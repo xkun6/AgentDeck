@@ -219,9 +219,32 @@ export interface AgentSnapshot {
 - `timeline` / `permission_requested` 未带 turnId 时，AgentManager 自动补上当前 turnId。
 - provider 未发 `permission_resolved` / `model_changed` / `mode_changed` 时由 AgentManager 补发；重复事件去重。
 - `usage_updated` 只更新快照的 `lastUsage`，不推 `agent.state`。
-- `agent.close` 后 agent 保留在注册表中（status `closed`），仍可查询 `agent.timeline`；再 `agent.send` 返回 `AGENT_CLOSED`。
+- `agent.close` 后 agent 保留在注册表中（status `closed`），仍可查询 `agent.timeline`；再 `agent.send` 时若可恢复则自动恢复（见 4.5），否则返回 `AGENT_CLOSED`。
 - `agent.create` 未传 model / modeId 时快照中为 `null`，表示使用 provider 默认值；`availableModes` 取自 `fetchCatalog`。
 - turn 结束时清空 pendingPermissions；`turn_failed` 记录 `lastError`，下一轮开始时清空。
+
+### 4.5 协议补充与会话持久化（P5/P6）
+
+**类型补充**（`agent-api.ts`）：
+- `AgentMode.dangerous?: boolean`：跳过权限确认类模式为 true（Claude `bypassPermissions`、Codex `full-access`），前端据此标红，不再写死 id。
+- `AgentStatus` 增加 `"dormant"`：已持久化但未加载到内存的会话（sidecar 重启后的历史会话）。
+- `AgentSnapshot` 增加：`preview?: string`（首条用户消息前 120 字）、`lastSeq: number`（该 agent 当前最大 seq，无事件为 0）、`resumable: boolean`（有 persistence 句柄且 provider 支持 `resumeSession`）。
+- 新方法 `agent.delete { agentId }` → `{}`：若在运行先关闭，然后从注册表与磁盘删除。
+- 新通知 `agent.removed { agentId }`：agent 被删除时广播。
+
+**持久化**（仅当设置了 `AGENTDECK_DATA_DIR`；未设置时保持纯内存行为）：
+- 目录 `<AGENTDECK_DATA_DIR>/agents/<agentId>/`：`meta.json`（快照中除 pendingPermissions / activeTurnId 外的字段，含 persistence 句柄）与 `timeline.jsonl`（每行一个经合并后的 `AgentStreamEnvelope`）。
+- 写入：timeline 逐条追加；meta 在状态变化时以「写临时文件 + rename」原子更新，500ms 防抖，turn 结束与 shutdown 时强制落盘。损坏的行/文件记日志后跳过，不得导致 sidecar 启动失败。
+- 启动：扫描全部 meta.json，原状态为 starting / idle / running / error 的恢复为 `dormant`，`closed` 保持 `closed`；timeline 在首次 `agent.timeline` 请求时惰性读取；seq 从持久化的 `lastSeq` 继续递增。`agent.list` 按 `updatedAt` 倒序返回。
+- 恢复：对 `dormant` 或 `closed` 的 agent 调 `agent.send` 时，若 `resumable` 则自动 `client.resumeSession(persistence, { cwd })`（状态 dormant/closed → starting → idle → running），若快照记录了非 null 的 model / modeId 则恢复后重新设置；不可恢复时返回 `-32000` + `NOT_SUPPORTED`（message「该会话无法恢复，请新建会话」）。恢复失败返回 `PROVIDER_UNAVAILABLE` 并把错误写入 lastError。
+- `agent.timeline` 返回的 `epoch` 为当前进程 epoch；历史条目保留原 seq，前端按 seq 去重。
+
+### 4.6 本地文件列表（Rust 命令，P5）
+
+- 命令 `fs_list { path?: string, showHidden?: boolean }` → `{ path, parent: string | null, home, entries: { name, path, isDir }[], error?: string }`。
+- `path` 缺省时列出用户主目录；Windows 下 `path` 为空字符串时返回盘符列表（entries 为 `C:\` 等，parent 为 null）。
+- 目录在前、文件在后，各自按名称不区分大小写排序；默认隐藏以 `.` 开头的条目与 Windows 隐藏属性条目。
+- 读取失败（不存在 / 无权限）不抛错，返回 `error`（中文）与空 entries，便于前端就地提示。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
@@ -337,6 +360,14 @@ ACP：
 | P5 裁剪页面 | 删除 Hermes 专属路由、组件、hooks、lib | typecheck / vitest / grid:check |
 | P6 持久化 | 会话元数据落盘、resumeSession | 重启后可继续会话 |
 | P7 打包 | node.exe 下载校验、esbuild bundle、NSIS | 干净机器安装运行，退出无残留进程 |
+
+### 7.1 打包方案（P7）
+
+- **node 运行时**：`scripts/fetch-node.mjs` 下载固定版本的官方 Node 24 LTS（Windows x64 zip，优先 npmmirror 镜像，失败回退 nodejs.org），用同源的 `SHASUMS256.txt` 校验后取出 `node.exe`，放到 `binaries/node-x86_64-pc-windows-msvc.exe`（`binaries/` 加入 .gitignore）；已存在且校验通过则跳过。`tauri.conf.json` 的 `bundle.externalBin` 配置 `binaries/node`，打包后位于主程序同目录的 `node.exe`，对应 3.1 的第 2 个候选。
+- **sidecar 代码**：`scripts/build-sidecar.mjs` 用 esbuild 把 `packages/sidecar/src/main.ts` 打成单文件 `dist-sidecar/bundle.mjs`（`--format=esm --platform=node --target=node24`，banner 注入 `createRequire`，`bufferutil` / `utf-8-validate` 设为 external），`tauri.conf.json` 的 `bundle.resources` 把它映射为资源目录下的 `sidecar/bundle.mjs`，对应 3.1 的第 2 个入口候选。claude-agent-sdk 的平台二进制不打包（打包态必须解析到用户本机的 claude）。
+- **构建命令**：`pnpm tauri:build` 的 `beforeBuildCommand` 依次执行 fetch-node、build-sidecar、web build。`pnpm tauri:dev` 仍以 `node --import tsx` 运行源码，但 externalBin 在 dev 时也必须存在，所以 dev 前也执行 fetch-node。
+- **安装包**：NSIS（per-user 安装）；`installer/nsis/hooks.nsh` 卸载时询问是否删除数据目录（`%APPDATA%\local.agentdeck.desktop`）。
+- **验收**：release 构建后直接运行 `target/release/agentdeck.exe`（旁边有 node.exe 与资源），确认 sidecar 以 bundle 方式启动、mock 会话可跑通、退出无残留；NSIS 安装包能生成。在干净机器上的安装测试由用户执行。
 
 ## 8. 许可
 
