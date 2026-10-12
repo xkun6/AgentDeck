@@ -31,7 +31,7 @@ import {
 } from "../claude/claude-executable.js";
 import { CODEX_MODES, CodexAgentClient } from "../codex/codex-agent.js";
 import { resolveCodexLaunch, type CodexLaunch } from "../codex/launch.js";
-import { buildClaudeLaunchOverride, buildCodexLaunchOverride } from "./launch.js";
+import { buildClaudeLaunchOverride, buildCodexLaunchOverride, mergeClaudeSettings } from "./launch.js";
 import {
   addSecrets,
   collectSecrets,
@@ -95,6 +95,21 @@ export function createCustomClaudeLaunch(
   return launch;
 }
 
+/**
+ * 中转的模型发现来源：中转自身合并后的 settings（settingsFile → settings → 推导 env → profile.env），
+ * 不读用户 ~/.claude/settings.json（中转不应继承用户的模型设置）；settingsFile 读取失败时返回 null。
+ */
+export async function loadCustomClaudeSettings(
+  profile: ProviderProfile,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const fileSettings = profile.settingsFile ? await readClaudeSettingsFile(profile.settingsFile) : undefined;
+    return mergeClaudeSettings(profile, fileSettings);
+  } catch {
+    return null;
+  }
+}
+
 function createInnerClient(profile: ProviderProfile, deps: CustomClientDeps, secrets: string[]): AgentClient {
   const providerId = customProviderId(profile.id);
   const find = deps.findExecutable ?? ((name: string) => findExecutable(name));
@@ -107,6 +122,7 @@ function createInnerClient(profile: ProviderProfile, deps: CustomClientDeps, sec
         providerId,
         label: profile.label,
         launch: createCustomClaudeLaunch(profile, secrets, deps.logger),
+        loadSettings: () => loadCustomClaudeSettings(profile),
         ...(command
           ? { resolveExecutable: () => resolveCustomClaudeExecutable(command, deps.env, find, deps.logger) }
           : {}),

@@ -42,7 +42,8 @@ export interface ClaudeCliOptions {
   extraArgs?: readonly string[];
   /** null 表示不传 --model，沿用 CLI 默认 / 用户配置 */
   model: string | null;
-  permissionMode: ClaudePermissionMode;
+  /** null 表示不传 --permission-mode，沿用用户设置的默认模式 */
+  permissionMode: ClaudePermissionMode | null;
   resumeSessionId: string | null;
   canUseTool: ClaudeCanUseTool;
   logger: Logger;
@@ -58,7 +59,8 @@ export interface ClaudeCliHandle extends AsyncIterable<ClaudeOutputMessage> {
   sendUserMessage(message: ClaudeUserInput): void;
   interrupt(): Promise<void>;
   setModel(model: string | null): Promise<void>;
-  setPermissionMode(mode: ClaudePermissionMode): Promise<void>;
+  /** 一般为 ClaudePermissionMode；切回基础模式时也可能是用户设置里的其它 CLI 模式 */
+  setPermissionMode(mode: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -80,8 +82,8 @@ export function buildClaudeCliArgs(
     "stdio",
     "--setting-sources",
     "user,project,local",
-    "--permission-mode",
-    options.permissionMode,
+    // null 时不传：沿用用户设置的默认权限模式
+    ...(options.permissionMode ? ["--permission-mode", options.permissionMode] : []),
     // 只是允许会话中途切到 bypassPermissions，不改变当前模式
     "--allow-dangerously-skip-permissions",
   ];
@@ -200,7 +202,7 @@ export class ClaudeCliSession implements ClaudeCliHandle {
     await this.request(model ? { subtype: "set_model", model } : { subtype: "set_model" });
   }
 
-  async setPermissionMode(mode: ClaudePermissionMode): Promise<void> {
+  async setPermissionMode(mode: string): Promise<void> {
     await this.request({ subtype: "set_permission_mode", mode });
   }
 

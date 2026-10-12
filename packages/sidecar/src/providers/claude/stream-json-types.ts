@@ -2,8 +2,11 @@
 // 中 AgentDeck 实际读写的消息形状。AgentDeck 原创的精简定义：只声明用到的字段，其余字段一律忽略。
 // 协议按本机 Claude Code 2.1.x 的实际行为核对：stdin / stdout 都是每行一个 JSON 对象。
 
-/** AgentDeck 暴露的权限模式（CLI 还支持 auto / dontAsk 等，本项目不用） */
-export type ClaudePermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
+/**
+ * AgentDeck 暴露的权限模式（CLI 还支持 dontAsk，本项目不用）。
+ * `default` 即 CLI 的「Manual」：`manual` 只是 CLI 接受的别名，CLI 内部仍记为 `default`（2.1.296 实测）。
+ */
+export type ClaudePermissionMode = "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
 
 export type ClaudeImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
@@ -32,7 +35,8 @@ export type ClaudeOutgoingControl =
   | { subtype: "initialize" }
   | { subtype: "interrupt" }
   | { subtype: "set_model"; model?: string }
-  | { subtype: "set_permission_mode"; mode: ClaudePermissionMode };
+  /** mode 也可能是用户设置里的其它 CLI 模式（切回基础模式时） */
+  | { subtype: "set_permission_mode"; mode: string };
 
 /** 对 CLI 控制请求的应答（写入 stdin） */
 export interface ClaudeControlResponseOut {
@@ -140,6 +144,8 @@ export interface ClaudeCanUseToolRequest {
 /** initialize 应答里用到的部分 */
 export interface ClaudeInitializeResponse {
   models?: Array<{ value?: unknown; displayName?: unknown; description?: unknown }>;
+  /** 进程当前的权限模式；未传 --permission-mode 启动时即用户设置的默认模式 */
+  current_permission_mode?: unknown;
 }
 
 // ---------------------------------------------------------------------------

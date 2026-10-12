@@ -160,6 +160,32 @@ describe("AgentSessionPicker", () => {
     expect(screen.getByRole("button", { name: "模式：完全访问" }).getAttribute("data-danger")).toBe("true");
   });
 
+  it("「默认模式」说明：Claude（含中转）为跟随 Claude Code 设置，其它 Agent 保持原文案", () => {
+    const providers: ProviderInfo[] = [
+      { id: "claude", kind: "claude", label: "Claude Code", available: true },
+      { id: "custom:relay", kind: "claude", label: "我的中转", available: true, custom: true, extends: "claude" },
+      ...PROVIDERS.slice(1),
+    ];
+    const cases: [string, string][] = [
+      ["claude", "跟随 Claude Code 设置"],
+      ["custom:relay", "跟随 Claude Code 设置"],
+      ["codex", "使用 Agent 的默认模式"],
+    ];
+    for (const [provider, description] of cases) {
+      render(
+        <AgentSessionPicker
+          selection={{ provider, model: null, modeId: null }}
+          onChange={vi.fn()}
+          providers={providers}
+          catalog={CATALOG}
+        />,
+      );
+      const list = openMenu("模式：默认模式");
+      expect(within(list).getByRole("option", { name: /默认模式/ }).textContent).toContain(description);
+      cleanup();
+    }
+  });
+
   it("危险与否只看 AgentMode.dangerous，不按 id 判断", () => {
     render(
       <AgentSessionPicker

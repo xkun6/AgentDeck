@@ -54,9 +54,14 @@ function modelOptions(models: AgentModelDefinition[], loading: boolean | undefin
   ];
 }
 
-function modeOptions(modes: AgentMode[]): ChipSelectOption[] {
+/** Claude（含基于 Claude 的中转）不选模式时不传 --permission-mode，跟随用户的 Claude Code 设置 */
+function defaultModeDescription(provider: ProviderInfo | undefined): string {
+  return provider?.kind === "claude" ? "跟随 Claude Code 设置" : "使用 Agent 的默认模式";
+}
+
+function modeOptions(modes: AgentMode[], defaultDescription: string): ChipSelectOption[] {
   return [
-    { value: "", label: "默认模式", description: "使用 Agent 的默认模式" },
+    { value: "", label: "默认模式", description: defaultDescription },
     ...modes.map((mode) => {
       const dangerous = isDangerousMode(mode);
       return {
@@ -133,7 +138,7 @@ export function AgentSessionPicker({
           icon={dangerous ? <ShieldAlert /> : <SlidersHorizontal />}
           value={selection.modeId ?? ""}
           displayValue={modeDisplay}
-          options={modeOptions(modes)}
+          options={modeOptions(modes, defaultModeDescription(provider))}
           onChange={(next) => onChange({ ...selection, modeId: next || null })}
           disabled={catalogDisabled || modes.length === 0}
           danger={dangerous}

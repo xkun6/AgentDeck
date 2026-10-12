@@ -29,6 +29,7 @@ import {
   createProviderProfilesSchema,
   createRedactingLogger,
   deepMergeSettings,
+  loadCustomClaudeSettings,
   isAbsoluteSettingsPath,
   mergeClaudeSettings,
   providerProfileSchema,
@@ -403,6 +404,56 @@ describe("settingsFile 读取", () => {
     writeFileSync(file, "{}");
     expect((await client.isAvailable()).available).toBe(true);
     await manager.shutdown();
+  });
+});
+
+describe("中转的模型发现：只用中转自身合并后的 settings", () => {
+  test("loadCustomClaudeSettings：settingsFile → settings → profile.env 合并；文件读不了返回 null", async () => {
+    const file = writeJson("relay.json", JSON.stringify({ model: "file-model", env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "relay-opus" } }));
+    const profile: ProviderProfile = {
+      id: "r",
+      extends: "claude",
+      label: "r",
+      settingsFile: file,
+      settings: { model: "relay-model[1m]" },
+      env: { ANTHROPIC_SMALL_FAST_MODEL: "relay-fast" },
+    };
+    const merged = await loadCustomClaudeSettings(profile);
+    expect(merged).toMatchObject({
+      model: "relay-model[1m]",
+      env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "relay-opus", ANTHROPIC_SMALL_FAST_MODEL: "relay-fast" },
+    });
+    rmSync(file);
+    await expect(loadCustomClaudeSettings(profile)).resolves.toBeNull();
+  });
+
+  test("中转不读用户 settings；配了静态 models 时不追加任何设置里的模型", async () => {
+    // 用户设置（CLAUDE_CONFIG_DIR）里有 user-model，中转不得继承
+    const userDir = path.join(dir, "user-claude");
+    mkdirSync(userDir);
+    writeFileSync(path.join(userDir, "settings.json"), JSON.stringify({ model: "user-model", env: { ANTHROPIC_MODEL: "user-env-model" } }));
+    const env = { CLAUDE_CONFIG_DIR: userDir };
+    const missingExe = path.join(dir, "no-such-claude.exe");
+    const profile: ProviderProfile = {
+      id: "r",
+      extends: "claude",
+      label: "r",
+      command: [missingExe],
+      settings: { model: "relay-model[1m]", env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: "relay-haiku" } },
+    };
+    const client = createCustomProviderClient(profile, { logger: createSilentLogger(), env });
+    const catalog = await client.fetchCatalog({ cwd: dir });
+    const ids = catalog.models.map((m) => m.id);
+    expect(ids).toEqual(["default", "sonnet", "opus", "haiku", "relay-model[1m]", "relay-haiku"]);
+    expect(catalog.models.find((m) => m.id === "relay-model[1m]")?.label).toBe("relay-model · 1M 上下文");
+    expect(catalog.models[0]!.description).toBe("跟随 Claude Code 设置（当前：relay-model[1m]）");
+    expect(catalog.models.every((m) => m.provider === "custom:r")).toBe(true);
+
+    const withStatic = createCustomProviderClient(
+      { ...profile, models: [{ id: "glm-4.6", label: "GLM", isDefault: true }] },
+      { logger: createSilentLogger(), env },
+    );
+    expect((await withStatic.fetchCatalog({ cwd: dir })).models.map((m) => m.id)).toEqual(["glm-4.6"]);
   });
 });
 

@@ -9,7 +9,12 @@ import { reservedProfileIds } from "./schema.js";
 import { loadProviderProfiles, providersConfigPath, saveProviderProfiles } from "./store.js";
 import { testProviderProfile, type ProviderTestDeps } from "./test-connection.js";
 
-export { createCustomClaudeLaunch, createCustomProviderClient, CustomProviderClient } from "./custom-client.js";
+export {
+  createCustomClaudeLaunch,
+  createCustomProviderClient,
+  CustomProviderClient,
+  loadCustomClaudeSettings,
+} from "./custom-client.js";
 export {
   buildClaudeLaunchOverride,
   buildCodexLaunchOverride,

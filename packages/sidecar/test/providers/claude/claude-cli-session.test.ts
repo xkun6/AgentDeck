@@ -122,6 +122,13 @@ describe("buildClaudeCliArgs", () => {
     expect(full.slice(-4)).toEqual(["--model", "haiku", "--resume", "s-1"]);
     expect(full).toContain("plan");
   });
+
+  test("permissionMode 为 null 时不传 --permission-mode，仍保留 --allow-dangerously-skip-permissions", () => {
+    const args = buildClaudeCliArgs({ model: null, permissionMode: null, resumeSessionId: null });
+    expect(args).not.toContain("--permission-mode");
+    expect(args.at(-1)).toBe("--allow-dangerously-skip-permissions");
+    expect(buildClaudeCliArgs({ model: null, permissionMode: "auto", resumeSessionId: null })).toContain("auto");
+  });
 });
 
 describe("ClaudeCliSession（假 claude 脚本）", () => {
@@ -276,6 +283,8 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
     return new ClaudeAgentClient({
       logger: createSilentLogger(),
       env: process.env,
+      // 不读本机用户的 Claude 设置，保证模型列表与机器无关
+      loadSettings: async () => null,
       resolveExecutable: async () => ({
         available: true,
         path: FAKE_CLAUDE,

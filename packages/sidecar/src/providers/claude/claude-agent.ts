@@ -63,6 +63,7 @@ import type {
   ClaudeUserInput,
   ClaudeUserOutputMessage,
 } from "./stream-json-types.js";
+import { readClaudeUserSettings, withSettingsModels } from "./settings-models.js";
 
 export const CLAUDE_PROVIDER_ID = "claude";
 
@@ -72,7 +73,7 @@ export const CLAUDE_MODELS: AgentModelDefinition[] = [
     provider: CLAUDE_PROVIDER_ID,
     id: "default",
     label: "默认（跟随 Claude Code 配置）",
-    description: "不指定模型，使用 Claude Code 的默认模型或用户设置",
+    description: "跟随 Claude Code 设置",
     isDefault: true,
   },
   { provider: CLAUDE_PROVIDER_ID, id: "sonnet", label: "Sonnet（均衡）" },
@@ -80,9 +81,19 @@ export const CLAUDE_MODELS: AgentModelDefinition[] = [
   { provider: CLAUDE_PROVIDER_ID, id: "haiku", label: "Haiku（最快）" },
 ];
 
+/**
+ * 不选模式（modeId 为 null）时不传 --permission-mode，跟随用户设置的默认模式。
+ * `default` 即 CLI 的 Manual（`manual` 是 CLI 接受的别名，内部仍为 `default`）。
+ */
 export const CLAUDE_MODES: AgentMode[] = [
-  { id: "default", label: "默认", description: "敏感操作逐项请求审批" },
+  { id: "default", label: "逐项审批", description: "敏感操作逐项请求审批" },
   { id: "acceptEdits", label: "自动接受编辑", description: "文件编辑自动通过，其它操作仍需审批" },
+  {
+    id: "auto",
+    label: "自动模式",
+    // 依据 Claude Code 文档 permission-modes「Eliminate permission prompts with auto mode」
+    description: "由独立的分类器模型代为审查：常规操作直接执行，越权、可疑或高风险操作会被拦截",
+  },
   { id: "plan", label: "计划模式", description: "只读分析并给出计划，批准后才执行" },
   {
     id: "bypassPermissions",
@@ -92,7 +103,8 @@ export const CLAUDE_MODES: AgentMode[] = [
   },
 ];
 
-const DEFAULT_MODE: ClaudePermissionMode = "default";
+/** 跟随设置时批准计划后切回基础模式；基础模式未知或本身就是 plan 时用它 */
+const PLAN_EXIT_FALLBACK_MODE: ClaudePermissionMode = "default";
 const INTERRUPT_TIMEOUT_MS = 3_000;
 const AVAILABILITY_CACHE_MS = 60_000;
 /** 模型列表来自 claude 的 initialize 应答，成功结果缓存 10 分钟 */
@@ -145,6 +157,12 @@ export interface ClaudeAgentClientOptions {
   /** 显示名，默认 `Claude Code` */
   label?: string;
   launch?: ClaudeLaunchOverride;
+  /**
+   * 模型发现用的 Claude 设置（顶层 model 与 env 中的模型变量，见 settings-models.ts）；返回 null 表示读不到。
+   * 默认：内置 provider 读用户 `$CLAUDE_CONFIG_DIR/settings.json`（或 `~/.claude/settings.json`），
+   * 带 launch 覆盖（中转）时不读用户设置。
+   */
+  loadSettings?: () => Promise<Record<string, unknown> | null>;
   /** 创建 claude 子进程会话（测试可注入假实现） */
   cliFactory?: ClaudeCliFactory;
   resolveExecutable?: () => Promise<ClaudeExecutableResolution>;
@@ -160,6 +178,7 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly childEnv: Record<string, string>;
   private readonly extraArgs: readonly string[];
   private readonly resolveExtraArgs: (() => Promise<readonly string[]>) | undefined;
+  private readonly loadSettings: () => Promise<Record<string, unknown> | null>;
   private readonly cliFactory: ClaudeCliFactory;
   private readonly resolveExecutable: () => Promise<ClaudeExecutableResolution>;
   private readonly terminateProcess: ProcessTerminator | undefined;
@@ -174,6 +193,9 @@ export class ClaudeAgentClient implements AgentClient {
     this.childEnv = buildClaudeChildEnv(options.env, options.launch);
     this.extraArgs = options.launch?.extraArgs ? [...options.launch.extraArgs] : [];
     this.resolveExtraArgs = options.launch?.resolveExtraArgs;
+    this.loadSettings =
+      options.loadSettings ??
+      (options.launch ? async () => null : () => readClaudeUserSettings(options.env));
     this.cliFactory = options.cliFactory ?? createClaudeCliSession;
     this.resolveExecutable =
       options.resolveExecutable ??
@@ -192,13 +214,21 @@ export class ClaudeAgentClient implements AgentClient {
     return { available: true, command: [resolution.path] };
   }
 
-  /** 模型优先取 claude initialize 应答里的列表；拿不到时退回静态别名 */
+  /**
+   * 模型优先取 claude initialize 应答里的列表，拿不到时退回静态别名；
+   * 再追加 Claude 设置里的具体模型（每次重新读取设置），`default` 的描述写明当前生效的模型。
+   */
   async fetchCatalog(opts?: {
     cwd?: string;
   }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
     const models = (await this.loadModels(opts?.cwd)) ?? CLAUDE_MODELS;
+    const settings = await this.loadSettings().catch(() => null);
     return {
-      models: models.map((model) => ({ ...model, provider: this.provider })),
+      models: withSettingsModels(
+        models.map((model) => ({ ...model, provider: this.provider })),
+        settings,
+        this.provider,
+      ),
       modes: CLAUDE_MODES.map((mode) => ({ ...mode })),
     };
   }
@@ -230,7 +260,7 @@ export class ClaudeAgentClient implements AgentClient {
         env: this.childEnv,
         ...(extraArgs.length > 0 ? { extraArgs } : {}),
         model: null,
-        permissionMode: DEFAULT_MODE,
+        permissionMode: null,
         resumeSessionId: null,
         canUseTool: async () => ({ behavior: "deny", message: "模型探测进程不执行工具" }),
         logger: this.logger,
@@ -268,8 +298,10 @@ export class ClaudeAgentClient implements AgentClient {
     cfg: AgentSessionConfig,
     resumeSessionId: string | null,
   ): Promise<ClaudeAgentSession> {
-    const modeId = cfg.modeId ?? DEFAULT_MODE;
-    assertClaudeMode(modeId);
+    const modeId = cfg.modeId ?? null;
+    if (modeId !== null) {
+      assertClaudeMode(modeId);
+    }
     const resolution = await this.resolve();
     if (!resolution.available) {
       throw new Error(resolution.reason);
@@ -337,7 +369,8 @@ export interface ClaudeAgentSessionOptions {
   executablePath: string;
   cwd: string;
   model: string | null;
-  modeId: string;
+  /** null 表示跟随用户设置（不传 --permission-mode） */
+  modeId: string | null;
   resumeSessionId: string | null;
 }
 
@@ -376,7 +409,12 @@ export class ClaudeAgentSession implements AgentSession {
   private threadStarted = false;
   private closed = false;
   private model: string | null;
-  private mode: ClaudePermissionMode;
+  /** null 表示跟随用户设置 */
+  private mode: ClaudePermissionMode | null;
+  /** 不传 --permission-mode 启动时 initialize 报告的 current_permission_mode（用户设置的默认模式） */
+  private baseMode: string | null = null;
+  /** 进入 plan 之前的模式（null 为跟随设置），批准计划后切回 */
+  private modeBeforePlan: ClaudePermissionMode | null = null;
 
   private cli: ClaudeCliHandle | null = null;
 
@@ -392,7 +430,9 @@ export class ClaudeAgentSession implements AgentSession {
   private contextOutputTokens = 0;
 
   constructor(options: ClaudeAgentSessionOptions) {
-    assertClaudeMode(options.modeId);
+    if (options.modeId !== null) {
+      assertClaudeMode(options.modeId);
+    }
     this.provider = options.providerId ?? CLAUDE_PROVIDER_ID;
     this.logger = options.logger;
     this.env = options.env;
@@ -462,9 +502,9 @@ export class ClaudeAgentSession implements AgentSession {
         behavior: "allow",
         updatedInput: response.updatedInput ?? pending.input,
       });
-      // 批准计划后离开 plan 模式，后续工具调用仍逐项审批
+      // 批准计划后离开 plan 模式，切回进入 plan 之前的模式
       if (isPlan && this.mode === "plan") {
-        await this.setMode("default").catch((error: unknown) => {
+        await this.leavePlanMode().catch((error: unknown) => {
           this.logger.warn("批准计划后切换模式失败：%s", errorMessage(error));
         });
       }
@@ -533,8 +573,28 @@ export class ClaudeAgentSession implements AgentSession {
     if (this.cli) {
       await this.cli.setPermissionMode(modeId);
     }
+    if (modeId === "plan" && this.mode !== "plan") {
+      this.modeBeforePlan = this.mode;
+    }
     this.mode = modeId;
     this.emit({ type: "mode_changed", modeId });
+  }
+
+  /** 切回进入 plan 之前的模式；之前为跟随设置时切回基础模式，快照 modeId 回到 null */
+  private async leavePlanMode(): Promise<void> {
+    const previous = this.modeBeforePlan;
+    this.modeBeforePlan = null;
+    if (previous) {
+      await this.setMode(previous);
+      return;
+    }
+    const target =
+      this.baseMode && this.baseMode !== "plan" ? this.baseMode : PLAN_EXIT_FALLBACK_MODE;
+    if (this.cli) {
+      await this.cli.setPermissionMode(target);
+    }
+    this.mode = null;
+    this.emit({ type: "mode_changed", modeId: null });
   }
 
   // -------------------------------------------------------------------------
@@ -546,12 +606,16 @@ export class ClaudeAgentSession implements AgentSession {
       return this.cli;
     }
     const model = normalizeModel(this.model);
+    // 跟随设置时进入的 plan：先不带 --permission-mode 启动以读到基础模式，再立即切到 plan
+    // （控制请求先于用户消息写入 stdin，CLI 按序处理）
+    const deferPlan = this.mode === "plan" && this.modeBeforePlan === null;
+    const launchMode = deferPlan ? null : this.mode;
     this.logger.info(
       "启动 Claude Code 会话（exe=%s, cwd=%s, model=%s, mode=%s, resume=%s）",
       this.executablePath,
       this.cwd,
       model ?? "default",
-      this.mode,
+      this.mode ?? "跟随设置",
       this.sessionId ?? "-",
     );
     const cli = this.cliFactory({
@@ -560,7 +624,7 @@ export class ClaudeAgentSession implements AgentSession {
       env: { ...this.env },
       ...(this.extraArgs && this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
       model,
-      permissionMode: this.mode,
+      permissionMode: launchMode,
       resumeSessionId: this.sessionId,
       canUseTool: this.handleCanUseTool,
       logger: this.logger,
@@ -568,11 +632,24 @@ export class ClaudeAgentSession implements AgentSession {
       ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
     });
     this.cli = cli;
-    cli.initialized.catch((error: unknown) => {
-      if (this.cli === cli) {
-        this.logger.warn("Claude Code initialize 失败：%s", errorMessage(error));
-      }
-    });
+    cli.initialized.then(
+      (response) => {
+        const current = response.current_permission_mode;
+        if (launchMode === null && this.cli === cli && typeof current === "string" && current) {
+          this.baseMode = current;
+        }
+      },
+      (error: unknown) => {
+        if (this.cli === cli) {
+          this.logger.warn("Claude Code initialize 失败：%s", errorMessage(error));
+        }
+      },
+    );
+    if (deferPlan) {
+      cli.setPermissionMode("plan").catch((error: unknown) => {
+        this.logger.warn("切换到计划模式失败：%s", errorMessage(error));
+      });
+    }
     void this.pump(cli);
     return cli;
   }

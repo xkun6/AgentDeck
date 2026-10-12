@@ -188,7 +188,8 @@ export type AgentStreamEvent =
   | { type: "permission_resolved"; requestId: string; response: AgentPermissionResponse }
   | { type: "usage_updated"; usage: AgentUsage }
   | { type: "model_changed"; modelId: string | null }
-  | { type: "mode_changed"; modeId: string };
+  /** modeId 为 null 表示回到「跟随 Agent 设置」（如 Claude 批准计划后切回用户默认模式） */
+  | { type: "mode_changed"; modeId: string | null };
 
 export interface AgentStreamEnvelope {
   agentId: string;

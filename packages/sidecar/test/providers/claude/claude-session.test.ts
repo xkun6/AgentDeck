@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import type { AgentStreamEvent, ToolCallTimelineItem } from "@agentdeck/protocol";
 import { describe, expect, test } from "vitest";
 
@@ -122,7 +126,10 @@ interface Harness {
   setup: (configure: (cli: FakeCli) => void) => void;
 }
 
-function createHarness(env: NodeJS.ProcessEnv = {}): Harness {
+function createHarness(
+  env: NodeJS.ProcessEnv = {},
+  loadSettings: () => Promise<Record<string, unknown> | null> = async () => null,
+): Harness {
   const clis: FakeCli[] = [];
   let configure: (cli: FakeCli) => void = () => undefined;
   const cliFactory: ClaudeCliFactory = (options) => {
@@ -135,6 +142,8 @@ function createHarness(env: NodeJS.ProcessEnv = {}): Harness {
   const client = new ClaudeAgentClient({
     logger: createSilentLogger(),
     env,
+    // 默认不读本机用户的 Claude 设置，保证模型列表与机器无关
+    loadSettings,
     cliFactory,
     terminateProcess,
     resolveExecutable: async () => ({
@@ -311,12 +320,14 @@ describe("ClaudeAgentClient", () => {
     const catalog = await client.fetchCatalog();
     expect(catalog.models.map((m) => m.id)).toEqual(["default", "sonnet", "opus", "haiku"]);
     expect(catalog.models.find((m) => m.isDefault)?.id).toBe("default");
-    expect(catalog.modes.map((m) => m.id)).toEqual([
-      "default",
-      "acceptEdits",
-      "plan",
-      "bypassPermissions",
+    expect(catalog.modes.map((m) => [m.id, m.label])).toEqual([
+      ["default", "逐项审批"],
+      ["acceptEdits", "自动接受编辑"],
+      ["auto", "自动模式"],
+      ["plan", "计划模式"],
+      ["bypassPermissions", "跳过所有审批"],
     ]);
+    expect(catalog.modes.filter((m) => m.dangerous).map((m) => m.id)).toEqual(["bypassPermissions"]);
     await expect(client.createSession({ cwd: ".", modeId: "yolo" })).rejects.toThrow("不支持模式");
   });
 
@@ -356,14 +367,14 @@ describe("ClaudeAgentClient", () => {
         provider: "claude",
         id: "default",
         label: "默认（跟随 Claude Code 配置）",
-        description: "Opus · 推荐",
+        description: "跟随 Claude Code 设置",
         isDefault: true,
       },
       { provider: "claude", id: "sonnet", label: "Sonnet", description: "Sonnet · 均衡" },
       { provider: "claude", id: "claude-fable-5-1[1m]", label: "Fable" },
     ]);
     expect(h.clis).toHaveLength(1);
-    expect(h.clis[0]!.options).toMatchObject({ cwd: "J:\\work", model: null, resumeSessionId: null });
+    expect(h.clis[0]!.options).toMatchObject({ cwd: "J:\\work", model: null, permissionMode: null, resumeSessionId: null });
     expect(h.clis[0]!.received).toHaveLength(0);
     expect(h.clis[0]!.calls.close).toBe(1);
 
@@ -381,6 +392,84 @@ describe("ClaudeAgentClient", () => {
     expect(h.clis[0]!.calls.close).toBe(1);
     await h.client.fetchCatalog();
     expect(h.clis).toHaveLength(2);
+  });
+
+  test("fetchCatalog：追加 Claude 设置里的模型（去重、原样 id、1M 显示名），默认模型写明当前生效值", async () => {
+    let settings: Record<string, unknown> | null = {
+      model: "opus[1m]",
+      env: { ANTHROPIC_DEFAULT_SONNET_MODEL: "sonnet", ANTHROPIC_SMALL_FAST_MODEL: "glm-4.5-air" },
+    };
+    const h = createHarness({}, async () => settings);
+    h.setup((cli) => {
+      cli.initialized = Promise.resolve({
+        current_permission_mode: "auto",
+        models: [
+          { value: "default", displayName: "Default (recommended)", description: "Opus 5.5" },
+          { value: "opus", displayName: "Opus" },
+          { value: "sonnet", displayName: "Sonnet" },
+        ],
+      });
+    });
+    const catalog = await h.client.fetchCatalog();
+    expect(catalog.models).toEqual([
+      {
+        provider: "claude",
+        id: "default",
+        label: "默认（跟随 Claude Code 配置）",
+        description: "跟随 Claude Code 设置（当前：opus[1m]）",
+        isDefault: true,
+      },
+      { provider: "claude", id: "opus", label: "Opus" },
+      { provider: "claude", id: "sonnet", label: "Sonnet" },
+      {
+        provider: "claude",
+        id: "opus[1m]",
+        label: "Opus · 1M 上下文",
+        description: "来自 Claude Code 设置（model）",
+      },
+      {
+        provider: "claude",
+        id: "glm-4.5-air",
+        label: "glm-4.5-air",
+        description: "来自 Claude Code 设置（env.ANTHROPIC_SMALL_FAST_MODEL）",
+      },
+    ]);
+
+    // 设置每次重新读取（模型探测结果仍走缓存）；读不到时只写「跟随 Claude Code 设置」
+    settings = null;
+    const again = await h.client.fetchCatalog();
+    expect(h.clis).toHaveLength(1);
+    expect(again.models.map((m) => m.id)).toEqual(["default", "opus", "sonnet"]);
+    expect(again.models[0]!.description).toBe("跟随 Claude Code 设置");
+  });
+
+  test("默认读取 $CLAUDE_CONFIG_DIR/settings.json；带 launch 覆盖（中转）时不读用户设置", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "agentdeck-claude-settings-"));
+    try {
+      writeFileSync(path.join(dir, "settings.json"), `\uFEFF${JSON.stringify({ model: "opus[1m]" })}`);
+      const unavailable = async () => ({ available: false as const, reason: "无" });
+      const builtin = new ClaudeAgentClient({
+        logger: createSilentLogger(),
+        env: { CLAUDE_CONFIG_DIR: dir },
+        resolveExecutable: unavailable,
+      });
+      const catalog = await builtin.fetchCatalog();
+      expect(catalog.models.map((m) => m.id)).toEqual(["default", "sonnet", "opus", "haiku", "opus[1m]"]);
+      expect(catalog.models[0]!.description).toBe("跟随 Claude Code 设置（当前：opus[1m]）");
+
+      const relay = new ClaudeAgentClient({
+        logger: createSilentLogger(),
+        env: { CLAUDE_CONFIG_DIR: dir },
+        providerId: "custom:x",
+        launch: { extraArgs: [] },
+        resolveExecutable: unavailable,
+      });
+      const relayCatalog = await relay.fetchCatalog();
+      expect(relayCatalog.models.map((m) => m.id)).toEqual(["default", "sonnet", "opus", "haiku"]);
+      expect(relayCatalog.models[0]!.description).toBe("跟随 Claude Code 设置");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("成功结果被缓存", async () => {
@@ -748,6 +837,9 @@ describe("ClaudeAgentSession", () => {
     const session = await h.client.createSession({ cwd: ".", modeId: "plan" });
     const events = collect(session);
     await session.startTurn("x");
+    // 跟随设置进入的 plan：不带 --permission-mode 启动，随即切到 plan
+    expect(h.clis[0]!.options.permissionMode).toBeNull();
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan"]);
     const promise = canUseTool(h.clis[0]!, "ExitPlanMode", { plan: "1. 改代码" }, { toolUseId: "tp" });
     const request = session.getPendingPermissions()[0]!;
     expect(request).toMatchObject({
@@ -760,8 +852,98 @@ describe("ClaudeAgentSession", () => {
     });
     await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "approve" });
     await expect(promise).resolves.toEqual({ behavior: "allow", updatedInput: { plan: "1. 改代码" } });
-    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["default"]);
-    expect(events.some((e) => e.type === "mode_changed" && e.modeId === "default")).toBe(true);
+    // initialize 没报告基础模式时退回 default；快照回到「跟随设置」
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan", "default"]);
+    expect(events.filter((e) => e.type === "mode_changed")).toEqual([{ type: "mode_changed", modeId: null }]);
+  });
+
+  /** 模拟 CLI 在当前回合发来 ExitPlanMode，并批准 */
+  async function approvePlan(h: Harness, session: AgentSession): Promise<void> {
+    const cli = h.clis.at(-1)!;
+    const promise = canUseTool(cli, "ExitPlanMode", { plan: "p" }, { toolUseId: "tp" });
+    const request = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(request.id, { behavior: "allow" });
+    await promise;
+  }
+
+  /** 让 initialize 应答的 then 回调先执行 */
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  test("跟随设置进入的 plan：批准后切回 initialize 报告的基础模式（含恢复会话）", async () => {
+    const h = createHarness();
+    h.setup((q) => {
+      q.initialized = Promise.resolve({ current_permission_mode: "auto" });
+    });
+    const created = await h.client.createSession({ cwd: ".", modeId: "plan" });
+    const createdEvents = collect(created);
+    await created.startTurn("x");
+    await flush();
+    await approvePlan(h, created);
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan", "auto"]);
+    expect(createdEvents.filter((e) => e.type === "mode_changed")).toEqual([{ type: "mode_changed", modeId: null }]);
+
+    // 恢复会话：manager 按快照再 setMode("plan")，规则相同
+    const resumed = await h.client.resumeSession({ provider: "claude", sessionId: SESSION_ID }, { cwd: "." });
+    await resumed.setMode!("plan");
+    await resumed.startTurn("y");
+    await flush();
+    expect(h.clis[1]!.options).toMatchObject({ permissionMode: null, resumeSessionId: SESSION_ID });
+    await approvePlan(h, resumed);
+    expect(h.clis[1]!.calls.setPermissionMode).toEqual(["plan", "auto"]);
+  });
+
+  test("会话中途从跟随设置切到 plan：批准后切回基础模式；基础模式为 plan 时退回 default", async () => {
+    const h = createHarness();
+    h.setup((q) => {
+      q.initialized = Promise.resolve({ current_permission_mode: "acceptEdits" });
+    });
+    const session = await h.client.createSession({ cwd: "." });
+    await session.startTurn("x");
+    await flush();
+    expect(h.clis[0]!.options.permissionMode).toBeNull();
+    await session.setMode!("plan");
+    await approvePlan(h, session);
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan", "acceptEdits"]);
+
+    const h2 = createHarness();
+    h2.setup((q) => {
+      q.initialized = Promise.resolve({ current_permission_mode: "plan" });
+    });
+    const planByDefault = await h2.client.createSession({ cwd: "." });
+    await planByDefault.startTurn("x");
+    await flush();
+    await planByDefault.setMode!("plan");
+    await approvePlan(h2, planByDefault);
+    expect(h2.clis[0]!.calls.setPermissionMode).toEqual(["plan", "default"]);
+  });
+
+  test("从显式模式进入 plan：批准后切回该模式，不使用 initialize 报告的模式", async () => {
+    const h = createHarness();
+    h.setup((q) => {
+      q.initialized = Promise.resolve({ current_permission_mode: "acceptEdits" });
+    });
+    const session = await h.client.createSession({ cwd: ".", modeId: "auto" });
+    const events = collect(session);
+    await session.startTurn("x");
+    await flush();
+    expect(h.clis[0]!.options.permissionMode).toBe("auto");
+    await session.setMode!("plan");
+    await approvePlan(h, session);
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan", "auto"]);
+    expect(events.flatMap((e) => (e.type === "mode_changed" ? [e.modeId] : []))).toEqual(["plan", "auto"]);
+  });
+
+  test("modeId 为 null（含恢复会话）时不传 --permission-mode；显式模式照常传", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    await session.startTurn("x");
+    expect(h.clis[0]!.options.permissionMode).toBeNull();
+    const resumed = await h.client.resumeSession({ provider: "claude", sessionId: SESSION_ID }, { cwd: "." });
+    await resumed.startTurn("y");
+    expect(h.clis[1]!.options.permissionMode).toBeNull();
+    const manual = await h.client.createSession({ cwd: ".", modeId: "default" });
+    await manual.startTurn("z");
+    expect(h.clis[2]!.options.permissionMode).toBe("default");
   });
 
   test("abort signal 触发时自动 deny 并发 permission_resolved", async () => {
@@ -894,13 +1076,14 @@ describe("ClaudeAgentSession", () => {
     ]);
     await session.startTurn("x");
     await waitUntil(() => terminalEvents(events).length === 1);
-    expect(h.clis[0]!.options).toMatchObject({ model: "opus", permissionMode: "plan" });
+    // 跟随设置时进入的 plan：不带 --permission-mode 启动，再以控制请求切到 plan
+    expect(h.clis[0]!.options).toMatchObject({ model: "opus", permissionMode: null });
 
     await session.setModel!("default");
     await session.setModel!("haiku");
     await session.setMode!("bypassPermissions");
     expect(h.clis[0]!.calls.setModel).toEqual([null, "haiku"]);
-    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["bypassPermissions"]);
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan", "bypassPermissions"]);
   });
 
   test("resumeSession：立即可描述持久化句柄，并以 --resume 启动", async () => {
