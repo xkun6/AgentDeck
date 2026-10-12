@@ -37,7 +37,11 @@ async function fetchDevToken() {
 async function bootstrap() {
   if (!window.__TAURI_INTERNALS__ && !window.__HERMES_RUNTIME__) {
     const { installBrowserCompanionRuntime } = await import("./lib/browser-companion");
-    await installBrowserCompanionRuntime();
+    const companion = await installBrowserCompanionRuntime();
+    if (!companion) {
+      // AgentDeck 浏览器开发模式：直连 sidecar（VITE_AGENTDECK_SIDECAR_URL），没有 Hermes 后端。
+      window.__HERMES_RUNTIME__ = { platform: "web", backendReady: true, hermesBackendDisabled: true };
+    }
   }
 
   if (window.__TAURI_INTERNALS__ && !window.__HERMES_RUNTIME__) {

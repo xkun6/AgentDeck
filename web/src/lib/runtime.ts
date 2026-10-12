@@ -456,6 +456,8 @@ declare global {
       embedded?: boolean;
       /** UI is running in a system browser through the desktop loopback relay. */
       browserCompanion?: boolean;
+      /** AgentDeck：没有 Hermes 后端，旧的 Hermes REST / 网关调用直接返回「暂不支持」。 */
+      hermesBackendDisabled?: boolean;
     };
     hermesDesktop?: {
       windowType: "electron" | "tauri";
@@ -627,6 +629,12 @@ export const runtime = {
 
   isBackendReady(): boolean {
     return window.__HERMES_RUNTIME__?.backendReady ?? true;
+  },
+
+  /** AgentDeck 下旧 Hermes 后端不存在：REST 与网关调用应立即失败而不是发请求。 */
+  isHermesBackendDisabled(): boolean {
+    if (typeof window === "undefined") return false;
+    return window.__HERMES_RUNTIME__?.hermesBackendDisabled ?? false;
   },
 
   getGuideState(): import("@agentdeck/protocol").GuideState {

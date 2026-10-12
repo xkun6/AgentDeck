@@ -1,0 +1,57 @@
+// 会话列表（侧栏 / 历史页）对 AgentSnapshot 的展示规则。
+import type { AgentSnapshot, AgentStatus, ProviderInfo } from "@agentdeck/protocol";
+import type { ChatSessionRuntime } from "@/stores/chat";
+import { isRuntimeRunning } from "@/lib/session-activity";
+
+const PROVIDER_FALLBACK_LABELS: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  mock: "Mock",
+};
+
+export function agentProviderLabel(provider: string, providers?: ProviderInfo[] | null): string {
+  return providers?.find((item) => item.id === provider)?.label
+    ?? PROVIDER_FALLBACK_LABELS[provider]
+    ?? (provider.startsWith("acp:") ? provider.slice(4) : provider);
+}
+
+function firstUserMessage(runtime: ChatSessionRuntime | undefined): string {
+  for (const message of runtime?.messages ?? []) {
+    if (message.role !== "user") continue;
+    for (const part of message.parts) {
+      if (part.type === "text" && part.text.trim()) return part.text.trim().replace(/\s+/g, " ");
+    }
+  }
+  return "";
+}
+
+/** 标题 → 首条用户消息 → 「<Agent> 会话」。 */
+export function agentDisplayTitle(
+  agent: AgentSnapshot,
+  runtime: ChatSessionRuntime | undefined,
+  providers?: ProviderInfo[] | null,
+): string {
+  return agent.title?.trim()
+    || firstUserMessage(runtime)
+    || `${agentProviderLabel(agent.provider, providers)} 会话`;
+}
+
+export const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
+  starting: "启动中",
+  idle: "空闲",
+  running: "运行中",
+  error: "出错",
+  closed: "已关闭",
+};
+
+export function isAgentRunning(agent: AgentSnapshot, runtime: ChatSessionRuntime | undefined): boolean {
+  return agent.status === "running" || agent.status === "starting" || (runtime ? isRuntimeRunning(runtime) : false);
+}
+
+export function formatAgentTime(ms: number, now: Date): string {
+  const d = new Date(ms);
+  if (d.toDateString() === now.toDateString()) {
+    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  }
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}

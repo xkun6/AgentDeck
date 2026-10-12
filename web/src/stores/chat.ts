@@ -1,11 +1,17 @@
 import { atom } from "jotai";
 import type {
+  AgentPermissionRequest,
+  AgentStreamEnvelope,
+  AgentTimelineItem,
+  AgentUsage,
   GatewayEvent,
   GatewayMessageUsageT,
   HermesMessageMetadata,
   HermesMessagePart,
   HermesUIMessage,
+  ToolCallTimelineItem,
 } from "@agentdeck/protocol";
+import { describePermissionCommand, describeToolCall } from "@/lib/agent-tool-detail";
 import type { ConnectionState } from "@/lib/gateway-client";
 import {
   normalizeCliThinkingProgress,
@@ -54,6 +60,8 @@ export interface PendingApproval {
   sessionId: string;
   command: string;
   reason?: string;
+  /** AgentDeck：sidecar 推来的完整权限请求（actions / detail 等）。 */
+  permission?: AgentPermissionRequest;
 }
 
 export type StreamStatus = "idle" | "connecting" | "streaming" | "complete" | "error";
@@ -78,6 +86,18 @@ export interface ChatSessionRuntime {
   turnFirstTokenAt?: number;
   activeAssistantId?: string;
   interrupted?: boolean;
+  /** AgentDeck：已归约的最后一个 sidecar 事件序号（按 seq 去重）。 */
+  agentLastSeq?: number;
+  /** AgentDeck：上述序号所属的 sidecar epoch。 */
+  agentEpoch?: string;
+  /** AgentDeck：进行中的 turnId。 */
+  activeTurnId?: string;
+  /** AgentDeck：最近一次 usage_updated。 */
+  agentUsage?: AgentUsage;
+  /** AgentDeck：Agent 最近一次上报的待办列表。 */
+  agentTodos?: { text: string; completed: boolean }[];
+  /** AgentDeck：最近一段 assistant_message 的 messageId（不同 messageId 分段拼接）。 */
+  agentTextMessageId?: string;
 }
 
 export type ChatRuntimeBySession = Record<string, ChatSessionRuntime>;
@@ -1433,6 +1453,528 @@ export const removeApprovalAtom = atom(
     );
   },
 );
+
+// ── AgentDeck：sidecar 事件 → ChatSessionRuntime ─────────────────────────────
+//
+// 会话 id 直接使用 sidecar 的 agentId。sidecar-client 已保证事件按 seq 连续投递，
+// 这里再按 (epoch, seq) 去重一次，timeline 回放与实时事件重叠时不会重复归约。
+
+const AGENT_PENDING_PROGRESS = "正在等待 Agent 响应…";
+const AGENT_RECONNECT_STATUS = "连接中断，正在重连…";
+
+function agentAssistantMessageId(turnId: string | undefined, seq: number): string {
+  return turnId ? `agent-turn-${turnId}` : `agent-assistant-${seq}`;
+}
+
+export function agentPendingAssistantId(clientMessageId: string): string {
+  return `agent-pending-${clientMessageId}`;
+}
+
+function appendAgentNotice(
+  runtime: ChatSessionRuntime,
+  agentId: string,
+  id: string,
+  createdAt: number,
+  text: string,
+  level: "info" | "warning" | "error" | "system",
+): ChatSessionRuntime {
+  const trimmed = text.trim();
+  if (!trimmed || runtime.messages.some((message) => message.id === id)) return runtime;
+  return {
+    ...runtime,
+    messages: [
+      ...runtime.messages,
+      {
+        id,
+        sessionId: agentId,
+        role: "system",
+        createdAt,
+        status: level === "error" ? "error" : "complete",
+        parts: [{ type: "notice", level, text: trimmed }],
+      },
+    ],
+  };
+}
+
+function withActiveAgentAssistant(
+  runtime: ChatSessionRuntime,
+  envelope: AgentStreamEnvelope,
+  turnId: string | undefined,
+  updater: (message: HermesUIMessage) => HermesUIMessage | null,
+): ChatSessionRuntime {
+  const id = runtime.activeAssistantId ?? agentAssistantMessageId(turnId ?? runtime.activeTurnId, envelope.seq);
+  const reconnecting = runtime.statusMessage === AGENT_RECONNECT_STATUS;
+  const ensured = ensureAssistantMessage(
+    {
+      ...runtime,
+      ...(reconnecting ? { statusMessage: "", statusKind: undefined, statusUpdatedAt: undefined } : {}),
+      activeAssistantId: id,
+      streamStatus: isStreamingStatus(runtime.streamStatus) ? "streaming" : runtime.streamStatus,
+      turnStartedAt: runtime.turnStartedAt ?? envelope.timestamp,
+    },
+    envelope.agentId,
+    id,
+    envelope.timestamp,
+  );
+  return updateMessage(ensured, id, updater);
+}
+
+function agentToolState(status: ToolCallTimelineItem["status"]): HermesToolPart["state"] {
+  if (status === "running") return "running";
+  if (status === "completed") return "done";
+  return "error";
+}
+
+function upsertAgentToolPart(
+  parts: HermesMessagePart[],
+  item: ToolCallTimelineItem,
+  timestamp: number,
+): HermesMessagePart[] {
+  const display = describeToolCall(item);
+  const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === item.callId);
+  const existing = index === -1 ? undefined : parts[index] as HermesToolPart;
+  const state = agentToolState(item.status);
+  const errorText = item.error
+    ? item.error
+    : item.status === "canceled"
+      ? "已取消"
+      : undefined;
+  const tool: HermesToolPart = {
+    type: "tool",
+    toolCallId: item.callId,
+    name: item.name,
+    state,
+    input: display.context,
+    preview: display.preview,
+    output: display.output,
+    errorText,
+    startedAt: existing?.startedAt ?? timestamp,
+    completedAt: state === "running" ? undefined : existing?.completedAt ?? timestamp,
+  };
+  if (!existing) return appendToolPart(withoutProgressParts(parts), tool);
+  const next = [...parts];
+  next[index] = tool;
+  return next;
+}
+
+function agentUsageMetadata(usage: AgentUsage | undefined): HermesMessageMetadata["usage"] | undefined {
+  if (!usage) return undefined;
+  const next: NonNullable<HermesMessageMetadata["usage"]> = {};
+  if (typeof usage.inputTokens === "number") next.tokensInput = usage.inputTokens;
+  if (typeof usage.outputTokens === "number") next.tokensOutput = usage.outputTokens;
+  if (typeof usage.inputTokens === "number" || typeof usage.outputTokens === "number") {
+    next.tokensTotal = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+  }
+  if (typeof usage.cachedInputTokens === "number") next.cacheRead = usage.cachedInputTokens;
+  if (typeof usage.contextWindowUsedTokens === "number") next.contextUsed = usage.contextWindowUsedTokens;
+  if (typeof usage.contextWindowMaxTokens === "number") next.contextMax = usage.contextWindowMaxTokens;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function agentTurnMetadata(
+  runtime: ChatSessionRuntime,
+  completedAt: number,
+  usage: AgentUsage | undefined,
+): HermesMessageMetadata {
+  const timing: NonNullable<HermesMessageMetadata["timing"]> = { completedAt };
+  const startedAt = runtime.turnStartedAt;
+  const firstTokenAt = runtime.turnFirstTokenAt;
+  if (typeof startedAt === "number") {
+    timing.startedAt = startedAt;
+    if (completedAt >= startedAt) timing.durationMs = completedAt - startedAt;
+  }
+  if (typeof firstTokenAt === "number") {
+    timing.firstTokenAt = firstTokenAt;
+    if (typeof startedAt === "number" && firstTokenAt >= startedAt) timing.ttftMs = firstTokenAt - startedAt;
+  }
+  const metadata: HermesMessageMetadata = { timing };
+  const usageMetadata = agentUsageMetadata(usage);
+  if (usageMetadata) metadata.usage = usageMetadata;
+  if (typeof usage?.totalCostUsd === "number") metadata.costUsd = usage.totalCostUsd;
+  return metadata;
+}
+
+function finishAgentTurn(
+  runtime: ChatSessionRuntime,
+  completedAt: number,
+  outcome: "complete" | "error" | "canceled",
+  usage: AgentUsage | undefined,
+): ChatSessionRuntime {
+  const id = runtime.activeAssistantId;
+  const metadata = agentTurnMetadata(runtime, completedAt, usage ?? runtime.agentUsage);
+  const next = id
+    ? updateMessage(runtime, id, (message) => {
+        let parts = withoutProgressParts(message.parts);
+        if (outcome !== "complete") parts = terminateRunningTools(parts);
+        if (parts.length === 0) return null;
+        return {
+          ...message,
+          status: outcome === "error" ? "error" : "complete",
+          parts,
+          metadata: { ...message.metadata, ...metadata },
+        };
+      })
+    : runtime;
+  return {
+    ...next,
+    streamStatus: outcome === "error" ? "error" : outcome === "canceled" ? "idle" : "complete",
+    pendingApprovals: [],
+    statusMessage: "",
+    statusKind: undefined,
+    statusUpdatedAt: undefined,
+    activeAssistantId: undefined,
+    activeTurnId: undefined,
+    agentTextMessageId: undefined,
+    turnStartedAt: undefined,
+    turnFirstTokenAt: undefined,
+    interrupted: undefined,
+    agentUsage: usage ?? runtime.agentUsage,
+  };
+}
+
+function todoStatusText(items: { text: string; completed: boolean }[]): string {
+  if (items.length === 0) return "";
+  const done = items.filter((item) => item.completed).length;
+  const current = items.find((item) => !item.completed);
+  return current
+    ? `计划进度 ${done}/${items.length}：${current.text}`
+    : `计划进度 ${done}/${items.length}：全部完成`;
+}
+
+function reduceAgentTimelineItem(
+  runtime: ChatSessionRuntime,
+  envelope: AgentStreamEnvelope,
+  item: AgentTimelineItem,
+  turnId: string | undefined,
+): ChatSessionRuntime {
+  const { agentId, timestamp, seq } = envelope;
+  switch (item.type) {
+    case "user_message": {
+      const optimisticId = item.clientMessageId;
+      if (optimisticId && runtime.messages.some((message) => message.id === optimisticId)) {
+        // 本地乐观消息已在：只确认状态，不重复插入
+        return updateMessage(runtime, optimisticId, (message) => ({ ...message, status: "complete" }));
+      }
+      return {
+        ...runtime,
+        // 新的一轮从这条用户消息开始；上一轮的助手消息不再承接后续输出
+        activeAssistantId: undefined,
+        messages: [
+          ...runtime.messages,
+          {
+            id: optimisticId ?? item.messageId ?? `agent-user-${seq}`,
+            sessionId: agentId,
+            role: "user",
+            createdAt: timestamp,
+            status: "complete",
+            parts: [{ type: "text", text: item.text }],
+          },
+        ],
+      };
+    }
+
+    case "assistant_message": {
+      if (!item.text) return runtime;
+      // 一轮内可能有多条 assistant_message（不同 messageId）：换 messageId 时另起一个文本段
+      const newSegment = Boolean(
+        item.messageId && runtime.agentTextMessageId && item.messageId !== runtime.agentTextMessageId,
+      );
+      return withActiveAgentAssistant(
+        clearProviderStatus({
+          ...runtime,
+          agentTextMessageId: item.messageId ?? runtime.agentTextMessageId,
+          turnFirstTokenAt: runtime.turnFirstTokenAt ?? timestamp,
+        }),
+        envelope,
+        turnId,
+        (message) => ({
+          ...message,
+          status: "streaming",
+          parts: newSegment
+            ? [...withoutProgressParts(message.parts), { type: "text", text: item.text }]
+            : appendTextPart(message.parts, item.text),
+        }),
+      );
+    }
+
+    case "reasoning": {
+      if (!item.text) return runtime;
+      return withActiveAgentAssistant(
+        { ...runtime, turnFirstTokenAt: runtime.turnFirstTokenAt ?? timestamp },
+        envelope,
+        turnId,
+        (message) => ({ ...message, status: "streaming", parts: appendReasoningPart(message.parts, item.text) }),
+      );
+    }
+
+    case "tool_call":
+      return withActiveAgentAssistant(runtime, envelope, turnId, (message) => ({
+        ...message,
+        status: "streaming",
+        parts: upsertAgentToolPart(message.parts, item, timestamp),
+      }));
+
+    case "todo":
+      return {
+        ...runtime,
+        agentTodos: item.items,
+        statusMessage: todoStatusText(item.items),
+        statusKind: "todo",
+        statusUpdatedAt: timestamp,
+      };
+
+    case "error":
+      return appendAgentNotice(runtime, agentId, `agent-notice-${seq}`, timestamp, item.message, "error");
+
+    default:
+      return runtime;
+  }
+}
+
+function reduceAgentEventInner(
+  runtime: ChatSessionRuntime,
+  envelope: AgentStreamEnvelope,
+): ChatSessionRuntime {
+  const { event, agentId, timestamp, seq } = envelope;
+  switch (event.type) {
+    case "timeline":
+      return reduceAgentTimelineItem(runtime, envelope, event.item, event.turnId);
+
+    case "turn_started": {
+      const active = runtime.activeAssistantId
+        ? runtime.messages.find((message) => message.id === runtime.activeAssistantId)
+        : undefined;
+      // 复用发送时插入的乐观助手消息；否则（回放 / 其它客户端发起）按 turnId 新建
+      const id = active && active.status === "streaming"
+        ? active.id
+        : agentAssistantMessageId(event.turnId, seq);
+      return ensureAssistantMessage(
+        {
+          ...runtime,
+          streamStatus: "streaming",
+          activeAssistantId: id,
+          activeTurnId: event.turnId,
+          agentTextMessageId: undefined,
+          turnStartedAt: active ? runtime.turnStartedAt ?? timestamp : timestamp,
+          turnFirstTokenAt: undefined,
+          statusMessage: "",
+          statusKind: undefined,
+          statusUpdatedAt: undefined,
+          interrupted: undefined,
+        },
+        agentId,
+        id,
+        timestamp,
+      );
+    }
+
+    case "turn_completed":
+      return finishAgentTurn(runtime, timestamp, "complete", event.usage);
+
+    case "turn_failed": {
+      const finished = finishAgentTurn(runtime, timestamp, "error", undefined);
+      const base = event.error || "Agent 执行失败";
+      const text = event.code === "PROCESS_EXITED"
+        ? `${base}（Agent 进程已退出，请新建会话继续）`
+        : base;
+      return appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, text, "error");
+    }
+
+    case "turn_canceled": {
+      const finished = finishAgentTurn(runtime, timestamp, "canceled", undefined);
+      return appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, "已中断本轮", "info");
+    }
+
+    case "permission_requested": {
+      const request = event.request;
+      const approval: PendingApproval = {
+        requestId: request.id,
+        sessionId: agentId,
+        command: describePermissionCommand(request),
+        reason: request.description,
+        permission: request,
+      };
+      return {
+        ...runtime,
+        pendingApprovals: [
+          ...runtime.pendingApprovals.filter((item) => item.requestId !== request.id),
+          approval,
+        ],
+      };
+    }
+
+    case "permission_resolved":
+      return {
+        ...runtime,
+        pendingApprovals: runtime.pendingApprovals.filter((item) => item.requestId !== event.requestId),
+      };
+
+    case "usage_updated":
+      return { ...runtime, agentUsage: event.usage };
+
+    default:
+      // thread_started / model_changed / mode_changed：快照由 agent.state 更新，时间线无变化
+      return runtime;
+  }
+}
+
+/** 把一个 sidecar 事件归约进会话运行时；同 epoch 下 seq 不大于已归约序号的事件直接忽略。 */
+export function reduceAgentEvent(
+  runtime: ChatSessionRuntime,
+  envelope: AgentStreamEnvelope,
+  now = Date.now(),
+): ChatSessionRuntime {
+  if (
+    runtime.agentEpoch === envelope.epoch &&
+    runtime.agentLastSeq !== undefined &&
+    envelope.seq <= runtime.agentLastSeq
+  ) {
+    return runtime;
+  }
+  const next = reduceAgentEventInner(runtime, envelope);
+  return {
+    ...next,
+    agentLastSeq: envelope.seq,
+    agentEpoch: envelope.epoch,
+    lastActivityAt: now,
+    updatedAt: now,
+  };
+}
+
+export const applyAgentEventAtom = atom(null, (_get, set, envelope: AgentStreamEnvelope) => {
+  set(chatRuntimeBySessionAtom, (state) =>
+    updateSessionRuntime(state, envelope.agentId, (runtime) => reduceAgentEvent(runtime, envelope)),
+  );
+});
+
+/** 发送前写入乐观的用户消息与占位助手消息（id = clientMessageId，事件到达后去重）。 */
+export const startAgentPromptAtom = atom(
+  null,
+  (
+    _get,
+    set,
+    params: { agentId: string; clientMessageId: string; text: string; images?: ImageEntry[]; now?: number },
+  ) => {
+    const now = params.now ?? Date.now();
+    const assistantId = agentPendingAssistantId(params.clientMessageId);
+    const userParts: HermesMessagePart[] = [];
+    if (params.text) userParts.push({ type: "text", text: params.text });
+    for (const image of params.images ?? []) {
+      const part = imagePartFromSource(image);
+      if (part) userParts.push(part);
+    }
+    set(chatRuntimeBySessionAtom, (state) =>
+      updateSessionRuntime(state, params.agentId, (runtime) => ({
+        ...resetStream(runtime, now),
+        interrupted: undefined,
+        messages: [
+          ...runtime.messages,
+          {
+            id: params.clientMessageId,
+            sessionId: params.agentId,
+            role: "user",
+            createdAt: now,
+            status: "streaming",
+            parts: userParts.length ? userParts : [{ type: "text", text: params.text }],
+          },
+          {
+            id: assistantId,
+            sessionId: params.agentId,
+            role: "assistant",
+            createdAt: now,
+            status: "streaming",
+            parts: [{ type: "progress", text: AGENT_PENDING_PROGRESS }],
+          },
+        ],
+        streamStatus: "streaming",
+        pendingApprovals: [],
+        turnStartedAt: now,
+        turnFirstTokenAt: undefined,
+        activeAssistantId: assistantId,
+      })),
+    );
+  },
+);
+
+/** `agent.send` 失败：撤掉占位助手消息，用户消息保留，追加错误提示。 */
+export const failAgentPromptAtom = atom(
+  null,
+  (_get, set, params: { agentId: string; clientMessageId: string; message: string; now?: number }) => {
+    const now = params.now ?? Date.now();
+    const assistantId = agentPendingAssistantId(params.clientMessageId);
+    set(chatRuntimeBySessionAtom, (state) =>
+      updateSessionRuntime(state, params.agentId, (runtime) => {
+        let next = updateMessage(runtime, assistantId, (message) => {
+          const parts = withoutProgressParts(message.parts);
+          return parts.length ? { ...message, status: "error", parts } : null;
+        });
+        next = updateMessage(next, params.clientMessageId, (message) => ({ ...message, status: "complete" }));
+        next = appendAgentNotice(next, params.agentId, `agent-send-error-${params.clientMessageId}`, now, `发送失败：${params.message}`, "error");
+        const ownsTurn = runtime.activeAssistantId === assistantId;
+        return {
+          ...next,
+          streamStatus: ownsTurn ? "error" : next.streamStatus,
+          activeAssistantId: ownsTurn ? undefined : next.activeAssistantId,
+          turnStartedAt: ownsTurn ? undefined : next.turnStartedAt,
+          turnFirstTokenAt: ownsTurn ? undefined : next.turnFirstTokenAt,
+          updatedAt: now,
+        };
+      }),
+    );
+  },
+);
+
+/**
+ * 重连 / 拉到新的 agent 列表后对齐运行时：断线期间被标成「重连中」的会话，
+ * 若 sidecar 说仍在运行则恢复为 streaming，否则收尾为空闲。
+ */
+export const reconcileAgentRuntimesAtom = atom(
+  null,
+  (_get, set, agents: { id: string; status: string }[]) => {
+    const statusById = new Map(agents.map((agent) => [agent.id, agent.status]));
+    const now = Date.now();
+    set(chatRuntimeBySessionAtom, (state) => {
+      let changed = false;
+      const next: ChatRuntimeBySession = { ...state };
+      for (const [agentId, runtime] of Object.entries(state)) {
+        if (runtime.streamStatus !== "connecting" || runtime.statusMessage !== AGENT_RECONNECT_STATUS) continue;
+        const status = statusById.get(agentId);
+        if (status === undefined) continue;
+        changed = true;
+        next[agentId] = status === "running" || status === "starting"
+          ? { ...runtime, streamStatus: "streaming", statusMessage: "", statusKind: undefined, statusUpdatedAt: undefined, updatedAt: now }
+          : finishAgentTurn(runtime, now, "complete", undefined);
+      }
+      return changed ? next : state;
+    });
+  },
+);
+
+/** sidecar 重启（epoch 变化）：旧序号作废，进行中的回合以错误收尾。 */
+export const resetAgentRuntimesForEpochAtom = atom(null, (_get, set) => {
+  const now = Date.now();
+  set(chatRuntimeBySessionAtom, (state) => {
+    let changed = false;
+    const next: ChatRuntimeBySession = { ...state };
+    for (const [agentId, runtime] of Object.entries(state)) {
+      if (runtime.agentEpoch === undefined && runtime.agentLastSeq === undefined) continue;
+      changed = true;
+      let updated: ChatSessionRuntime = { ...runtime, agentEpoch: undefined, agentLastSeq: undefined, pendingApprovals: [] };
+      if (isStreamingStatus(runtime.streamStatus)) {
+        updated = appendAgentNotice(
+          finishAgentTurn(updated, now, "error", undefined),
+          agentId,
+          `agent-epoch-reset-${now}`,
+          now,
+          "Agent 服务已重启，本轮已中断",
+          "error",
+        );
+      }
+      next[agentId] = updated;
+    }
+    return changed ? next : state;
+  });
+});
 
 // ── Hydration ────────────────────────────────────────────────────────────────
 

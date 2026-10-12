@@ -40,6 +40,8 @@ import {
   useTestMessagingPlatform,
 } from "@/hooks/use-im-onboarding";
 import { useCreateAndSendSession } from "@/hooks/use-create-and-send-session";
+import { readAgentSelection } from "@/lib/agent-selection";
+import { readWorkspacePath } from "@/lib/workspaces";
 import { openExternalUrl } from "@/lib/external-links";
 import {
   buildImDiagnosticBundle,
@@ -947,7 +949,8 @@ function FeishuRoute() {
       await createAndSendSession({
         text: buildImDiagnosticPrompt(diagnosticBundle),
         attachments: [],
-      }, { updateAttachment: () => undefined });
+        workspacePath: readWorkspacePath(),
+      }, readAgentSelection());
     } catch (error) {
       setDiagnosticError(textFromError(error) ?? "无法打开 Hermes 排查会话");
     } finally {
@@ -1243,7 +1246,8 @@ function WeixinRoute() {
       await createAndSendSession({
         text: buildImDiagnosticPrompt(diagnosticBundle),
         attachments: [],
-      }, { updateAttachment: () => undefined });
+        workspacePath: readWorkspacePath(),
+      }, readAgentSelection());
     } catch (error) {
       setDiagnosticError(textFromError(error) ?? "无法打开 Hermes 排查会话");
     } finally {

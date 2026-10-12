@@ -4,6 +4,7 @@ import { debugBus } from "./debug-bus";
 import { activeProfileAtom } from "@/stores/ui";
 import { AttachmentUploadResult } from "@agentdeck/protocol";
 import { assertCompatible } from "./version-check";
+import { agentDeckUnsupportedError } from "./agentdeck-unsupported";
 import type { DownloadExternalImageInput, DownloadedImageResult } from "./runtime";
 
 interface Parser<T> {
@@ -142,6 +143,7 @@ export async function fetchJSON<T>(
   init?: RequestInit,
   parser?: Parser<T>,
 ): Promise<T> {
+  if (runtime.isHermesBackendDisabled()) throw agentDeckUnsupportedError();
   assertCompatible();
   if (shouldUseNativeIpc(path)) {
     return fetchViaElectron(path, init, parser);

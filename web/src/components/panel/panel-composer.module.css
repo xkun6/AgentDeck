@@ -1,0 +1,5 @@
+.hint {
+  margin: 8px 4px 0;
+  color: var(--h-text-3);
+  font-size: var(--h-button-font-size-sm);
+}

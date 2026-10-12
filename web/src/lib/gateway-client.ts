@@ -527,16 +527,47 @@ export interface GatewayClientLike {
   close(): void;
 }
 
-let instance: GatewayClient | null = null;
+/**
+ * AgentDeck 没有 Hermes 网关：旧调用方（P5 删除前）拿到的是这个空壳，所有请求
+ * 立即以「暂不支持」失败，不建连、不重连，避免对不存在的 /api/ws 反复报错。
+ */
+export class DisabledGatewayClient implements GatewayClientLike {
+  readonly state: ConnectionState = "idle";
+  connect(): Promise<void> {
+    return rejectUnsupported();
+  }
+  request<T = unknown>(): Promise<T> {
+    return rejectUnsupported<T>();
+  }
+  on(): () => void {
+    return () => {};
+  }
+  onAny(): () => void {
+    return () => {};
+  }
+  onState(cb: (s: ConnectionState) => void): () => void {
+    cb(this.state);
+    return () => {};
+  }
+  enableAutoReconnect(): void {}
+  disableAutoReconnect(): void {}
+  forceReconnect(): void {}
+  close(): void {}
+}
+
+let instance: GatewayClientLike | null = null;
 
 // The socket factory picks native webview WebSocket vs Rust relay (and flips
 // automatically when a packaged webview blocks ws:// from tauri://); the
 // protocol layer above is identical either way. See gateway-socket-path.ts.
 import { createGatewaySocket } from "./gateway-socket-path";
+import { rejectUnsupported } from "./agentdeck-unsupported";
 
 export function getGatewayClient(): GatewayClientLike {
   if (instance) return instance;
-  instance = new GatewayClient(createGatewaySocket);
+  instance = runtime.isHermesBackendDisabled()
+    ? new DisabledGatewayClient()
+    : new GatewayClient(createGatewaySocket);
   return instance;
 }
 

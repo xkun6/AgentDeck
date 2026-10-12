@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   arrayBufferToBase64,
   installTauriBridge,
-  isTauriDevMode,
+  isSidecarReady,
   normalizeTauriInvokeError,
-  shouldWaitForManagedRuntimeConfig,
 } from "./tauri-bridge";
-import { EXPECTED_BACKEND_VERSION } from "./build-info";
+import { AGENTDECK_UNSUPPORTED_MESSAGE } from "./agentdeck-unsupported";
 
 const mockInvoke = vi.fn();
+const mockListen = vi.fn();
 const mockFileDropUnlisten = vi.fn();
 let fileDropHandler: ((event: {
   payload: {
@@ -26,35 +26,33 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: mockInvoke,
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: mockListen,
+}));
+
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
     onDragDropEvent: mockOnDragDropEvent,
   }),
 }));
 
+const READY_STATUS = {
+  wsUrl: "ws://127.0.0.1:43210/rpc",
+  token: "token",
+  version: "0.1.0",
+  status: "ready",
+  error: null,
+};
+
 beforeEach(() => {
   mockInvoke.mockReset();
+  mockListen.mockReset();
+  mockListen.mockResolvedValue(() => {});
   mockFileDropUnlisten.mockReset();
   mockOnDragDropEvent.mockClear();
   fileDropHandler = null;
   mockInvoke.mockImplementation((command: string, args?: unknown) => {
-    if (command === "get_runtime_config") {
-      return Promise.resolve({
-        apiBaseUrl: "http://127.0.0.1:9120",
-        gatewayUrl: "ws://127.0.0.1:9120/api/ws",
-        sessionToken: "token",
-        currentProfile: "default",
-      });
-    }
-    if (command === "api_request") {
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ version: EXPECTED_BACKEND_VERSION, name: "hermes-agent" }),
-      });
-    }
+    if (command === "get_sidecar_config") return Promise.resolve(READY_STATUS);
     return Promise.resolve({ command, args });
   });
   (globalThis as any).window = {};
@@ -64,12 +62,7 @@ afterEach(() => {
   delete (globalThis as any).window;
 });
 
-describe("isTauriDevMode", () => {
-  it("uses Vite build mode instead of the window URL protocol", () => {
-    expect(isTauriDevMode(true)).toBe(true);
-    expect(isTauriDevMode(false)).toBe(false);
-  });
-
+describe("tauri bridge", () => {
   it("encodes large upload buffers in chunks", () => {
     const bytes = new Uint8Array(100_000);
     for (let i = 0; i < bytes.length; i++) {
@@ -81,54 +74,76 @@ describe("isTauriDevMode", () => {
     expect(decoded).toEqual(bytes);
   });
 
-  it("exposes config migration scan/import through Tauri IPC", async () => {
+  it("sidecar 就绪时直接挂载，运行时标记为无 Hermes 后端", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.scanConfigMigration?.({ manualPath: "/Users/alice/.hermes" });
-    await window.hermesDesktop?.importConfigMigration?.({
-      sourcePath: "/Users/alice/.hermes",
-      recommendedTargetProfile: "imported",
+    expect(mockInvoke).toHaveBeenCalledWith("get_sidecar_config", undefined);
+    expect(mockInvoke).not.toHaveBeenCalledWith("get_runtime_config", expect.anything());
+    expect(mockInvoke).not.toHaveBeenCalledWith("get_runtime_config", undefined);
+    expect(mockInvoke).not.toHaveBeenCalledWith("runtime_info", undefined);
+    expect(mockInvoke).not.toHaveBeenCalledWith("api_request", expect.anything());
+    expect(mockListen).not.toHaveBeenCalledWith("runtime-status", expect.anything());
+    expect(window.__HERMES_RUNTIME__).toMatchObject({
+      platform: "tauri",
+      backendReady: true,
+      hermesBackendDisabled: true,
     });
-
-    expect(mockInvoke).toHaveBeenCalledWith("config_migration_scan", {
-      input: { manualPath: "/Users/alice/.hermes" },
-    });
-    expect(mockInvoke).toHaveBeenCalledWith("config_migration_import", {
-      input: {
-        sourcePath: "/Users/alice/.hermes",
-        recommendedTargetProfile: "imported",
-      },
-    });
+    expect(window.hermesDesktop?.windowType).toBe("tauri");
   });
 
-  it("exposes debug bundle export through Tauri IPC", async () => {
+  it("isSidecarReady 只在 ready 且有 wsUrl 时为真", () => {
+    expect(isSidecarReady(READY_STATUS as never)).toBe(true);
+    expect(isSidecarReady({ ...READY_STATUS, status: "starting" } as never)).toBe(false);
+    expect(isSidecarReady({ ...READY_STATUS, wsUrl: "" } as never)).toBe(false);
+    expect(isSidecarReady(null)).toBe(false);
+  });
+
+  it("已删除的 Hermes 命令统一返回「暂不支持」", async () => {
     await installTauriBridge();
+    const bridge = window.hermesDesktop!;
+    const calls: Array<Promise<unknown> | undefined> = [
+      bridge.request({ path: "/api/version" }),
+      bridge.scanConfigMigration?.({ manualPath: "/Users/alice/.hermes" }),
+      bridge.exportDebugBundle?.({ frontendDebug: [] }),
+      bridge.checkDesktopUpdate?.(),
+      bridge.exportProfileBackup?.(),
+      bridge.getRuntimeInfo?.(),
+      bridge.refreshGatewayUrl?.(),
+      bridge.getDesktopControlState?.(),
+      bridge.installManagedRuntime?.(),
+      bridge.readMemory?.(),
+      bridge.getYoloMode?.(),
+    ];
+    for (const call of calls) {
+      await expect(call).rejects.toThrow(AGENTDECK_UNSUPPORTED_MESSAGE);
+    }
+    const invokedCommands = mockInvoke.mock.calls.map(([command]) => command);
+    expect(invokedCommands).toEqual(["get_sidecar_config"]);
+  });
 
-    await window.hermesDesktop?.exportDebugBundle?.({
-      frontendDebug: [{ type: "console", summary: "hello" }],
-      rendererDiagnostics: { route: "/debug" },
-    });
-
-    expect(mockInvoke).toHaveBeenCalledWith("export_debug_bundle", {
-      input: {
-        frontendDebug: [{ type: "console", summary: "hello" }],
-        rendererDiagnostics: { route: "/debug" },
-      },
-    });
+  it("已删除事件的订阅不注册监听", async () => {
+    await installTauriBridge();
+    const unsubscribe = window.hermesDesktop?.onUiUpdateReady?.(() => {});
+    const unsubscribeProgress = window.hermesDesktop?.onAppUpdateProgress?.(() => {});
+    expect(typeof unsubscribe).toBe("function");
+    expect(typeof unsubscribeProgress).toBe("function");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockListen).not.toHaveBeenCalledWith("ui-update-ready", expect.anything());
+    expect(mockListen).not.toHaveBeenCalledWith("app-update-progress", expect.anything());
   });
 
   it("exposes log snapshot export through Tauri IPC", async () => {
     await installTauriBridge();
 
     await window.hermesDesktop?.exportLogSnapshot?.({
-      fileName: "hermes-logs-agent.log",
+      fileName: "agentdeck-logs.log",
       content: "hello\n",
       format: "log",
     });
 
     expect(mockInvoke).toHaveBeenCalledWith("export_log_snapshot", {
       input: {
-        fileName: "hermes-logs-agent.log",
+        fileName: "agentdeck-logs.log",
         content: "hello\n",
         format: "log",
       },
@@ -154,28 +169,20 @@ describe("isTauriDevMode", () => {
   it("exposes external URL opening through Tauri IPC", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.openExternalUrl?.({ url: "https://hermesagent.org.cn" });
+    await window.hermesDesktop?.openExternalUrl?.({ url: "https://example.com" });
 
     expect(mockInvoke).toHaveBeenCalledWith("open_external_url", {
-      input: { url: "https://hermesagent.org.cn" },
+      input: { url: "https://example.com" },
     });
-  });
-
-  it("exposes desktop update checks through Tauri IPC", async () => {
-    await installTauriBridge();
-
-    await window.hermesDesktop?.checkDesktopUpdate?.();
-
-    expect(mockInvoke).toHaveBeenCalledWith("desktop_check_update", undefined);
   });
 
   it("exposes external terminal opening through Tauri IPC", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.terminalOpenExternal?.({ purpose: "gatewaySetup" });
+    await window.hermesDesktop?.terminalOpenExternal?.({ purpose: "shell" });
 
     expect(mockInvoke).toHaveBeenCalledWith("terminal_open_external", {
-      input: { purpose: "gatewaySetup" },
+      input: { purpose: "shell" },
     });
   });
 
@@ -219,227 +226,19 @@ describe("isTauriDevMode", () => {
       code: "not_ready",
       kind: "state",
       message: "Desktop runtime not ready",
-      details: { phase: "starting-dashboard" },
+      details: { phase: "starting" },
     });
 
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toBe("Desktop runtime not ready");
     expect((error as any).code).toBe("not_ready");
     expect((error as any).kind).toBe("state");
-    expect((error as any).details).toEqual({ phase: "starting-dashboard" });
+    expect((error as any).details).toEqual({ phase: "starting" });
   });
 
   it("normalizes legacy string Tauri IPC errors", () => {
     const error = normalizeTauriInvokeError("Desktop runtime not ready");
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toBe("Desktop runtime not ready");
-  });
-
-  it("exposes profile backup export/import through Tauri IPC", async () => {
-    await installTauriBridge();
-
-    await window.hermesDesktop?.exportProfileBackup?.();
-    await window.hermesDesktop?.importProfileBackup?.();
-
-    expect(mockInvoke).toHaveBeenCalledWith("backup_export_profile");
-    expect(mockInvoke).toHaveBeenCalledWith("backup_import_profile");
-  });
-
-  it("mounts the renderer without waiting when the managed runtime is intentionally offline", async () => {
-    (globalThis as any).window.__TAURI_INTERNALS__ = {};
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === "get_runtime_config") {
-        return Promise.resolve({
-          apiBaseUrl: "",
-          gatewayUrl: "",
-          currentProfile: "default",
-          connectionMode: "managed",
-          backendReady: false,
-          guideState: "pending",
-          managedRuntimeDesiredState: "stopped",
-          managedRuntimeLifecycleState: "stopped",
-        });
-      }
-      return Promise.resolve({});
-    });
-
-    await installTauriBridge();
-
-    expect(window.__HERMES_RUNTIME__).toMatchObject({
-      backendReady: false,
-      backendRecoveryReason: "managed-runtime-offline",
-      guideState: "pending",
-      managedRuntimeDesiredState: "stopped",
-      managedRuntimeLifecycleState: "stopped",
-    });
-    expect(mockInvoke).not.toHaveBeenCalledWith("runtime_info", undefined);
-    expect(mockInvoke).not.toHaveBeenCalledWith("api_request", expect.anything());
-  });
-
-  it("mounts the offline repair shell when an attached backend is unreachable", async () => {
-    (globalThis as any).window.__TAURI_INTERNALS__ = {};
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === "get_runtime_config") {
-        return Promise.resolve({
-          apiBaseUrl: "http://127.0.0.1:9559",
-          gatewayUrl: "ws://127.0.0.1:9559/api/ws",
-          currentProfile: "default",
-          connectionMode: "local",
-          backendReady: true,
-          guideState: "completed",
-        });
-      }
-      if (command === "api_request") {
-        return Promise.reject({
-          code: "dashboard_unreachable",
-          kind: "dashboard",
-          message: "Dashboard not reachable at http://127.0.0.1:9559",
-        });
-      }
-      return Promise.resolve({});
-    });
-
-    await installTauriBridge();
-
-    expect(window.__HERMES_RUNTIME__).toMatchObject({
-      connectionMode: "local",
-      backendReady: false,
-      backendRecoveryReason: "external-backend-unreachable",
-      apiBaseUrl: "http://127.0.0.1:9559",
-      dashboardApiBaseUrl: "http://127.0.0.1:9559",
-    });
-  });
-
-  it("mounts the auth repair shell when an attached backend rejects credentials", async () => {
-    (globalThis as any).window.__TAURI_INTERNALS__ = {};
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === "get_runtime_config") {
-        return Promise.resolve({
-          apiBaseUrl: "https://remote.example.com",
-          gatewayUrl: "wss://remote.example.com/api/ws",
-          currentProfile: "default",
-          connectionMode: "remote",
-          backendReady: true,
-          guideState: "completed",
-        });
-      }
-      if (command === "api_request") {
-        return Promise.resolve({
-          ok: false,
-          status: 401,
-          statusText: "Unauthorized",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ error: "unauthenticated" }),
-        });
-      }
-      return Promise.resolve({});
-    });
-
-    await installTauriBridge();
-
-    expect(window.__HERMES_RUNTIME__).toMatchObject({
-      connectionMode: "remote",
-      backendReady: false,
-      backendRecoveryReason: "external-backend-auth-required",
-      dashboardApiBaseUrl: "https://remote.example.com",
-    });
-  });
-
-  it("waits for apiBaseUrl when managed runtime is still starting", () => {
-    expect(shouldWaitForManagedRuntimeConfig({
-      apiBaseUrl: "",
-      connectionMode: "managed",
-      backendReady: false,
-      managedRuntimeDesiredState: "running",
-    })).toBe(true);
-    expect(shouldWaitForManagedRuntimeConfig({
-      apiBaseUrl: "",
-      connectionMode: "managed",
-      backendReady: false,
-      managedRuntimeDesiredState: "stopped",
-    })).toBe(false);
-    expect(shouldWaitForManagedRuntimeConfig({
-      apiBaseUrl: "http://127.0.0.1:9120",
-      connectionMode: "managed",
-      backendReady: true,
-      managedRuntimeDesiredState: "running",
-    })).toBe(false);
-  });
-
-  it("exposes persisted guide and managed runtime lifecycle commands", async () => {
-    await installTauriBridge();
-
-    await window.hermesDesktop?.setGuideState?.("deferred");
-    await window.hermesDesktop?.installManagedRuntime?.();
-    await window.hermesDesktop?.startManagedRuntime?.();
-    await window.hermesDesktop?.stopManagedRuntime?.();
-    await window.hermesDesktop?.uninstallManagedRuntime?.();
-    await window.hermesDesktop?.reinstallManagedRuntime?.();
-
-    expect(mockInvoke).toHaveBeenCalledWith("set_guide_state", { input: { guideState: "deferred" } });
-    expect(mockInvoke).toHaveBeenCalledWith("managed_runtime_install", undefined);
-    expect(mockInvoke).toHaveBeenCalledWith("managed_runtime_start", undefined);
-    expect(mockInvoke).toHaveBeenCalledWith("managed_runtime_stop", undefined);
-    expect(mockInvoke).toHaveBeenCalledWith("managed_runtime_uninstall", undefined);
-    expect(mockInvoke).toHaveBeenCalledWith("managed_runtime_reinstall", undefined);
-  });
-
-  it("verifies backend version before mounting the runtime in Tauri mode", async () => {
-    (globalThis as any).window.__TAURI_INTERNALS__ = {};
-    const fetchSpy = vi.fn();
-    (globalThis as any).fetch = fetchSpy;
-
-    await installTauriBridge();
-
-    expect(mockInvoke).toHaveBeenCalledWith("api_request", {
-      input: { path: "/api/version", method: "GET" },
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(window.__HERMES_RUNTIME__).toMatchObject({
-      platform: "tauri",
-      // In dev mode with managed connection the runtime hides apiBaseUrl so
-      // requests flow through the Vite proxy, but the real dashboard origin is
-      // preserved on dashboardApiBaseUrl.
-      dashboardApiBaseUrl: "http://127.0.0.1:9120",
-    });
-  });
-
-  it("uses the managed runtime kernel version for the initial compatibility gate", async () => {
-    (globalThis as any).window.__TAURI_INTERNALS__ = {};
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === "get_runtime_config") {
-        return Promise.resolve({
-          apiBaseUrl: "http://127.0.0.1:9120",
-          gatewayUrl: "ws://127.0.0.1:9120/api/ws",
-          sessionToken: "token",
-          kernelVersion: "0.20.0",
-          currentProfile: "default",
-          connectionMode: "managed",
-        });
-      }
-      if (command === "api_request") {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ version: "0.20.0", name: "hermes-agent" }),
-        });
-      }
-      return Promise.resolve({});
-    });
-    const fetchSpy = vi.fn();
-    (globalThis as any).fetch = fetchSpy;
-
-    await installTauriBridge();
-
-    expect(mockInvoke).toHaveBeenCalledWith("api_request", {
-      input: { path: "/api/version", method: "GET" },
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(window.__HERMES_RUNTIME__).toMatchObject({
-      kernelVersion: "0.20.0",
-      dashboardApiBaseUrl: "http://127.0.0.1:9120",
-    });
   });
 });

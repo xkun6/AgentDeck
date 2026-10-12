@@ -1,77 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Popover, StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
-import { Folder, MessageSquare, MoreHorizontal, Plus } from "lucide-react";
+import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
+import type { AgentSnapshot } from "@agentdeck/protocol";
+import { Folder, MessageSquare, Plus } from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
+import { agentListAtom } from "@/stores/agents";
 import { activeSessionIdAtom } from "@/stores/ui";
-import { useActiveProfileName } from "@/hooks/use-profiles";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import {
-  prefetchSessionMessages,
-  useArchiveSession,
-  useDeleteSessions,
-  useSessions,
-} from "@/hooks/use-sessions";
-import { useGateway } from "@/hooks/use-gateway";
-import { useSessionBranch } from "@/hooks/use-session-branch";
-import {
-  isSessionRunning,
-  mergeLiveRuntimeSessions,
-  sessionIdMatches,
-} from "@/lib/session-activity";
-import { sessionDisplayTitle } from "@/lib/session-title";
-import {
-  readPinnedSessionIds,
-  readSessionTitleOverrides,
-  subscribeSessionUiStateChanges,
-  unpinSessions,
-} from "@/lib/session-ui-state";
-import { deriveSidebarSessionLists } from "@/lib/sidebar-session-lists";
-import {
-  SessionDeleteModal,
-  SessionBranchErrorModal,
-  SessionExportErrorModal,
-  SessionRenameModal,
-  SessionRowMenu,
-  useSessionRowActions,
-  type UseSessionRowActions,
-} from "@/components/session-actions";
+  AGENT_STATUS_LABELS,
+  agentDisplayTitle,
+  agentProviderLabel,
+  formatAgentTime,
+  isAgentRunning,
+} from "@/lib/agent-session-display";
 import {
   readPinnedWorkspaceProjectPaths,
-  readSessionWorkspaceMap,
   readWorkspaceProjects,
   subscribeWorkspaceChanges,
   unpinWorkspaceProjects,
   workspaceNameFromPath,
   type WorkspaceProject,
 } from "@/lib/workspaces";
-import type { SessionSummary } from "@agentdeck/protocol";
 import s from "./workbench-sidebar.module.css";
-
-function relTime(unixSec: number, now: Date) {
-  const d = new Date(unixSec * 1000);
-  if (d.toDateString() === now.toDateString()) {
-    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-  }
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
-function elapsed(unixSec: number, now: Date) {
-  const ms = now.getTime() - unixSec * 1000;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3_600_000) {
-    const m = Math.floor(ms / 60_000);
-    const s = Math.floor((ms % 60_000) / 1000);
-    return `${m}m ${s.toString().padStart(2, "0")}s`;
-  }
-  return `${Math.floor(ms / 3_600_000)}h`;
-}
-
-function modelShort(model: string | null | undefined) {
-  if (!model) return "—";
-  return model.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-}
 
 function sectionLabel(index: number, label: string): string {
   return `§${index.toString().padStart(2, "0")} · ${label}`;
@@ -89,47 +41,25 @@ function KanbanQuickIcon() {
   );
 }
 
+function statusTone(agent: AgentSnapshot, running: boolean): StatusDotTone | null {
+  if (running) return "success";
+  if (agent.status === "error") return "danger";
+  if (agent.status === "closed") return null;
+  return "warning";
+}
+
 interface SessionRowProps {
-  session: SessionSummary;
-  state: "live" | "ok" | "err" | "idle";
+  title: string;
+  tone: StatusDotTone | null;
   active: boolean;
   meta: string;
   projectName?: string;
-  pinned: boolean;
-  menuDisabled?: boolean;
-  actions: UseSessionRowActions;
+  tooltip: string;
   onClick: () => void;
-  onHover?: () => void;
-  onBranch: () => void;
-  branching?: boolean;
 }
 
-function SessionRow({
-  session,
-  state,
-  active,
-  meta,
-  projectName,
-  pinned,
-  menuDisabled = false,
-  actions,
-  onClick,
-  onHover,
-  onBranch,
-  branching = false,
-}: SessionRowProps) {
-  const title = sessionDisplayTitle(session);
-  const dotState = state === "idle" ? undefined : state;
-  const dotTone: StatusDotTone | null = dotState === "live"
-    ? "success"
-    : dotState === "ok"
-      ? "warning"
-      : dotState === "err"
-        ? "danger"
-        : null;
-  const actionMenuDisabled = menuDisabled || actions.isDeleting || branching;
+function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick }: SessionRowProps) {
   return (
-    // role=button (not a real <button>) so the "⋯" trigger can nest inside it.
     <div
       className={s.sessionRow}
       data-active={active ? "true" : undefined}
@@ -142,13 +72,11 @@ function SessionRow({
           onClick();
         }
       }}
-      onMouseEnter={onHover}
-      onFocus={onHover}
-      title={title}
+      title={tooltip}
     >
       <div className={s.rowMain}>
         <div className={s.ttl}>
-          {dotTone ? <StatusDot tone={dotTone} size="xs" /> : <span className={s.dotPlaceholder} />}
+          {tone ? <StatusDot tone={tone} size="xs" /> : <span className={s.dotPlaceholder} />}
           <span className={s.ttlText}>{title}</span>
         </div>
         <div className={s.meta}>
@@ -160,36 +88,6 @@ function SessionRow({
           ) : null}
         </div>
       </div>
-      <Popover.Root
-        open={!actionMenuDisabled && actions.openMenuId === session.id}
-        onOpenChange={(open) => {
-          actions.setOpenMenuId(open && !actionMenuDisabled ? session.id : null);
-        }}
-      >
-        <Popover.Trigger asChild>
-          <button
-            type="button"
-            className={s.rowMore}
-            aria-label="会话操作"
-            title={menuDisabled ? "运行中任务暂不可操作" : "会话操作"}
-            disabled={actionMenuDisabled}
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            <MoreHorizontal size={16} />
-          </button>
-        </Popover.Trigger>
-        <SessionRowMenu
-          pinned={pinned}
-          disabled={actionMenuDisabled}
-          onTogglePin={() => actions.togglePin(session.id)}
-          onRename={() => actions.startRename(session)}
-          onBranch={onBranch}
-          onExport={() => void actions.handleExport(session)}
-          onArchive={() => actions.handleArchive(session)}
-          onDelete={() => actions.openDeleteDialog([session])}
-        />
-      </Popover.Root>
     </div>
   );
 }
@@ -199,67 +97,32 @@ export function WorkbenchSidebar() {
   const location = useLocation();
   const setActiveId = useSetAtom(activeSessionIdAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
-  const queryClient = useQueryClient();
-  const profile = useActiveProfileName();
-  const { data } = useSessions();
-  const archiveSession = useArchiveSession();
-  const deleteSessions = useDeleteSessions();
-  const { setSessionTitle, resumeSession } = useGateway();
-  const sessionBranch = useSessionBranch();
-  const [titleOverrides, setTitleOverrides] = useState(readSessionTitleOverrides);
-  const [pinnedSessionIds, setPinnedSessionIds] = useState(readPinnedSessionIds);
+  const agents = useAtomValue(agentListAtom);
+  const { data: providers } = useAgentProviders();
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [pinnedProjectPaths, setPinnedProjectPaths] = useState(readPinnedWorkspaceProjectPaths);
-  const [sessionWorkspaceMap, setSessionWorkspaceMap] = useState(readSessionWorkspaceMap);
 
-  useEffect(
-    () =>
-      subscribeSessionUiStateChanges(() => {
-        setTitleOverrides(readSessionTitleOverrides());
-        setPinnedSessionIds(readPinnedSessionIds());
-      }),
-    [],
-  );
   useEffect(
     () =>
       subscribeWorkspaceChanges(() => {
         setProjects(readWorkspaceProjects());
         setPinnedProjectPaths(readPinnedWorkspaceProjectPaths());
-        setSessionWorkspaceMap(readSessionWorkspaceMap());
       }),
     [],
   );
 
-  const sessions = useMemo(
-    () =>
-      mergeLiveRuntimeSessions(
-        (data?.sessions ?? []).map((sess) => {
-          const override = titleOverrides[sess.id];
-          return override ? { ...sess, title: override } : sess;
-        }),
-        runtimeBySession,
-      ),
-    [data?.sessions, runtimeBySession, titleOverrides],
-  );
-
-  useEffect(() => {
-    if (!data || data.total > sessions.length || pinnedSessionIds.size === 0) return;
-    const liveIds = new Set(sessions.map((session) => session.id));
-    const staleIds = Array.from(pinnedSessionIds).filter((id) => !liveIds.has(id));
-    if (staleIds.length > 0) setPinnedSessionIds(unpinSessions(staleIds));
-  }, [data, pinnedSessionIds, sessions]);
-
   const now = new Date();
 
-  const { active, pinned, recent } = useMemo(
-    () =>
-      deriveSidebarSessionLists(
-        sessions,
-        pinnedSessionIds,
-        (session) => isSessionRunning(session, runtimeBySession),
-      ),
-    [pinnedSessionIds, runtimeBySession, sessions],
-  );
+  // agent.list 已按 updatedAt 倒序；进行中 = sidecar 报 running/starting 或本地仍在流式输出。
+  const { active, recent } = useMemo(() => {
+    const activeList: AgentSnapshot[] = [];
+    const recentList: AgentSnapshot[] = [];
+    for (const agent of agents) {
+      if (isAgentRunning(agent, runtimeBySession[agent.id])) activeList.push(agent);
+      else recentList.push(agent);
+    }
+    return { active: activeList, recent: recentList };
+  }, [agents, runtimeBySession]);
 
   const pinnedProjects = useMemo(
     () => {
@@ -272,15 +135,10 @@ export function WorkbenchSidebar() {
     [pinnedProjectPaths, projects],
   );
 
-  const projectNameBySessionId = useMemo(() => {
-    const projectNameByPath = new Map(projects.map((project) => [project.path, project.name]));
-    return new Map(
-      Object.entries(sessionWorkspaceMap).flatMap(([sessionId, workspacePath]) => {
-        const projectName = projectNameByPath.get(workspacePath) ?? workspaceNameFromPath(workspacePath);
-        return projectName ? [[sessionId, projectName]] : [];
-      }),
-    );
-  }, [projects, sessionWorkspaceMap]);
+  const projectNameByPath = useMemo(
+    () => new Map(projects.map((project) => [project.path, project.name])),
+    [projects],
+  );
 
   useEffect(() => {
     if (pinnedProjectPaths.size === 0) return;
@@ -289,47 +147,32 @@ export function WorkbenchSidebar() {
     if (stalePaths.length > 0) setPinnedProjectPaths(unpinWorkspaceProjects(stalePaths));
   }, [pinnedProjectPaths, projects]);
 
-  const goSession = (sess: SessionSummary) => {
-    setActiveId(sess.id);
-    navigate(`/tasks/${sess.id}`);
-  };
-
-  const hoverSession = (sess: SessionSummary) => {
-    prefetchSessionMessages(queryClient, profile, sess.id);
+  const goSession = (agent: AgentSnapshot) => {
+    setActiveId(agent.id);
+    navigate(`/tasks/${encodeURIComponent(agent.id)}`);
   };
 
   const activeSessionId = location.pathname.startsWith("/tasks/")
     ? decodeURIComponent(location.pathname.slice("/tasks/".length))
     : null;
 
-  const onSessionsDeleted = useCallback(
-    (succeededIds: string[]) => {
-      // If the session being viewed was deleted, leave its detail route so we
-      // don't fall back to loading a now-missing session id.
-      if (activeSessionId && succeededIds.includes(activeSessionId)) {
-        setActiveId(null);
-        navigate("/");
-      }
-    },
-    [activeSessionId, navigate, setActiveId],
-  );
-  const rowActions = useSessionRowActions({
-    deleteSessions: (ids) => deleteSessions.mutateAsync(ids),
-    isDeleting: deleteSessions.isPending,
-    setSessionTitle,
-    resumeSession,
-    archive: archiveSession.mutate,
-    profile,
-    onDeleted: onSessionsDeleted,
-  });
-
-  const showPinned = pinned.length > 0;
-  const pinnedProjectSectionIndex = showPinned ? 3 : 2;
-  const recentSectionIndex = pinnedProjectSectionIndex + 1;
-  const activeSectionLabel = sectionLabel(1, "进行中");
-  const pinnedSessionSectionLabel = sectionLabel(2, "置顶对话");
-  const pinnedProjectSectionLabel = sectionLabel(pinnedProjectSectionIndex, "置顶项目");
-  const recentSectionLabel = sectionLabel(recentSectionIndex, "最近对话");
+  const renderRow = (agent: AgentSnapshot, running: boolean) => {
+    const title = agentDisplayTitle(agent, runtimeBySession[agent.id], providers);
+    const provider = agentProviderLabel(agent.provider, providers);
+    const status = running ? AGENT_STATUS_LABELS.running : AGENT_STATUS_LABELS[agent.status];
+    return (
+      <SessionRow
+        key={agent.id}
+        title={title}
+        tone={statusTone(agent, running)}
+        active={agent.id === activeSessionId}
+        meta={`${provider} · ${status} · ${formatAgentTime(agent.updatedAt, now)}`}
+        projectName={projectNameByPath.get(agent.cwd) ?? workspaceNameFromPath(agent.cwd)}
+        tooltip={`${title}\n${provider} · ${status}\n${agent.cwd}`}
+        onClick={() => goSession(agent)}
+      />
+    );
+  };
 
   return (
     <aside className={s.sidebar}>
@@ -384,71 +227,19 @@ export function WorkbenchSidebar() {
       <div className={s.scrollY}>
         <section className={s.section}>
           <div className={s.label}>
-            <span>{activeSectionLabel}</span>
+            <span>{sectionLabel(1, "进行中")}</span>
             <span className={s.labelNum}>✕✕</span>
           </div>
           {active.length === 0 ? (
             <div className={s.empty}>暂无运行任务</div>
           ) : (
-            active.map((sess) => (
-              <SessionRow
-                key={sess.id}
-                session={sess}
-                state="live"
-                active={sessionIdMatches(sess.id, activeSessionId)}
-                meta={`${modelShort(sess.model)} · ${elapsed(sess.started_at, now)}`}
-                projectName={projectNameBySessionId.get(sess.id)}
-                pinned={pinnedSessionIds.has(sess.id)}
-                menuDisabled
-                actions={rowActions}
-                onClick={() => goSession(sess)}
-                onHover={() => hoverSession(sess)}
-                onBranch={() => void sessionBranch.branchSession(sess)}
-                branching={sessionBranch.branchingSessionId === sess.id}
-              />
-            ))
+            active.map((agent) => renderRow(agent, true))
           )}
         </section>
 
-        {showPinned ? (
-          <section className={s.section}>
-            <div className={s.label}>
-              <span>{pinnedSessionSectionLabel}</span>
-              <span className={s.labelNum}>✕✕</span>
-            </div>
-            {pinned.map((sess) => {
-              const running = isSessionRunning(sess, runtimeBySession);
-              const state: "live" | "ok" | "err" =
-                running
-                  ? "live"
-                  : sess.end_reason === "error" || sess.end_reason === "interrupted"
-                    ? "err"
-                    : "ok";
-              const ts = sess.ended_at ?? sess.started_at;
-              return (
-                <SessionRow
-                  key={sess.id}
-                  session={sess}
-                  state={state}
-                  active={sessionIdMatches(sess.id, activeSessionId)}
-                  meta={running ? `${modelShort(sess.model)} · ${elapsed(sess.started_at, now)}` : relTime(ts, now)}
-                  projectName={projectNameBySessionId.get(sess.id)}
-                  pinned={pinnedSessionIds.has(sess.id)}
-                  menuDisabled={running}
-                  actions={rowActions}
-                  onClick={() => goSession(sess)}
-                  onHover={() => hoverSession(sess)}
-                  onBranch={() => void sessionBranch.branchSession(sess)}
-                  branching={sessionBranch.branchingSessionId === sess.id}
-                />
-              );
-            })}
-          </section>
-        ) : null}
-
         <section className={s.section}>
           <div className={s.label}>
-            <span>{pinnedProjectSectionLabel}</span>
+            <span>{sectionLabel(2, "置顶项目")}</span>
             <span className={s.labelNum}>✕✕</span>
           </div>
           {pinnedProjects.length === 0 ? (
@@ -486,70 +277,16 @@ export function WorkbenchSidebar() {
 
         <section className={s.section}>
           <div className={s.label}>
-            <span>{recentSectionLabel}</span>
+            <span>{sectionLabel(3, "最近对话")}</span>
             <span className={s.labelNum}>✕✕</span>
           </div>
           {recent.length === 0 ? (
             <div className={s.empty}>暂无最近会话</div>
           ) : (
-            recent.map((sess) => {
-              const state: "ok" | "err" =
-                sess.end_reason === "error" || sess.end_reason === "interrupted" ? "err" : "ok";
-              const meta = relTime(sess.ended_at ?? sess.started_at, now);
-              return (
-                <SessionRow
-                  key={sess.id}
-                  session={sess}
-                  state={state}
-                  active={sessionIdMatches(sess.id, activeSessionId)}
-                  meta={meta}
-                  projectName={projectNameBySessionId.get(sess.id)}
-                  pinned={pinnedSessionIds.has(sess.id)}
-                  actions={rowActions}
-                  onClick={() => goSession(sess)}
-                  onHover={() => hoverSession(sess)}
-                  onBranch={() => void sessionBranch.branchSession(sess)}
-                  branching={sessionBranch.branchingSessionId === sess.id}
-                />
-              );
-            })
+            recent.map((agent) => renderRow(agent, false))
           )}
         </section>
       </div>
-
-      {rowActions.renamingSession ? (
-        <SessionRenameModal
-          value={rowActions.renameValue}
-          saving={rowActions.renameSaving}
-          error={rowActions.renameError}
-          onChange={rowActions.setRenameValue}
-          onClose={rowActions.closeRename}
-          onSubmit={rowActions.submitRename}
-        />
-      ) : null}
-
-      {rowActions.deleteTargets ? (
-        <SessionDeleteModal
-          sessions={rowActions.deleteTargets}
-          deleting={rowActions.isDeleting}
-          onClose={rowActions.closeDeleteDialog}
-          onConfirm={rowActions.confirmDelete}
-        />
-      ) : null}
-
-      {rowActions.exportError ? (
-        <SessionExportErrorModal
-          error={rowActions.exportError}
-          onClose={rowActions.clearExportError}
-        />
-      ) : null}
-
-      {sessionBranch.error ? (
-        <SessionBranchErrorModal
-          error={sessionBranch.error}
-          onClose={sessionBranch.clearError}
-        />
-      ) : null}
     </aside>
   );
 }

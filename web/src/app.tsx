@@ -3,6 +3,7 @@ import { DEFAULT_THEME_CONFIG, hydrateThemeAtom, usePlatform, type ThemeConfig }
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { useSetAtom } from "jotai";
 import { useBootstrapActiveProfile } from "@/hooks/use-profiles";
+import { useSidecarBridge } from "@/hooks/use-agent-session";
 import { readUiValue } from "@/lib/ui-store";
 import { sendTelemetryPingIfDue, sendTokenUsageTelemetryIfDue } from "@/lib/telemetry";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -91,6 +92,7 @@ function withSuspense(node: ReactNode) {
 }
 
 function BackendApp() {
+  useSidecarBridge();
   useBootstrapActiveProfile();
   const location = useLocation();
   return (

@@ -4,6 +4,11 @@
 // surface. On initialization, populates window.hermesDesktop so that ALL
 // existing call sites (settings.tsx, projects.tsx, goose-composer.tsx, etc.)
 // work without any changes.
+//
+// AgentDeck：Rust 外壳已删除 Hermes 专属命令（见 src/main.rs 的 generate_handler!）。
+// 对应的桥方法保留类型签名，实现统一返回「AgentDeck 暂不支持该功能」的 rejected
+// Promise（事件订阅返回空的取消函数），旧调用方在 P5 统一删除。启动时不再等待
+// Hermes 的 runtime-status，而是等待 Node sidecar 就绪（sidecar-status）。
 
 import type {
   ApiRequestInput,
@@ -83,21 +88,12 @@ import type {
   HermesGitBridge,
 } from "./runtime";
 import { BUILD_COMMIT, DESKTOP_VERSION, versionLabel } from "./build-info";
-import {
-  assertCompatible,
-  deferBackendVersionCheckForOfflineRuntime,
-  recordRuntimeKernelVersion,
-  resetVersionCheck,
-  verifyBackendVersion,
-  type BackendRecoveryReason,
-} from "./version-check";
+import { deferBackendVersionCheckForOfflineRuntime, resetVersionCheck } from "./version-check";
+import { rejectUnsupported } from "./agentdeck-unsupported";
+import type { SidecarStatusPayload } from "./sidecar-client";
 import hermesLogo from "@/assets/hermes-default-avatar.png";
 
 let invoke: typeof import("@tauri-apps/api/core").invoke;
-
-export function isTauriDevMode(envDev = import.meta.env.DEV): boolean {
-  return envDev;
-}
 
 const BASE64_CHUNK_SIZE = 0x8000;
 type TauriFileDropPosition = {
@@ -249,6 +245,11 @@ function normalizeFileDropPayload(payload: TauriFileDropEventPayload): DesktopFi
   };
 }
 
+/** 已删除事件的订阅：不再注册监听，返回空的取消函数。 */
+function noopUnsubscribe(): () => void {
+  return () => {};
+}
+
 const tauriBridge = {
   windowType: "tauri" as const,
 
@@ -256,24 +257,17 @@ const tauriBridge = {
     return invokeCommand("fatal_error_and_exit", { input });
   },
 
-  async request(input: ApiRequestInput): Promise<ApiRequestResult> {
-    return invokeCommand("api_request", { input });
+  // api_request 已删除：Hermes REST 不存在。
+  async request(_input: ApiRequestInput): Promise<ApiRequestResult> {
+    return rejectUnsupported();
   },
 
   async externalRequest(input: ApiRequestInput): Promise<ApiRequestResult> {
     return invokeCommand("external_request", { input });
   },
 
-  async uploadFile(input: FileUploadInput): Promise<ApiRequestResult> {
-    const base64 = arrayBufferToBase64(input.data);
-    return invokeCommand("upload_file", {
-      input: {
-        sessionId: input.sessionId,
-        name: input.name,
-        type: input.type,
-        data: base64,
-      },
-    });
+  async uploadFile(_input: FileUploadInput): Promise<ApiRequestResult> {
+    return rejectUnsupported();
   },
 
   async downloadExternalImage(input: DownloadExternalImageInput): Promise<DownloadedImageResult> {
@@ -327,7 +321,7 @@ const tauriBridge = {
   },
 
   async openBrowserCompanion(): Promise<{ ok: boolean; url: string; port: number }> {
-    return invokeCommand("open_browser_companion");
+    return rejectUnsupported();
   },
 
   async toggleDevtools(): Promise<void> {
@@ -342,9 +336,8 @@ const tauriBridge = {
     return invokeCommand("export_session_json", { input });
   },
 
-  async exportDebugBundle(input?: ExportDebugBundleInput): Promise<ExportDebugBundleResult> {
-    const inv = await ensureInvoke();
-    return inv("export_debug_bundle", { input: input ?? null });
+  async exportDebugBundle(_input?: ExportDebugBundleInput): Promise<ExportDebugBundleResult> {
+    return rejectUnsupported();
   },
 
   async environmentCheck(): Promise<EnvironmentCheckResult> {
@@ -356,102 +349,54 @@ const tauriBridge = {
   },
 
   async checkDesktopUpdate(): Promise<DesktopUpdateManifestFetchResult> {
-    return invokeCommand("desktop_check_update");
+    return rejectUnsupported();
   },
 
   async getUpdateConfig(): Promise<UpdateConfigSnapshot> {
-    return invokeCommand("get_update_config");
+    return rejectUnsupported();
   },
 
-  async setUpdateConfig(config: UpdateConfig): Promise<UpdateConfigSnapshot> {
-    return invokeCommand("set_update_config", { input: { config } });
+  async setUpdateConfig(_config: UpdateConfig): Promise<UpdateConfigSnapshot> {
+    return rejectUnsupported();
   },
 
   async appUpdateCheck(): Promise<AppUpdateCheckResult> {
-    return invokeCommand("app_update_check");
+    return rejectUnsupported();
   },
 
   async appUpdateInstall(): Promise<AppUpdateInstallResult> {
-    return invokeCommand("app_update_install");
+    return rejectUnsupported();
   },
 
-  async hotUpdateBackend(input: {
+  async hotUpdateBackend(_input: {
     sourceRoot?: string;
     skipGit?: boolean;
   }): Promise<HotUpdateBackendResult> {
-    return invokeCommand("hot_update_backend", { input });
+    return rejectUnsupported();
   },
 
-  // Track B UI hot update (custom `hermesui:` scheme). The kernel is never
-  // restarted — after a successful install/rollback the Rust side emits
-  // `ui-update-ready` and reloads the main window itself.
   async uiCheckUpdate(): Promise<UiUpdateCheckResult> {
-    return invokeCommand("ui_check_update");
+    return rejectUnsupported();
   },
 
   async uiInstallUpdate(): Promise<UiInstallUpdateResult> {
-    return invokeCommand("ui_install_update");
+    return rejectUnsupported();
   },
 
   async uiRollback(): Promise<UiInstallUpdateResult> {
-    return invokeCommand("ui_rollback");
+    return rejectUnsupported();
   },
 
-  onUiUpdateReady(handler: (payload: UiUpdateReadyPayload) => void): () => void {
-    let unlisten: (() => void) | null = null;
-    let disposed = false;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) =>
-        listen<UiUpdateReadyPayload>("ui-update-ready", (event) => {
-          handler(event.payload);
-        }))
-      .then((fn) => {
-        if (disposed) safeUnlisten(fn);
-        else unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      safeUnlisten(unlisten);
-    };
+  onUiUpdateReady(_handler: (payload: UiUpdateReadyPayload) => void): () => void {
+    return noopUnsubscribe();
   },
 
-  onHotUpdateProgress(handler: (payload: HotUpdateProgressPayload) => void): () => void {
-    let unlisten: (() => void) | null = null;
-    let disposed = false;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) =>
-        listen<HotUpdateProgressPayload>("hot-update-progress", (event) => {
-          handler(event.payload);
-        }))
-      .then((fn) => {
-        if (disposed) safeUnlisten(fn);
-        else unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      safeUnlisten(unlisten);
-    };
+  onHotUpdateProgress(_handler: (payload: HotUpdateProgressPayload) => void): () => void {
+    return noopUnsubscribe();
   },
 
-  onAppUpdateProgress(handler: (payload: AppUpdateProgressPayload) => void): () => void {
-    let unlisten: (() => void) | null = null;
-    let disposed = false;
-    import("@tauri-apps/api/event")
-      .then(({ listen }) =>
-        listen<AppUpdateProgressPayload>("app-update-progress", (event) => {
-          handler(event.payload);
-        }))
-      .then((fn) => {
-        if (disposed) safeUnlisten(fn);
-        else unlisten = fn;
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      safeUnlisten(unlisten);
-    };
+  onAppUpdateProgress(_handler: (payload: AppUpdateProgressPayload) => void): () => void {
+    return noopUnsubscribe();
   },
 
   getRuntimeConfig() {
@@ -459,163 +404,160 @@ const tauriBridge = {
   },
 
   async refreshGatewayUrl(): Promise<{ gatewayUrl: string; sessionToken?: string }> {
-    return invokeCommand("refresh_gateway_url");
+    return rejectUnsupported();
   },
 
   async getBackendVersion(): Promise<{ version: string }> {
-    return invokeCommand("get_backend_version");
+    return rejectUnsupported();
   },
 
   async getRuntimeInfo(): Promise<RuntimeInfo> {
-    return invokeCommand("runtime_info");
+    return rejectUnsupported();
   },
 
   async checkRuntimeUpdate(): Promise<RuntimeUpdateCheckResult> {
-    return invokeCommand("runtime_check_update");
+    return rejectUnsupported();
   },
 
   async installRuntimeUpdate(): Promise<RuntimeInstallUpdateResult> {
-    return invokeCommand("runtime_install_update");
+    return rejectUnsupported();
   },
 
   async rollbackRuntime(): Promise<RuntimeInstallUpdateResult> {
-    return invokeCommand("runtime_rollback");
+    return rejectUnsupported();
   },
 
   async exportProfileBackup(): Promise<BackupExportResult> {
-    const inv = await ensureInvoke();
-    return inv("backup_export_profile");
+    return rejectUnsupported();
   },
 
   async importProfileBackup(): Promise<BackupImportResult> {
-    const inv = await ensureInvoke();
-    return inv("backup_import_profile");
+    return rejectUnsupported();
   },
 
-  async switchProfile(input: SwitchProfileInput): Promise<SwitchProfileResult> {
-    return invokeCommand("switch_profile", { input });
+  async switchProfile(_input: SwitchProfileInput): Promise<SwitchProfileResult> {
+    return rejectUnsupported();
   },
 
   async getConnectionConfig(): Promise<ConnectionConfigView> {
-    return invokeCommand("get_connection_config");
+    return rejectUnsupported();
   },
 
-  async saveConnectionConfig(input: ConnectionConfigInput): Promise<ConnectionConfigView> {
-    return invokeCommand("save_connection_config", { input });
+  async saveConnectionConfig(_input: ConnectionConfigInput): Promise<ConnectionConfigView> {
+    return rejectUnsupported();
   },
 
-  async applyConnectionConfig(input: ConnectionConfigInput): Promise<ApplyConnectionResult> {
-    return invokeCommand("apply_connection_config", { input });
+  async applyConnectionConfig(_input: ConnectionConfigInput): Promise<ApplyConnectionResult> {
+    return rejectUnsupported();
   },
 
-  async testConnectionConfig(input: ConnectionConfigInput): Promise<TestConnectionResult> {
-    return invokeCommand("test_connection_config", { input });
+  async testConnectionConfig(_input: ConnectionConfigInput): Promise<TestConnectionResult> {
+    return rejectUnsupported();
   },
 
   async getDesktopControlState(): Promise<RuntimeControlResult> {
-    return invokeCommand("get_desktop_control_state");
+    return rejectUnsupported();
   },
 
-  async setGuideState(guideState: GuideState): Promise<RuntimeControlResult> {
-    return invokeCommand("set_guide_state", { input: { guideState } });
+  async setGuideState(_guideState: GuideState): Promise<RuntimeControlResult> {
+    return rejectUnsupported();
   },
 
   async installManagedRuntime(): Promise<RuntimeControlResult> {
-    return invokeCommand("managed_runtime_install");
+    return rejectUnsupported();
   },
 
   async startManagedRuntime(): Promise<RuntimeControlResult> {
-    return invokeCommand("managed_runtime_start");
+    return rejectUnsupported();
   },
 
   async stopManagedRuntime(): Promise<RuntimeControlResult> {
-    return invokeCommand("managed_runtime_stop");
+    return rejectUnsupported();
   },
 
   async uninstallManagedRuntime(): Promise<RuntimeControlResult> {
-    return invokeCommand("managed_runtime_uninstall");
+    return rejectUnsupported();
   },
 
   async reinstallManagedRuntime(): Promise<RuntimeControlResult> {
-    return invokeCommand("managed_runtime_reinstall");
+    return rejectUnsupported();
   },
 
-  async probeConnectionConfig(remoteUrl: string): Promise<ProbeConnectionResult> {
-    return invokeCommand("probe_connection_config", { remoteUrl });
+  async probeConnectionConfig(_remoteUrl: string): Promise<ProbeConnectionResult> {
+    return rejectUnsupported();
   },
 
-  async connectionOauthLogin(remoteUrl: string): Promise<OauthLoginResult> {
-    return invokeCommand("connection_oauth_login", { input: { remoteUrl } });
+  async connectionOauthLogin(_remoteUrl: string): Promise<OauthLoginResult> {
+    return rejectUnsupported();
   },
 
-  async connectionPasswordLogin(input: {
+  async connectionPasswordLogin(_input: {
     remoteUrl: string;
     provider: string;
     username: string;
     password: string;
   }): Promise<OauthLoginResult> {
-    return invokeCommand("connection_password_login", { input });
+    return rejectUnsupported();
   },
 
-  async connectionAuthMe(remoteUrl: string): Promise<OauthLoginResult> {
-    return invokeCommand("connection_auth_me", { input: { remoteUrl } });
+  async connectionAuthMe(_remoteUrl: string): Promise<OauthLoginResult> {
+    return rejectUnsupported();
   },
 
-  async connectionOauthLogout(remoteUrl: string): Promise<void> {
-    return invokeCommand("connection_oauth_logout", { input: { remoteUrl } });
+  async connectionOauthLogout(_remoteUrl: string): Promise<void> {
+    return rejectUnsupported();
   },
 
-
-  async scanConfigMigration(input?: ConfigMigrationScanInput): Promise<ConfigMigrationScanResult> {
-    return invokeCommand("config_migration_scan", { input: input ?? null });
+  async scanConfigMigration(_input?: ConfigMigrationScanInput): Promise<ConfigMigrationScanResult> {
+    return rejectUnsupported();
   },
 
-  async importConfigMigration(input: ConfigMigrationImportInput): Promise<ConfigMigrationImportResult> {
-    return invokeCommand("config_migration_import", { input });
+  async importConfigMigration(_input: ConfigMigrationImportInput): Promise<ConfigMigrationImportResult> {
+    return rejectUnsupported();
   },
 
   async getYoloMode(): Promise<YoloModeStatus> {
-    return invokeCommand("get_yolo_mode");
+    return rejectUnsupported();
   },
 
-  async setYoloMode(input: SetYoloModeInput): Promise<SetYoloModeResult> {
-    return invokeCommand("set_yolo_mode", { input });
+  async setYoloMode(_input: SetYoloModeInput): Promise<SetYoloModeResult> {
+    return rejectUnsupported();
   },
 
-  async imOnboardingState(input: ImOnboardingStateInput): Promise<ImOnboardingStateResult> {
-    return invokeCommand("im_onboarding_state", { input });
+  async imOnboardingState(_input: ImOnboardingStateInput): Promise<ImOnboardingStateResult> {
+    return rejectUnsupported();
   },
 
-  async imOnboardingBegin(input: ImOnboardingBeginInput): Promise<ImOnboardingBeginResult> {
-    return invokeCommand("im_onboarding_begin", { input });
+  async imOnboardingBegin(_input: ImOnboardingBeginInput): Promise<ImOnboardingBeginResult> {
+    return rejectUnsupported();
   },
 
-  async imOnboardingPoll(input: ImOnboardingPollInput): Promise<ImOnboardingPollResult> {
-    return invokeCommand("im_onboarding_poll", { input });
+  async imOnboardingPoll(_input: ImOnboardingPollInput): Promise<ImOnboardingPollResult> {
+    return rejectUnsupported();
   },
 
-  async imOnboardingApply(input: ImOnboardingApplyInput): Promise<ImOnboardingApplyResult> {
-    return invokeCommand("im_onboarding_apply", { input });
+  async imOnboardingApply(_input: ImOnboardingApplyInput): Promise<ImOnboardingApplyResult> {
+    return rejectUnsupported();
   },
 
-  async readMemory() {
-    return invokeCommand("read_memory");
+  async readMemory(): Promise<never> {
+    return rejectUnsupported();
   },
 
-  async addMemoryEntry(content: string) {
-    return invokeCommand("add_memory_entry", { content });
+  async addMemoryEntry(_content: string): Promise<never> {
+    return rejectUnsupported();
   },
 
-  async updateMemoryEntry(index: number, content: string) {
-    return invokeCommand("update_memory_entry", { index, content });
+  async updateMemoryEntry(_index: number, _content: string): Promise<never> {
+    return rejectUnsupported();
   },
 
-  async removeMemoryEntry(index: number) {
-    return invokeCommand("remove_memory_entry", { index });
+  async removeMemoryEntry(_index: number): Promise<never> {
+    return rejectUnsupported();
   },
 
-  async writeUserProfile(content: string) {
-    return invokeCommand("write_user_profile", { content });
+  async writeUserProfile(_content: string): Promise<never> {
+    return rejectUnsupported();
   },
 
   async uiStoreSnapshot(): Promise<UiStoreSnapshot> {
@@ -789,15 +731,16 @@ const tauriBridge = {
   },
 };
 
-// Overlay shown while the Rust side prepares the managed runtime and
-// dashboard before React can mount. Pre-React, plain DOM — we can't mount
-// React yet because the bridge isn't ready (no apiBaseUrl => API calls
-// would throw). Phase strings match the `runtime-status` event emitted by
-// src/main.rs::emit_runtime_status.
-function showBootstrapOverlay(initialMessage: string): {
-  update(phase: string, message: string): void;
+// Overlay shown while the Rust side starts the Node sidecar before React can
+// mount. Pre-React, plain DOM. Phases follow the `sidecar-status` event
+// (starting / failed / stopped); failures expose the full error text and a
+// 「重试」button that calls `restart_sidecar`.
+interface BootstrapOverlay {
+  update(phase: "starting" | "error", message: string): void;
   dismiss(): void;
-} {
+}
+
+function showBootstrapOverlay(initialMessage: string, onRetry: () => void): BootstrapOverlay {
   let lastErrorMessage = "";
 
   const root = document.createElement("div");
@@ -820,7 +763,7 @@ function showBootstrapOverlay(initialMessage: string): {
 
   const mark = document.createElement("img");
   mark.src = hermesLogo;
-  mark.alt = "Hermes Agent Logo";
+  mark.alt = "AgentDeck";
   mark.setAttribute(
     "style",
     "width:104px;height:104px;border:1px solid rgba(251,250,246,0.14);border-radius: 0;display:block;",
@@ -832,16 +775,16 @@ function showBootstrapOverlay(initialMessage: string): {
     "style",
     "font-size:16px;font-weight:700;letter-spacing:0.02em;color:#fbfaf6;",
   );
-  title.textContent = "Hermes Agent 中文社区桌面版";
+  title.textContent = "AgentDeck";
   panel.appendChild(title);
 
   const brand = document.createElement("div");
   brand.setAttribute(
     "style",
     "margin-top:-12px;font-size:12px;font-weight:600;color:rgba(251,250,246,0.54);" +
-      "letter-spacing:0.08em;text-transform:uppercase;",
+      "letter-spacing:0.08em;",
   );
-  brand.textContent = "Hermes Agent 中文社区 · hermesagent.org.cn";
+  brand.textContent = "多 Agent 编排桌面工具";
   panel.appendChild(brand);
 
   const message = document.createElement("div");
@@ -876,15 +819,15 @@ function showBootstrapOverlay(initialMessage: string): {
   detailTitle.textContent = "完整错误信息";
   detailHeader.appendChild(detailTitle);
 
+  const buttonStyle =
+    "appearance:none;border:1px solid rgba(251,250,246,0.18);background:rgba(251,250,246,0.08);" +
+    "color:#fbfaf6;border-radius: 0;padding:8px 12px;font-size:12px;font-weight:700;" +
+    "font-family:inherit;cursor:pointer;";
+
   const copyButton = document.createElement("button");
   copyButton.type = "button";
   copyButton.disabled = true;
-  copyButton.setAttribute(
-    "style",
-    "appearance:none;border:1px solid rgba(251,250,246,0.18);background:rgba(251,250,246,0.08);" +
-      "color:#fbfaf6;border-radius: 0;padding:8px 12px;font-size:12px;font-weight:700;" +
-      "font-family:inherit;cursor:pointer;",
-  );
+  copyButton.setAttribute("style", buttonStyle);
   copyButton.textContent = "复制错误信息";
   detailHeader.appendChild(copyButton);
   detail.appendChild(detailHeader);
@@ -902,6 +845,17 @@ function showBootstrapOverlay(initialMessage: string): {
   detail.appendChild(errorText);
   panel.appendChild(detail);
 
+  const retryButton = document.createElement("button");
+  retryButton.type = "button";
+  retryButton.id = "hermes-bootstrap-retry";
+  retryButton.setAttribute("style", `${buttonStyle}display:none;`);
+  retryButton.textContent = "重试";
+  retryButton.addEventListener("click", () => {
+    if (retryButton.disabled) return;
+    onRetry();
+  });
+  panel.appendChild(retryButton);
+
   const versionPanel = document.createElement("div");
   versionPanel.setAttribute(
     "style",
@@ -911,16 +865,12 @@ function showBootstrapOverlay(initialMessage: string): {
   );
 
   const uiVersionRow = document.createElement("div");
-
-  const applyVersionRow = (rowEl: HTMLDivElement, line: BootstrapVersionLine) => {
-    rowEl.setAttribute(
-      "style",
-      "font-variant-numeric:tabular-nums;white-space:nowrap;color:rgba(133,126,111,0.76);",
-    );
-    rowEl.textContent = `${line.label} ${line.version} · ${line.commit}`;
-  };
-
-  applyVersionRow(uiVersionRow, buildBootstrapVersionLine());
+  const versionLine = buildBootstrapVersionLine();
+  uiVersionRow.setAttribute(
+    "style",
+    "font-variant-numeric:tabular-nums;white-space:nowrap;color:rgba(133,126,111,0.76);",
+  );
+  uiVersionRow.textContent = `${versionLine.label} ${versionLine.version} · ${versionLine.commit}`;
   versionPanel.append(uiVersionRow);
   panel.appendChild(versionPanel);
 
@@ -929,9 +879,9 @@ function showBootstrapOverlay(initialMessage: string): {
   sub.setAttribute(
     "style",
     "font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;" +
-      "color:rgba(255,255,255,0.45);letter-spacing:0.06em;text-transform:uppercase;",
+      "color:rgba(255,255,255,0.45);letter-spacing:0.06em;",
   );
-  sub.textContent = "Hermes Agent 中文社区桌面版 · 启动中";
+  sub.textContent = "AgentDeck · 启动中";
   panel.appendChild(sub);
 
   root.appendChild(panel);
@@ -969,13 +919,21 @@ function showBootstrapOverlay(initialMessage: string): {
         lastErrorMessage = msg || "未知启动错误";
         root.setAttribute("role", "alert");
         panel.setAttribute("aria-live", "assertive");
-        message.textContent = "启动 Hermes Agent 内核时遇到问题，请复制下方完整错误信息用于排查。";
+        message.textContent = "Agent 服务（Node sidecar）启动失败，可复制下方错误信息排查，或点击「重试」重新启动。";
         errorText.textContent = lastErrorMessage;
         detail.style.display = "block";
         copyButton.disabled = false;
+        retryButton.style.display = "inline-block";
+        retryButton.disabled = false;
+        retryButton.textContent = "重试";
         sub.textContent = "启动失败";
-      } else if (msg) {
-        message.textContent = msg;
+      } else {
+        root.removeAttribute("role");
+        panel.setAttribute("aria-live", "polite");
+        message.textContent = msg || initialMessage;
+        detail.style.display = "none";
+        retryButton.style.display = "none";
+        sub.textContent = "AgentDeck · 启动中";
       }
     },
     dismiss() {
@@ -984,80 +942,86 @@ function showBootstrapOverlay(initialMessage: string): {
   };
 }
 
-async function waitForBootstrap(
-  initialMessage: string,
-  readConfig: () => Promise<{ apiBaseUrl?: string }>,
-  readRuntimeInfo: () => Promise<{ lastError?: string }>,
-): Promise<{ failed: boolean; message: string }> {
+const SIDECAR_STARTING_MESSAGE = "正在启动 Agent 服务…";
+const OVERLAY_SHOW_DELAY_MS = 1200;
+const SIDECAR_POLL_INTERVAL_MS = 1000;
+
+export function isSidecarReady(status: SidecarStatusPayload | null | undefined): boolean {
+  return status?.status === "ready" && Boolean(status.wsUrl);
+}
+
+/**
+ * 阻塞到 sidecar 就绪：starting 超过 1.2 秒显示遮罩；failed / stopped 立即显示错误
+ * 与「重试」按钮（调用 restart_sidecar）。首次拉起失败 Rust 不会自动重试，只能手动重启。
+ */
+async function waitForSidecarReady(initial: SidecarStatusPayload): Promise<void> {
   const { listen } = await import("@tauri-apps/api/event");
 
-  return new Promise((resolve) => {
-    let overlay: ReturnType<typeof showBootstrapOverlay> | null = null;
+  return new Promise<void>((resolve) => {
+    let overlay: BootstrapOverlay | null = null;
     let unlisten: (() => void) | null = null;
-    let interval: number | null = null;
-    let showTimer: number | null = null;
     let settled = false;
-    let lastPhase = "starting";
-    let lastMessage = initialMessage;
+    let restarting = false;
 
-    const ensureOverlay = () => {
-      if (!overlay) {
-        overlay = showBootstrapOverlay(lastMessage || initialMessage);
-        overlay.update(lastPhase, lastMessage || initialMessage);
-      }
+    const retry = () => {
+      if (restarting) return;
+      restarting = true;
+      ensureOverlay().update("starting", "正在重启 Agent 服务…");
+      invokeCommand<SidecarStatusPayload>("restart_sidecar")
+        .then((status) => handle(status))
+        .catch((error) => {
+          ensureOverlay().update("error", error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          restarting = false;
+        });
+    };
+
+    const ensureOverlay = (): BootstrapOverlay => {
+      if (!overlay) overlay = showBootstrapOverlay(SIDECAR_STARTING_MESSAGE, retry);
       return overlay;
     };
 
-    showTimer = window.setTimeout(() => {
-      if (!settled) ensureOverlay();
-    }, 1200);
-
-    const finish = (result: { failed: boolean; message: string }) => {
+    const finish = () => {
       if (settled) return;
       settled = true;
       safeUnlisten(unlisten);
-      if (interval !== null) window.clearInterval(interval);
-      if (showTimer !== null) window.clearTimeout(showTimer);
-      if (!result.failed) overlay?.dismiss();
-      resolve(result);
+      window.clearInterval(poll);
+      window.clearTimeout(showTimer);
+      overlay?.dismiss();
+      resolve();
     };
 
-    const checkReady = () => {
-      void readConfig()
-        .then((cfg) => {
-          if (cfg.apiBaseUrl) finish({ failed: false, message: "" });
-        })
-        .catch(() => {});
-      void readRuntimeInfo()
-        .then((info) => {
-          if (info.lastError) {
-            lastPhase = "error";
-            lastMessage = info.lastError;
-            ensureOverlay().update("error", info.lastError);
-            finish({ failed: true, message: info.lastError });
-          }
-        })
-        .catch(() => {});
-    };
-
-    listen<{ phase: string; message: string }>("runtime-status", (event) => {
-      const { phase, message } = event.payload;
-      lastPhase = phase;
-      if (message) lastMessage = message;
-      overlay?.update(phase, message);
-      if (phase === "ready") {
-        finish({ failed: false, message: "" });
-      } else if (phase === "error") {
-        // Error paths should be visible immediately even if the normal slow-start
-        // threshold has not elapsed yet.
-        ensureOverlay().update("error", message);
-        finish({ failed: true, message });
+    const handle = (status: SidecarStatusPayload) => {
+      if (settled) return;
+      if (isSidecarReady(status)) {
+        finish();
+        return;
       }
-    }).then((fn) => {
-      unlisten = fn;
-      checkReady();
-      interval = window.setInterval(checkReady, 500);
-    });
+      if (status.status === "failed" || status.status === "stopped") {
+        if (restarting) return;
+        ensureOverlay().update("error", status.error || "Agent 服务未能启动");
+      } else {
+        overlay?.update("starting", restarting ? "正在重启 Agent 服务…" : SIDECAR_STARTING_MESSAGE);
+      }
+    };
+
+    const showTimer = window.setTimeout(() => {
+      if (!settled) ensureOverlay();
+    }, OVERLAY_SHOW_DELAY_MS);
+    const poll = window.setInterval(() => {
+      if (restarting) return;
+      void invokeCommand<SidecarStatusPayload>("get_sidecar_config").then(handle).catch(() => {});
+    }, SIDECAR_POLL_INTERVAL_MS);
+
+    listen<SidecarStatusPayload>("sidecar-status", (event) => handle(event.payload))
+      .then((fn) => {
+        if (settled) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+
+    handle(initial);
   });
 }
 
@@ -1096,131 +1060,34 @@ function registerDevtoolsShortcut(): void {
   );
 }
 
-export function shouldWaitForManagedRuntimeConfig(config: {
-  apiBaseUrl?: string;
-  backendReady?: boolean;
-  connectionMode?: "managed" | "local" | "remote";
-  managedRuntimeDesiredState?: import("@agentdeck/protocol").ManagedRuntimeDesiredState;
-}): boolean {
-  if (config.apiBaseUrl) return false;
-  const connectionMode = config.connectionMode ?? "managed";
-  const managedRuntimeShouldRun =
-    connectionMode === "managed" &&
-    (config.managedRuntimeDesiredState ?? "running") === "running";
-  return config.backendReady !== false || managedRuntimeShouldRun;
-}
-
 export async function installTauriBridge(): Promise<void> {
   // Install before any React component mounts a Tauri event listener, so the
   // StrictMode mount→unmount teardown race can't leak an unhandled rejection.
   installTauriRejectionGuard();
 
-  let config = await invokeCommand<{
-    apiBaseUrl: string;
-    gatewayUrl: string;
-    sessionToken?: string;
-    kernelVersion?: string;
-    currentProfile: string;
-    connectionMode?: "managed" | "local" | "remote";
-    portable?: boolean;
-    embedded?: boolean;
-    backendReady?: boolean;
-    guideState?: GuideState;
-    managedRuntimeDesiredState?: import("@agentdeck/protocol").ManagedRuntimeDesiredState;
-    managedRuntimeLifecycleState?: import("@agentdeck/protocol").ManagedRuntimeLifecycleState;
-  }>("get_runtime_config");
-
-  // Dev mode: WebView loads from Vite dev server (http://localhost:9545).
-  // Don't set apiBaseUrl/gatewayUrl — let the browser use relative URLs that
-  // go through Vite's proxy, just like web mode. This avoids cross-origin
-  // issues with the gateway WebSocket (a browser-native API that can't
-  // go through the Tauri IPC bridge). Still inject sessionToken in dev: managed
-  // runtime builds may not have dashboard web_dist, so Vite cannot reliably
-  // scrape the token from Dashboard /; authenticated REST calls still need the
-  // token header while using the relative proxy URL.
-  // Production Tauri v2 can also load bundled assets from an
-  // `http://*.localhost` origin on Windows, so URL protocol is not a
-  // reliable dev/prod signal. Use Vite's explicit build mode instead.
-  const isDevMode = isTauriDevMode();
-
-  // First-run / managed dev: Rust spawned the install/start task and returned
-  // immediately with empty state. Show the overlay and block here until the
-  // `runtime-status` event reports `ready`, then refetch the config so we get
-  // the populated apiBaseUrl/sessionToken. In Vite dev we still avoid writing
-  // apiBaseUrl into window.__HERMES_RUNTIME__ later, but waiting here prevents
-  // the React app from racing the managed dashboard startup.
-  if (shouldWaitForManagedRuntimeConfig(config)) {
-    const result = await waitForBootstrap(
-      "正在唤醒Hermes...",
-      () => invokeCommand("get_runtime_config"),
-      () => invokeCommand("runtime_info"),
-    );
-    if (result.failed) {
-      // Leave the overlay up — the user needs to see the message
-      // and decide what to do (close and reopen, fix env vars, etc).
-      // Throwing here would surface in the React error boundary, but
-      // we never mounted React; the overlay IS the UI right now.
-      throw new Error(`runtime bootstrap failed: ${result.message}`);
-    }
-    config = await invokeCommand("get_runtime_config");
-  }
-
-  // Mount the bridge before the version gate so that a mismatch can use the
-  // native fatal-error dialog via hermesDesktop.fatalErrorAndExit. The bridge
-  // is fully functional through Tauri invoke; window.__HERMES_RUNTIME__ is set
-  // after the version check so the platform guard still sees the Tauri context.
+  // Mount the bridge first so the fatal-error dialog and ui_store work while we
+  // wait for the sidecar.
   (window as any).hermesDesktop = tauriBridge;
 
-  // Reset any stale version check state, then verify before we let the React
-  // app run against this backend. A mismatch or unreachable /api/version
-  // triggers a fatal dialog and force-quits. We pass the config's apiBaseUrl
-  // explicitly because window.__HERMES_RUNTIME__ is not populated yet.
-  resetVersionCheck();
-  recordRuntimeKernelVersion(config.kernelVersion);
-  const connectionMode = config.connectionMode ?? "managed";
-  const managedRuntimeIntentionallyOffline =
-    connectionMode === "managed" &&
-    config.backendReady === false &&
-    !config.apiBaseUrl &&
-    (config.managedRuntimeDesiredState ?? "running") !== "running";
-  let backendRecoveryReason: BackendRecoveryReason | undefined;
-  if (managedRuntimeIntentionallyOffline) {
-    deferBackendVersionCheckForOfflineRuntime();
-    backendRecoveryReason = "managed-runtime-offline";
-  } else {
-    const versionState = await verifyBackendVersion(config.apiBaseUrl, { connectionMode });
-    if (versionState.kind === "deferred") {
-      backendRecoveryReason = versionState.reason;
-    } else if (versionState.kind !== "ok") {
-      assertCompatible();
-      throw new Error("version check failed during bridge installation");
-    }
+  const status = await invokeCommand<SidecarStatusPayload>("get_sidecar_config");
+  if (!isSidecarReady(status)) {
+    await waitForSidecarReady(status);
   }
 
-  // Attached local/remote mode must keep the real URLs even in Vite dev: the
-  // Vite proxy targets the managed dashboard port (9120), so relative URLs
-  // would route traffic to the wrong backend. Managed dev still hides URLs and
-  // uses the proxy as before.
-  const hideUrlsForViteProxy = isDevMode && connectionMode === "managed";
+  // 没有 Hermes 后端：版本闸门直接放行，旧 REST / 网关调用由 hermesBackendDisabled 拦截。
+  resetVersionCheck();
+  deferBackendVersionCheckForOfflineRuntime();
 
   window.__HERMES_RUNTIME__ = {
     platform: "tauri" as const,
-    apiBaseUrl: hideUrlsForViteProxy ? undefined : config.apiBaseUrl,
-    dashboardApiBaseUrl: config.apiBaseUrl,
-    gatewayUrl: hideUrlsForViteProxy ? undefined : config.gatewayUrl,
-    sessionToken: config.sessionToken,
-    kernelVersion: config.kernelVersion,
-    currentProfile: config.currentProfile,
-    connectionMode,
-    portable: config.portable ?? false,
-    embedded: config.embedded ?? false,
-    backendReady: backendRecoveryReason
-      ? false
-      : config.backendReady ?? Boolean(config.apiBaseUrl),
-    backendRecoveryReason,
-    guideState: config.guideState ?? "completed",
-    managedRuntimeDesiredState: config.managedRuntimeDesiredState ?? "running",
-    managedRuntimeLifecycleState: config.managedRuntimeLifecycleState ?? "running",
+    connectionMode: "managed",
+    portable: false,
+    embedded: false,
+    backendReady: true,
+    hermesBackendDisabled: true,
+    guideState: "completed",
+    managedRuntimeDesiredState: "running",
+    managedRuntimeLifecycleState: "running",
   };
 
   registerDevtoolsShortcut();

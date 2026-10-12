@@ -8,6 +8,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { useAtomValue } from "jotai";
 import { useNavigate } from "react-router-dom";
@@ -159,6 +160,10 @@ interface GooseComposerProps {
   showCompressCommand?: boolean;
   initialWorkspacePath?: string;
   voiceConfig?: Record<string, unknown> | null;
+  /** 工具栏里工作区按钮之后的额外控件（AgentDeck 的 Agent / 模型 / 模式选择器）。 */
+  toolbarExtra?: ReactNode;
+  /** 工作区变化时回调（宿主据此按 cwd 拉取模型列表等）。 */
+  onWorkspaceChange?: (path: string) => void;
 }
 
 function messageFromError(error: unknown): string {
@@ -235,6 +240,8 @@ export function GooseComposer({
   showCompressCommand = true,
   initialWorkspacePath = "",
   voiceConfig = null,
+  toolbarExtra,
+  onWorkspaceChange,
 }: GooseComposerProps) {
   const navigate = useNavigate();
   const configuredSubmitShortcut = useAtomValue(composerSubmitShortcutAtom);
@@ -248,6 +255,11 @@ export function GooseComposer({
   const [workspacePath, setWorkspacePath] = useState(
     () => normalizeWorkspacePath(initialWorkspacePath) || readWorkspacePath(),
   );
+  const onWorkspaceChangeRef = useRef(onWorkspaceChange);
+  onWorkspaceChangeRef.current = onWorkspaceChange;
+  useEffect(() => {
+    onWorkspaceChangeRef.current?.(workspacePath.trim());
+  }, [workspacePath]);
   const [submitError, setSubmitError] = useState("");
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -1534,6 +1546,7 @@ export function GooseComposer({
                 <X aria-hidden="true" />
               </button>
             ) : null}
+            {toolbarExtra}
             {modelPicker ? (
               <button
                 className={s.toolButton}
