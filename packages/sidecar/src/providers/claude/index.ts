@@ -7,12 +7,17 @@ export {
   CLAUDE_PROVIDER_ID,
   ClaudeAgentClient,
   ClaudeAgentSession,
-  type ClaudeQueryFn,
-  type ClaudeQueryHandle,
 } from "./claude-agent.js";
+export {
+  ClaudeCliSession,
+  buildClaudeCliArgs,
+  type ClaudeCliFactory,
+  type ClaudeCliHandle,
+  type ClaudeCliOptions,
+} from "./claude-cli-session.js";
 export { resolveClaudeExecutable, type ClaudeExecutableResolution } from "./claude-executable.js";
 
-/** Claude Code provider（claude-agent-sdk 长会话） */
+/** Claude Code provider（直连本机 claude CLI 的 stream-json 长会话） */
 export const createClaudeClients: ProviderFactory = (ctx) => [
   new ClaudeAgentClient({ logger: ctx.logger, env: ctx.env }),
 ];

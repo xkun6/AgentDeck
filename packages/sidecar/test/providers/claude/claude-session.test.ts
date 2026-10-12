@@ -1,12 +1,3 @@
-import type { ChildProcess } from "node:child_process";
-
-import type {
-  Options,
-  PermissionMode,
-  PermissionResult,
-  SDKMessage,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
 import type { AgentStreamEvent, ToolCallTimelineItem } from "@agentdeck/protocol";
 import { describe, expect, test } from "vitest";
 
@@ -14,45 +5,49 @@ import type { AgentSession } from "../../../src/agent/types.js";
 import { createSilentLogger } from "../../../src/logger.js";
 import {
   ClaudeAgentClient,
-  type ClaudeQueryFn,
-  type ClaudeQueryHandle,
+  type ClaudeCliFactory,
+  type ClaudeCliHandle,
+  type ClaudeCliOptions,
 } from "../../../src/providers/claude/index.js";
+import type {
+  ClaudeInitializeResponse,
+  ClaudeOutputMessage,
+  ClaudePermissionMode,
+  ClaudePermissionResult,
+  ClaudeUserInput,
+} from "../../../src/providers/claude/stream-json-types.js";
 import type { ProcessTerminator } from "../../../src/utils/tree-kill.js";
 
 // ---------------------------------------------------------------------------
-// 假 query：记录收到的用户消息，测试脚本通过 onUser 回调推送 SDK 消息
+// 假 claude 进程句柄：记录收到的用户消息，测试脚本通过 onUser 回调推送 CLI 消息
 // ---------------------------------------------------------------------------
 
-class FakeQuery implements ClaudeQueryHandle {
-  readonly received: SDKUserMessage[] = [];
+class FakeCli implements ClaudeCliHandle {
+  readonly received: ClaudeUserInput[] = [];
   readonly calls = {
     interrupt: 0,
-    setModel: [] as (string | undefined)[],
-    setPermissionMode: [] as PermissionMode[],
+    setModel: [] as (string | null)[],
+    setPermissionMode: [] as ClaudePermissionMode[],
     close: 0,
   };
-  inputEnded = false;
-  interruptImpl: () => Promise<undefined> = async () => undefined;
-  onUser: (message: SDKUserMessage, query: FakeQuery) => void = () => undefined;
+  initialized: Promise<ClaudeInitializeResponse> = Promise.resolve({});
+  interruptImpl: () => Promise<void> = async () => undefined;
+  onUser: (message: ClaudeUserInput, cli: FakeCli) => void = () => undefined;
 
-  private readonly outbox: SDKMessage[] = [];
-  private waiter: ((result: IteratorResult<SDKMessage, void>) => void) | null = null;
+  private readonly outbox: ClaudeOutputMessage[] = [];
+  private waiter: {
+    resolve: (result: IteratorResult<ClaudeOutputMessage, void>) => void;
+    reject: (error: Error) => void;
+  } | null = null;
   private ended = false;
   private failure: Error | null = null;
 
-  constructor(
-    readonly prompt: AsyncIterable<SDKUserMessage>,
-    readonly options: Options,
-  ) {
-    void this.consume();
-  }
+  constructor(readonly options: ClaudeCliOptions) {}
 
-  private async consume(): Promise<void> {
-    for await (const message of this.prompt) {
-      this.received.push(message);
-      this.onUser(message, this);
-    }
-    this.inputEnded = true;
+  sendUserMessage(message: ClaudeUserInput): void {
+    if (this.ended) throw new Error("Claude Code 进程已退出");
+    this.received.push(message);
+    queueMicrotask(() => this.onUser(message, this));
   }
 
   emit(...messages: unknown[]): void {
@@ -60,30 +55,27 @@ class FakeQuery implements ClaudeQueryHandle {
       const waiter = this.waiter;
       if (waiter) {
         this.waiter = null;
-        waiter({ value: message as SDKMessage, done: false });
+        waiter.resolve({ value: message as ClaudeOutputMessage, done: false });
       } else {
-        this.outbox.push(message as SDKMessage);
+        this.outbox.push(message as ClaudeOutputMessage);
       }
     }
   }
 
   end(error?: Error): void {
+    if (this.ended) return;
     this.ended = true;
-    this.failure = error ?? null;
     const waiter = this.waiter;
     this.waiter = null;
     if (waiter) {
-      if (error) {
-        // 让 next() 走异常分支
-        this.failure = null;
-        (waiter as unknown as (r: Promise<never>) => void)(Promise.reject(error));
-      } else {
-        waiter({ value: undefined, done: true });
-      }
+      if (error) waiter.reject(error);
+      else waiter.resolve({ value: undefined, done: true });
+      return;
     }
+    this.failure = error ?? null;
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<SDKMessage, void> {
+  [Symbol.asyncIterator](): AsyncIterator<ClaudeOutputMessage, void> {
     return {
       next: () => {
         const next = this.outbox.shift();
@@ -96,27 +88,27 @@ class FakeQuery implements ClaudeQueryHandle {
           }
           return Promise.resolve({ value: undefined, done: true });
         }
-        return new Promise((resolve) => {
-          this.waiter = resolve;
+        return new Promise((resolve, reject) => {
+          this.waiter = { resolve, reject };
         });
       },
     };
   }
 
-  async interrupt(): Promise<undefined> {
+  async interrupt(): Promise<void> {
     this.calls.interrupt += 1;
     return this.interruptImpl();
   }
 
-  async setModel(model?: string): Promise<void> {
+  async setModel(model: string | null): Promise<void> {
     this.calls.setModel.push(model);
   }
 
-  async setPermissionMode(mode: PermissionMode): Promise<void> {
+  async setPermissionMode(mode: ClaudePermissionMode): Promise<void> {
     this.calls.setPermissionMode.push(mode);
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.calls.close += 1;
     this.end();
   }
@@ -124,30 +116,26 @@ class FakeQuery implements ClaudeQueryHandle {
 
 interface Harness {
   client: ClaudeAgentClient;
-  queries: FakeQuery[];
-  terminated: unknown[];
-  /** 新建 query 时用来配置脚本 */
-  setup: (configure: (query: FakeQuery) => void) => void;
+  clis: FakeCli[];
+  terminateProcess: ProcessTerminator;
+  /** 新建 claude 进程时用来配置脚本 */
+  setup: (configure: (cli: FakeCli) => void) => void;
 }
 
 function createHarness(env: NodeJS.ProcessEnv = {}): Harness {
-  const queries: FakeQuery[] = [];
-  const terminated: unknown[] = [];
-  let configure: (query: FakeQuery) => void = () => undefined;
-  const queryFn: ClaudeQueryFn = ({ prompt, options }) => {
-    const query = new FakeQuery(prompt, options);
-    configure(query);
-    queries.push(query);
-    return query;
+  const clis: FakeCli[] = [];
+  let configure: (cli: FakeCli) => void = () => undefined;
+  const cliFactory: ClaudeCliFactory = (options) => {
+    const cli = new FakeCli(options);
+    configure(cli);
+    clis.push(cli);
+    return cli;
   };
-  const terminateProcess: ProcessTerminator = async (child) => {
-    terminated.push(child);
-    return "terminated";
-  };
+  const terminateProcess: ProcessTerminator = async () => "terminated";
   const client = new ClaudeAgentClient({
     logger: createSilentLogger(),
     env,
-    queryFn,
+    cliFactory,
     terminateProcess,
     resolveExecutable: async () => ({
       available: true,
@@ -158,12 +146,26 @@ function createHarness(env: NodeJS.ProcessEnv = {}): Harness {
   });
   return {
     client,
-    queries,
-    terminated,
+    clis,
+    terminateProcess,
     setup: (fn) => {
       configure = fn;
     },
   };
+}
+
+/** 直接调用传给 claude 进程的 canUseTool 回调（模拟 CLI 发来 can_use_tool） */
+function canUseTool(
+  cli: FakeCli,
+  toolName: string,
+  input: Record<string, unknown>,
+  ctx: { signal?: AbortSignal; toolUseId?: string; title?: string } = {},
+): Promise<ClaudePermissionResult> {
+  return cli.options.canUseTool(toolName, input, {
+    signal: ctx.signal ?? new AbortController().signal,
+    ...(ctx.toolUseId ? { toolUseId: ctx.toolUseId } : {}),
+    ...(ctx.title ? { title: ctx.title } : {}),
+  });
 }
 
 function collect(session: AgentSession): AgentStreamEvent[] {
@@ -264,13 +266,13 @@ const msg = {
 /** 默认脚本：每轮回复 init（仅首轮）+ 流式文本 + 完整 assistant + result */
 function replyText(text: string) {
   let first = true;
-  return (user: SDKUserMessage, query: FakeQuery) => {
-    const id = `msg-${query.received.length}`;
+  return (user: ClaudeUserInput, cli: FakeCli) => {
+    const id = `msg-${cli.received.length}`;
     if (first) {
-      query.emit(msg.init());
+      cli.emit(msg.init());
       first = false;
     }
-    query.emit(
+    cli.emit(
       msg.streamStart(id),
       msg.thinkingDelta("想一想"),
       msg.textDelta(text.slice(0, 2)),
@@ -336,6 +338,51 @@ describe("ClaudeAgentClient", () => {
     expect(calls).toBe(2);
   });
 
+  test("fetchCatalog：优先用 initialize 返回的模型，探测进程随即关闭并缓存结果", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.initialized = Promise.resolve({
+        models: [
+          { value: "default", displayName: "Default (recommended)", description: "Opus · 推荐" },
+          { value: "sonnet", displayName: "Sonnet", description: "Sonnet · 均衡" },
+          { value: "claude-fable-5-1[1m]", displayName: "Fable" },
+          { value: "" },
+        ],
+      });
+    });
+    const catalog = await h.client.fetchCatalog({ cwd: "J:\\work" });
+    expect(catalog.models).toEqual([
+      {
+        provider: "claude",
+        id: "default",
+        label: "默认（跟随 Claude Code 配置）",
+        description: "Opus · 推荐",
+        isDefault: true,
+      },
+      { provider: "claude", id: "sonnet", label: "Sonnet", description: "Sonnet · 均衡" },
+      { provider: "claude", id: "claude-fable-5-1[1m]", label: "Fable" },
+    ]);
+    expect(h.clis).toHaveLength(1);
+    expect(h.clis[0]!.options).toMatchObject({ cwd: "J:\\work", model: null, resumeSessionId: null });
+    expect(h.clis[0]!.received).toHaveLength(0);
+    expect(h.clis[0]!.calls.close).toBe(1);
+
+    await h.client.fetchCatalog();
+    expect(h.clis).toHaveLength(1);
+  });
+
+  test("fetchCatalog：initialize 失败时退回内置别名，且不缓存失败", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.initialized = Promise.reject(new Error("boom"));
+    });
+    const catalog = await h.client.fetchCatalog();
+    expect(catalog.models.map((m) => m.id)).toEqual(["default", "sonnet", "opus", "haiku"]);
+    expect(h.clis[0]!.calls.close).toBe(1);
+    await h.client.fetchCatalog();
+    expect(h.clis).toHaveLength(2);
+  });
+
   test("成功结果被缓存", async () => {
     let calls = 0;
     const client = new ClaudeAgentClient({
@@ -353,7 +400,7 @@ describe("ClaudeAgentClient", () => {
 });
 
 describe("ClaudeAgentSession", () => {
-  test("首轮才创建 query，options 符合约定，env 已清洗", async () => {
+  test("首轮才启动 claude 进程，选项符合约定，env 已清洗", async () => {
     const h = createHarness({
       PATH: "C:\\bin",
       AGENTDECK_TOKEN: "secret",
@@ -362,7 +409,7 @@ describe("ClaudeAgentSession", () => {
     });
     h.setup((q) => (q.onUser = replyText("OK")));
     const session = await h.client.createSession({ cwd: "J:\\work", modeId: "acceptEdits" });
-    expect(h.queries).toHaveLength(0);
+    expect(h.clis).toHaveLength(0);
     expect(session.id).toBeNull();
     expect(session.describePersistence()).toBeNull();
 
@@ -370,22 +417,27 @@ describe("ClaudeAgentSession", () => {
     await session.startTurn("hi");
     await waitUntil(() => terminalEvents(events).length === 1);
 
-    expect(h.queries).toHaveLength(1);
-    const options = h.queries[0]!.options;
+    expect(h.clis).toHaveLength(1);
+    const options = h.clis[0]!.options;
     expect(options).toMatchObject({
+      executablePath: "C:\\fake\\claude.exe",
       cwd: "J:\\work",
-      includePartialMessages: true,
       permissionMode: "acceptEdits",
-      pathToClaudeCodeExecutable: "C:\\fake\\claude.exe",
-      systemPrompt: { type: "preset", preset: "claude_code" },
-      settingSources: ["user", "project", "local"],
+      model: null,
+      resumeSessionId: null,
     });
-    expect(options.model).toBeUndefined();
-    expect(options.resume).toBeUndefined();
     expect(typeof options.canUseTool).toBe("function");
-    expect(typeof options.spawnClaudeCodeProcess).toBe("function");
-    expect(typeof options.stderr).toBe("function");
+    expect(typeof options.onStderr).toBe("function");
+    expect(options.terminateProcess).toBe(h.terminateProcess);
     expect(options.env).toEqual({ PATH: "C:\\bin" });
+    // 用户消息带 uuid，result 以 user_message_uuid 回显
+    expect(h.clis[0]!.received[0]).toMatchObject({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      parent_tool_use_id: null,
+      session_id: "",
+    });
+    expect(typeof h.clis[0]!.received[0]!.uuid).toBe("string");
   });
 
   test("一轮完整事件：thread_started、思考/文本增量（无重复）、usage、turn_completed", async () => {
@@ -459,7 +511,7 @@ describe("ClaudeAgentSession", () => {
     ]);
   });
 
-  test("多轮复用同一 query，thread_started 只发一次", async () => {
+  test("多轮复用同一 claude 进程，thread_started 只发一次", async () => {
     const h = createHarness();
     h.setup((q) => (q.onUser = replyText("OK")));
     const session = await h.client.createSession({ cwd: "." });
@@ -473,10 +525,11 @@ describe("ClaudeAgentSession", () => {
     ]);
     await waitUntil(() => terminalEvents(events).length === 2);
 
-    expect(h.queries).toHaveLength(1);
-    const query = h.queries[0]!;
-    expect(query.received).toHaveLength(2);
-    expect(query.received[1]!.message.content).toEqual([
+    expect(h.clis).toHaveLength(1);
+    const cli = h.clis[0]!;
+    expect(cli.received).toHaveLength(2);
+    expect(cli.received[1]!.session_id).toBe(SESSION_ID);
+    expect(cli.received[1]!.message.content).toEqual([
       { type: "text", text: "two" },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } },
       { type: "text", text: "[不支持的图片类型：image/bmp]" },
@@ -640,13 +693,10 @@ describe("ClaudeAgentSession", () => {
     const session = await h.client.createSession({ cwd: "." });
     const events = collect(session);
     await session.startTurn("x");
-    const canUseTool = h.queries[0]!.options.canUseTool!;
-    const signal = new AbortController().signal;
+    const cli = h.clis[0]!;
 
-    const allowPromise = canUseTool("Bash", { command: "rm -rf tmp" }, {
-      signal,
-      toolUseID: "toolu_9",
-      requestId: "req-1",
+    const allowPromise = canUseTool(cli, "Bash", { command: "rm -rf tmp" }, {
+      toolUseId: "toolu_9",
       title: "Claude wants to run rm",
     });
     const requested = events.find((e) => e.type === "permission_requested");
@@ -670,14 +720,14 @@ describe("ClaudeAgentSession", () => {
     await expect(allowPromise).resolves.toEqual({
       behavior: "allow",
       updatedInput: { command: "rm -rf tmp" },
-    } satisfies PermissionResult);
+    } satisfies ClaudePermissionResult);
     expect(events.at(-1)).toEqual({
       type: "permission_resolved",
       requestId: requested.request.id,
       response: { behavior: "allow" },
     });
 
-    const updatedPromise = canUseTool("Bash", { command: "a" }, { signal, toolUseID: "t2", requestId: "r2" });
+    const updatedPromise = canUseTool(cli, "Bash", { command: "a" }, { toolUseId: "t2" });
     const second = session.getPendingPermissions()[0]!;
     await session.respondToPermission(second.id, {
       behavior: "allow",
@@ -685,11 +735,7 @@ describe("ClaudeAgentSession", () => {
     });
     await expect(updatedPromise).resolves.toEqual({ behavior: "allow", updatedInput: { command: "b" } });
 
-    const denyPromise = canUseTool("Write", { file_path: "a.txt", content: "x" }, {
-      signal,
-      toolUseID: "t3",
-      requestId: "r3",
-    });
+    const denyPromise = canUseTool(cli, "Write", { file_path: "a.txt", content: "x" }, { toolUseId: "t3" });
     const third = session.getPendingPermissions()[0]!;
     await session.respondToPermission(third.id, { behavior: "deny" });
     await expect(denyPromise).resolves.toEqual({ behavior: "deny", message: "用户拒绝了该操作" });
@@ -702,12 +748,7 @@ describe("ClaudeAgentSession", () => {
     const session = await h.client.createSession({ cwd: ".", modeId: "plan" });
     const events = collect(session);
     await session.startTurn("x");
-    const canUseTool = h.queries[0]!.options.canUseTool!;
-    const promise = canUseTool("ExitPlanMode", { plan: "1. 改代码" }, {
-      signal: new AbortController().signal,
-      toolUseID: "tp",
-      requestId: "rp",
-    });
+    const promise = canUseTool(h.clis[0]!, "ExitPlanMode", { plan: "1. 改代码" }, { toolUseId: "tp" });
     const request = session.getPendingPermissions()[0]!;
     expect(request).toMatchObject({
       kind: "plan",
@@ -719,7 +760,7 @@ describe("ClaudeAgentSession", () => {
     });
     await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "approve" });
     await expect(promise).resolves.toEqual({ behavior: "allow", updatedInput: { plan: "1. 改代码" } });
-    expect(h.queries[0]!.calls.setPermissionMode).toEqual(["default"]);
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["default"]);
     expect(events.some((e) => e.type === "mode_changed" && e.modeId === "default")).toBe(true);
   });
 
@@ -729,10 +770,9 @@ describe("ClaudeAgentSession", () => {
     const events = collect(session);
     await session.startTurn("x");
     const controller = new AbortController();
-    const promise = h.queries[0]!.options.canUseTool!("Bash", { command: "ls" }, {
+    const promise = canUseTool(h.clis[0]!, "Bash", { command: "ls" }, {
       signal: controller.signal,
-      toolUseID: "t",
-      requestId: "r",
+      toolUseId: "t",
     });
     controller.abort();
     await expect(promise).resolves.toMatchObject({ behavior: "deny" });
@@ -740,7 +780,7 @@ describe("ClaudeAgentSession", () => {
     expect(events.at(-1)).toMatchObject({ type: "permission_resolved", response: { behavior: "deny" } });
   });
 
-  test("interrupt：拒绝挂起权限、取消运行中工具、调用 query.interrupt、发 turn_canceled，忽略过期 result", async () => {
+  test("interrupt：拒绝挂起权限、取消运行中工具、发 interrupt 控制请求、发 turn_canceled，忽略过期 result", async () => {
     const h = createHarness();
     let round = 0;
     h.setup(
@@ -768,14 +808,10 @@ describe("ClaudeAgentSession", () => {
     const events = collect(session);
     const { turnId } = await session.startTurn("long");
     await waitUntil(() => toolCalls(events).length === 1);
-    const permission = h.queries[0]!.options.canUseTool!("Bash", { command: "sleep 100" }, {
-      signal: new AbortController().signal,
-      toolUseID: "toolu_s",
-      requestId: "r",
-    });
+    const permission = canUseTool(h.clis[0]!, "Bash", { command: "sleep 100" }, { toolUseId: "toolu_s" });
 
     await session.interrupt();
-    expect(h.queries[0]!.calls.interrupt).toBe(1);
+    expect(h.clis[0]!.calls.interrupt).toBe(1);
     await expect(permission).resolves.toMatchObject({ behavior: "deny" });
     expect(toolCalls(events).at(-1)).toMatchObject({ callId: "toolu_s", status: "canceled" });
     expect(terminalEvents(events)).toEqual([{ type: "turn_canceled", turnId, reason: "interrupted" }]);
@@ -784,10 +820,10 @@ describe("ClaudeAgentSession", () => {
     const second = await session.startTurn("next");
     await waitUntil(() => terminalEvents(events).length === 2);
     expect(terminalEvents(events)[1]).toMatchObject({ type: "turn_completed", turnId: second.turnId });
-    expect(h.queries).toHaveLength(1);
+    expect(h.clis).toHaveLength(1);
   });
 
-  test("interrupt 超时（3 秒）后拆掉 query，下一轮以 resume 重建", async () => {
+  test("interrupt 超时（3 秒）后结束 claude 进程，下一轮以 --resume 重建", async () => {
     const h = createHarness();
     let created = 0;
     h.setup((q) => {
@@ -807,15 +843,15 @@ describe("ClaudeAgentSession", () => {
     await session.interrupt();
     expect(Date.now() - started).toBeGreaterThanOrEqual(2_900);
     expect(terminalEvents(events).map((e) => e.type)).toEqual(["turn_canceled"]);
-    expect(h.queries[0]!.calls.close).toBe(1);
+    expect(h.clis[0]!.calls.close).toBe(1);
 
     await session.startTurn("y");
     await waitUntil(() => terminalEvents(events).length === 2);
-    expect(h.queries).toHaveLength(2);
-    expect(h.queries[1]!.options.resume).toBe(SESSION_ID);
+    expect(h.clis).toHaveLength(2);
+    expect(h.clis[1]!.options.resumeSessionId).toBe(SESSION_ID);
   });
 
-  test("消息流意外结束 → turn_failed，下一轮重建 query 并 resume", async () => {
+  test("claude 进程意外退出 → turn_failed，下一轮重建进程并 --resume", async () => {
     const h = createHarness();
     let created = 0;
     h.setup((q) => {
@@ -840,10 +876,11 @@ describe("ClaudeAgentSession", () => {
     await session.startTurn("y");
     await waitUntil(() => terminalEvents(events).length === 2);
     expect(terminalEvents(events)[1]!.type).toBe("turn_completed");
-    expect(h.queries[1]!.options.resume).toBe(SESSION_ID);
+    expect(h.clis[0]!.calls.close).toBeGreaterThanOrEqual(1);
+    expect(h.clis[1]!.options.resumeSessionId).toBe(SESSION_ID);
   });
 
-  test("setModel / setMode：无 query 时记下并在创建时生效，有 query 时调用 SDK", async () => {
+  test("setModel / setMode：无进程时记下并在启动时生效，有进程时发控制请求", async () => {
     const h = createHarness();
     h.setup((q) => (q.onUser = (user) => q.emit(msg.result(user.uuid))));
     const session = await h.client.createSession({ cwd: ".", model: "default" });
@@ -857,16 +894,16 @@ describe("ClaudeAgentSession", () => {
     ]);
     await session.startTurn("x");
     await waitUntil(() => terminalEvents(events).length === 1);
-    expect(h.queries[0]!.options).toMatchObject({ model: "opus", permissionMode: "plan" });
+    expect(h.clis[0]!.options).toMatchObject({ model: "opus", permissionMode: "plan" });
 
     await session.setModel!("default");
     await session.setModel!("haiku");
     await session.setMode!("bypassPermissions");
-    expect(h.queries[0]!.calls.setModel).toEqual([undefined, "haiku"]);
-    expect(h.queries[0]!.calls.setPermissionMode).toEqual(["bypassPermissions"]);
+    expect(h.clis[0]!.calls.setModel).toEqual([null, "haiku"]);
+    expect(h.clis[0]!.calls.setPermissionMode).toEqual(["bypassPermissions"]);
   });
 
-  test("resumeSession：立即可描述持久化句柄，并以 resume 启动", async () => {
+  test("resumeSession：立即可描述持久化句柄，并以 --resume 启动", async () => {
     const h = createHarness();
     h.setup((q) => (q.onUser = replyText("继续")));
     const session = await h.client.resumeSession({ provider: "claude", sessionId: SESSION_ID }, { cwd: "." });
@@ -875,36 +912,23 @@ describe("ClaudeAgentSession", () => {
     const events = collect(session);
     await session.startTurn("x");
     await waitUntil(() => terminalEvents(events).length === 1);
-    expect(h.queries[0]!.options.resume).toBe(SESSION_ID);
+    expect(h.clis[0]!.options.resumeSessionId).toBe(SESSION_ID);
+    expect(h.clis[0]!.received[0]!.session_id).toBe(SESSION_ID);
     expect(events.filter((e) => e.type === "thread_started")).toHaveLength(1);
   });
 
-  test("spawnClaudeCodeProcess 以 shell:false 拉起子进程；close 结束输入、tree-kill 子进程并取消回合", async () => {
+  test("close：关闭 claude 进程、取消回合，之后不可再用", async () => {
     const h = createHarness();
-    let child: ChildProcess | null = null;
-    h.setup((q) => {
-      const spawned = q.options.spawnClaudeCodeProcess!({
-        command: process.execPath,
-        args: ["-e", "setInterval(() => {}, 1000)"],
-        cwd: process.cwd(),
-        env: q.options.env ?? {},
-        signal: new AbortController().signal,
-      });
-      child = spawned as unknown as ChildProcess;
-    });
     const session = await h.client.createSession({ cwd: "." });
     const events = collect(session);
     const { turnId } = await session.startTurn("x");
-    expect(child).not.toBeNull();
-    const pid = (child as unknown as ChildProcess).pid;
-    expect(typeof pid).toBe("number");
+    expect(h.clis).toHaveLength(1);
 
     await session.close();
     expect(terminalEvents(events)).toEqual([{ type: "turn_canceled", turnId, reason: "closed" }]);
-    expect(h.terminated).toEqual([child]);
-    expect(h.queries[0]!.calls.close).toBe(1);
-    await waitUntil(() => h.queries[0]!.inputEnded);
+    expect(h.clis[0]!.calls.close).toBe(1);
     await expect(session.startTurn("again")).rejects.toThrow("已关闭");
-    (child as unknown as ChildProcess).kill();
+    await session.close(); // 幂等
+    expect(h.clis[0]!.calls.close).toBe(1);
   });
 });

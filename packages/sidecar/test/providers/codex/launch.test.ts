@@ -137,6 +137,22 @@ describe.skipIf(process.platform !== "win32")("resolveCodexLaunch（Windows 文�
     });
   });
 
+  test("PATH 中位于 node_modules 内的目录（如 pnpm 注入的 node_modules/.bin）被跳过", () => {
+    const localBin = path.join(root, "repo", "node_modules", ".bin");
+    touch(path.join(localBin, "codex.exe"));
+    touch(path.join(localBin, "codex.cmd"), NPM_SHIM);
+    touch(path.join(localBin, "node_modules", "@openai", "codex", "bin", "codex.js"));
+    expect(resolveCodexLaunch({ ...winOpts, env: { PATH: localBin } })).toBeNull();
+
+    const globalBin = path.join(root, "global");
+    const exe = touch(path.join(globalBin, "codex.exe"));
+    expect(resolveCodexLaunch({ ...winOpts, env: { PATH: [localBin, globalBin].join(";") } })).toEqual({
+      command: exe,
+      args: [],
+      source: "path",
+    });
+  });
+
   test("都找不到时返回 null", () => {
     expect(resolveCodexLaunch({ ...winOpts, env: { PATH: path.join(root, "empty") } })).toBeNull();
   });

@@ -2,16 +2,16 @@
 //   1. 环境变量 AGENTDECK_CLAUDE_PATH（指向 .cmd shim 时同样解析出背后的真实 exe）
 //   2. PATH 上的 claude.exe（非 Windows 为 claude）
 //   3. PATH 上的 npm shim claude.cmd → 解析出真实 exe（或 cli.js）
-//   4. SDK 自带平台包 @anthropic-ai/claude-agent-sdk-<platform>-<arch>/claude(.exe)（仅开发态存在）
-//   5. 不可用
+//   4. 不可用
+// 只使用用户本机安装的 Claude Code：PATH 中位于 node_modules 内的目录（项目本地依赖）一律跳过。
 // 每个候选都跑一次 `--version`（带超时）校验，失败则继续下一个。
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 
+import { isInsideNodeModules } from "../../utils/node-modules-dir.js";
 import { execCommand } from "../../utils/spawn.js";
 
-export type ClaudeExecutableSource = "env" | "path" | "npm-shim" | "sdk-bundled";
+export type ClaudeExecutableSource = "env" | "path" | "npm-shim";
 
 export interface ClaudeExecutable {
   /** 真实可执行文件（.exe 或无扩展名的原生二进制；极少数情况为 cli.js，由当前 node 执行） */
@@ -27,11 +27,8 @@ export type ClaudeExecutableResolution =
 export interface ClaudeExecutableDeps {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
-  arch: string;
   exists(filePath: string): boolean;
   readFile(filePath: string): string;
-  /** 解析 SDK 平台包内的可执行文件路径，找不到返回 null */
-  resolveSdkBinary(platform: NodeJS.Platform, arch: string): string | null;
   /** 跑 `--version`，成功返回版本文本，失败返回 null */
   probe(executablePath: string): Promise<string | null>;
   warn?(message: string): void;
@@ -104,12 +101,6 @@ export async function resolveClaudeExecutable(
     }
   }
 
-  // 4. SDK 自带平台包
-  const found = await tryCandidate(deps.resolveSdkBinary(deps.platform, deps.arch), "sdk-bundled");
-  if (found) {
-    return { available: true, ...found };
-  }
-
   const detail = failures.length > 0 ? `；已尝试：${failures.join("、")}` : "";
   return { available: false, reason: `${CLAUDE_UNAVAILABLE_REASON}${detail}` };
 }
@@ -177,7 +168,7 @@ function splitPath(deps: Pick<ClaudeExecutableDeps, "env" | "platform">): string
   const dirs: string[] = [];
   for (const entry of raw.split(delimiter)) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-    if (!dir) {
+    if (!dir || isInsideNodeModules(dir)) {
       continue;
     }
     const key = deps.platform === "win32" ? dir.toLowerCase() : dir;
@@ -188,19 +179,6 @@ function splitPath(deps: Pick<ClaudeExecutableDeps, "env" | "platform">): string
     dirs.push(dir);
   }
   return dirs;
-}
-
-export function resolveSdkBundledBinary(platform: NodeJS.Platform, arch: string): string | null {
-  try {
-    const require = createRequire(import.meta.url);
-    const sdkEntry = require.resolve("@anthropic-ai/claude-agent-sdk");
-    const sdkRequire = createRequire(sdkEntry);
-    const pkgJson = sdkRequire.resolve(`@anthropic-ai/claude-agent-sdk-${platform}-${arch}/package.json`);
-    const binary = path.join(path.dirname(pkgJson), platform === "win32" ? "claude.exe" : "claude");
-    return existsSync(binary) ? binary : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function probeClaudeVersion(
@@ -234,10 +212,8 @@ export function createDefaultClaudeExecutableDeps(
   return {
     env,
     platform: process.platform,
-    arch: process.arch,
     exists: existsSync,
     readFile: (filePath) => readFileSync(filePath, "utf8"),
-    resolveSdkBinary: resolveSdkBundledBinary,
     probe: (executablePath) => probeClaudeVersion(executablePath, env),
     ...(warn ? { warn } : {}),
   };

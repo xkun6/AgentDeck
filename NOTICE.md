@@ -52,26 +52,17 @@ sidecar 由 esbuild 打成单文件，以下 npm 包的代码被打进其中（�
 | 包 | 版本 | 许可证 |
 |---|---|---|
 | @agentclientprotocol/sdk | 0.17.1 | Apache-2.0 |
-| @anthropic-ai/claude-agent-sdk | 0.3.246 | Anthropic 专有条款（见下文） |
 | isexe | 3.1.5 | BlueOak-1.0.0 |
 | tree-kill | 1.2.2 | MIT |
 | which | 5.0.0 | ISC |
 | ws | 8.21.1 | MIT |
 | zod | 3.25.76、4.6.6 | MIT |
-| mime-types / mime-db（内嵌于 claude-agent-sdk 的 `sdk.mjs`） | — | MIT |
 
 各包的版权行与许可全文见 `legal/sidecar-third-party.txt`。
 
-### Claude Agent SDK（`@anthropic-ai/claude-agent-sdk`）
+### Claude Code 与 Codex
 
-sidecar bundle 中包含 `@anthropic-ai/claude-agent-sdk` 0.3.246 的 JavaScript 代码（`sdk.mjs`）。该 SDK **不是开源软件**，其使用受 Anthropic 条款约束。其包内 `LICENSE.md` 原文为：
-
-```
-© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
-```
-
-- AgentDeck **不随安装包分发** `claude` 可执行文件（SDK 的平台二进制包 `@anthropic-ai/claude-agent-sdk-*` 未打包），运行时使用用户本机已安装的 Claude Code。
-- 使用 Claude 相关功能即表示用户需自行遵守上述 Anthropic 条款。
+AgentDeck 的 Claude Code 与 Codex 适配均直接调用**用户本机安装的 CLI**（`claude` 通过 stream-json stdio 协议，`codex` 通过 `codex app-server`）。本项目**不包含也不分发** Anthropic / OpenAI 的代码或可执行文件；使用相关功能时，用户需自行安装这些 CLI 并遵守其各自的许可与服务条款。
 
 ### 前端依赖（web bundle）
 

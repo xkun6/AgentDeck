@@ -1,23 +1,11 @@
 // Derived from paseo packages/server/src/server/agent/providers/claude/agent.ts and query.ts (Apache-2.0); modified for AgentDeck
-// 大幅精简：一个会话一个长生命周期 query（streaming input），每轮 push 一条用户消息；
+// 大幅精简：一个会话一个长生命周期 claude 子进程（stream-json stdio 协议，见 claude-cli-session.ts），每轮写一条用户消息；
 // 只保留 AgentDeck 协议需要的事件翻译、权限中转、中断、模型/模式切换与 tree-kill 关闭。
 // 去掉了 paseo 的子代理侧链、steer、rewind、历史回放、快速模式、思考预算等功能。
+// AgentDeck 改动：不再依赖 Anthropic 的 Agent SDK，直接 spawn 用户本机安装的 claude 可执行文件。
 import { randomUUID } from "node:crypto";
-import type { ChildProcess } from "node:child_process";
+import os from "node:os";
 
-import {
-  query as sdkQuery,
-  type CanUseTool,
-  type Options,
-  type PermissionMode,
-  type PermissionResult,
-  type Query,
-  type SDKMessage,
-  type SDKResultMessage,
-  type SDKUserMessage,
-  type SpawnOptions as ClaudeSpawnOptions,
-  type SpawnedProcess,
-} from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentMode,
   AgentModelDefinition,
@@ -41,8 +29,12 @@ import type {
 import type { Logger } from "../../logger.js";
 import { createExternalProcessEnv } from "../../utils/process-env.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
-import { spawnProcess } from "../../utils/spawn.js";
-import { terminateWithTreeKill, type ProcessTerminator } from "../../utils/tree-kill.js";
+import type { ProcessTerminator } from "../../utils/tree-kill.js";
+import {
+  createClaudeCliSession,
+  type ClaudeCliFactory,
+  type ClaudeCliHandle,
+} from "./claude-cli-session.js";
 import {
   createDefaultClaudeExecutableDeps,
   resolveClaudeExecutable,
@@ -55,6 +47,21 @@ import {
   mapClaudeRunningToolCall,
   resolveClaudeToolKind,
 } from "./tool-call-mapper.js";
+import type {
+  ClaudeAssistantMessage,
+  ClaudeCanUseTool,
+  ClaudeContentBlock,
+  ClaudeImageMediaType,
+  ClaudeInitializeResponse,
+  ClaudeOutputMessage,
+  ClaudePermissionMode,
+  ClaudePermissionResult,
+  ClaudeResultMessage,
+  ClaudeStreamEvent,
+  ClaudeUserContentBlock,
+  ClaudeUserInput,
+  ClaudeUserOutputMessage,
+} from "./stream-json-types.js";
 
 export const CLAUDE_PROVIDER_ID = "claude";
 
@@ -84,11 +91,12 @@ export const CLAUDE_MODES: AgentMode[] = [
   },
 ];
 
-const DEFAULT_MODE: PermissionMode = "default";
+const DEFAULT_MODE: ClaudePermissionMode = "default";
 const INTERRUPT_TIMEOUT_MS = 3_000;
 const AVAILABILITY_CACHE_MS = 60_000;
-const KILL_GRACEFUL_TIMEOUT_MS = 1_500;
-const KILL_FORCE_TIMEOUT_MS = 1_500;
+/** 模型列表来自 claude 的 initialize 应答，成功结果缓存 10 分钟 */
+const MODEL_CACHE_MS = 10 * 60_000;
+const MODEL_PROBE_TIMEOUT_MS = 15_000;
 
 /** 父进程若本身运行在 Claude Code 里，这些变量会让子 claude 认为自己嵌套在另一个会话中 */
 const PARENT_SESSION_ENV_VARS = [
@@ -110,22 +118,12 @@ const PLAN_PERMISSION_ACTIONS: AgentPermissionAction[] = [
   { id: "keep_planning", label: "继续规划", behavior: "deny" },
 ];
 
-/** SDK Query 中本 provider 用到的部分（测试可注入假实现） */
-export type ClaudeQueryHandle = AsyncIterable<SDKMessage> &
-  Pick<Query, "interrupt" | "setModel" | "setPermissionMode" | "close">;
-
-export type ClaudeQueryFn = (params: {
-  prompt: AsyncIterable<SDKUserMessage>;
-  options: Options;
-}) => ClaudeQueryHandle;
-
-const defaultQueryFn: ClaudeQueryFn = (params) => sdkQuery(params);
-
 export interface ClaudeAgentClientOptions {
   logger: Logger;
   /** sidecar 进程环境；传给 claude 前会剔除 AGENTDECK_* 与父 Claude 会话变量 */
   env: NodeJS.ProcessEnv;
-  queryFn?: ClaudeQueryFn;
+  /** 创建 claude 子进程会话（测试可注入假实现） */
+  cliFactory?: ClaudeCliFactory;
   resolveExecutable?: () => Promise<ClaudeExecutableResolution>;
   terminateProcess?: ProcessTerminator;
 }
@@ -137,22 +135,24 @@ export class ClaudeAgentClient implements AgentClient {
 
   private readonly logger: Logger;
   private readonly childEnv: Record<string, string>;
-  private readonly queryFn: ClaudeQueryFn;
+  private readonly cliFactory: ClaudeCliFactory;
   private readonly resolveExecutable: () => Promise<ClaudeExecutableResolution>;
-  private readonly terminateProcess: ProcessTerminator;
+  private readonly terminateProcess: ProcessTerminator | undefined;
   private cached: { at: number; promise: Promise<ClaudeExecutableResolution> } | null = null;
+  private modelCache: { at: number; models: AgentModelDefinition[] } | null = null;
+  private modelProbe: Promise<AgentModelDefinition[] | null> | null = null;
 
   constructor(options: ClaudeAgentClientOptions) {
     this.logger = options.logger;
     this.childEnv = buildClaudeChildEnv(options.env);
-    this.queryFn = options.queryFn ?? defaultQueryFn;
+    this.cliFactory = options.cliFactory ?? createClaudeCliSession;
     this.resolveExecutable =
       options.resolveExecutable ??
       (() =>
         resolveClaudeExecutable(
           createDefaultClaudeExecutableDeps(options.env, (message) => this.logger.warn(message)),
         ));
-    this.terminateProcess = options.terminateProcess ?? terminateWithTreeKill;
+    this.terminateProcess = options.terminateProcess;
   }
 
   async isAvailable(): Promise<AgentAvailability> {
@@ -163,11 +163,60 @@ export class ClaudeAgentClient implements AgentClient {
     return { available: true, command: [resolution.path] };
   }
 
-  async fetchCatalog(): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
+  /** 模型优先取 claude initialize 应答里的列表；拿不到时退回静态别名 */
+  async fetchCatalog(opts?: {
+    cwd?: string;
+  }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
+    const models = (await this.loadModels(opts?.cwd)) ?? CLAUDE_MODELS;
     return {
-      models: CLAUDE_MODELS.map((model) => ({ ...model })),
+      models: models.map((model) => ({ ...model })),
       modes: CLAUDE_MODES.map((mode) => ({ ...mode })),
     };
+  }
+
+  private async loadModels(cwd: string | undefined): Promise<AgentModelDefinition[] | null> {
+    if (this.modelCache && Date.now() - this.modelCache.at < MODEL_CACHE_MS) {
+      return this.modelCache.models;
+    }
+    if (!this.modelProbe) {
+      this.modelProbe = this.probeModels(cwd ?? os.homedir()).finally(() => {
+        this.modelProbe = null;
+      });
+    }
+    return this.modelProbe;
+  }
+
+  /** 起一个临时 claude 进程，只发 initialize（不发用户消息，不消耗额度），读出模型列表后立即结束 */
+  private async probeModels(cwd: string): Promise<AgentModelDefinition[] | null> {
+    let cli: ClaudeCliHandle | null = null;
+    try {
+      const resolution = await this.resolve();
+      if (!resolution.available) {
+        return null;
+      }
+      cli = this.cliFactory({
+        executablePath: resolution.path,
+        cwd,
+        env: this.childEnv,
+        model: null,
+        permissionMode: DEFAULT_MODE,
+        resumeSessionId: null,
+        canUseTool: async () => ({ behavior: "deny", message: "模型探测进程不执行工具" }),
+        logger: this.logger,
+        controlTimeoutMs: MODEL_PROBE_TIMEOUT_MS,
+        ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
+      });
+      const models = mapInitializeModels(await cli.initialized);
+      if (models) {
+        this.modelCache = { at: Date.now(), models };
+      }
+      return models;
+    } catch (error) {
+      this.logger.warn("获取 Claude Code 模型列表失败，使用内置别名：%s", errorMessage(error));
+      return null;
+    } finally {
+      await cli?.close().catch(() => undefined);
+    }
   }
 
   async createSession(cfg: AgentSessionConfig): Promise<AgentSession> {
@@ -197,8 +246,8 @@ export class ClaudeAgentClient implements AgentClient {
     return new ClaudeAgentSession({
       logger: this.logger,
       env: this.childEnv,
-      queryFn: this.queryFn,
-      terminateProcess: this.terminateProcess,
+      cliFactory: this.cliFactory,
+      ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       executablePath: resolution.path,
       cwd: cfg.cwd,
       model: cfg.model ?? null,
@@ -236,7 +285,7 @@ export interface ClaudeAgentSessionOptions {
   logger: Logger;
   /** 已清洗的子进程环境 */
   env: Record<string, string>;
-  queryFn: ClaudeQueryFn;
+  cliFactory?: ClaudeCliFactory;
   terminateProcess?: ProcessTerminator;
   executablePath: string;
   cwd: string;
@@ -254,7 +303,7 @@ interface ActiveTurn {
 interface PendingPermission {
   request: AgentPermissionRequest;
   input: Record<string, unknown>;
-  resolve: (result: PermissionResult) => void;
+  resolve: (result: ClaudePermissionResult) => void;
   cleanup: () => void;
 }
 
@@ -265,19 +314,13 @@ interface ToolUseEntry {
   hidden: boolean;
 }
 
-interface AsyncMessageInput<T> {
-  push(item: T): void;
-  end(): void;
-  iterable: AsyncIterable<T>;
-}
-
 export class ClaudeAgentSession implements AgentSession {
   readonly provider = CLAUDE_PROVIDER_ID;
 
   private readonly logger: Logger;
   private readonly env: Record<string, string>;
-  private readonly queryFn: ClaudeQueryFn;
-  private readonly terminateProcess: ProcessTerminator;
+  private readonly cliFactory: ClaudeCliFactory;
+  private readonly terminateProcess: ProcessTerminator | undefined;
   private readonly executablePath: string;
   private readonly cwd: string;
 
@@ -285,11 +328,9 @@ export class ClaudeAgentSession implements AgentSession {
   private threadStarted = false;
   private closed = false;
   private model: string | null;
-  private mode: PermissionMode;
+  private mode: ClaudePermissionMode;
 
-  private query: ClaudeQueryHandle | null = null;
-  private input: AsyncMessageInput<SDKUserMessage> | null = null;
-  private child: ChildProcess | null = null;
+  private cli: ClaudeCliHandle | null = null;
 
   private activeTurn: ActiveTurn | null = null;
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -306,8 +347,8 @@ export class ClaudeAgentSession implements AgentSession {
     assertClaudeMode(options.modeId);
     this.logger = options.logger;
     this.env = options.env;
-    this.queryFn = options.queryFn;
-    this.terminateProcess = options.terminateProcess ?? terminateWithTreeKill;
+    this.cliFactory = options.cliFactory ?? createClaudeCliSession;
+    this.terminateProcess = options.terminateProcess;
     this.executablePath = options.executablePath;
     this.cwd = options.cwd;
     this.model = options.model;
@@ -327,14 +368,13 @@ export class ClaudeAgentSession implements AgentSession {
       throw new Error("Claude 会话正在执行中");
     }
     const turnId = randomUUID();
-    const message = toSdkUserMessage(prompt, this.sessionId);
-    const turn: ActiveTurn = { turnId, userMessageUuid: message.uuid ?? randomUUID() };
+    const message = toClaudeUserInput(prompt, this.sessionId);
+    const turn: ActiveTurn = { turnId, userMessageUuid: message.uuid };
     this.activeTurn = turn;
     this.emit({ type: "turn_started", turnId });
 
     try {
-      const input = this.ensureQuery();
-      input.push(message);
+      this.ensureCli().sendUserMessage(message);
     } catch (error) {
       this.logger.error("启动 Claude Code 失败：%s", errorMessage(error));
       this.finishTurn(turn, {
@@ -397,14 +437,14 @@ export class ClaudeAgentSession implements AgentSession {
     this.denyAllPendingPermissions("回合已取消");
     this.cancelRunningTools(turn.turnId);
 
-    const query = this.query;
-    if (query) {
+    const cli = this.cli;
+    if (cli) {
       try {
-        await withTimeout(query.interrupt(), INTERRUPT_TIMEOUT_MS, "中断 Claude Code 超时（3 秒）");
+        await withTimeout(cli.interrupt(), INTERRUPT_TIMEOUT_MS, "中断 Claude Code 超时（3 秒）");
       } catch (error) {
-        // 中断失败或超时：直接拆掉当前 query，下一轮以 resume 重新拉起
+        // 中断失败或超时：直接结束当前进程，下一轮以 --resume 重新拉起
         this.logger.warn("中断 Claude Code 失败，重建会话进程：%s", errorMessage(error));
-        await this.teardownQuery();
+        await this.teardownCli();
       }
     }
     this.emit({ type: "turn_canceled", turnId: turn.turnId, reason: "interrupted" });
@@ -422,7 +462,7 @@ export class ClaudeAgentSession implements AgentSession {
       this.emit({ type: "turn_canceled", turnId: turn.turnId, reason: "closed" });
     }
     this.closed = true;
-    await this.teardownQuery();
+    await this.teardownCli();
     this.listeners.clear();
   }
 
@@ -431,8 +471,8 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   async setModel(modelId: string | null): Promise<void> {
-    if (this.query) {
-      await this.query.setModel(normalizeModel(modelId) ?? undefined);
+    if (this.cli) {
+      await this.cli.setModel(normalizeModel(modelId));
     }
     this.model = modelId;
     this.emit({ type: "model_changed", modelId });
@@ -440,85 +480,51 @@ export class ClaudeAgentSession implements AgentSession {
 
   async setMode(modeId: string): Promise<void> {
     assertClaudeMode(modeId);
-    if (this.query) {
-      await this.query.setPermissionMode(modeId);
+    if (this.cli) {
+      await this.cli.setPermissionMode(modeId);
     }
     this.mode = modeId;
     this.emit({ type: "mode_changed", modeId });
   }
 
   // -------------------------------------------------------------------------
-  // query 生命周期
+  // claude 子进程生命周期
   // -------------------------------------------------------------------------
 
-  private ensureQuery(): AsyncMessageInput<SDKUserMessage> {
-    if (this.query && this.input) {
-      return this.input;
+  private ensureCli(): ClaudeCliHandle {
+    if (this.cli) {
+      return this.cli;
     }
-    const input = createAsyncMessageInput<SDKUserMessage>();
-    const options = this.buildOptions();
+    const model = normalizeModel(this.model);
     this.logger.info(
       "启动 Claude Code 会话（exe=%s, cwd=%s, model=%s, mode=%s, resume=%s）",
       this.executablePath,
       this.cwd,
-      options.model ?? "default",
+      model ?? "default",
       this.mode,
-      options.resume ?? "-",
+      this.sessionId ?? "-",
     );
-    const query = this.queryFn({ prompt: input.iterable, options });
-    this.query = query;
-    this.input = input;
-    void this.pump(query, input);
-    return input;
-  }
-
-  private buildOptions(): Options {
-    const model = normalizeModel(this.model);
-    return {
+    const cli = this.cliFactory({
+      executablePath: this.executablePath,
       cwd: this.cwd,
-      includePartialMessages: true,
-      permissionMode: this.mode,
-      // 允许会话中途切换到 bypassPermissions（只是放行该模式，不改变当前模式）
-      allowDangerouslySkipPermissions: true,
-      canUseTool: this.handleCanUseTool,
-      pathToClaudeCodeExecutable: this.executablePath,
-      spawnClaudeCodeProcess: this.spawnClaudeProcess,
-      systemPrompt: { type: "preset", preset: "claude_code" },
-      settingSources: ["user", "project", "local"],
-      stderr: this.handleStderr,
       env: { ...this.env },
-      ...(model ? { model } : {}),
-      ...(this.sessionId ? { resume: this.sessionId } : {}),
-    };
-  }
-
-  private readonly spawnClaudeProcess = (spawnOptions: ClaudeSpawnOptions): SpawnedProcess => {
-    // pathToClaudeCodeExecutable 指向 cli.js 时 SDK 会给出 "node"/"bun"，换成当前 node，避免依赖 PATH
-    const command =
-      spawnOptions.command === "node" || spawnOptions.command === "bun"
-        ? process.execPath
-        : spawnOptions.command;
-    const child = spawnProcess(command, [...spawnOptions.args], {
-      ...(spawnOptions.cwd ? { cwd: spawnOptions.cwd } : {}),
-      env: spawnOptions.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      // 绕过 cmd.exe：SDK 会传 --mcp-config 等内联 JSON 参数，经过 cmd.exe 会被破坏
-      shell: false,
-      ...(spawnOptions.signal ? { signal: spawnOptions.signal } : {}),
+      model,
+      permissionMode: this.mode,
+      resumeSessionId: this.sessionId,
+      canUseTool: this.handleCanUseTool,
+      logger: this.logger,
+      onStderr: this.handleStderr,
+      ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
     });
-    this.child = child;
-    child.stderr?.on("data", (chunk: Buffer | string) => this.handleStderr(chunk.toString()));
-    child.once("exit", (code, signal) => {
-      this.logger.debug("Claude Code 进程退出（code=%s, signal=%s）", code, signal);
-      if (this.child === child) {
-        this.child = null;
+    this.cli = cli;
+    cli.initialized.catch((error: unknown) => {
+      if (this.cli === cli) {
+        this.logger.warn("Claude Code initialize 失败：%s", errorMessage(error));
       }
     });
-    if (!child.stdin || !child.stdout) {
-      throw new Error("Claude Code 进程缺少 stdio 管道");
-    }
-    return child as unknown as SpawnedProcess;
-  };
+    void this.pump(cli);
+    return cli;
+  }
 
   private readonly handleStderr = (data: string): void => {
     const text = data.trim();
@@ -527,14 +533,11 @@ export class ClaudeAgentSession implements AgentSession {
     }
   };
 
-  private async pump(
-    query: ClaudeQueryHandle,
-    input: AsyncMessageInput<SDKUserMessage>,
-  ): Promise<void> {
+  private async pump(cli: ClaudeCliHandle): Promise<void> {
     let failure: string | null = null;
     try {
-      for await (const message of query) {
-        if (this.query !== query) {
+      for await (const message of cli) {
+        if (this.cli !== cli) {
           break;
         }
         try {
@@ -547,12 +550,12 @@ export class ClaudeAgentSession implements AgentSession {
       failure = errorMessage(error);
     }
 
-    if (this.query !== query) {
+    if (this.cli !== cli) {
       return; // 已被 teardown / 重建
     }
-    this.query = null;
-    this.input = null;
-    input.end();
+    this.cli = null;
+    // 进程已退出：仍走一遍 close，确保残留的子进程树被清理
+    void cli.close().catch(() => undefined);
     if (this.closed) {
       return;
     }
@@ -571,26 +574,13 @@ export class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private async teardownQuery(): Promise<void> {
-    const query = this.query;
-    const input = this.input;
-    const child = this.child;
-    this.query = null;
-    this.input = null;
-    this.child = null;
-    input?.end();
-    if (child) {
-      await this.terminateProcess(child, {
-        gracefulTimeoutMs: KILL_GRACEFUL_TIMEOUT_MS,
-        forceTimeoutMs: KILL_FORCE_TIMEOUT_MS,
-      }).catch((error: unknown) => {
-        this.logger.warn("结束 Claude Code 进程树失败：%s", errorMessage(error));
+  private async teardownCli(): Promise<void> {
+    const cli = this.cli;
+    this.cli = null;
+    if (cli) {
+      await cli.close().catch((error: unknown) => {
+        this.logger.warn("结束 Claude Code 进程失败：%s", errorMessage(error));
       });
-    }
-    try {
-      query?.close();
-    } catch (error) {
-      this.logger.debug("关闭 Claude query 出错：%s", errorMessage(error));
     }
   }
 
@@ -598,7 +588,7 @@ export class ClaudeAgentSession implements AgentSession {
   // 事件翻译
   // -------------------------------------------------------------------------
 
-  private handleMessage(message: SDKMessage): void {
+  private handleMessage(message: ClaudeOutputMessage): void {
     switch (message.type) {
       case "system":
         if (message.subtype === "init") {
@@ -609,14 +599,14 @@ export class ClaudeAgentSession implements AgentSession {
         if (message.parent_tool_use_id) {
           return; // 子代理内部输出不进主时间线
         }
-        this.handleStreamEvent(message.event as unknown as StreamEventLike);
+        this.handleStreamEvent(message.event);
         return;
       case "assistant":
         if (message.parent_tool_use_id) {
           return;
         }
         this.captureSession(message.session_id);
-        this.handleAssistantMessage(message.message as unknown as AssistantMessageLike);
+        this.handleAssistantMessage(message.message);
         return;
       case "user":
         if (message.parent_tool_use_id) {
@@ -643,7 +633,7 @@ export class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private handleStreamEvent(event: StreamEventLike): void {
+  private handleStreamEvent(event: ClaudeStreamEvent): void {
     switch (event.type) {
       case "message_start": {
         this.currentStreamMessageId = event.message?.id ?? null;
@@ -691,7 +681,7 @@ export class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private handleAssistantMessage(message: AssistantMessageLike): void {
+  private handleAssistantMessage(message: ClaudeAssistantMessage["message"]): void {
     const turn = this.activeTurn;
     if (!turn || !Array.isArray(message.content)) {
       return;
@@ -732,7 +722,7 @@ export class ClaudeAgentSession implements AgentSession {
     return messageId !== null && set.has(messageId);
   }
 
-  private handleToolUse(turn: ActiveTurn, block: ContentBlockLike): void {
+  private handleToolUse(turn: ActiveTurn, block: ClaudeContentBlock): void {
     const callId = typeof block.id === "string" ? block.id : null;
     const name = typeof block.name === "string" ? block.name : null;
     if (!callId || !name || this.toolUses.has(callId)) {
@@ -754,23 +744,23 @@ export class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private handleUserMessage(message: SDKUserMessage): void {
+  private handleUserMessage(message: ClaudeUserOutputMessage): void {
     const turn = this.activeTurn;
-    const content = message.message.content;
+    const content = message.message?.content;
     if (!turn || !Array.isArray(content)) {
       return;
     }
-    const results = (content as unknown as ContentBlockLike[]).filter(
-      (block) => block.type === "tool_result" || block.type === "mcp_tool_result",
+    const results = (content as ClaudeContentBlock[]).filter(
+      (block) => block?.type === "tool_result" || block?.type === "mcp_tool_result",
     );
-    // SDK 的 tool_use_result 是单个工具的结构化输出，只有一条结果时才能对应上
+    // CLI 的 tool_use_result 是单个工具的结构化输出，只有一条结果时才能对应上
     const structured = results.length === 1 ? message.tool_use_result : undefined;
     for (const block of results) {
       this.handleToolResult(turn, block, structured);
     }
   }
 
-  private handleToolResult(turn: ActiveTurn, block: ContentBlockLike, structured: unknown): void {
+  private handleToolResult(turn: ActiveTurn, block: ClaudeContentBlock, structured: unknown): void {
     const callId = typeof block.tool_use_id === "string" ? block.tool_use_id : null;
     if (!callId) {
       return;
@@ -803,7 +793,7 @@ export class ClaudeAgentSession implements AgentSession {
     }
   }
 
-  private handleResult(message: SDKResultMessage): void {
+  private handleResult(message: ClaudeResultMessage): void {
     const turn = this.activeTurn;
     if (!turn) {
       return; // 已中断的回合或自发回合的 result
@@ -831,8 +821,8 @@ export class ClaudeAgentSession implements AgentSession {
     });
   }
 
-  private convertUsage(message: SDKResultMessage): AgentUsage {
-    const usage = message.usage as unknown as Record<string, unknown> | undefined;
+  private convertUsage(message: ClaudeResultMessage): AgentUsage {
+    const usage = message.usage;
     const cacheRead = toCount(usage?.cache_read_input_tokens);
     const cacheCreation = toCount(usage?.cache_creation_input_tokens);
     const input = toCount(usage?.input_tokens);
@@ -862,7 +852,7 @@ export class ClaudeAgentSession implements AgentSession {
   // 权限
   // -------------------------------------------------------------------------
 
-  private readonly handleCanUseTool: CanUseTool = async (toolName, input, options) => {
+  private readonly handleCanUseTool: ClaudeCanUseTool = async (toolName, input, options) => {
     const turn = this.activeTurn;
     if (this.closed || !turn) {
       return { behavior: "deny", message: "当前没有进行中的回合" };
@@ -872,7 +862,7 @@ export class ClaudeAgentSession implements AgentSession {
     const detail: ToolCallDetail | undefined = isPlan
       ? { type: "plan", text: typeof input.plan === "string" ? input.plan : "" }
       : mapClaudeRunningToolCall({
-          callId: options.toolUseID || requestId,
+          callId: options.toolUseId || requestId,
           name: toolName,
           input,
         })?.detail;
@@ -891,7 +881,7 @@ export class ClaudeAgentSession implements AgentSession {
       })),
     };
 
-    return new Promise<PermissionResult>((resolve) => {
+    return new Promise<ClaudePermissionResult>((resolve) => {
       const onAbort = () => {
         if (!this.pendingPermissions.delete(requestId)) {
           return;
@@ -904,14 +894,14 @@ export class ClaudeAgentSession implements AgentSession {
         });
         resolve({ behavior: "deny", message });
       };
-      const cleanup = () => options.signal?.removeEventListener("abort", onAbort);
+      const cleanup = () => options.signal.removeEventListener("abort", onAbort);
       this.pendingPermissions.set(requestId, { request, input, resolve, cleanup });
       this.emit({ type: "permission_requested", turnId: turn.turnId, request });
-      if (options.signal?.aborted) {
+      if (options.signal.aborted) {
         onAbort();
         return;
       }
-      options.signal?.addEventListener("abort", onAbort, { once: true });
+      options.signal.addEventListener("abort", onAbort, { once: true });
     });
   };
 
@@ -970,37 +960,6 @@ export class ClaudeAgentSession implements AgentSession {
 // 辅助
 // ---------------------------------------------------------------------------
 
-interface ContentBlockLike {
-  type?: string;
-  id?: unknown;
-  name?: unknown;
-  input?: unknown;
-  text?: unknown;
-  thinking?: unknown;
-  tool_use_id?: unknown;
-  content?: unknown;
-  is_error?: unknown;
-}
-
-interface AssistantMessageLike {
-  id?: unknown;
-  content?: ContentBlockLike[];
-}
-
-interface StreamEventLike {
-  type: string;
-  message?: {
-    id?: string;
-    usage?: {
-      input_tokens?: unknown;
-      cache_creation_input_tokens?: unknown;
-      cache_read_input_tokens?: unknown;
-    };
-  };
-  usage?: { output_tokens?: unknown };
-  delta?: { type?: string; text?: unknown; thinking?: unknown };
-}
-
 export function buildClaudeChildEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const childEnv = createExternalProcessEnv(env) as Record<string, string>;
   for (const key of Object.keys(childEnv)) {
@@ -1011,7 +970,7 @@ export function buildClaudeChildEnv(env: NodeJS.ProcessEnv): Record<string, stri
   return childEnv;
 }
 
-function assertClaudeMode(modeId: string): asserts modeId is PermissionMode {
+function assertClaudeMode(modeId: string): asserts modeId is ClaudePermissionMode {
   if (!CLAUDE_MODES.some((mode) => mode.id === modeId)) {
     throw new Error(`Claude Code 不支持模式：${modeId}`);
   }
@@ -1026,22 +985,46 @@ function normalizeModel(modelId: string | null | undefined): string | null {
   return trimmed;
 }
 
-type SdkContentBlock =
-  | { type: "text"; text: string }
-  | {
-      type: "image";
-      source: {
-        type: "base64";
-        media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-        data: string;
-      };
-    };
+/** initialize 应答里的模型列表 → AgentModelDefinition；没有可用条目返回 null */
+export function mapInitializeModels(
+  response: ClaudeInitializeResponse,
+): AgentModelDefinition[] | null {
+  if (!Array.isArray(response.models)) {
+    return null;
+  }
+  const builtinDefault = CLAUDE_MODELS[0]!;
+  const models: AgentModelDefinition[] = [];
+  const seen = new Set<string>();
+  for (const entry of response.models) {
+    const id = typeof entry?.value === "string" ? entry.value.trim() : "";
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const label = typeof entry.displayName === "string" && entry.displayName ? entry.displayName : id;
+    const description =
+      typeof entry.description === "string" && entry.description ? entry.description : undefined;
+    if (id === "default") {
+      // `default` 表示不传 --model；沿用内置的中文标签
+      models.push({ ...builtinDefault, ...(description ? { description } : {}) });
+    } else {
+      models.push({ provider: CLAUDE_PROVIDER_ID, id, label, ...(description ? { description } : {}) });
+    }
+  }
+  if (models.length === 0) {
+    return null;
+  }
+  if (!seen.has("default")) {
+    models.unshift({ ...builtinDefault });
+  }
+  return models;
+}
 
-export function toSdkUserMessage(
+export function toClaudeUserInput(
   prompt: AgentPromptInput,
   sessionId: string | null,
-): SDKUserMessage {
-  const content: SdkContentBlock[] = [];
+): ClaudeUserInput {
+  const content: ClaudeUserContentBlock[] = [];
   if (typeof prompt === "string") {
     content.push({ type: "text", text: prompt });
   } else {
@@ -1053,7 +1036,7 @@ export function toSdkUserMessage(
           type: "image",
           source: {
             type: "base64",
-            media_type: part.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+            media_type: part.mimeType as ClaudeImageMediaType,
             data: part.data,
           },
         });
@@ -1066,7 +1049,7 @@ export function toSdkUserMessage(
     type: "user",
     message: { role: "user", content },
     parent_tool_use_id: null,
-    uuid: randomUUID() as SDKUserMessage["uuid"] & string,
+    uuid: randomUUID(),
     session_id: sessionId ?? "",
   };
 }
@@ -1111,7 +1094,7 @@ function toolResultText(content: unknown): string {
 
 /**
  * 工具输出候选：shell / read 等用文本（结构化 tool_use_result 的字段名与 shared schema 不一致），
- * search / fetch 优先用 SDK 的结构化输出（Glob/Grep/WebFetch/WebSearch 的 Output 与 schema 吻合）。
+ * search / fetch 优先用 CLI 的结构化输出（Glob/Grep/WebFetch/WebSearch 的 Output 与 schema 吻合）。
  */
 function buildOutputCandidates(name: string, text: string, structured: unknown): unknown[] {
   const structuredCandidate =
@@ -1125,7 +1108,7 @@ function buildOutputCandidates(name: string, text: string, structured: unknown):
   return [...ordered, null];
 }
 
-function resultErrorText(message: SDKResultMessage): string {
+function resultErrorText(message: ClaudeResultMessage): string {
   if (message.subtype === "success") {
     return message.result?.trim() || "Claude Code 返回了错误";
   }
@@ -1151,48 +1134,4 @@ function toCount(value: unknown): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-// Derived from paseo createAsyncMessageInput（agent.ts）：可推送的异步迭代器，作为 streaming input
-function createAsyncMessageInput<T>(): AsyncMessageInput<T> {
-  const queue: T[] = [];
-  const resolvers: Array<(value: IteratorResult<T, void>) => void> = [];
-  let closed = false;
-
-  return {
-    push(item: T) {
-      if (closed) {
-        return;
-      }
-      const resolve = resolvers.shift();
-      if (resolve) {
-        resolve({ value: item, done: false });
-        return;
-      }
-      queue.push(item);
-    },
-    end() {
-      closed = true;
-      while (resolvers.length > 0) {
-        resolvers.shift()?.({ value: undefined, done: true });
-      }
-    },
-    iterable: {
-      [Symbol.asyncIterator](): AsyncIterator<T, void> {
-        return {
-          next: (): Promise<IteratorResult<T, void>> => {
-            if (queue.length > 0) {
-              return Promise.resolve({ value: queue.shift() as T, done: false });
-            }
-            if (closed) {
-              return Promise.resolve({ value: undefined, done: true });
-            }
-            return new Promise<IteratorResult<T, void>>((resolve) => {
-              resolvers.push(resolve);
-            });
-          },
-        };
-      },
-    },
-  };
 }

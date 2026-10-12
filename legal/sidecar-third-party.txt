@@ -1,18 +1,17 @@
 AgentDeck sidecar（dist-sidecar/bundle.mjs，安装后位于 <资源目录>/sidecar/bundle.mjs）第三方组件许可声明
 
 清单来源：scripts/build-sidecar.mjs 输出的 esbuild metafile（dist-sidecar/meta.json）中实际打进 bundle 的 npm 包。
-Node.js 内置模块与 external（bufferutil、utf-8-validate、@anthropic-ai/claude-agent-sdk-* 平台二进制）不在 bundle 中，未列出。
+Node.js 内置模块与 external（bufferutil、utf-8-validate）不在 bundle 中，未列出。
+Claude Code 与 Codex 均调用用户本机安装的 CLI，bundle 中不包含 Anthropic / OpenAI 的代码或可执行文件。
 
 包清单（包名@版本 — 许可证）：
   - @agentclientprotocol/sdk@0.17.1 — Apache-2.0
-  - @anthropic-ai/claude-agent-sdk@0.3.246 — SEE LICENSE IN README.md
   - isexe@3.1.5 — BlueOak-1.0.0
   - tree-kill@1.2.2 — MIT
   - which@5.0.0 — ISC
   - ws@8.21.1 — MIT
   - zod@3.25.76 — MIT
   - zod@4.6.6 — MIT
-  - mime-types / mime-db（由 @anthropic-ai/claude-agent-sdk 的 sdk.mjs 内嵌）— MIT
 
 ==============================================================================
 @agentclientprotocol/sdk@0.17.1
@@ -213,16 +212,6 @@ Node.js 内置模块与 external（bufferutil、utf-8-validate、@anthropic-ai/c
    limitations under the License.
 
 ==============================================================================
-@anthropic-ai/claude-agent-sdk@0.3.246
-许可证：SEE LICENSE IN README.md
-主页：https://github.com/anthropics/claude-agent-sdk-typescript
-说明：该 SDK 不是开源许可，其使用受 Anthropic 条款约束（https://code.claude.com/docs/en/legal-and-compliance）。
-      本项目只打包其 JavaScript 代码（sdk.mjs），不随包分发 claude 可执行文件，运行时使用用户本机安装的 Claude Code。
-许可文件原文（LICENSE.md）：
-==============================================================================
-© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
-
-==============================================================================
 isexe@3.1.5
 许可证：BlueOak-1.0.0
 主页：https://github.com/isaacs/isexe
@@ -416,64 +405,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-==============================================================================
-mime-types（由 @anthropic-ai/claude-agent-sdk 的 sdk.mjs 内嵌，具体版本无法从压缩代码确定）
-许可证：MIT
-依据：sdk.mjs 中保留的法律注释：mime-types, Copyright(c) 2014 Jonathan Ong, Copyright(c) 2015 Douglas Christopher Wilson, MIT Licensed
-以下许可原文取自本仓库依赖树中的 mime-types@3.0.2：
-==============================================================================
-(The MIT License)
-
-Copyright (c) 2014 Jonathan Ong <me@jongleberry.com>
-Copyright (c) 2015 Douglas Christopher Wilson <doug@somethingdoug.com>
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-'Software'), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-==============================================================================
-mime-db（由 @anthropic-ai/claude-agent-sdk 的 sdk.mjs 内嵌，具体版本无法从压缩代码确定）
-许可证：MIT
-依据：sdk.mjs 中包含 mime-db 的 MIME 类型数据
-以下许可原文取自本仓库依赖树中的 mime-db@1.54.0：
-==============================================================================
-(The MIT License)
-
-Copyright (c) 2014 Jonathan Ong <me@jongleberry.com>
-Copyright (c) 2015-2022 Douglas Christopher Wilson <doug@somethingdoug.com>
-
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-'Software'), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-

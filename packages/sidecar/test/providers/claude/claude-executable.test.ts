@@ -63,10 +63,8 @@ function makeDeps(overrides: Partial<ClaudeExecutableDeps> & { good?: string[] }
   const deps: ClaudeExecutableDeps = {
     env: {},
     platform: "win32",
-    arch: "x64",
     exists: existsSync,
     readFile: (file) => readFileSync(file, "utf8"),
-    resolveSdkBinary: () => null,
     probe: async (file) => {
       probed.push(file);
       return good.has(file) ? "2.1.296 (Claude Code)" : null;
@@ -133,18 +131,32 @@ describe("resolveClaudeExecutable", () => {
     expect(result).toMatchObject({ available: true, path: exe, source: "npm-shim" });
   });
 
-  test("--version 校验失败的候选被跳过，退回 SDK 自带平台包", async () => {
+  test("--version 校验失败的候选被跳过，继续解析 npm shim", async () => {
     const broken = touch("bin", "claude.exe");
-    const bundled = touch("sdk", "claude.exe");
+    writeShim("npm", NPM_EXE_SHIM);
+    const exe = touch("npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
     const { deps, probed } = makeDeps({
-      env: { PATH: path.join(root, "bin") },
-      good: [bundled],
-      resolveSdkBinary: (platform, arch) =>
-        platform === "win32" && arch === "x64" ? bundled : null,
+      env: { PATH: [path.join(root, "bin"), path.join(root, "npm")].join(";") },
+      good: [exe],
     });
     const result = await resolveClaudeExecutable(deps);
-    expect(result).toMatchObject({ available: true, path: bundled, source: "sdk-bundled" });
-    expect(probed).toEqual([broken, bundled]);
+    expect(result).toMatchObject({ available: true, path: exe, source: "npm-shim" });
+    expect(probed).toEqual([broken, exe]);
+  });
+
+  test("PATH 中位于 node_modules 内的目录（项目本地依赖）被跳过", async () => {
+    const localBin = path.join(root, "repo", "node_modules", ".bin");
+    const localExe = touch("repo", "node_modules", ".bin", "claude.exe");
+    writeShim(path.join("repo", "node_modules", ".bin"), NPM_EXE_SHIM);
+    touch("repo", "node_modules", ".bin", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    const globalExe = touch("global", "claude.exe");
+    const { deps, probed } = makeDeps({
+      env: { PATH: [localBin, path.join(root, "global")].join(";") },
+      good: [localExe, globalExe],
+    });
+    const result = await resolveClaudeExecutable(deps);
+    expect(result).toMatchObject({ available: true, path: globalExe, source: "path" });
+    expect(probed).toEqual([globalExe]);
   });
 
   test("全部找不到时返回中文原因", async () => {

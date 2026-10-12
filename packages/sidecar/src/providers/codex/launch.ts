@@ -1,9 +1,13 @@
 // Codex 可执行文件定位（design.md 5.1 / 5.2）：
 // AGENTDECK_CODEX_PATH → PATH 上的 codex.exe（非 Windows 为 codex）→ 解析 npm 的 codex.cmd shim：
 // 背后是 node_modules/@openai/codex/bin/codex.js 时优先找平台包里的原生 codex.exe，找不到则用当前 node 执行 codex.js。
+// 只使用用户本机全局安装的 codex：PATH 中位于 node_modules 内的目录（项目本地依赖，如 pnpm 注入的
+// node_modules/.bin）一律跳过，因此不会解析到 AgentDeck 仓库或打包产物里的 @openai/codex。
 // 设计参考 paseo codex-app-server-agent.ts 的 findDefaultCodexBinary，但实现为 AgentDeck 自写。
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+
+import { isInsideNodeModules } from "../../utils/node-modules-dir.js";
 
 export type CodexLaunchSource = "env" | "path" | "npm-shim-native" | "npm-shim-js";
 
@@ -48,7 +52,7 @@ function pathDirs(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
   return raw
     .split(sep)
     .map((dir) => dir.trim().replace(/^"(.*)"$/, "$1"))
-    .filter((dir) => dir.length > 0);
+    .filter((dir) => dir.length > 0 && !isInsideNodeModules(dir));
 }
 
 function joinFor(platform: NodeJS.Platform, ...parts: string[]): string {
