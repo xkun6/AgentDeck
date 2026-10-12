@@ -75,7 +75,7 @@ sidecar 入口：
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
 - `GET /health`（无需 token）→ `{ "ok": true, "version": "..." }`
 - 每个 WS 文本帧是一个 JSON-RPC 2.0 对象。客户端发请求，服务端回响应；服务端主动推送用**通知**（无 id）。
-- 错误码：`-32700` 解析错误、`-32600` 非法请求、`-32601` 方法不存在、`-32602` 参数错误、`-32000` 业务错误（`data.code` 给出细分，如 `PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`TURN_IN_PROGRESS`）。
+- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
 
 ### 4.1 请求方法
 
@@ -202,6 +202,16 @@ export interface AgentSnapshot {
 }
 ```
 
+### 4.4 实现补充约定（P2 落地时确定）
+
+- `user_message` 由 AgentManager 在调用 `startTurn` 前统一写入（带 `clientMessageId`，不带 turnId）；**provider 不得发 `user_message`**。
+- `timeline` / `permission_requested` 未带 turnId 时，AgentManager 自动补上当前 turnId。
+- provider 未发 `permission_resolved` / `model_changed` / `mode_changed` 时由 AgentManager 补发；重复事件去重。
+- `usage_updated` 只更新快照的 `lastUsage`，不推 `agent.state`。
+- `agent.close` 后 agent 保留在注册表中（status `closed`），仍可查询 `agent.timeline`；再 `agent.send` 返回 `AGENT_CLOSED`。
+- `agent.create` 未传 model / modeId 时快照中为 `null`，表示使用 provider 默认值；`availableModes` 取自 `fetchCatalog`。
+- turn 结束时清空 pendingPermissions；`turn_failed` 记录 `lastError`，下一轮开始时清空。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -249,6 +259,8 @@ interface AgentClient {
   shutdown?(): Promise<void>;
 }
 ```
+
+补充：`AgentClient.isAvailable()` 实际返回 `{ available, reason?, command? }`，`command` 用于填 `ProviderInfo.command`。provider 注册方式：`src/providers/{claude,codex,acp}/index.ts` 各导出一个 `ProviderFactory`（`(ctx: { logger, dataDir?, env }) => AgentClient[] | Promise<AgentClient[]>`），`registry.ts` 固定汇总，各 provider 只改自己的目录。会话事件约定：每轮必须先发 `turn_started`，结束时只发一次 `turn_completed` / `turn_failed` / `turn_canceled`；`respondToPermission` 返回前发 `permission_resolved`；AgentManager 在 `createSession` 返回后才订阅，所以 `thread_started` 要在首轮发；**provider 代码绝不能写 `process.stdout`**（stdout 只留给 ready 行）。
 
 ### 5.1 provider 要点（P3）
 

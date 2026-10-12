@@ -10,7 +10,11 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.17.1",
     "@agentdeck/protocol": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "0.3.246",
+    "@anthropic-ai/sdk": "^0.104.2",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "tree-kill": "^1.2.2",
     "which": "^5.0.0",
     "ws": "^8.18.0",
