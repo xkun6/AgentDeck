@@ -1,48 +1,232 @@
-//! Background supervisor for the desktop-managed dashboard (and the gateway it
-//! serves). Without it, a crashed managed runtime stays down until the user
-//! notices and manually restarts — and historically the restart button itself
-//! was broken (Eynzof/Hermes-CN-Desktop#224), so a crash meant a dead gateway
-//! with no in-app recovery. This polls the owned child process and respawns it
-//! when it dies unexpectedly.
+//! sidecar 生命周期编排与后台监管。
 //!
-//! Scope guards (it must never fight the user or storm-restart):
-//! - Only acts in `ConnectionMode::Managed` on a desktop-owned child. Attached
-//!   local/remote dashboards are the user's to manage.
-//! - Respects `dashboard_restart_in_flight`, so a manual restart / profile
-//!   switch / YOLO toggle / runtime update is never raced.
-//! - Caps consecutive crash-loop restarts; a runtime that keeps dying on boot
-//!   (bad config, antivirus kill) is left down with a surfaced error instead of
-//!   being hammered forever.
+//! - `start_sidecar`：启动时拉起 sidecar，状态每次变化都更新 `AppState` 并 emit
+//!   `sidecar-status`（载荷见 docs/design.md 3.4）。
+//! - `restart_sidecar`：手动重启（重新生成 token，端口可能变化）。
+//! - `supervise_sidecar`：沿用原 dashboard supervisor 策略——5 秒轮询，进程意外
+//!   退出时自动重启；60 秒内连续失败 5 次后暂停自动重启并上报错误。
+//! - `shutdown_sidecar`：应用退出时按契约关闭 sidecar。
+//!
+//! `sidecar_busy` 防止监管器与手动重启同时操作 `AppState::sidecar`。
 
 use std::time::{Duration, Instant};
 
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::commands::restart;
-use crate::connection::ConnectionMode;
+use crate::process::sidecar::{
+    self, SidecarHandle, SidecarStatus, SidecarStatusPayload, SpawnOptions,
+};
 use crate::state::AppState;
 
-fn release_dashboard_port_locks(state: &AppState) {
-    if let Ok(mut inner) = state.inner.lock() {
-        if let Some(handle) = inner.dashboard_handle.as_mut() {
-            if let Some(locks) = handle.port_locks.take() {
-                for lock in locks {
-                    lock.release();
-                }
-            }
-        }
+/// sidecar 状态事件名。
+pub const SIDECAR_STATUS_EVENT: &str = "sidecar-status";
+
+const POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// 两次自动重启间隔小于该值时视为"连续"失败；运行更久则计数归零。
+const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
+/// 连续自动重启的上限，超过后暂停自动重启。
+const MAX_CONSECUTIVE_RESTARTS: u32 = 5;
+
+/// 更新 `AppState::sidecar_status` 并 emit `sidecar-status`。
+pub fn set_status(app: &AppHandle, payload: SidecarStatusPayload) {
+    if let Ok(mut inner) = app.state::<AppState>().inner.lock() {
+        inner.sidecar_status = payload.clone();
+    }
+    if let Err(err) = app.emit(SIDECAR_STATUS_EVENT, payload) {
+        log::warn!("emit {SIDECAR_STATUS_EVENT} 失败: {err}");
     }
 }
 
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
-/// A respawn is "consecutive" (part of a crash loop) when the previous one was
-/// more recent than this. A dashboard that stays up longer resets the counter.
-const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
-/// Give up auto-restarting after this many back-to-back crash-loop restarts.
-const MAX_CONSECUTIVE_RESTARTS: u32 = 5;
+/// 当前 sidecar 状态快照。
+pub fn current_status(app: &AppHandle) -> SidecarStatusPayload {
+    app.state::<AppState>()
+        .inner
+        .lock()
+        .map(|inner| inner.sidecar_status.clone())
+        .unwrap_or_else(|_| SidecarStatusPayload::stopped())
+}
 
-pub async fn supervise_managed_dashboard(app: tauri::AppHandle) {
-    let (host, port) = restart::host_and_port();
+fn failed(token: String, error: String) -> SidecarStatusPayload {
+    SidecarStatusPayload {
+        ws_url: String::new(),
+        token,
+        version: None,
+        status: SidecarStatus::Failed,
+        error: Some(error),
+    }
+}
+
+fn try_claim(app: &AppHandle) -> bool {
+    match app.state::<AppState>().inner.lock() {
+        Ok(mut inner) if !inner.sidecar_busy => {
+            inner.sidecar_busy = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn release(app: &AppHandle) {
+    if let Ok(mut inner) = app.state::<AppState>().inner.lock() {
+        inner.sidecar_busy = false;
+    }
+}
+
+fn take_handle(app: &AppHandle) -> Option<SidecarHandle> {
+    app.state::<AppState>()
+        .inner
+        .lock()
+        .ok()
+        .and_then(|mut inner| inner.sidecar.take())
+}
+
+/// 在阻塞线程池中按契约关闭 sidecar（关 stdin → 等 3 秒 → 强杀）。
+async fn stop_handle(handle: Option<SidecarHandle>) {
+    if let Some(mut handle) = handle {
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            if !handle.stop() {
+                log::warn!("sidecar (pid {}) 未能确认退出", handle.child_pid());
+            }
+        })
+        .await;
+    }
+}
+
+fn resolve_and_spawn(
+    token: String,
+    data_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
+    resource_dir: Option<std::path::PathBuf>,
+) -> Result<SidecarHandle, String> {
+    let entries = crate::path_resolver::effective_entries();
+    let node = sidecar::resolve_node(sidecar::current_exe_dir().as_deref(), &entries).ok_or_else(
+        || {
+            format!(
+                "未找到 Node.js：请安装 Node.js 并确认其在 PATH 中，或设置环境变量 {}",
+                sidecar::NODE_ENV
+            )
+        },
+    )?;
+    let entry =
+        sidecar::resolve_entry(resource_dir.as_deref(), sidecar::dev_repo_root().as_deref())
+            .ok_or_else(|| {
+                format!(
+                    "未找到 sidecar 入口：可设置环境变量 {} 指向 sidecar 脚本",
+                    sidecar::ENTRY_ENV
+                )
+            })?;
+    sidecar::spawn_sidecar(&SpawnOptions {
+        node,
+        entry,
+        token,
+        data_dir,
+        log_dir,
+        path_env: crate::path_resolver::effective_path_os(),
+    })
+}
+
+/// 拉起一次 sidecar 并更新状态。调用方必须已持有 `sidecar_busy`。
+async fn launch(app: &AppHandle) -> SidecarStatusPayload {
+    let (data_dir, log_dir, resource_dir) = match app.state::<AppState>().inner.lock() {
+        Ok(inner) => (
+            inner.data_dir.clone(),
+            inner.log_dir.clone(),
+            inner.resource_dir.clone(),
+        ),
+        Err(_) => {
+            let payload = failed(String::new(), "应用状态锁异常".to_string());
+            set_status(app, payload.clone());
+            return payload;
+        }
+    };
+
+    // 每次启动都重新生成 token。
+    let token = match sidecar::generate_token() {
+        Ok(token) => token,
+        Err(err) => {
+            let payload = failed(String::new(), err);
+            set_status(app, payload.clone());
+            return payload;
+        }
+    };
+    set_status(
+        app,
+        SidecarStatusPayload {
+            ws_url: String::new(),
+            token: token.clone(),
+            version: None,
+            status: SidecarStatus::Starting,
+            error: None,
+        },
+    );
+
+    let spawn_token = token.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        resolve_and_spawn(spawn_token, data_dir, log_dir, resource_dir)
+    })
+    .await
+    .map_err(|err| format!("sidecar 启动任务异常: {err}"))
+    .and_then(|result| result);
+
+    let payload = match result {
+        Ok(handle) => {
+            let payload = SidecarStatusPayload {
+                ws_url: handle.ws_url(),
+                token,
+                version: Some(handle.version.clone()),
+                status: SidecarStatus::Ready,
+                error: None,
+            };
+            let previous = match app.state::<AppState>().inner.lock() {
+                Ok(mut inner) => inner.sidecar.replace(handle),
+                Err(_) => Some(handle),
+            };
+            stop_handle(previous).await;
+            payload
+        }
+        Err(err) => {
+            log::error!("sidecar 启动失败: {err}");
+            failed(token, err)
+        }
+    };
+    set_status(app, payload.clone());
+    payload
+}
+
+/// 应用启动时拉起 sidecar。失败只体现在状态里，不影响窗口。
+pub async fn start_sidecar(app: &AppHandle) -> SidecarStatusPayload {
+    if !try_claim(app) {
+        return current_status(app);
+    }
+    let payload = launch(app).await;
+    release(app);
+    payload
+}
+
+/// 手动重启 sidecar。若已有启动/重启在进行，直接返回当前状态。
+pub async fn restart_sidecar(app: &AppHandle) -> SidecarStatusPayload {
+    if !try_claim(app) {
+        return current_status(app);
+    }
+    stop_handle(take_handle(app)).await;
+    let payload = launch(app).await;
+    release(app);
+    payload
+}
+
+/// 应用退出时同步关闭 sidecar（最多阻塞约 3 秒 + 强杀）。
+pub fn shutdown_sidecar(app: &AppHandle) {
+    if let Some(mut handle) = take_handle(app) {
+        log::info!("应用退出，关闭 sidecar (pid {})", handle.child_pid());
+        handle.stop();
+    }
+    if let Ok(mut inner) = app.state::<AppState>().inner.lock() {
+        inner.sidecar_status = SidecarStatusPayload::stopped();
+    }
+}
+
+/// 后台监管：5 秒轮询，sidecar 意外退出时自动重启。
+pub async fn supervise_sidecar(app: AppHandle) {
     let mut ticker = tokio::time::interval(POLL_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -51,54 +235,29 @@ pub async fn supervise_managed_dashboard(app: tauri::AppHandle) {
 
     loop {
         ticker.tick().await;
-        let state = app.state::<AppState>();
 
-        // Decide under the lock, then drop it before the async respawn. On a
-        // detected unexpected death we claim the restart guard here so a manual
-        // restart / profile switch can't race us on `dashboard_handle`.
-        let target_home = {
+        // 在锁内判定并占用 busy，避免与手动重启竞争。
+        let state = app.state::<AppState>();
+        let dead = {
             let mut inner = match state.inner.lock() {
                 Ok(guard) => guard,
                 Err(_) => continue,
             };
-            if inner.connection_mode != ConnectionMode::Managed {
+            if inner.sidecar_busy {
                 continue;
             }
-            if crate::desktop_control::read().managed_runtime_desired_state
-                != crate::desktop_control::ManagedRuntimeDesiredState::Running
-            {
-                continue;
-            }
-            if inner.dashboard_restart_in_flight {
-                continue;
-            }
-            let exited = match inner.dashboard_handle.as_mut() {
-                Some(handle) if handle.owns_process => match handle.child.as_mut() {
-                    // `Ok(Some(_))` means the process has already exited. A live
-                    // (or still-booting) child returns `Ok(None)`, so this never
-                    // false-positives during startup.
-                    Some(child) => matches!(child.try_wait(), Ok(Some(_))),
-                    None => false,
-                },
-                _ => false,
-            };
+            let exited = inner
+                .sidecar
+                .as_mut()
+                .is_some_and(|handle| handle.has_exited());
             if !exited {
-                // Healthy. The crash-loop counter is reset by the HEALTHY_WINDOW
-                // check below whenever the next real restart is far enough out.
                 continue;
             }
-            inner.dashboard_restart_in_flight = true;
-            // Release port locks held by the dying handle before respawn so
-            // ensure_hermes_dashboard can reclaim the same port set.
-            if let Some(handle) = inner.dashboard_handle.as_mut() {
-                if let Some(locks) = handle.port_locks.take() {
-                    for lock in locks {
-                        lock.release();
-                    }
-                }
-            }
-            inner.hermes_home.clone()
+            inner.sidecar_busy = true;
+            inner.sidecar.take()
         };
+        // 回收已退出进程，并清理 Job / 进程组里的残留子进程。
+        stop_handle(dead).await;
 
         let now = Instant::now();
         consecutive = match last_restart {
@@ -107,58 +266,30 @@ pub async fn supervise_managed_dashboard(app: tauri::AppHandle) {
         };
 
         if consecutive > MAX_CONSECUTIVE_RESTARTS {
-            log::error!(
-                "Managed dashboard crashed {} times in a row; pausing auto-restart.",
-                consecutive - 1
-            );
-            if let Ok(mut inner) = state.inner.lock() {
-                inner.dashboard_restart_in_flight = false;
-                inner.last_runtime_error = Some(
-                    "网关多次启动失败，已暂停自动重启。请手动重启，或检查配置 / 杀毒软件是否拦截。"
+            log::error!("sidecar 连续异常退出 {} 次，暂停自动重启", consecutive - 1);
+            set_status(
+                &app,
+                failed(
+                    String::new(),
+                    "sidecar 多次异常退出，已暂停自动重启。请手动重启，或检查 Node.js 环境 / 杀毒软件拦截。"
                         .to_string(),
-                );
-            }
-            // Crash-loop abort: release port locks so a manual restart can
-            // reclaim the ports without waiting for the desktop to exit.
-            release_dashboard_port_locks(&state);
-            return;
+                ),
+            );
+            release(&app);
+            continue;
         }
 
         log::warn!(
-            "Managed dashboard exited unexpectedly; auto-restarting (attempt {}/{}).",
+            "sidecar 意外退出，自动重启（第 {}/{} 次）",
             consecutive,
             MAX_CONSECUTIVE_RESTARTS
         );
         last_restart = Some(now);
-
-        let result =
-            restart::respawn_managed_dashboard(&state, &host, port, &target_home, &target_home)
-                .await;
-        restart::end_restart(&state);
-
-        match result {
-            Ok(res) => match res.outcome {
-                restart::RespawnOutcome::Spawned => {
-                    log::info!("Managed dashboard auto-restarted.");
-                }
-                restart::RespawnOutcome::Recovered { error } => {
-                    log::warn!(
-                        "Managed dashboard auto-restart recovered after error: {}",
-                        error
-                    );
-                }
-                restart::RespawnOutcome::Down {
-                    error,
-                    recovery_error,
-                } => {
-                    log::error!(
-                        "Managed dashboard auto-restart failed: {} / {}",
-                        error,
-                        recovery_error
-                    );
-                }
-            },
-            Err(e) => log::error!("Managed dashboard auto-restart errored: {}", e),
+        let payload = launch(&app).await;
+        release(&app);
+        match payload.status {
+            SidecarStatus::Ready => log::info!("sidecar 自动重启成功"),
+            _ => log::error!("sidecar 自动重启失败: {:?}", payload.error),
         }
     }
 }

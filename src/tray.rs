@@ -1,6 +1,6 @@
 //! System tray integration for the desktop app.
 //!
-//! Closing the main window should keep the managed runtime alive. The tray is
+//! Closing the main window should keep the sidecar and its agent sessions alive.
 //! the visible affordance for bringing the UI back or explicitly quitting the
 //! whole desktop runtime.
 
@@ -10,9 +10,9 @@ use tauri::{App, AppHandle, Manager, Runtime, Window};
 
 pub const MAIN_WINDOW_LABEL: &str = "main";
 
-const TRAY_ID: &str = "hermes-main-tray";
-const MENU_OPEN_MAIN: &str = "hermes-tray-open-main";
-const MENU_QUIT: &str = "hermes-tray-quit";
+const TRAY_ID: &str = "agentdeck-main-tray";
+const MENU_OPEN_MAIN: &str = "agentdeck-tray-open-main";
+const MENU_QUIT: &str = "agentdeck-tray-quit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayMenuAction {
@@ -51,12 +51,12 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let menu = MenuBuilder::new(app)
         .text(MENU_OPEN_MAIN, "打开主窗口")
         .separator()
-        .text(MENU_QUIT, "退出 Hermes")
+        .text(MENU_QUIT, "退出 AgentDeck")
         .build()?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .tooltip("Hermes Agent 中文社区桌面版")
+        .tooltip("AgentDeck")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match action_for_menu_id(event.id().as_ref()) {
             Some(TrayMenuAction::OpenMainWindow) => show_main_window(app),

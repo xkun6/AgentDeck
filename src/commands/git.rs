@@ -18,15 +18,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
-
-fn require_local_git(state: &State<'_, AppState>) -> AppResult<()> {
-    let inner = state.inner.lock()?;
-    crate::connection::require_local_filesystem(inner.connection_mode, "本机 Git / Worktree")
-}
 
 /// Cap the diff handed to commit-message generation so the payload stays bounded.
 const COMMIT_CONTEXT_DIFF_MAX_CHARS: usize = 120_000;
@@ -881,11 +874,7 @@ fn review_commit_impl(repo_path: &str, message: &str, push: bool) -> AppResult<O
 // blocking subprocess work below never stalls the main (UI) thread.
 
 #[tauri::command]
-pub async fn git_review_list(
-    input: ReviewListInput,
-    state: State<'_, AppState>,
-) -> AppResult<ReviewList> {
-    require_local_git(&state)?;
+pub async fn git_review_list(input: ReviewListInput) -> AppResult<ReviewList> {
     if let Some(reference) = input.base_ref.as_deref() {
         ensure_safe_ref(reference)?;
     }
@@ -897,11 +886,7 @@ pub async fn git_review_list(
 }
 
 #[tauri::command]
-pub async fn git_review_diff(
-    input: ReviewDiffInput,
-    state: State<'_, AppState>,
-) -> AppResult<String> {
-    require_local_git(&state)?;
+pub async fn git_review_diff(input: ReviewDiffInput) -> AppResult<String> {
     if let Some(reference) = input.base_ref.as_deref() {
         ensure_safe_ref(reference)?;
     }
@@ -915,85 +900,49 @@ pub async fn git_review_diff(
 }
 
 #[tauri::command]
-pub async fn git_review_stage(
-    input: ReviewPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<OkFlag> {
-    require_local_git(&state)?;
+pub async fn git_review_stage(input: ReviewPathInput) -> AppResult<OkFlag> {
     review_stage_impl(&input.repo_path, input.file_path.as_deref())
 }
 
 #[tauri::command]
-pub async fn git_review_unstage(
-    input: ReviewPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<OkFlag> {
-    require_local_git(&state)?;
+pub async fn git_review_unstage(input: ReviewPathInput) -> AppResult<OkFlag> {
     review_unstage_impl(&input.repo_path, input.file_path.as_deref())
 }
 
 #[tauri::command]
-pub async fn git_review_revert(
-    input: ReviewPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<OkFlag> {
-    require_local_git(&state)?;
+pub async fn git_review_revert(input: ReviewPathInput) -> AppResult<OkFlag> {
     review_revert_impl(&input.repo_path, input.file_path.as_deref())
 }
 
 #[tauri::command]
-pub async fn git_review_rev_parse(
-    input: ReviewRevParseInput,
-    state: State<'_, AppState>,
-) -> AppResult<Option<String>> {
-    require_local_git(&state)?;
+pub async fn git_review_rev_parse(input: ReviewRevParseInput) -> AppResult<Option<String>> {
     review_rev_parse_impl(&input.repo_path, input.reference.as_deref())
 }
 
 #[tauri::command]
-pub async fn git_review_commit(
-    input: ReviewCommitInput,
-    state: State<'_, AppState>,
-) -> AppResult<OkFlag> {
-    require_local_git(&state)?;
+pub async fn git_review_commit(input: ReviewCommitInput) -> AppResult<OkFlag> {
     review_commit_impl(&input.repo_path, &input.message, input.push)
 }
 
 #[tauri::command]
-pub async fn git_review_commit_context(
-    input: RepoPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<CommitContext> {
-    require_local_git(&state)?;
+pub async fn git_review_commit_context(input: RepoPathInput) -> AppResult<CommitContext> {
     Ok(commit_context_impl(&input.repo_path))
 }
 
 #[tauri::command]
-pub async fn git_review_push(
-    input: RepoPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<OkFlag> {
-    require_local_git(&state)?;
+pub async fn git_review_push(input: RepoPathInput) -> AppResult<OkFlag> {
     let cwd = resolve_repo_dir(&input.repo_path)?;
     push_current(&cwd)?;
     Ok(OkFlag { ok: true })
 }
 
 #[tauri::command]
-pub async fn git_review_ship_info(
-    input: RepoPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<ShipInfo> {
-    require_local_git(&state)?;
+pub async fn git_review_ship_info(input: RepoPathInput) -> AppResult<ShipInfo> {
     Ok(ship_info_impl(&input.repo_path))
 }
 
 #[tauri::command]
-pub async fn git_review_create_pr(
-    input: RepoPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<CreatePrResult> {
-    require_local_git(&state)?;
+pub async fn git_review_create_pr(input: RepoPathInput) -> AppResult<CreatePrResult> {
     let cwd = resolve_repo_dir(&input.repo_path)?;
     // Push first so gh has a remote ref (best-effort, like upstream).
     let _ = push_current(&cwd);
@@ -1591,11 +1540,7 @@ fn repo_status_impl(repo_path: &str) -> Option<RepoStatus> {
 }
 
 #[tauri::command]
-pub fn git_worktree_list(
-    input: RepoPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<Vec<Worktree>> {
-    require_local_git(&state)?;
+pub fn git_worktree_list(input: RepoPathInput) -> AppResult<Vec<Worktree>> {
     let Ok(cwd) = resolve_repo_dir(&input.repo_path) else {
         return Ok(Vec::new());
     };
@@ -1603,11 +1548,7 @@ pub fn git_worktree_list(
 }
 
 #[tauri::command]
-pub fn git_worktree_add(
-    input: WorktreeAddInput,
-    state: State<'_, AppState>,
-) -> AppResult<WorktreeAddResult> {
-    require_local_git(&state)?;
+pub fn git_worktree_add(input: WorktreeAddInput) -> AppResult<WorktreeAddResult> {
     add_worktree_impl(
         &input.repo_path,
         input.name.as_deref(),
@@ -1618,17 +1559,12 @@ pub fn git_worktree_add(
 }
 
 #[tauri::command]
-pub fn git_worktree_remove(
-    input: WorktreeRemoveInput,
-    state: State<'_, AppState>,
-) -> AppResult<WorktreeRemoveResult> {
-    require_local_git(&state)?;
+pub fn git_worktree_remove(input: WorktreeRemoveInput) -> AppResult<WorktreeRemoveResult> {
     remove_worktree_impl(&input.repo_path, &input.worktree_path, input.force)
 }
 
 #[tauri::command]
-pub fn git_branch_list(input: RepoPathInput, state: State<'_, AppState>) -> AppResult<Vec<Branch>> {
-    require_local_git(&state)?;
+pub fn git_branch_list(input: RepoPathInput) -> AppResult<Vec<Branch>> {
     let Ok(cwd) = resolve_repo_dir(&input.repo_path) else {
         return Ok(Vec::new());
     };
@@ -1636,11 +1572,7 @@ pub fn git_branch_list(input: RepoPathInput, state: State<'_, AppState>) -> AppR
 }
 
 #[tauri::command]
-pub fn git_branch_switch(
-    input: BranchSwitchInput,
-    state: State<'_, AppState>,
-) -> AppResult<BranchSwitchResult> {
-    require_local_git(&state)?;
+pub fn git_branch_switch(input: BranchSwitchInput) -> AppResult<BranchSwitchResult> {
     branch_switch_impl(input)
 }
 
@@ -1658,11 +1590,7 @@ fn branch_switch_impl(input: BranchSwitchInput) -> AppResult<BranchSwitchResult>
 }
 
 #[tauri::command]
-pub fn git_repo_status(
-    input: RepoPathInput,
-    state: State<'_, AppState>,
-) -> AppResult<Option<RepoStatus>> {
-    require_local_git(&state)?;
+pub fn git_repo_status(input: RepoPathInput) -> AppResult<Option<RepoStatus>> {
     Ok(repo_status_impl(&input.repo_path))
 }
 

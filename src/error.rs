@@ -9,68 +9,11 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AppError {
-    // --- Dashboard process ---
-    #[error("Dashboard startup failed: {0}")]
-    DashboardStartup(String),
-
-    #[error("Dashboard not reachable at {0}")]
-    DashboardUnreachable(String),
-
-    #[error("Dashboard probe failed: {0}")]
-    DashboardProbe(String),
-
-    // --- Gateway ---
+    // --- Sidecar WebSocket relay ---
     #[error("Gateway WebSocket error: {0}")]
     GatewayWs(String),
 
-    // --- Runtime management ---
-    #[error("Runtime update manifest not configured")]
-    RuntimeManifestNotConfigured,
-
-    #[error("Runtime update check failed: {0}")]
-    RuntimeCheckFailed(String),
-
-    #[error("Runtime download failed: {0}")]
-    RuntimeDownloadFailed(String),
-
-    #[error("Runtime signature verification failed: {0}")]
-    RuntimeSignatureInvalid(String),
-
-    #[error("Runtime SHA-256 mismatch: expected {expected}, got {actual}")]
-    RuntimeChecksumMismatch { expected: String, actual: String },
-
-    #[error("Runtime extraction failed: {0}")]
-    RuntimeExtractFailed(String),
-
-    #[error("Runtime smoke check failed: {0}")]
-    RuntimeSmokeFailed(String),
-
-    #[error("Runtime install failed: {0}")]
-    RuntimeInstallFailed(String),
-
-    #[error("Runtime unavailable: {0}")]
-    RuntimeUnavailable(String),
-
-    #[error("No previous runtime version to rollback to")]
-    RuntimeNoPreviousVersion,
-
-    // --- Profile ---
-    #[error("Invalid profile name: {0}")]
-    ProfileInvalidName(String),
-
-    #[error("Profile directory missing: {0}")]
-    ProfileDirMissing(String),
-
-    #[error("Profile switch already in progress")]
-    ProfileSwitchInFlight,
-
-    #[error("Desktop is not the dashboard owner")]
-    ProfileNotOwner,
-
-    #[error("Profile switch failed: {0}")]
-    ProfileSwitchFailed(String),
-
-    // --- API proxy ---
+    // --- Requests ---
     #[error("Invalid API request: {0}")]
     InvalidRequest(String),
 
@@ -79,12 +22,6 @@ pub enum AppError {
 
     #[error("Request outside allowed origin: {0}")]
     OriginViolation(String),
-
-    // --- Remote OAuth session ---
-    // Prefix is load-bearing: the frontend string-matches AUTH_SESSION_EXPIRED
-    // to surface the "re-login to the remote gateway" banner. Do not localize.
-    #[error("AUTH_SESSION_EXPIRED: {0}")]
-    AuthSessionExpired(String),
 
     // --- File operations ---
     #[error("File operation failed: {0}")]
@@ -97,14 +34,7 @@ pub enum AppError {
     // --- State ---
     #[error("App state lock poisoned")]
     StateLockPoisoned,
-    #[error("Desktop runtime not ready")]
-    NotReady,
-    // --- Embedded Python (docs/embedded-python.md) ---
-    #[error("Embedded Python error: {msg}")]
-    EmbeddedPython {
-        msg: String,
-        traceback: Option<String>,
-    },
+
     // --- Generic (escape hatch for truly unexpected errors) ---
     #[error("{0}")]
     Internal(String),
@@ -116,84 +46,32 @@ struct AppErrorIpc {
     code: &'static str,
     kind: &'static str,
     message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    details: Option<serde_json::Value>,
 }
 
 impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
-            AppError::DashboardStartup(_) => "dashboard_startup",
-            AppError::DashboardUnreachable(_) => "dashboard_unreachable",
-            AppError::DashboardProbe(_) => "dashboard_probe",
             AppError::GatewayWs(_) => "gateway_ws",
-            AppError::RuntimeManifestNotConfigured => "runtime_manifest_not_configured",
-            AppError::RuntimeCheckFailed(_) => "runtime_check_failed",
-            AppError::RuntimeDownloadFailed(_) => "runtime_download_failed",
-            AppError::RuntimeSignatureInvalid(_) => "runtime_signature_invalid",
-            AppError::RuntimeChecksumMismatch { .. } => "runtime_checksum_mismatch",
-            AppError::RuntimeExtractFailed(_) => "runtime_extract_failed",
-            AppError::RuntimeSmokeFailed(_) => "runtime_smoke_failed",
-            AppError::RuntimeInstallFailed(_) => "runtime_install_failed",
-            AppError::RuntimeUnavailable(_) => "runtime_unavailable",
-            AppError::RuntimeNoPreviousVersion => "runtime_no_previous_version",
-            AppError::ProfileInvalidName(_) => "profile_invalid_name",
-            AppError::ProfileDirMissing(_) => "profile_dir_missing",
-            AppError::ProfileSwitchInFlight => "profile_switch_in_flight",
-            AppError::ProfileNotOwner => "profile_not_owner",
-            AppError::ProfileSwitchFailed(_) => "profile_switch_failed",
             AppError::InvalidRequest(_) => "invalid_request",
             AppError::ProxyError(_) => "proxy_error",
             AppError::OriginViolation(_) => "origin_violation",
-            AppError::AuthSessionExpired(_) => "auth_session_expired",
             AppError::FileError(_) => "file_error",
             AppError::Git(_) => "git",
             AppError::StateLockPoisoned => "state_lock_poisoned",
-            AppError::NotReady => "not_ready",
-            AppError::EmbeddedPython { .. } => "embedded_python",
             AppError::Internal(_) => "internal",
         }
     }
 
     pub fn kind(&self) -> &'static str {
         match self {
-            AppError::DashboardStartup(_)
-            | AppError::DashboardUnreachable(_)
-            | AppError::DashboardProbe(_) => "dashboard",
             AppError::GatewayWs(_) => "gateway_ws",
-            AppError::RuntimeManifestNotConfigured
-            | AppError::RuntimeCheckFailed(_)
-            | AppError::RuntimeDownloadFailed(_)
-            | AppError::RuntimeSignatureInvalid(_)
-            | AppError::RuntimeChecksumMismatch { .. }
-            | AppError::RuntimeExtractFailed(_)
-            | AppError::RuntimeSmokeFailed(_)
-            | AppError::RuntimeInstallFailed(_)
-            | AppError::RuntimeUnavailable(_)
-            | AppError::RuntimeNoPreviousVersion => "runtime",
-            AppError::ProfileInvalidName(_)
-            | AppError::ProfileDirMissing(_)
-            | AppError::ProfileSwitchInFlight
-            | AppError::ProfileNotOwner
-            | AppError::ProfileSwitchFailed(_) => "profile",
             AppError::InvalidRequest(_)
             | AppError::ProxyError(_)
             | AppError::OriginViolation(_) => "api_proxy",
-            AppError::AuthSessionExpired(_) => "auth",
             AppError::FileError(_) => "file",
             AppError::Git(_) => "git",
-            AppError::StateLockPoisoned | AppError::NotReady => "state",
-            AppError::EmbeddedPython { .. } => "embedded_python",
+            AppError::StateLockPoisoned => "state",
             AppError::Internal(_) => "internal",
-        }
-    }
-
-    fn details(&self) -> Option<serde_json::Value> {
-        match self {
-            AppError::RuntimeChecksumMismatch { expected, actual } => {
-                Some(serde_json::json!({ "expected": expected, "actual": actual }))
-            }
-            _ => None,
         }
     }
 }
@@ -207,7 +85,6 @@ impl Serialize for AppError {
             code: self.code(),
             kind: self.kind(),
             message: self.to_string(),
-            details: self.details(),
         }
         .serialize(serializer)
     }
@@ -225,8 +102,6 @@ impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         if e.is_timeout() {
             AppError::ProxyError(format!("Request timed out: {}", e))
-        } else if e.is_connect() {
-            AppError::DashboardUnreachable(e.to_string())
         } else {
             AppError::ProxyError(e.to_string())
         }
@@ -244,23 +119,6 @@ impl From<std::io::Error> for AppError {
 impl From<url::ParseError> for AppError {
     fn from(e: url::ParseError) -> Self {
         AppError::InvalidRequest(e.to_string())
-    }
-}
-
-// Convenience: convert PyO3 errors into a stable AppError variant. The
-// Python traceback is extracted here (not at the call site) so every
-// src/embedded/call.rs failure path maps identically. Feature-gated: the
-// embedded architecture compiles without pyo3 (stub backend).
-#[cfg(feature = "embedded-python")]
-impl From<pyo3::PyErr> for AppError {
-    fn from(e: pyo3::PyErr) -> Self {
-        use pyo3::prelude::*;
-        let traceback =
-            Python::attach(|py| e.traceback(py).map(|tb| tb.format().unwrap_or_default()));
-        AppError::EmbeddedPython {
-            msg: e.to_string(),
-            traceback,
-        }
     }
 }
 
@@ -306,49 +164,15 @@ mod tests {
 
     #[test]
     fn serialize_emits_structured_ipc_error() {
-        let err = AppError::DashboardStartup("boom".to_string());
+        let err = AppError::GatewayWs("boom".to_string());
         let json: serde_json::Value = serde_json::to_value(&err).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
-                "code": "dashboard_startup",
-                "kind": "dashboard",
-                "message": "Dashboard startup failed: boom"
+                "code": "gateway_ws",
+                "kind": "gateway_ws",
+                "message": "Gateway WebSocket error: boom"
             })
-        );
-    }
-
-    #[test]
-    fn serialize_checksum_error_includes_machine_readable_details() {
-        let err = AppError::RuntimeChecksumMismatch {
-            expected: "abc".to_string(),
-            actual: "def".to_string(),
-        };
-        let json: serde_json::Value = serde_json::to_value(&err).unwrap();
-        assert_eq!(json["code"], "runtime_checksum_mismatch");
-        assert_eq!(json["kind"], "runtime");
-        assert_eq!(json["details"]["expected"], "abc");
-        assert_eq!(json["details"]["actual"], "def");
-    }
-
-    #[test]
-    fn display_runtime_checksum_mismatch_includes_both_fields() {
-        let err = AppError::RuntimeChecksumMismatch {
-            expected: "abc".to_string(),
-            actual: "def".to_string(),
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("abc"));
-        assert!(msg.contains("def"));
-        assert!(msg.contains("expected"));
-    }
-
-    #[test]
-    fn display_dashboard_unreachable_contains_url() {
-        let err = AppError::DashboardUnreachable("http://127.0.0.1:9119".to_string());
-        assert_eq!(
-            err.to_string(),
-            "Dashboard not reachable at http://127.0.0.1:9119"
         );
     }
 
@@ -356,22 +180,5 @@ mod tests {
     fn display_origin_violation_contains_origin() {
         let err = AppError::OriginViolation("https://evil.example".to_string());
         assert!(err.to_string().contains("https://evil.example"));
-    }
-
-    #[test]
-    fn display_runtime_no_previous_version_is_static() {
-        let err = AppError::RuntimeNoPreviousVersion;
-        assert_eq!(
-            err.to_string(),
-            "No previous runtime version to rollback to"
-        );
-    }
-
-    #[test]
-    fn display_profile_switch_in_flight_is_static() {
-        assert_eq!(
-            AppError::ProfileSwitchInFlight.to_string(),
-            "Profile switch already in progress"
-        );
     }
 }

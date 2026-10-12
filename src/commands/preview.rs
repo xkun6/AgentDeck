@@ -24,15 +24,9 @@ use std::sync::{Mutex, OnceLock};
 use base64::Engine;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter};
 
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
-
-fn require_local_preview(state: &State<'_, AppState>) -> AppResult<()> {
-    let inner = state.inner.lock()?;
-    crate::connection::require_local_filesystem(inner.connection_mode, "本机文件预览")
-}
 
 /// Tauri event emitted to the renderer whenever a watched file changes.
 const PREVIEW_FILE_CHANGED: &str = "preview-file-changed";
@@ -385,20 +379,12 @@ fn read_file_preview(root: &str, path: &str) -> AppResult<FilePreview> {
 }
 
 #[tauri::command]
-pub fn read_workspace_file(
-    input: ReadWorkspaceFileInput,
-    state: State<'_, AppState>,
-) -> AppResult<FilePreview> {
-    require_local_preview(&state)?;
+pub fn read_workspace_file(input: ReadWorkspaceFileInput) -> AppResult<FilePreview> {
     read_file_preview(&input.root, &input.path)
 }
 
 #[tauri::command]
-pub fn read_file_data_url(
-    input: ReadFileDataUrlInput,
-    state: State<'_, AppState>,
-) -> AppResult<String> {
-    require_local_preview(&state)?;
+pub fn read_file_data_url(input: ReadFileDataUrlInput) -> AppResult<String> {
     read_file_data_url_impl(&input.path)
 }
 
@@ -440,11 +426,7 @@ fn write_file_text(root: &str, path: &str, content: &str) -> AppResult<WriteWork
 }
 
 #[tauri::command]
-pub fn write_workspace_file(
-    input: WriteWorkspaceFileInput,
-    state: State<'_, AppState>,
-) -> AppResult<WriteWorkspaceFileResult> {
-    require_local_preview(&state)?;
+pub fn write_workspace_file(input: WriteWorkspaceFileInput) -> AppResult<WriteWorkspaceFileResult> {
     write_file_text(&input.root, &input.path, &input.content)
 }
 
@@ -488,9 +470,7 @@ fn spawn_file_watcher(
 pub fn watch_preview_file(
     app: AppHandle,
     input: WatchPreviewFileInput,
-    state: State<'_, AppState>,
 ) -> AppResult<WatchPreviewFileResult> {
-    require_local_preview(&state)?;
     let path = PathBuf::from(input.path.trim());
     if !path.exists() {
         return Err(AppError::FileError(format!(

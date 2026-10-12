@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 
-const UI_DB_FILE: &str = "desktop-ui.sqlite";
+const UI_DB_FILE: &str = "ui.sqlite";
 const SCHEMA_VERSION: i64 = 1;
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,8 +122,8 @@ pub struct UiEventInput {
     pub app_version: Option<String>,
 }
 
-pub fn db_path(hermes_home: &str) -> PathBuf {
-    Path::new(hermes_home).join(UI_DB_FILE)
+pub fn db_path(data_dir: &str) -> PathBuf {
+    Path::new(data_dir).join(UI_DB_FILE)
 }
 
 fn sqlite_err(e: rusqlite::Error) -> AppError {
@@ -134,8 +134,8 @@ fn json_err(e: serde_json::Error) -> AppError {
     AppError::Internal(format!("UI store json error: {}", e))
 }
 
-fn connect(hermes_home: &str) -> AppResult<Connection> {
-    let path = db_path(hermes_home);
+fn connect(data_dir: &str) -> AppResult<Connection> {
+    let path = db_path(data_dir);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -247,8 +247,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-pub fn snapshot(hermes_home: &str) -> AppResult<UiStoreSnapshot> {
-    let conn = connect(hermes_home)?;
+pub fn snapshot(data_dir: &str) -> AppResult<UiStoreSnapshot> {
+    let conn = connect(data_dir)?;
     let mut stmt = conn
         .prepare("SELECT key, value_json FROM ui_kv ORDER BY key")
         .map_err(sqlite_err)?;
@@ -270,10 +270,10 @@ pub fn snapshot(hermes_home: &str) -> AppResult<UiStoreSnapshot> {
     Ok(UiStoreSnapshot { kv })
 }
 
-pub fn set_kv(hermes_home: &str, input: UiStoreSetKvInput) -> AppResult<()> {
+pub fn set_kv(data_dir: &str, input: UiStoreSetKvInput) -> AppResult<()> {
     let key = clean_key(&input.key)?;
     let raw = serde_json::to_string(&input.value).map_err(json_err)?;
-    let conn = connect(hermes_home)?;
+    let conn = connect(data_dir)?;
     conn.execute(
         "INSERT INTO ui_kv(key, value_json, updated_at)
          VALUES(?, ?, ?)
@@ -284,20 +284,20 @@ pub fn set_kv(hermes_home: &str, input: UiStoreSetKvInput) -> AppResult<()> {
     Ok(())
 }
 
-pub fn remove_kv(hermes_home: &str, input: UiStoreRemoveKvInput) -> AppResult<()> {
+pub fn remove_kv(data_dir: &str, input: UiStoreRemoveKvInput) -> AppResult<()> {
     let key = clean_key(&input.key)?;
-    let conn = connect(hermes_home)?;
+    let conn = connect(data_dir)?;
     conn.execute("DELETE FROM ui_kv WHERE key = ?", params![key])
         .map_err(sqlite_err)?;
     Ok(())
 }
 
-pub fn set_session_archived(hermes_home: &str, session_id: &str, archived: bool) -> AppResult<()> {
+pub fn set_session_archived(data_dir: &str, session_id: &str, archived: bool) -> AppResult<()> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
         return Err(AppError::InvalidRequest("session id is empty".into()));
     }
-    let conn = connect(hermes_home)?;
+    let conn = connect(data_dir)?;
     conn.execute(
         "INSERT INTO session_ui_state(session_id, archived, updated_at)
          VALUES(?, ?, ?)
@@ -308,8 +308,8 @@ pub fn set_session_archived(hermes_home: &str, session_id: &str, archived: bool)
     Ok(())
 }
 
-pub fn read_archived_session_ids(hermes_home: &str) -> HashSet<String> {
-    let Ok(conn) = connect(hermes_home) else {
+pub fn read_archived_session_ids(data_dir: &str) -> HashSet<String> {
+    let Ok(conn) = connect(data_dir) else {
         return HashSet::new();
     };
     let Ok(mut stmt) = conn.prepare("SELECT session_id FROM session_ui_state WHERE archived = 1")
@@ -322,7 +322,7 @@ pub fn read_archived_session_ids(hermes_home: &str) -> HashSet<String> {
     rows.filter_map(Result::ok).collect()
 }
 
-pub fn record_turn_stats(hermes_home: &str, mut stat: UiTurnStats) -> AppResult<()> {
+pub fn record_turn_stats(data_dir: &str, mut stat: UiTurnStats) -> AppResult<()> {
     if stat.id.trim().is_empty() {
         return Err(AppError::InvalidRequest("turn stats id is empty".into()));
     }
@@ -336,7 +336,7 @@ pub fn record_turn_stats(hermes_home: &str, mut stat: UiTurnStats) -> AppResult<
         Some(value) => Some(serde_json::to_string(value).map_err(json_err)?),
         None => None,
     };
-    let conn = connect(hermes_home)?;
+    let conn = connect(data_dir)?;
     conn.execute(
         "INSERT INTO turn_stats(
             id, session_id, gateway_session_id, client_message_id, backend_message_id,
@@ -451,8 +451,8 @@ fn row_to_turn_stats(row: &rusqlite::Row<'_>) -> rusqlite::Result<UiTurnStats> {
     })
 }
 
-pub fn get_turn_stats(hermes_home: &str, session_id: &str) -> AppResult<Vec<UiTurnStats>> {
-    let conn = connect(hermes_home)?;
+pub fn get_turn_stats(data_dir: &str, session_id: &str) -> AppResult<Vec<UiTurnStats>> {
+    let conn = connect(data_dir)?;
     let mut stmt = conn
         .prepare(
             "SELECT * FROM turn_stats
@@ -471,11 +471,11 @@ pub fn get_turn_stats(hermes_home: &str, session_id: &str) -> AppResult<Vec<UiTu
 }
 
 pub fn get_turn_stats_window(
-    hermes_home: &str,
+    data_dir: &str,
     since_ms: Option<i64>,
     limit: Option<i64>,
 ) -> AppResult<Vec<UiTurnStats>> {
-    let conn = connect(hermes_home)?;
+    let conn = connect(data_dir)?;
     let limit = limit.unwrap_or(5_000).clamp(1, 20_000);
     let mut out = Vec::new();
 
@@ -513,7 +513,7 @@ pub fn get_turn_stats_window(
     Ok(out)
 }
 
-pub fn record_event(hermes_home: &str, input: UiEventInput) -> AppResult<()> {
+pub fn record_event(data_dir: &str, input: UiEventInput) -> AppResult<()> {
     if input.id.trim().is_empty() || input.event_name.trim().is_empty() {
         return Err(AppError::InvalidRequest("UI event id/name is empty".into()));
     }
@@ -521,7 +521,7 @@ pub fn record_event(hermes_home: &str, input: UiEventInput) -> AppResult<()> {
         Some(value) => Some(serde_json::to_string(value).map_err(json_err)?),
         None => None,
     };
-    let conn = connect(hermes_home)?;
+    let conn = connect(data_dir)?;
     conn.execute(
         "INSERT OR REPLACE INTO ui_events(id, ts, session_id, event_name, source, props_json, app_version)
          VALUES(?, ?, ?, ?, ?, ?, ?)",
@@ -539,8 +539,8 @@ pub fn record_event(hermes_home: &str, input: UiEventInput) -> AppResult<()> {
     Ok(())
 }
 
-pub fn kv_value(hermes_home: &str, key: &str) -> AppResult<Option<Value>> {
-    let conn = connect(hermes_home)?;
+pub fn kv_value(data_dir: &str, key: &str) -> AppResult<Option<Value>> {
+    let conn = connect(data_dir)?;
     let raw: Option<String> = conn
         .query_row(
             "SELECT value_json FROM ui_kv WHERE key = ?",
@@ -551,59 +551,6 @@ pub fn kv_value(hermes_home: &str, key: &str) -> AppResult<Option<Value>> {
         .map_err(sqlite_err)?;
     raw.map(|value| serde_json::from_str::<Value>(&value).map_err(json_err))
         .transpose()
-}
-
-/// UI-store KV key holding the desktop "YOLO mode" preference, scoped to the
-/// active profile's HERMES_HOME. When truthy, the desktop launches the managed
-/// runtime with `HERMES_YOLO_MODE=1`, which makes the backend auto-approve
-/// dangerous-command prompts (equivalent to the `--yolo` CLI flag).
-pub const YOLO_MODE_KEY: &str = "desktop.yoloMode";
-
-fn value_is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Bool(b) => *b,
-        // Accept both integer (1) and float (1.0) JSON numbers; legacy or
-        // hand-edited values may be either.
-        Value::Number(n) => n.as_f64().map(|v| v != 0.0).unwrap_or(false),
-        Value::String(s) => crate::util::str_is_truthy(s),
-        _ => false,
-    }
-}
-
-/// Read the persisted desktop YOLO-mode preference for `hermes_home`.
-///
-/// Returns `false` when the key is unset or on any read error — YOLO mode must
-/// never be enabled by accident, so we fail closed.
-pub fn yolo_mode_enabled(hermes_home: &str) -> bool {
-    match kv_value(hermes_home, YOLO_MODE_KEY) {
-        Ok(Some(value)) => value_is_truthy(&value),
-        _ => false,
-    }
-}
-
-/// Read the persisted desktop YOLO-mode preference for `hermes_home` as an
-/// explicit tri-state.
-///
-/// `None` means the user has never set it — the inherited `HERMES_YOLO_MODE`
-/// env var may still act as a default. `Some(false)` is an authoritative "off"
-/// that overrides any inherited env flag; `Some(true)` is an explicit "on".
-/// Read errors fail closed to `None` (no persisted opinion).
-pub fn yolo_mode_preference(hermes_home: &str) -> Option<bool> {
-    match kv_value(hermes_home, YOLO_MODE_KEY) {
-        Ok(Some(value)) => Some(value_is_truthy(&value)),
-        _ => None,
-    }
-}
-
-/// Persist the desktop YOLO-mode preference for `hermes_home`.
-pub fn set_yolo_mode(hermes_home: &str, enabled: bool) -> AppResult<()> {
-    set_kv(
-        hermes_home,
-        UiStoreSetKvInput {
-            key: YOLO_MODE_KEY.to_string(),
-            value: Value::Bool(enabled),
-        },
-    )
 }
 
 #[cfg(test)]
@@ -634,69 +581,6 @@ mod tests {
         assert!(read_archived_session_ids(dir.path().to_str().unwrap()).contains("s1"));
         set_session_archived(dir.path().to_str().unwrap(), "s1", false).unwrap();
         assert!(!read_archived_session_ids(dir.path().to_str().unwrap()).contains("s1"));
-    }
-
-    #[test]
-    fn yolo_mode_defaults_off_and_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let home = dir.path().to_str().unwrap();
-        // Unset → fail closed.
-        assert!(!yolo_mode_enabled(home));
-        set_yolo_mode(home, true).unwrap();
-        assert!(yolo_mode_enabled(home));
-        set_yolo_mode(home, false).unwrap();
-        assert!(!yolo_mode_enabled(home));
-    }
-
-    #[test]
-    fn yolo_mode_preference_is_tri_state() {
-        let dir = TempDir::new().unwrap();
-        let home = dir.path().to_str().unwrap();
-        // Never set → no persisted opinion.
-        assert_eq!(yolo_mode_preference(home), None);
-        // Explicit on/off round-trip as Some.
-        set_yolo_mode(home, true).unwrap();
-        assert_eq!(yolo_mode_preference(home), Some(true));
-        set_yolo_mode(home, false).unwrap();
-        assert_eq!(yolo_mode_preference(home), Some(false));
-    }
-
-    #[test]
-    fn yolo_mode_reads_legacy_truthy_values() {
-        let dir = TempDir::new().unwrap();
-        let home = dir.path().to_str().unwrap();
-        for raw in [
-            serde_json::json!(1),
-            serde_json::json!("1"),
-            serde_json::json!("true"),
-            serde_json::json!("on"),
-        ] {
-            set_kv(
-                home,
-                UiStoreSetKvInput {
-                    key: YOLO_MODE_KEY.into(),
-                    value: raw.clone(),
-                },
-            )
-            .unwrap();
-            assert!(yolo_mode_enabled(home), "expected truthy for {raw}");
-        }
-        for raw in [
-            serde_json::json!(0),
-            serde_json::json!("0"),
-            serde_json::json!("false"),
-            serde_json::json!(null),
-        ] {
-            set_kv(
-                home,
-                UiStoreSetKvInput {
-                    key: YOLO_MODE_KEY.into(),
-                    value: raw.clone(),
-                },
-            )
-            .unwrap();
-            assert!(!yolo_mode_enabled(home), "expected falsy for {raw}");
-        }
     }
 
     #[test]

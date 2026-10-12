@@ -1,5 +1,8 @@
+// 通用 PTY 终端：应用内终端（portable-pty）与外部系统终端。
+
 use std::collections::{BTreeMap, HashMap};
 use std::env;
+#[cfg(target_os = "macos")]
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,10 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
-
-use crate::process::runtime;
-use crate::state::AppState;
+use tauri::{AppHandle, Emitter};
 
 const TERMINAL_EVENT: &str = "terminal-output";
 const DEFAULT_COLS: u16 = 100;
@@ -35,7 +35,6 @@ struct TerminalSession {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalStartInput {
-    pub purpose: Option<String>,
     pub cwd: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
@@ -48,17 +47,6 @@ pub struct TerminalStartResult {
     pub terminal_id: String,
     pub cwd: String,
     pub shell: String,
-    pub profile: String,
-    pub hermes_home: String,
-    pub managed_runtime: Option<ManagedRuntimeSummary>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedRuntimeSummary {
-    pub runtime_version: String,
-    pub executable_path: String,
-    pub shim_dir: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +73,6 @@ pub struct TerminalCloseInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOpenExternalInput {
-    pub purpose: Option<String>,
     pub cwd: Option<String>,
 }
 
@@ -111,45 +98,23 @@ pub struct TerminalEventPayload {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct TerminalContext {
-    hermes_home: String,
-    hermes_home_base: String,
-    profile: String,
-    api_base_url: String,
-}
-
 #[tauri::command]
 pub async fn terminal_start(
     app: AppHandle,
-    state: State<'_, AppState>,
     input: TerminalStartInput,
 ) -> Result<TerminalStartResult, String> {
-    let context = {
-        let inner = state.inner.lock().map_err(|e| e.to_string())?;
-        crate::connection::require_local_filesystem(inner.connection_mode, "本机终端")
-            .map_err(|e| e.to_string())?;
-        TerminalContext {
-            hermes_home: inner.hermes_home.clone(),
-            hermes_home_base: inner.hermes_home_base.clone(),
-            profile: inner.current_profile.clone(),
-            api_base_url: inner.api_base_url.clone(),
-        }
-    };
-
-    tauri::async_runtime::spawn_blocking(move || terminal_start_impl(app, context, input))
+    tauri::async_runtime::spawn_blocking(move || terminal_start_impl(app, input))
         .await
         .map_err(|e| format!("终端启动任务失败：{e}"))?
 }
 
 fn terminal_start_impl(
     app: AppHandle,
-    context: TerminalContext,
     input: TerminalStartInput,
 ) -> Result<TerminalStartResult, String> {
     let cols = normalize_size(input.cols, DEFAULT_COLS, MAX_COLS);
     let rows = normalize_size(input.rows, DEFAULT_ROWS, MAX_ROWS);
-    let cwd = resolve_cwd(input.cwd.as_deref(), &context)?;
+    let cwd = resolve_cwd(input.cwd.as_deref())?;
     let shell = default_shell_program();
     let terminal_id = new_terminal_id();
 
@@ -172,10 +137,11 @@ fn terminal_start_impl(
         .take_writer()
         .map_err(|e| format!("无法写入终端：{e}"))?;
 
-    let runtime_summary = prepare_managed_runtime_shim().transpose()?;
     let mut cmd = CommandBuilder::new(&shell);
     cmd.cwd(&cwd);
-    apply_terminal_env(&mut cmd, &context, runtime_summary.as_ref(), &shell);
+    for (key, value) in build_terminal_env(&shell) {
+        cmd.env(&key, &value);
+    }
 
     let child = pair
         .slave
@@ -183,8 +149,7 @@ fn terminal_start_impl(
         .map_err(|e| format!("无法启动终端 Shell：{e}"))?;
     drop(pair.slave);
 
-    let initial_input = initial_input_for(input.purpose.as_deref(), input.initial_input.as_deref());
-    if let Some(data) = initial_input {
+    if let Some(data) = input.initial_input.as_deref().filter(|v| !v.is_empty()) {
         writer
             .write_all(data.as_bytes())
             .map_err(|e| format!("无法写入初始命令：{e}"))?;
@@ -209,45 +174,24 @@ fn terminal_start_impl(
         terminal_id,
         cwd: cwd.to_string_lossy().to_string(),
         shell,
-        profile: context.profile,
-        hermes_home: context.hermes_home,
-        managed_runtime: runtime_summary,
     })
 }
 
+/// 在系统终端（Windows PowerShell / macOS Terminal.app）中打开 `cwd`。
 #[tauri::command]
 pub fn terminal_open_external(
-    state: State<'_, AppState>,
     input: TerminalOpenExternalInput,
 ) -> Result<TerminalOpenExternalResult, String> {
-    let context = {
-        let inner = state.inner.lock().map_err(|e| e.to_string())?;
-        crate::connection::require_local_filesystem(inner.connection_mode, "本机外部终端")
-            .map_err(|e| e.to_string())?;
-        TerminalContext {
-            hermes_home: inner.hermes_home.clone(),
-            hermes_home_base: inner.hermes_home_base.clone(),
-            profile: inner.current_profile.clone(),
-            api_base_url: inner.api_base_url.clone(),
-        }
-    };
-
-    let cwd = resolve_cwd(input.cwd.as_deref(), &context)?;
-    let runtime_summary = prepare_managed_runtime_shim().ok_or_else(|| {
-        "桌面端 Hermes 运行时尚未就绪，请稍后重试或先完成运行时安装。".to_string()
-    })??;
-    let shim_path = hermes_shim_path(&runtime_summary);
-    let args = hermes_args_for_purpose(input.purpose.as_deref());
+    let cwd = resolve_cwd(input.cwd.as_deref())?;
     let shell_hint = external_terminal_shell_hint();
-    let env_vars = build_terminal_env(&context, Some(&runtime_summary), shell_hint);
-    let command = format_external_command_display(&shim_path, &args);
-    let terminal = spawn_external_terminal(&cwd, &shim_path, &args, &env_vars)?;
+    let env_vars = build_terminal_env(shell_hint);
+    let terminal = spawn_external_terminal(&cwd, &env_vars)?;
 
     Ok(TerminalOpenExternalResult {
         ok: true,
         terminal,
         cwd: cwd.to_string_lossy().to_string(),
-        command,
+        command: shell_hint.to_string(),
     })
 }
 
@@ -325,7 +269,8 @@ fn default_shell_program() -> String {
     }
 }
 
-fn resolve_cwd(requested: Option<&str>, context: &TerminalContext) -> Result<PathBuf, String> {
+/// 显式传入的目录必须存在；未传时用用户主目录。
+fn resolve_cwd(requested: Option<&str>) -> Result<PathBuf, String> {
     if let Some(value) = requested.map(str::trim).filter(|v| !v.is_empty()) {
         let path = PathBuf::from(value);
         if path.is_dir() {
@@ -333,104 +278,15 @@ fn resolve_cwd(requested: Option<&str>, context: &TerminalContext) -> Result<Pat
         }
         return Err(format!("目录不存在：{value}"));
     }
-
-    let candidates = [
-        PathBuf::from(&context.hermes_home),
-        PathBuf::from(&context.hermes_home_base),
-        runtime::hermes_home_dir(),
-    ];
-
-    for path in candidates {
-        if path.as_os_str().is_empty() {
-            continue;
-        }
-        if fs::create_dir_all(&path).is_ok() && path.is_dir() {
-            return Ok(path);
-        }
-    }
-
     dirs::home_dir().ok_or_else(|| "无法确定终端工作目录。".to_string())
 }
 
-fn prepare_managed_runtime_shim() -> Option<Result<ManagedRuntimeSummary, String>> {
-    let record = runtime::read_current_record()?;
-    let executable_path = PathBuf::from(&record.executable_path);
-    let shim_dir = runtime::runtime_root().join("desktop-bin");
-    Some(
-        ensure_hermes_shim(&shim_dir, &executable_path).map(|_| ManagedRuntimeSummary {
-            runtime_version: record.runtime_version,
-            executable_path: record.executable_path,
-            shim_dir: shim_dir.to_string_lossy().to_string(),
-        }),
-    )
-}
-
-fn hermes_shim_path(summary: &ManagedRuntimeSummary) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        PathBuf::from(&summary.shim_dir).join("hermes.cmd")
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        PathBuf::from(&summary.shim_dir).join("hermes")
-    }
-}
-
-fn ensure_hermes_shim(shim_dir: &Path, executable_path: &Path) -> Result<(), String> {
-    fs::create_dir_all(shim_dir).map_err(|e| format!("无法创建 Hermes 命令目录：{e}"))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        let escaped = executable_path.to_string_lossy().replace('"', "\"\"");
-        let content = format!("@echo off\r\n\"{}\" %*\r\n", escaped);
-        fs::write(shim_dir.join("hermes.cmd"), &content)
-            .map_err(|e| format!("无法写入 hermes.cmd：{e}"))?;
-        fs::write(shim_dir.join("hermes.bat"), &content)
-            .map_err(|e| format!("无法写入 hermes.bat：{e}"))?;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let script = format!(
-            "#!/bin/sh\nexec {} \"$@\"\n",
-            shell_quote(&executable_path.to_string_lossy())
-        );
-        let shim = shim_dir.join("hermes");
-        fs::write(&shim, script).map_err(|e| format!("无法写入 hermes 命令：{e}"))?;
-        let mut perms = fs::metadata(&shim)
-            .map_err(|e| format!("无法读取 hermes 命令权限：{e}"))?
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&shim, perms).map_err(|e| format!("无法设置 hermes 命令权限：{e}"))?;
-    }
-
-    Ok(())
-}
-
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(any(target_os = "macos", test))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn apply_terminal_env(
-    cmd: &mut CommandBuilder,
-    context: &TerminalContext,
-    runtime_summary: Option<&ManagedRuntimeSummary>,
-    shell: &str,
-) {
-    let vars = build_terminal_env(context, runtime_summary, shell);
-    for (key, value) in vars {
-        cmd.env(&key, &value);
-    }
-}
-
-fn build_terminal_env(
-    context: &TerminalContext,
-    runtime_summary: Option<&ManagedRuntimeSummary>,
-    shell: &str,
-) -> BTreeMap<String, String> {
+fn build_terminal_env(shell: &str) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
 
     for (key, value) in env::vars() {
@@ -447,7 +303,7 @@ fn build_terminal_env(
     vars.insert("CLICOLOR".to_string(), "1".to_string());
     vars.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
     vars.insert("FORCE_COLOR".to_string(), "1".to_string());
-    vars.insert("TERM_PROGRAM".to_string(), "Hermes Console".to_string());
+    vars.insert("TERM_PROGRAM".to_string(), "AgentDeck".to_string());
     vars.insert("LSCOLORS".to_string(), "GxFxCxDxBxegedabagaced".to_string());
     vars.insert(
         "GREP_COLORS".to_string(),
@@ -455,86 +311,16 @@ fn build_terminal_env(
             .to_string(),
     );
     apply_color_prompt_env(&mut vars, shell);
-    vars.insert("HERMES_DESKTOP_TERMINAL".to_string(), "1".to_string());
-    vars.insert("HERMES_HOME".to_string(), context.hermes_home.clone());
-    vars.insert("HERMES_PROFILE".to_string(), context.profile.clone());
-    vars.insert(
-        "HERMES_DESKTOP_RUNTIME_ROOT".to_string(),
-        runtime::runtime_root().to_string_lossy().to_string(),
-    );
-    vars.insert(
-        "HERMES_GATEWAY_RUNTIME_DIR".to_string(),
-        runtime::gateway_runtime_dir().to_string_lossy().to_string(),
-    );
-    vars.insert(
-        "HERMES_GATEWAY_LOCK_DIR".to_string(),
-        runtime::gateway_runtime_dir()
-            .join("token-locks")
-            .to_string_lossy()
-            .to_string(),
-    );
-    if !context.api_base_url.is_empty() {
-        vars.insert(
-            "HERMES_DASHBOARD_URL".to_string(),
-            context.api_base_url.clone(),
-        );
-    }
-    if let Some(web_dist) = runtime::current_dashboard_web_dist_dir() {
-        vars.insert(
-            "HERMES_WEB_DIST".to_string(),
-            web_dist.to_string_lossy().to_string(),
-        );
-    }
-    if let Some(skills_dir) = runtime::current_bundled_skills_dir() {
-        vars.insert(
-            "HERMES_BUNDLED_SKILLS".to_string(),
-            skills_dir.to_string_lossy().to_string(),
-        );
-    }
-    if let Some(plugins_dir) = runtime::current_bundled_plugins_dir() {
-        vars.insert(
-            "HERMES_BUNDLED_PLUGINS".to_string(),
-            plugins_dir.to_string_lossy().to_string(),
-        );
-    }
 
     // Effective PATH so the in-app terminal matches the user's real one.
     // The shell is spawned non-login (no `-l`), so it will not rebuild PATH
-    // from .zprofile itself — inject it even without a managed runtime,
-    // overriding the GUI-truncated process PATH forwarded above.
-    let effective = crate::path_resolver::effective_path_os()
-        .to_string_lossy()
-        .to_string();
-    // Prepend the bundled node bin dir (P-032) so `hermes --tui`, `npx`, and
-    // node-based MCP/lint tools resolve node/npm/npx in the in-app + external
-    // terminal without a host Node install. HERMES_NODE/HERMES_TUI_DIR make
-    // the TUI launcher deterministic and source-checkout-free.
-    let mut path = effective;
-    if let Some(node_bin) = runtime::current_node_bin_dir() {
-        let node_bin = node_bin.to_string_lossy().into_owned();
-        path = prepend_path(&node_bin, &path);
-    }
-    if let Some(node) = runtime::current_node_binary() {
-        vars.insert(
-            "HERMES_NODE".to_string(),
-            node.to_string_lossy().into_owned(),
-        );
-    }
-    if let Some(tui_dir) = runtime::current_tui_dir() {
-        vars.insert(
-            "HERMES_TUI_DIR".to_string(),
-            tui_dir.to_string_lossy().into_owned(),
-        );
-    }
-    vars.insert("PATH".to_string(), path.clone());
-
-    if let Some(summary) = runtime_summary {
-        vars.insert("PATH".to_string(), prepend_path(&summary.shim_dir, &path));
-        vars.insert(
-            "HERMES_MANAGED_RUNTIME".to_string(),
-            summary.executable_path.clone(),
-        );
-    }
+    // from .zprofile itself — override the GUI-truncated process PATH.
+    vars.insert(
+        "PATH".to_string(),
+        crate::path_resolver::effective_path_os()
+            .to_string_lossy()
+            .to_string(),
+    );
 
     vars
 }
@@ -586,41 +372,6 @@ fn should_forward_env(key: &str) -> bool {
         || key.starts_with("LC_")
 }
 
-fn prepend_path(dir: &str, existing: &str) -> String {
-    let sep = if cfg!(target_os = "windows") {
-        ";"
-    } else {
-        ":"
-    };
-    if existing.trim().is_empty() {
-        dir.to_string()
-    } else {
-        format!("{dir}{sep}{existing}")
-    }
-}
-
-fn initial_input_for(purpose: Option<&str>, explicit: Option<&str>) -> Option<String> {
-    if let Some(value) = explicit.filter(|v| !v.is_empty()) {
-        return Some(value.to_string());
-    }
-
-    match purpose {
-        Some("gatewaySetup") | Some("gateway_setup") => Some("hermes gateway setup\r".to_string()),
-        Some("gatewayStatus") | Some("gateway_status") => {
-            Some("hermes gateway status\r".to_string())
-        }
-        _ => None,
-    }
-}
-
-fn hermes_args_for_purpose(purpose: Option<&str>) -> Vec<&'static str> {
-    match purpose {
-        Some("gatewaySetup") | Some("gateway_setup") => vec!["gateway", "setup"],
-        Some("gatewayStatus") | Some("gateway_status") => vec!["gateway", "status"],
-        _ => Vec::new(),
-    }
-}
-
 fn external_terminal_shell_hint() -> &'static str {
     #[cfg(target_os = "windows")]
     {
@@ -638,35 +389,13 @@ fn external_terminal_shell_hint() -> &'static str {
     }
 }
 
-fn format_external_command_display(shim_path: &Path, args: &[&str]) -> String {
-    #[cfg(target_os = "windows")]
-    {
-        powershell_invocation(shim_path, args)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        shell_invocation(shim_path, args)
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn spawn_external_terminal(
     cwd: &Path,
-    shim_path: &Path,
-    args: &[&str],
     env_vars: &BTreeMap<String, String>,
 ) -> Result<String, String> {
-    let invocation = powershell_invocation(shim_path, args);
     StdCommand::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoExit",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-        ])
-        .arg(invocation)
+        .args(["-NoLogo", "-NoExit", "-ExecutionPolicy", "Bypass"])
         .current_dir(cwd)
         .envs(env_vars.iter())
         .spawn()
@@ -677,11 +406,9 @@ fn spawn_external_terminal(
 #[cfg(target_os = "macos")]
 fn spawn_external_terminal(
     cwd: &Path,
-    shim_path: &Path,
-    args: &[&str],
     env_vars: &BTreeMap<String, String>,
 ) -> Result<String, String> {
-    let script_path = write_macos_terminal_script(cwd, env_vars, shim_path, args)?;
+    let script_path = write_macos_terminal_script(cwd, env_vars)?;
     let source_command = macos_terminal_source_command(&script_path);
     let output = StdCommand::new("osascript")
         .arg("-e")
@@ -714,46 +441,15 @@ fn spawn_external_terminal(
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn spawn_external_terminal(
     _cwd: &Path,
-    _shim_path: &Path,
-    _args: &[&str],
     _env_vars: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     Err("当前平台暂不支持自动打开外部终端。".to_string())
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn powershell_invocation(shim_path: &Path, args: &[&str]) -> String {
-    std::iter::once(format!(
-        "& {}",
-        powershell_quote(&shim_path.to_string_lossy())
-    ))
-    .chain(args.iter().map(|arg| powershell_quote(arg)))
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn powershell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-#[cfg(any(not(target_os = "windows"), test))]
-fn shell_invocation(shim_path: &Path, args: &[&str]) -> String {
-    std::iter::once(shell_quote(&shim_path.to_string_lossy()))
-        .chain(args.iter().map(|arg| shell_quote(arg)))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(any(target_os = "macos", test))]
-fn macos_terminal_script(
-    cwd: &Path,
-    env_vars: &BTreeMap<String, String>,
-    shim_path: &Path,
-    args: &[&str],
-) -> String {
+fn macos_terminal_script(cwd: &Path, env_vars: &BTreeMap<String, String>) -> String {
     let mut lines = vec![
-        "# Hermes Console external terminal bootstrap.".to_string(),
+        "# AgentDeck external terminal bootstrap.".to_string(),
         format!("cd {}", shell_quote(&cwd.to_string_lossy())),
     ];
     for (key, value) in env_vars {
@@ -761,7 +457,6 @@ fn macos_terminal_script(
             lines.push(format!("export {key}={}", shell_quote(value)));
         }
     }
-    lines.push(shell_invocation(shim_path, args));
     lines.join("\n")
 }
 
@@ -769,17 +464,15 @@ fn macos_terminal_script(
 fn write_macos_terminal_script(
     cwd: &Path,
     env_vars: &BTreeMap<String, String>,
-    shim_path: &Path,
-    args: &[&str],
 ) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = runtime::runtime_root().join("external-terminal");
+    let dir = env::temp_dir().join("agentdeck-external-terminal");
     fs::create_dir_all(&dir).map_err(|e| format!("无法创建外部终端启动目录：{e}"))?;
     cleanup_old_macos_terminal_scripts(&dir);
 
     let path = dir.join(format!("open-{}.zsh", new_terminal_id()));
-    let content = macos_terminal_script(cwd, env_vars, shim_path, args);
+    let content = macos_terminal_script(cwd, env_vars);
     fs::write(&path, content).map_err(|e| format!("无法写入外部终端启动脚本：{e}"))?;
     let mut perms = fs::metadata(&path)
         .map_err(|e| format!("无法读取外部终端启动脚本权限：{e}"))?
@@ -1039,64 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn hermes_args_follow_console_purpose() {
-        assert_eq!(hermes_args_for_purpose(None), Vec::<&str>::new());
-        assert_eq!(hermes_args_for_purpose(Some("shell")), Vec::<&str>::new());
-        assert_eq!(
-            hermes_args_for_purpose(Some("gatewaySetup")),
-            vec!["gateway", "setup"]
-        );
-        assert_eq!(
-            hermes_args_for_purpose(Some("gateway_status")),
-            vec!["gateway", "status"]
-        );
-    }
-
-    #[test]
-    fn powershell_quote_escapes_single_quotes() {
-        assert_eq!(
-            powershell_quote("C:\\Users\\O'Hermes\\desktop-bin\\hermes.cmd"),
-            "'C:\\Users\\O''Hermes\\desktop-bin\\hermes.cmd'"
-        );
-    }
-
-    #[test]
-    fn powershell_invocation_uses_full_shim_path_and_args() {
-        let invocation = powershell_invocation(
-            Path::new("C:\\Hermes Agent\\desktop-bin\\hermes.cmd"),
-            &["gateway", "status"],
-        );
-        assert_eq!(
-            invocation,
-            "& 'C:\\Hermes Agent\\desktop-bin\\hermes.cmd' 'gateway' 'status'"
-        );
-    }
-
-    #[test]
-    fn macos_terminal_script_sets_environment_and_runs_full_shim_path() {
-        let mut env_vars = BTreeMap::new();
-        env_vars.insert(
-            "HERMES_HOME".to_string(),
-            "/Users/alice/Hermes Home".to_string(),
-        );
-        env_vars.insert("HERMES_PROFILE".to_string(), "default".to_string());
-        env_vars.insert("BAD-NAME".to_string(), "ignored".to_string());
-
-        let script = macos_terminal_script(
-            Path::new("/Users/alice/Work Dir"),
-            &env_vars,
-            Path::new("/opt/Hermes Runtime/desktop-bin/hermes"),
-            &["gateway", "setup"],
-        );
-
-        assert!(script.contains("cd '/Users/alice/Work Dir'"));
-        assert!(script.contains("export HERMES_HOME='/Users/alice/Hermes Home'"));
-        assert!(script.contains("export HERMES_PROFILE='default'"));
-        assert!(!script.contains("BAD-NAME"));
-        assert!(script.contains("'/opt/Hermes Runtime/desktop-bin/hermes' 'gateway' 'setup'"));
-    }
-
-    #[test]
     fn macos_terminal_source_command_stays_short() {
         assert_eq!(
             macos_terminal_source_command(Path::new("/Users/alice/Hermes Scripts/open.zsh")),
@@ -1113,62 +748,42 @@ mod tests {
     }
 
     #[test]
-    fn build_terminal_env_contains_managed_runtime_context() {
-        let context = TerminalContext {
-            hermes_home: "/tmp/hermes-home/default".to_string(),
-            hermes_home_base: "/tmp/hermes-home".to_string(),
-            profile: "default".to_string(),
-            api_base_url: "http://127.0.0.1:9120".to_string(),
-        };
-        let runtime = ManagedRuntimeSummary {
-            runtime_version: "1.2.3".to_string(),
-            executable_path: "/runtime/hermes".to_string(),
-            shim_dir: "/runtime/desktop-bin".to_string(),
-        };
+    fn macos_terminal_script_sets_environment_and_cwd() {
+        let mut env_vars = BTreeMap::new();
+        env_vars.insert("PATH".to_string(), "/opt/homebrew/bin:/usr/bin".to_string());
+        env_vars.insert("BAD-NAME".to_string(), "ignored".to_string());
 
-        let env_vars = build_terminal_env(&context, Some(&runtime), "/bin/zsh");
+        let script = macos_terminal_script(Path::new("/Users/alice/Work Dir"), &env_vars);
 
-        assert_eq!(
-            env_vars.get("HERMES_HOME").map(String::as_str),
-            Some("/tmp/hermes-home/default")
-        );
-        assert_eq!(
-            env_vars.get("HERMES_PROFILE").map(String::as_str),
-            Some("default")
-        );
-        assert_eq!(
-            env_vars.get("HERMES_DASHBOARD_URL").map(String::as_str),
-            Some("http://127.0.0.1:9120")
-        );
-        assert_eq!(
-            env_vars.get("HERMES_MANAGED_RUNTIME").map(String::as_str),
-            Some("/runtime/hermes")
-        );
-        assert!(
-            env_vars
-                .get("PATH")
-                .is_some_and(|path| path.starts_with("/runtime/desktop-bin")),
-            "PATH should start with managed runtime shim dir"
-        );
+        assert!(script.contains("cd '/Users/alice/Work Dir'"));
+        assert!(script.contains("export PATH='/opt/homebrew/bin:/usr/bin'"));
+        assert!(!script.contains("BAD-NAME"));
     }
 
-    // 没有 managed runtime 时终端同样要拿到有效 PATH：shell 以非登录方式
-    // 启动，不会自己重建 PATH，缺了注入就只剩 GUI 精简 PATH。
+    // 终端以非登录方式启动，不会自己重建 PATH，缺了注入就只剩 GUI 精简 PATH。
     #[test]
-    fn build_terminal_env_sets_effective_path_without_managed_runtime() {
-        let context = TerminalContext {
-            hermes_home: "/tmp/hermes-home/default".to_string(),
-            hermes_home_base: "/tmp/hermes-home".to_string(),
-            profile: "default".to_string(),
-            api_base_url: String::new(),
-        };
-
-        let env_vars = build_terminal_env(&context, None, "/bin/zsh");
+    fn build_terminal_env_sets_effective_path() {
+        let env_vars = build_terminal_env("/bin/zsh");
 
         let expected = crate::path_resolver::effective_path_os()
             .to_string_lossy()
             .to_string();
         assert_eq!(env_vars.get("PATH"), Some(&expected));
-        assert!(!env_vars.contains_key("HERMES_MANAGED_RUNTIME"));
+        assert_eq!(
+            env_vars.get("TERM_PROGRAM").map(String::as_str),
+            Some("AgentDeck")
+        );
+        assert!(!env_vars.keys().any(|key| key.starts_with("HERMES_")));
+    }
+
+    #[test]
+    fn resolve_cwd_rejects_missing_dir_and_defaults_to_home() {
+        assert!(resolve_cwd(Some("/no/such/agentdeck-dir-404")).is_err());
+        assert_eq!(resolve_cwd(None).ok(), dirs::home_dir());
+        let dir = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            resolve_cwd(dir.path().to_str()).unwrap(),
+            dir.path().to_path_buf()
+        );
     }
 }

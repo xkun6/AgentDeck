@@ -1,32 +1,25 @@
-//! Per-runtime-root single-instance guard (issue #366).
+//! Per-data-dir single-instance guard.
 //!
-//! Two desktop shells sharing one runtime root would fight over the same
-//! managed kernel (each respawn/quit tears down the other's backend), so a
-//! second launch against the SAME root must hand focus to the incumbent and
-//! exit — WeChat-style. Distinct roots (two portable extractions, or a
-//! portable copy next to an installed build) are a supported scenario and
-//! must keep coexisting, which is why this is an advisory file lock scoped
-//! to `runtime_root()` rather than `tauri-plugin-single-instance` (that
-//! plugin keys on the app identifier and would veto legitimate portable
-//! side-by-side launches).
+//! Two shells sharing one data directory would fight over the same sidecar and
+//! UI store, so a second launch against the SAME data dir must hand focus to
+//! the incumbent and exit. Distinct data dirs (e.g. `AGENTDECK_HOME` pointing
+//! elsewhere) keep coexisting, which is why this is an advisory file lock
+//! scoped to the data dir rather than `tauri-plugin-single-instance` (that
+//! plugin keys on the app identifier).
 //!
 //! Lock-file semantics: the file carries no content and is never deleted.
 //! Both `flock` (Unix) and `LockFileEx` (Windows, via `fs2`) release the
 //! lock when the owning process dies, so a leftover file from a crashed
-//! shell can never deadlock the next launch; writing into a locked region
-//! is also a known Windows footgun we avoid entirely. Diagnostics about the
-//! owner live in `desktop-owner.json`, not here.
+//! shell can never deadlock the next launch.
 
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fs2::FileExt;
 
 #[cfg(target_os = "windows")]
 use std::sync::Mutex;
-
-use crate::process::runtime;
 
 const INSTANCE_LOCK_FILENAME: &str = "desktop-instance.lock";
 const FOCUS_REQUEST_FILENAME: &str = "focus-request.json";
@@ -35,10 +28,10 @@ const FOCUS_REQUEST_FILENAME: &str = "focus-request.json";
 /// network volumes and every Windows filesystem.
 const FOCUS_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 /// Escape hatch for QA / development multi-open against one root.
-const SINGLE_INSTANCE_ENV: &str = "HERMES_DESKTOP_SINGLE_INSTANCE";
+const SINGLE_INSTANCE_ENV: &str = "AGENTDECK_SINGLE_INSTANCE";
 
 /// Holding this guard means holding the exclusive instance lock; keep it
-/// alive for the whole process (a `main()` local outliving `app.run()`).
+/// alive for the whole process.
 pub struct InstanceGuard {
     _file: std::fs::File,
 }
@@ -51,21 +44,21 @@ pub struct InstanceGuard {
 static NAMED_MUTEX_HANDLE: Mutex<Option<isize>> = Mutex::new(None);
 
 pub enum SingleInstance {
-    /// We own the runtime root; proceed with startup.
+    /// We own the data dir; proceed with startup.
     Acquired(InstanceGuard),
-    /// A live shell already owns this runtime root.
+    /// A live shell already owns this data dir.
     AlreadyRunning,
     /// The lock could not be evaluated (exotic filesystem, permissions…).
     /// Callers must FAIL OPEN — never let the guard itself block startup.
     Unavailable(String),
 }
 
-fn instance_lock_path() -> PathBuf {
-    runtime::runtime_root().join(INSTANCE_LOCK_FILENAME)
+fn instance_lock_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(INSTANCE_LOCK_FILENAME)
 }
 
-fn focus_request_path() -> PathBuf {
-    runtime::runtime_root().join(FOCUS_REQUEST_FILENAME)
+fn focus_request_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(FOCUS_REQUEST_FILENAME)
 }
 
 fn single_instance_disabled() -> bool {
@@ -77,12 +70,12 @@ fn single_instance_disabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Try to become the single desktop instance for the current runtime root.
-pub fn try_acquire() -> SingleInstance {
+/// Try to become the single desktop instance for `data_dir`.
+pub fn try_acquire(data_dir: &Path) -> SingleInstance {
     if single_instance_disabled() {
         log::warn!(
             "{SINGLE_INSTANCE_ENV} disables the single-instance guard; \
-             concurrent shells on one runtime root are unsupported"
+             concurrent shells on one data dir are unsupported"
         );
         return SingleInstance::Unavailable(format!("disabled via {SINGLE_INSTANCE_ENV}"));
     }
@@ -92,7 +85,7 @@ pub fn try_acquire() -> SingleInstance {
     // stored in NAMED_MUTEX_HANDLE and automatically released on process exit.
     #[cfg(target_os = "windows")]
     {
-        match try_acquire_named_mutex() {
+        match try_acquire_named_mutex(data_dir) {
             Ok(()) => {}
             Err(already) if already => return SingleInstance::AlreadyRunning,
             Err(_) => {
@@ -102,11 +95,11 @@ pub fn try_acquire() -> SingleInstance {
         }
     }
 
-    let lock_path = instance_lock_path();
+    let lock_path = instance_lock_path(data_dir);
     if let Some(parent) = lock_path.parent() {
         if let Err(err) = fs::create_dir_all(parent) {
             return SingleInstance::Unavailable(format!(
-                "create runtime root {}: {err}",
+                "create data dir {}: {err}",
                 parent.display()
             ));
         }
@@ -138,16 +131,15 @@ pub fn try_acquire() -> SingleInstance {
 /// The handle is stored in `NAMED_MUTEX_HANDLE` so it stays alive for the
 /// process lifetime, keeping the mutex visible to other processes.
 #[cfg(target_os = "windows")]
-fn try_acquire_named_mutex() -> Result<(), bool> {
+fn try_acquire_named_mutex(data_dir: &Path) -> Result<(), bool> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
     use windows_sys::Win32::System::Threading::CreateMutexW;
 
-    let root = runtime::runtime_root();
-    let root_str = root.to_string_lossy();
+    let root_str = data_dir.to_string_lossy();
     let safe_name = root_str.replace("\\", "_").replace(":", "");
-    let wide: Vec<u16> = OsStr::new(&format!("Local\\HermesDesktop_{safe_name}"))
+    let wide: Vec<u16> = OsStr::new(&format!("Local\\AgentDeck_{safe_name}"))
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
@@ -185,8 +177,8 @@ fn try_acquire_named_mutex() -> Result<(), bool> {
 
 /// Ask the incumbent instance to bring its main window to the foreground.
 /// Atomic write (temp file + rename) so the watcher never reads a torn file.
-pub fn notify_running_instance() {
-    let path = focus_request_path();
+pub fn notify_running_instance(data_dir: &Path) {
+    let path = focus_request_path(data_dir);
     let Some(parent) = path.parent().map(PathBuf::from) else {
         return;
     };
@@ -213,8 +205,8 @@ pub fn notify_running_instance() {
 /// Remove a leftover focus request from a previous run. Called by the lock
 /// holder during startup — its window is about to show anyway, so consuming
 /// a racing request here is equivalent to honoring it.
-pub fn clear_stale_focus_request() {
-    let path = focus_request_path();
+pub fn clear_stale_focus_request(data_dir: &Path) {
+    let path = focus_request_path(data_dir);
     match fs::remove_file(&path) {
         Ok(()) => log::debug!("cleared stale focus request {}", path.display()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -225,11 +217,11 @@ pub fn clear_stale_focus_request() {
 /// Watch for focus requests from would-be second instances and raise the
 /// main window. Delete-then-show ordering: showing is idempotent, so a
 /// failed show never leaves the file behind to storm the loop.
-pub fn spawn_focus_watcher(app: tauri::AppHandle) {
+pub fn spawn_focus_watcher(app: tauri::AppHandle, data_dir: PathBuf) {
+    let path = focus_request_path(&data_dir);
     std::thread::Builder::new()
         .name("instance-focus-watcher".into())
         .spawn(move || loop {
-            let path = focus_request_path();
             if path.exists() {
                 match fs::remove_file(&path) {
                     Ok(()) => {
@@ -253,26 +245,23 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    fn with_runtime_root<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+    fn with_data_dir<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
         let dir = tempfile::TempDir::new().expect("tempdir");
-        std::env::set_var("HERMES_DESKTOP_RUNTIME_ROOT", dir.path());
-        let out = f(dir.path());
-        std::env::remove_var("HERMES_DESKTOP_RUNTIME_ROOT");
-        out
+        f(dir.path())
     }
 
     #[test]
     #[serial]
     fn second_acquire_returns_already_running() {
-        with_runtime_root(|_root| {
-            let first = try_acquire();
+        with_data_dir(|root| {
+            let first = try_acquire(root);
             let guard = match first {
                 SingleInstance::Acquired(g) => g,
                 _ => panic!("first acquire should succeed"),
             };
             // flock/LockFileEx exclude a second descriptor even within one
             // process, so this models a second shell faithfully.
-            match try_acquire() {
+            match try_acquire(root) {
                 SingleInstance::AlreadyRunning => {}
                 SingleInstance::Acquired(_) => panic!("second acquire must be blocked"),
                 SingleInstance::Unavailable(err) => panic!("unexpected: {err}"),
@@ -284,8 +273,8 @@ mod tests {
     #[test]
     #[serial]
     fn drop_guard_releases_lock() {
-        with_runtime_root(|_root| {
-            match try_acquire() {
+        with_data_dir(|root| {
+            match try_acquire(root) {
                 SingleInstance::Acquired(guard) => drop(guard),
                 _ => panic!("first acquire should succeed"),
             }
@@ -295,7 +284,7 @@ mod tests {
             // a second process would). This is correct cross-process behavior.
             // On non-Windows (or if the named mutex fails), the file lock
             // alone is the guard and should be reacquirable after drop.
-            match try_acquire() {
+            match try_acquire(root) {
                 SingleInstance::Acquired(_) => {}
                 #[cfg(not(target_os = "windows"))]
                 _ => panic!("lock must be reacquirable after drop"),
@@ -313,24 +302,24 @@ mod tests {
     #[test]
     #[serial]
     fn focus_request_roundtrip() {
-        with_runtime_root(|root| {
-            notify_running_instance();
+        with_data_dir(|root| {
+            notify_running_instance(root);
             let path = root.join(FOCUS_REQUEST_FILENAME);
             let body = std::fs::read_to_string(&path).expect("focus request written");
             assert!(body.contains("\"pid\""), "payload has pid: {body}");
-            clear_stale_focus_request();
+            clear_stale_focus_request(root);
             assert!(!path.exists(), "cleared focus request must be gone");
             // Clearing again is a no-op, not an error.
-            clear_stale_focus_request();
+            clear_stale_focus_request(root);
         });
     }
 
     #[test]
     #[serial]
     fn env_escape_hatch_disables_lock() {
-        with_runtime_root(|_root| {
+        with_data_dir(|root| {
             std::env::set_var(SINGLE_INSTANCE_ENV, "0");
-            let out = try_acquire();
+            let out = try_acquire(root);
             std::env::remove_var(SINGLE_INSTANCE_ENV);
             match out {
                 SingleInstance::Unavailable(reason) => {

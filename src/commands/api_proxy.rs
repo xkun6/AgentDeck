@@ -1,11 +1,7 @@
-// HTTP proxy commands: api_request, external_request, upload_file.
+// 外部 HTTP 请求命令：external_request、download_external_image。
 //
-// Replaces the Electron ipcMain handlers at
-// hermes-cn-ui-v1/apps/desktop/src/main/main.ts lines 532-650.
-//
-// api_request is the most complex: it intercepts certain routes locally
-// (session logs, archive, runtime update) and proxies everything else
-// to the hermes dashboard with auth header injection.
+// 只允许 https，以及指向本机的 http；拒绝私网 / 链路本地等内网 IP（含 DNS
+// 解析结果），每次重定向都重新校验。
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -14,49 +10,13 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
-use crate::cron_runs;
 use crate::error::AppError;
-use crate::process::dashboard::{build_gateway_url, fetch_session_token};
-use crate::session_archive;
-use crate::session_log;
-use crate::state::AppState;
 
-const SESSION_LOG_ROUTE_PREFIX: &str = "/__hermes_session_log/";
 const EXTERNAL_TIMEOUT: Duration = Duration::from_secs(15);
-const DASHBOARD_PROXY_TIMEOUT: Duration = Duration::from_secs(30);
-const DASHBOARD_AUDIO_PROXY_TIMEOUT: Duration = Duration::from_secs(180);
-const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
-const MAX_UPLOAD_BASE64_LEN: usize = MAX_UPLOAD_BYTES.div_ceil(3) * 4;
 const MAX_EXTERNAL_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_EXTERNAL_IMAGE_REDIRECTS: usize = 5;
-// Dashboard-facing clients never follow redirects: a gated dashboard answers
-// unauthenticated requests with 401 JSON, but a misconfigured one could 302 →
-// /login. Following that silently would turn a 401 into a 200 whose body is
-// login-page HTML (and drop auth headers on a cross-host hop). Fail loud.
-static DASHBOARD_PROXY_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(DASHBOARD_PROXY_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("valid dashboard proxy HTTP client")
-});
-static DASHBOARD_AUDIO_PROXY_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(DASHBOARD_AUDIO_PROXY_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("valid dashboard audio proxy HTTP client")
-});
-static UPLOAD_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(UPLOAD_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("valid upload HTTP client")
-});
+
 static EXTERNAL_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(EXTERNAL_TIMEOUT)
@@ -103,57 +63,11 @@ pub struct DownloadExternalImageResult {
     pub size: usize,
 }
 
-fn json_result(status: u16, status_text: &str, body: serde_json::Value) -> ApiRequestResult {
-    let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), "application/json".to_string());
-    ApiRequestResult {
-        ok: (200..300).contains(&status),
-        status,
-        status_text: status_text.to_string(),
-        headers,
-        body: serde_json::to_string(&body).unwrap_or_default(),
-    }
-}
-
-/// Extract the URL path component (strip query string).
-fn url_path(path: &str) -> String {
-    if let Ok(url) = url::Url::parse(&format!("http://x{}", path)) {
-        url.path().to_string()
-    } else {
-        path.split('?').next().unwrap_or(path).to_string()
-    }
-}
-
-fn is_audio_api_path(path: &str) -> bool {
-    url_path(path).starts_with("/api/audio/")
-}
-
-fn upload_limit_error() -> AppError {
-    AppError::InvalidRequest(format!(
-        "upload_file exceeds {} MiB limit",
-        MAX_UPLOAD_BYTES / 1024 / 1024
-    ))
-}
-
 fn external_image_limit_error() -> AppError {
     AppError::InvalidRequest(format!(
         "download_external_image exceeds {} MiB limit",
         MAX_EXTERNAL_IMAGE_BYTES / 1024 / 1024
     ))
-}
-
-fn ensure_upload_base64_size(encoded_len: usize) -> Result<(), AppError> {
-    if encoded_len > MAX_UPLOAD_BASE64_LEN {
-        return Err(upload_limit_error());
-    }
-    Ok(())
-}
-
-fn ensure_upload_decoded_size(decoded_len: usize) -> Result<(), AppError> {
-    if decoded_len > MAX_UPLOAD_BYTES {
-        return Err(upload_limit_error());
-    }
-    Ok(())
 }
 
 fn is_blocked_external_ip(ip: IpAddr) -> bool {
@@ -266,609 +180,6 @@ async fn validate_external_url(raw: &str) -> Result<url::Url, AppError> {
     }
 
     Ok(url)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn url_path_strips_query_string() {
-        assert_eq!(url_path("/api/foo?bar=1&baz=2"), "/api/foo");
-    }
-
-    #[test]
-    fn profile_resolution_prefers_request_header() {
-        let mut headers = HashMap::new();
-        headers.insert("X-Hermes-Profile".to_string(), "work".to_string());
-        assert_eq!(
-            resolve_request_profile(Some(&headers), Some("personal")),
-            "work"
-        );
-    }
-
-    #[test]
-    fn profile_resolution_header_lookup_is_case_insensitive() {
-        let mut headers = HashMap::new();
-        headers.insert("x-hermes-profile".to_string(), "work".to_string());
-        assert_eq!(resolve_request_profile(Some(&headers), None), "work");
-    }
-
-    #[test]
-    fn profile_resolution_falls_back_to_state_profile() {
-        let headers = HashMap::new();
-        assert_eq!(
-            resolve_request_profile(Some(&headers), Some("personal")),
-            "personal"
-        );
-        assert_eq!(resolve_request_profile(None, Some("personal")), "personal");
-    }
-
-    #[test]
-    fn profile_resolution_ignores_blank_header_and_blank_state() {
-        let mut headers = HashMap::new();
-        headers.insert("X-Hermes-Profile".to_string(), "   ".to_string());
-        assert_eq!(
-            resolve_request_profile(Some(&headers), Some("personal")),
-            "personal"
-        );
-        assert_eq!(
-            resolve_request_profile(Some(&headers), Some("  ")),
-            "default"
-        );
-        assert_eq!(resolve_request_profile(None, None), "default");
-    }
-
-    #[test]
-    fn url_path_passes_through_without_query() {
-        assert_eq!(url_path("/api/foo"), "/api/foo");
-    }
-
-    #[test]
-    fn url_path_handles_empty_path() {
-        assert_eq!(url_path(""), "/");
-    }
-
-    #[test]
-    fn url_path_handles_root() {
-        assert_eq!(url_path("/"), "/");
-    }
-
-    #[test]
-    fn audio_api_path_matches_audio_routes_with_queries() {
-        assert!(is_audio_api_path("/api/audio/transcribe"));
-        assert!(is_audio_api_path("/api/audio/speak?debug=1"));
-        assert!(!is_audio_api_path("/api/model/info"));
-    }
-
-    #[test]
-    fn json_result_2xx_is_ok() {
-        let r = json_result(200, "OK", serde_json::json!({"x": 1}));
-        assert!(r.ok);
-        assert_eq!(r.status, 200);
-        assert_eq!(r.status_text, "OK");
-        assert_eq!(
-            r.headers.get("content-type"),
-            Some(&"application/json".to_string())
-        );
-        assert_eq!(r.body, "{\"x\":1}");
-    }
-
-    #[test]
-    fn json_result_4xx_is_not_ok() {
-        let r = json_result(404, "Not Found", serde_json::json!({"message": "nope"}));
-        assert!(!r.ok);
-        assert_eq!(r.status, 404);
-    }
-
-    #[test]
-    fn json_result_5xx_is_not_ok() {
-        let r = json_result(503, "Down", serde_json::json!(null));
-        assert!(!r.ok);
-        assert_eq!(r.status, 503);
-    }
-
-    #[test]
-    fn json_result_boundary_300_is_not_ok() {
-        // 300..399 redirects are explicitly not "ok" by this convention.
-        let r = json_result(301, "Moved", serde_json::json!(null));
-        assert!(!r.ok);
-    }
-
-    #[test]
-    fn upload_base64_limit_is_checked_before_decode() {
-        assert!(ensure_upload_base64_size(MAX_UPLOAD_BASE64_LEN).is_ok());
-        let err = ensure_upload_base64_size(MAX_UPLOAD_BASE64_LEN + 1).unwrap_err();
-        assert!(matches!(err, AppError::InvalidRequest(msg) if msg.contains("100 MiB")));
-    }
-
-    #[test]
-    fn upload_decoded_limit_is_checked_after_decode() {
-        assert!(ensure_upload_decoded_size(MAX_UPLOAD_BYTES).is_ok());
-        let err = ensure_upload_decoded_size(MAX_UPLOAD_BYTES + 1).unwrap_err();
-        assert!(matches!(err, AppError::InvalidRequest(msg) if msg.contains("100 MiB")));
-    }
-
-    #[test]
-    fn external_url_shape_requires_https() {
-        let err = validate_external_url_shape("http://api.example.com/models").unwrap_err();
-        assert!(err.to_string().contains("only allows https"));
-    }
-
-    #[test]
-    fn external_url_shape_accepts_local_http_targets() {
-        for raw in [
-            "http://localhost:1234/v1/models",
-            "http://service.localhost:1234/v1/models",
-            "http://127.0.0.1:1234/v1/models",
-            "http://0.0.0.0:1234/v1/models",
-            "http://[::1]:1234/v1/models",
-        ] {
-            let url = validate_external_url_shape(raw).unwrap();
-            assert_eq!(url.scheme(), "http");
-        }
-    }
-
-    #[tokio::test]
-    async fn external_url_allows_localhost_without_dns_rejection() {
-        let url = validate_external_url("http://localhost:1234/v1/models")
-            .await
-            .unwrap();
-        assert_eq!(url.host_str(), Some("localhost"));
-    }
-
-    #[test]
-    fn external_url_shape_rejects_private_ip_literals() {
-        for raw in [
-            "https://10.0.0.1/status",
-            "https://172.16.0.1/status",
-            "https://192.168.1.1/status",
-            "https://169.254.169.254/latest/meta-data",
-            "https://[fc00::1]/status",
-            "https://[fe80::1]/status",
-        ] {
-            let err = validate_external_url_shape(raw).unwrap_err();
-            assert!(
-                err.to_string().contains("private or local")
-                    || err.to_string().contains("localhost"),
-                "unexpected error for {raw}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn external_url_shape_accepts_public_https_hosts() {
-        let url = validate_external_url_shape("https://api.example.com/v1/models").unwrap();
-        assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some("api.example.com"));
-    }
-}
-
-/// Core implementation of `api_request` with no Tauri State dependency.
-/// Exposed for integration tests; production callers go through the
-/// `#[tauri::command]` wrapper below.
-pub async fn api_request_impl(
-    input: ApiRequestInput,
-    api_base_url: &str,
-    session_token: Option<&str>,
-    hermes_home: &str,
-) -> Result<ApiRequestResult, AppError> {
-    api_request_impl_with_home_base(input, api_base_url, session_token, hermes_home, hermes_home)
-        .await
-}
-
-/// How the proxied dashboard request authenticates.
-enum ProxyAuth<'a> {
-    /// Legacy loopback/local/remote-token: inject Bearer + X-Hermes-Session-Token.
-    Token(Option<&'a str>),
-    /// Gated remote: use the cookie-aware session client, inject no headers.
-    Oauth(&'a crate::oauth_session::OauthSession),
-}
-
-/// Header the frontend transport layer sets to name the Hermes profile a
-/// request targets (web/src/lib/transport.ts injects `X-Hermes-Profile`).
-const PROFILE_HEADER: &str = "x-hermes-profile";
-
-/// Resolve the active profile for the embedded Hard FFI dispatch: an explicit
-/// request header wins, then the desktop state hint (`AppStateInner::
-/// current_profile`), then "default".
-fn resolve_request_profile(
-    headers: Option<&HashMap<String, String>>,
-    state_profile: Option<&str>,
-) -> String {
-    headers
-        .and_then(|h| {
-            h.iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(PROFILE_HEADER))
-                .map(|(_, v)| v.trim().to_string())
-        })
-        .filter(|p| !p.is_empty())
-        .or_else(|| {
-            state_profile
-                .map(str::trim)
-                .filter(|p| !p.is_empty())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "default".to_string())
-}
-
-/// Core implementation variant used by the Tauri command so local desktop
-/// intercepts can read both the active profile home and the profile root.
-/// Token-auth entry point (loopback/local/remote-token + all existing tests).
-pub async fn api_request_impl_with_home_base(
-    input: ApiRequestInput,
-    api_base_url: &str,
-    session_token: Option<&str>,
-    hermes_home: &str,
-    hermes_home_base: &str,
-) -> Result<ApiRequestResult, AppError> {
-    api_request_impl_with_profile(
-        input,
-        api_base_url,
-        session_token,
-        hermes_home,
-        hermes_home_base,
-        None,
-    )
-    .await
-}
-
-/// Token-auth entry point that also carries the desktop's active profile, so
-/// the embedded Hard FFI branch dispatches against the real profile instead of
-/// a hardcoded "default". `active_profile` is only a fallback — a per-request
-/// `X-Hermes-Profile` header still takes precedence.
-pub async fn api_request_impl_with_profile(
-    input: ApiRequestInput,
-    api_base_url: &str,
-    session_token: Option<&str>,
-    hermes_home: &str,
-    hermes_home_base: &str,
-    active_profile: Option<&str>,
-) -> Result<ApiRequestResult, AppError> {
-    api_request_impl_inner(
-        input,
-        api_base_url,
-        ProxyAuth::Token(session_token),
-        hermes_home,
-        hermes_home_base,
-        active_profile,
-    )
-    .await
-}
-
-/// OAuth-auth entry point for gated remote gateways (cookie session client).
-pub async fn api_request_impl_oauth(
-    input: ApiRequestInput,
-    api_base_url: &str,
-    session: &crate::oauth_session::OauthSession,
-    hermes_home: &str,
-    hermes_home_base: &str,
-) -> Result<ApiRequestResult, AppError> {
-    api_request_impl_inner(
-        input,
-        api_base_url,
-        ProxyAuth::Oauth(session),
-        hermes_home,
-        hermes_home_base,
-        None,
-    )
-    .await
-}
-
-async fn api_request_impl_inner(
-    input: ApiRequestInput,
-    api_base_url: &str,
-    auth: ProxyAuth<'_>,
-    hermes_home: &str,
-    hermes_home_base: &str,
-    active_profile: Option<&str>,
-) -> Result<ApiRequestResult, AppError> {
-    let method = input.method.as_deref().unwrap_or("GET");
-    let path = &input.path;
-    let url_p = url_path(path);
-
-    // 1. Session log intercept
-    if let Some(rest) = url_p.strip_prefix(SESSION_LOG_ROUTE_PREFIX) {
-        let session_id = urlencoding::decode(rest).unwrap_or_default().to_string();
-        let (status, body) = session_log::handle_session_log_request(&session_id, hermes_home);
-        let status_text = if status == 200 { "OK" } else { "Not Found" };
-        return Ok(json_result(status, status_text, body));
-    }
-
-    // 2. Session archive intercept
-    if let Some((status, body)) = session_archive::handle_archive_request(path, method, hermes_home)
-    {
-        let status_text = if status == 200 { "OK" } else { "Error" };
-        return Ok(json_result(status, status_text, body));
-    }
-
-    // 3. Cron run history intercept (desktop-local, read-only)
-    if let Some((status, body)) =
-        cron_runs::handle_cron_runs_request(path, method, hermes_home_base)
-    {
-        let status_text = if status == 200 { "OK" } else { "Error" };
-        return Ok(json_result(status, status_text, body));
-    }
-
-    // 4. Runtime update intercept
-    if url_p == "/api/hermes/update" && method.to_uppercase() == "POST" {
-        let result = crate::process::runtime::install_runtime_update(None).await;
-        let status = if result.ok { 200 } else { 503 };
-        let status_text = if result.ok {
-            "OK"
-        } else {
-            "Runtime Update Failed"
-        };
-        let body = serde_json::to_value(&result).unwrap_or_default();
-        return Ok(json_result(status, status_text, body));
-    }
-
-    // 5. Embedded Hard FFI — zero HTTP (docs/embedded-python.md). The
-    // api_proxy never forwards to reqwest here: routes are dispatched directly
-    // into the embedded interpreter via the FFI registry.
-    if api_base_url == crate::embedded::EMBEDDED_API_BASE_URL {
-        let token = match &auth {
-            ProxyAuth::Token(t) => *t,
-            ProxyAuth::Oauth(_) => None,
-        };
-        let profile = resolve_request_profile(input.headers.as_ref(), active_profile);
-        return crate::embedded::api::embedded_rest_request(hermes_home, token, &profile, &input)
-            .await;
-    }
-
-    // 6. Proxy to dashboard
-    let full_url = if path.starts_with("http://") || path.starts_with("https://") {
-        // Validate same origin
-        let base = url::Url::parse(api_base_url)?;
-        let target = url::Url::parse(path)?;
-        if target.origin() != base.origin() {
-            return Err(AppError::OriginViolation(
-                base.origin().ascii_serialization(),
-            ));
-        }
-        path.to_string()
-    } else {
-        let base = api_base_url.trim_end_matches('/');
-        let p = if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{}", path)
-        };
-        format!("{}{}", base, p)
-    };
-
-    let is_audio = is_audio_api_path(path);
-    let http_method = method.parse().unwrap_or(reqwest::Method::GET);
-    let mut req = match &auth {
-        ProxyAuth::Token(_) => {
-            let client = if is_audio {
-                &*DASHBOARD_AUDIO_PROXY_HTTP_CLIENT
-            } else {
-                &*DASHBOARD_PROXY_HTTP_CLIENT
-            };
-            client.request(http_method, &full_url)
-        }
-        ProxyAuth::Oauth(session) => {
-            // One cookie-aware client (30s default); override per-request for
-            // long-poll audio so streaming TTS/STT is not cut short.
-            let mut b = session.client().request(http_method, &full_url);
-            if is_audio {
-                b = b.timeout(DASHBOARD_AUDIO_PROXY_TIMEOUT);
-            }
-            b
-        }
-    };
-
-    // Inject auth headers (token mode only; oauth rides the cookie jar).
-    if let ProxyAuth::Token(Some(token)) = &auth {
-        req = req
-            .header("Authorization", format!("Bearer {}", token))
-            .header("X-Hermes-Session-Token", *token);
-    }
-
-    // Forward caller headers (don't override auth)
-    if let Some(ref headers) = input.headers {
-        for (key, value) in headers {
-            let lower = key.to_lowercase();
-            if lower != "authorization" && lower != "x-hermes-session-token" {
-                req = req.header(key.as_str(), value.as_str());
-            }
-        }
-    }
-
-    if let Some(ref body) = input.body {
-        req = req.body(body.clone());
-    }
-
-    let res = req.send().await?;
-    let status = res.status().as_u16();
-    let status_text = res.status().canonical_reason().unwrap_or("").to_string();
-    let res_headers: HashMap<String, String> = res
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-    let raw_body = res.text().await.unwrap_or_default();
-
-    // 6. Post-process: filter archived sessions
-    let body = session_archive::filter_archived_from_response(path, method, hermes_home, &raw_body);
-
-    Ok(ApiRequestResult {
-        ok: (200..300).contains(&status),
-        status,
-        status_text,
-        headers: res_headers,
-        body,
-    })
-}
-
-/// Shared desktop proxy path used by both Tauri IPC and the loopback browser
-/// companion. Keeping it here preserves local archive/session-log intercepts,
-/// OAuth cookies and token-refresh behavior for both renderers.
-pub async fn api_request_from_state(
-    app: &tauri::AppHandle,
-    input: ApiRequestInput,
-    state: &AppState,
-) -> Result<ApiRequestResult, AppError> {
-    let (api_base_url, auth, hermes_home, hermes_home_base, current_profile, mode) = {
-        let inner = state.inner.lock()?;
-        (
-            inner.api_base_url.clone(),
-            inner.dashboard_auth(),
-            inner.hermes_home.clone(),
-            inner.hermes_home_base.clone(),
-            inner.current_profile.clone(),
-            inner.connection_mode,
-        )
-    };
-
-    // Attached modes: the runtime-update intercept below manages the desktop
-    // managed runtime, which is not what this shell is connected to.
-    if mode != crate::connection::ConnectionMode::Managed
-        && url_path(&input.path) == "/api/hermes/update"
-        && input.method.as_deref().unwrap_or("GET").to_uppercase() == "POST"
-    {
-        return Ok(json_result(
-            409,
-            "Conflict",
-            serde_json::json!({
-                "ok": false,
-                "error": "当前连接的不是本机内核，无法更新桌面端 managed runtime"
-            }),
-        ));
-    }
-
-    // OAuth remote: cookie-authed proxy. The server may rotate AT/RT on the
-    // response (captured by the jar) — persist promptly. A 401 with a
-    // session_expired/unauthenticated envelope means re-login is needed.
-    if let crate::state::DashboardAuth::Oauth(session) = &auth {
-        let result = api_request_impl_oauth(
-            input,
-            &api_base_url,
-            session,
-            &hermes_home,
-            &hermes_home_base,
-        )
-        .await?;
-        if session.take_dirty() {
-            crate::oauth_session::persist_if_dirty(&api_base_url, session);
-        }
-        if result.status == 401 && is_auth_expired_body(&result.body) {
-            emit_auth_expired(app, state, &api_base_url, &result.body);
-        }
-        return Ok(result);
-    }
-
-    let session_token = match &auth {
-        crate::state::DashboardAuth::Token(t) => t.clone(),
-        crate::state::DashboardAuth::Oauth(_) => None,
-    };
-    let first = api_request_impl_with_profile(
-        input.clone(),
-        &api_base_url,
-        session_token.as_deref(),
-        &hermes_home,
-        &hermes_home_base,
-        Some(&current_profile),
-    )
-    .await?;
-    // Remote tokens are static (entered in Settings or via env); the
-    // refresh-by-scraping-the-dashboard-HTML recovery below only applies to
-    // managed runtime and loopback local CLI dashboards, whose token may
-    // rotate on restart.
-    if first.status != 401 || mode == crate::connection::ConnectionMode::Remote {
-        return Ok(first);
-    }
-
-    // Dashboard session tokens are process-local. If the dashboard restarts
-    // while the Tauri process remains alive, the cached token becomes stale and
-    // every proxied request fails with 401. Refresh from the dashboard HTML and
-    // retry once so ordinary UI reads recover without requiring an app restart.
-    let fresh_token = match std::env::var("HERMES_DESKTOP_SESSION_TOKEN")
-        .ok()
-        .or_else(|| std::env::var("HERMES_DASHBOARD_SESSION_TOKEN").ok())
-    {
-        Some(token) => Some(token),
-        None => fetch_session_token(&api_base_url).await,
-    };
-    if fresh_token.is_none() || fresh_token == session_token {
-        return Ok(first);
-    }
-
-    let fresh_gateway_url = build_gateway_url(&api_base_url, fresh_token.as_deref());
-    {
-        let mut inner = state.inner.lock()?;
-        inner.session_token = fresh_token.clone();
-        inner.gateway_url = fresh_gateway_url;
-    }
-
-    api_request_impl_with_profile(
-        input,
-        &api_base_url,
-        fresh_token.as_deref(),
-        &hermes_home,
-        &hermes_home_base,
-        Some(&current_profile),
-    )
-    .await
-}
-
-/// The main API proxy command. Handles local route intercepts and proxies
-/// to the dashboard for everything else.
-#[tauri::command]
-pub async fn api_request(
-    app: tauri::AppHandle,
-    input: ApiRequestInput,
-    state: State<'_, AppState>,
-) -> Result<ApiRequestResult, AppError> {
-    api_request_from_state(&app, input, &state).await
-}
-
-/// True when a 401 body carries the gated-auth envelope signalling the remote
-/// session is dead (needs re-login), vs a generic loopback `{detail:...}` 401.
-fn is_auth_expired_body(body: &str) -> bool {
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
-        return false;
-    };
-    json.get("error")
-        .and_then(|e| e.as_str())
-        .map(|e| e == "session_expired" || e == "unauthenticated")
-        .unwrap_or(false)
-        || json.get("login_url").is_some()
-}
-
-/// Emit `connection-auth-expired` to the frontend so it can surface the
-/// re-login banner. Debounced to 5s (a burst of 401s must not storm the UI).
-fn emit_auth_expired(app: &tauri::AppHandle, state: &AppState, base_url: &str, body: &str) {
-    use tauri::Emitter;
-    {
-        let mut inner = match state.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        let now = std::time::Instant::now();
-        if let Some(last) = inner.last_auth_expired_emit {
-            if now.duration_since(last) < Duration::from_secs(5) {
-                return;
-            }
-        }
-        inner.last_auth_expired_emit = Some(now);
-    }
-    let json = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
-    let reason = json
-        .get("error")
-        .and_then(|e| e.as_str())
-        .unwrap_or("unauthenticated")
-        .to_string();
-    let login_url = json
-        .get("login_url")
-        .and_then(|u| u.as_str())
-        .map(String::from);
-    let _ = app.emit(
-        "connection-auth-expired",
-        serde_json::json!({ "baseUrl": base_url, "reason": reason, "loginUrl": login_url }),
-    );
 }
 
 /// Proxy an HTTP request to an arbitrary external URL (15s timeout).
@@ -1175,141 +486,6 @@ async fn external_request_impl_with_client(
     }
 }
 
-/// Core implementation of `upload_file` with no Tauri State dependency.
-/// Exposed for integration tests.
-pub async fn upload_file_impl(
-    input: UploadFileInput,
-    api_base_url: &str,
-    session_token: Option<&str>,
-    hermes_home: &str,
-) -> Result<ApiRequestResult, AppError> {
-    upload_file_impl_with_profile(input, api_base_url, session_token, hermes_home, None).await
-}
-
-/// `upload_file_impl` variant that carries the desktop's active profile so
-/// the embedded Hard FFI dispatch targets the real profile instead of a
-/// hardcoded "default".
-pub async fn upload_file_impl_with_profile(
-    input: UploadFileInput,
-    api_base_url: &str,
-    session_token: Option<&str>,
-    hermes_home: &str,
-    active_profile: Option<&str>,
-) -> Result<ApiRequestResult, AppError> {
-    use base64::Engine;
-
-    ensure_upload_base64_size(input.data.len())?;
-    let file_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&input.data)
-        .map_err(|e| AppError::InvalidRequest(format!("Invalid base64: {}", e)))?;
-    ensure_upload_decoded_size(file_bytes.len())?;
-
-    // Embedded Hard FFI — zero HTTP (refactor_plan.md Phase C): dispatch
-    // straight into the embedded interpreter's handle_upload (writes
-    // ~/.hermes/uploads/<session_id>/), never reqwest. Keeps src/embedded/
-    // free of reqwest so the no-http deny gate stays green.
-    if api_base_url == crate::embedded::EMBEDDED_API_BASE_URL {
-        let body = serde_json::json!({
-            "session_id": input.session_id.clone(),
-            "name": input.name.clone(),
-            "type": input.r#type.clone().unwrap_or_else(|| "application/octet-stream".to_string()),
-            "data": input.data.clone(),
-        })
-        .to_string();
-        let embedded_input = ApiRequestInput {
-            path: "/api/upload".to_string(),
-            method: Some("POST".to_string()),
-            headers: None,
-            body: Some(body),
-        };
-        let profile = resolve_request_profile(None, active_profile);
-        return crate::embedded::api::embedded_rest_request(
-            hermes_home,
-            session_token,
-            &profile,
-            &embedded_input,
-        )
-        .await;
-    }
-
-    let mime_type = input
-        .r#type
-        .as_deref()
-        .unwrap_or("application/octet-stream");
-
-    let file_part = reqwest::multipart::Part::bytes(file_bytes)
-        .file_name(input.name.clone())
-        .mime_str(mime_type)?;
-
-    let form = reqwest::multipart::Form::new()
-        .text("session_id", input.session_id)
-        .part("file", file_part);
-
-    let url = format!("{}/api/upload", api_base_url.trim_end_matches('/'));
-    let mut req = UPLOAD_HTTP_CLIENT.post(&url).multipart(form);
-
-    if let Some(token) = session_token {
-        req = req
-            .header("Authorization", format!("Bearer {}", token))
-            .header("X-Hermes-Session-Token", token);
-    }
-
-    let res = req.send().await?;
-    let status = res.status().as_u16();
-    let status_text = res.status().canonical_reason().unwrap_or("").to_string();
-    let headers: HashMap<String, String> = res
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-    let body = res.text().await.unwrap_or_default();
-
-    Ok(ApiRequestResult {
-        ok: (200..300).contains(&status),
-        status,
-        status_text,
-        headers,
-        body,
-    })
-}
-
-/// Upload a file to the dashboard's /api/upload endpoint.
-/// The file data arrives as a base64-encoded string from the frontend.
-#[tauri::command]
-pub async fn upload_file(
-    input: UploadFileInput,
-    state: State<'_, AppState>,
-) -> Result<ApiRequestResult, AppError> {
-    let (api_base_url, session_token, hermes_home, current_profile) = {
-        let inner = state.inner.lock()?;
-        (
-            inner.api_base_url.clone(),
-            inner.session_token.clone(),
-            inner.hermes_home.clone(),
-            inner.current_profile.clone(),
-        )
-    };
-    upload_file_impl_with_profile(
-        input,
-        &api_base_url,
-        session_token.as_deref(),
-        &hermes_home,
-        Some(&current_profile),
-    )
-    .await
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UploadFileInput {
-    pub session_id: String,
-    pub name: String,
-    #[serde(default)]
-    pub r#type: Option<String>,
-    /// Base64-encoded file content.
-    pub data: String,
-}
-
 #[cfg(test)]
 mod external_request_tests {
     use super::*;
@@ -1379,5 +555,65 @@ mod external_request_tests {
         assert!(captured.contains("Bearer sk-sensitive"));
         proxy_thread.join().expect("proxy thread");
         target.verify().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn external_url_shape_requires_https() {
+        let err = validate_external_url_shape("http://api.example.com/models").unwrap_err();
+        assert!(err.to_string().contains("only allows https"));
+    }
+
+    #[test]
+    fn external_url_shape_accepts_local_http_targets() {
+        for raw in [
+            "http://localhost:1234/v1/models",
+            "http://service.localhost:1234/v1/models",
+            "http://127.0.0.1:1234/v1/models",
+            "http://0.0.0.0:1234/v1/models",
+            "http://[::1]:1234/v1/models",
+        ] {
+            let url = validate_external_url_shape(raw).unwrap();
+            assert_eq!(url.scheme(), "http");
+        }
+    }
+
+    #[tokio::test]
+    async fn external_url_allows_localhost_without_dns_rejection() {
+        let url = validate_external_url("http://localhost:1234/v1/models")
+            .await
+            .unwrap();
+        assert_eq!(url.host_str(), Some("localhost"));
+    }
+
+    #[test]
+    fn external_url_shape_rejects_private_ip_literals() {
+        for raw in [
+            "https://10.0.0.1/status",
+            "https://172.16.0.1/status",
+            "https://192.168.1.1/status",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[fc00::1]/status",
+            "https://[fe80::1]/status",
+        ] {
+            let err = validate_external_url_shape(raw).unwrap_err();
+            assert!(
+                err.to_string().contains("private or local")
+                    || err.to_string().contains("localhost"),
+                "unexpected error for {raw}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_url_shape_accepts_public_https_hosts() {
+        let url = validate_external_url_shape("https://api.example.com/v1/models").unwrap();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("api.example.com"));
     }
 }

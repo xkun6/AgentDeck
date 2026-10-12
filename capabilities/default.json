@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Hermes Agent CN",
+  "description": "Default capabilities for AgentDeck",
   "windows": ["main"],
   "remote": {
     "urls": ["http://localhost:9545/*"]
