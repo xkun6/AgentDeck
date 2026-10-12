@@ -7,6 +7,7 @@ export {
   CodexAgentClient,
   CodexAgentSession,
   DEFAULT_CODEX_MODE_ID,
+  type CodexLaunchOverride,
 } from "./codex-agent.js";
 export { resolveCodexLaunch, type CodexLaunch } from "./launch.js";
 

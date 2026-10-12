@@ -38,6 +38,8 @@ export interface ClaudeCliOptions {
   cwd: string;
   /** 已清洗的子进程环境 */
   env: Record<string, string>;
+  /** 追加到参数末尾（自定义中转 provider 的 --settings / --disallowedTools） */
+  extraArgs?: readonly string[];
   /** null 表示不传 --model，沿用 CLI 默认 / 用户配置 */
   model: string | null;
   permissionMode: ClaudePermissionMode;
@@ -63,7 +65,7 @@ export interface ClaudeCliHandle extends AsyncIterable<ClaudeOutputMessage> {
 export type ClaudeCliFactory = (options: ClaudeCliOptions) => ClaudeCliHandle;
 
 export function buildClaudeCliArgs(
-  options: Pick<ClaudeCliOptions, "model" | "permissionMode" | "resumeSessionId">,
+  options: Pick<ClaudeCliOptions, "model" | "permissionMode" | "resumeSessionId" | "extraArgs">,
 ): string[] {
   const args = [
     "--print",
@@ -88,6 +90,9 @@ export function buildClaudeCliArgs(
   }
   if (options.resumeSessionId) {
     args.push("--resume", options.resumeSessionId);
+  }
+  if (options.extraArgs) {
+    args.push(...options.extraArgs);
   }
   return args;
 }

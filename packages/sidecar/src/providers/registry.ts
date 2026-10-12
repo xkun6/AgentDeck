@@ -22,6 +22,10 @@ export const PROVIDER_FACTORIES: readonly ProviderFactory[] = [
 
 export class ProviderRegistry {
   private readonly clients = new Map<AgentProviderId, AgentClient>();
+  /** 自定义 provider（providers.json），始终排在内置项之后 */
+  private readonly customIds = new Set<AgentProviderId>();
+  /** 被替换 / 删除的自定义 client：运行中的会话可能仍在用，退出时再统一 shutdown */
+  private readonly retired = new Set<AgentClient>();
 
   constructor(clients: Iterable<AgentClient>) {
     for (const client of clients) {
@@ -40,11 +44,64 @@ export class ProviderRegistry {
     return Array.from(this.clients.values());
   }
 
+  /** 内置 provider 的 id（不含自定义项） */
+  builtinIds(): AgentProviderId[] {
+    return this.list()
+      .map((client) => client.provider)
+      .filter((id) => !this.customIds.has(id));
+  }
+
+  /**
+   * 整体替换自定义 provider（design.md 4.7），内置项不变。旧 client 不 shutdown：AgentManager 里运行中的会话
+   * 持有旧 client 创建的会话对象，继续运行直到关闭；新建 / 恢复会话通过 get() 拿到新 client。
+   */
+  replaceCustomClients(clients: Iterable<AgentClient>): void {
+    const next = Array.from(clients);
+    const seen = new Set<AgentProviderId>();
+    for (const client of next) {
+      if (seen.has(client.provider)) {
+        throw new Error(`provider id 重复：${client.provider}`);
+      }
+      if (this.clients.has(client.provider) && !this.customIds.has(client.provider)) {
+        throw new Error(`自定义 provider 与内置 provider 冲突：${client.provider}`);
+      }
+      seen.add(client.provider);
+    }
+    for (const id of this.customIds) {
+      const old = this.clients.get(id);
+      if (old) {
+        this.retired.add(old);
+      }
+      this.clients.delete(id);
+    }
+    this.customIds.clear();
+    for (const client of next) {
+      this.clients.set(client.provider, client);
+      this.customIds.add(client.provider);
+    }
+  }
+
   /** provider.list：逐个探测可用性（单个超时/异常记为不可用，不影响其它 provider） */
   async listProviderInfo(): Promise<ProviderInfo[]> {
     return Promise.all(
       this.list().map(async (client): Promise<ProviderInfo> => {
-        const base = { id: client.provider, kind: client.kind, label: client.label };
+        const base: Pick<
+          ProviderInfo,
+          "id" | "kind" | "label" | "custom" | "extends" | "description"
+        > = {
+          id: client.provider,
+          kind: client.kind,
+          label: client.label,
+          ...(client.custom
+            ? {
+                custom: true,
+                extends: client.custom.extends,
+                ...(client.custom.description !== undefined
+                  ? { description: client.custom.description }
+                  : {}),
+              }
+            : {}),
+        };
         try {
           const availability = await withTimeout(
             client.isAvailable(),
@@ -67,7 +124,9 @@ export class ProviderRegistry {
   }
 
   async shutdown(): Promise<void> {
-    await Promise.allSettled(this.list().map((client) => client.shutdown?.()));
+    const all = [...this.list(), ...this.retired];
+    this.retired.clear();
+    await Promise.allSettled(all.map((client) => client.shutdown?.()));
   }
 }
 

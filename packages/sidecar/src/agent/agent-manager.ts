@@ -245,6 +245,7 @@ export class AgentManager {
       throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束或先取消");
     }
     if (agent.session === null) {
+      this.refreshClient(agent);
       this.assertResumable(agent);
     } else if (agent.closed) {
       throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
@@ -457,6 +458,30 @@ export class AgentManager {
     await this.persistNow(agent);
     this.logger.info("关闭 agent %s", agent.id);
     this.emitState(agent);
+  }
+
+  /**
+   * 恢复前按 provider id 重新取 client：自定义 provider（4.7）可能已被替换为新配置或被删除。
+   * 运行中的会话不经过这里，继续使用创建时的会话对象（旧配置）直到关闭。
+   */
+  private refreshClient(agent: ManagedAgent): void {
+    const client = this.registry.get(agent.snapshot.provider);
+    if (!client) {
+      agent.client = undefined;
+      if (agent.snapshot.persistence?.sessionId) {
+        throw new AgentRpcError(
+          "PROVIDER_NOT_FOUND",
+          `provider 已被删除或停用：${agent.snapshot.provider}`,
+        );
+      }
+      return;
+    }
+    const hadClient = agent.client !== undefined;
+    agent.client = client;
+    if (!hadClient) {
+      // 启动时 provider 不存在、之后才出现（如自定义 provider 重新启用）：重新判断能否恢复
+      this.refreshResumable(agent);
+    }
   }
 
   /** 不可恢复时：dormant 返回 NOT_SUPPORTED（4.5），closed 返回 AGENT_CLOSED（4.4） */

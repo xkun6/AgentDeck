@@ -8,6 +8,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
 import { createLogger, type Logger } from "./logger.js";
+import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { RpcServer } from "./server/rpc-server.js";
 import { withTimeout } from "./utils/promise-timeout.js";
@@ -159,6 +160,18 @@ async function main(): Promise<void> {
     env: process.env,
     ...(config.dataDir ? { dataDir: config.dataDir } : {}),
   });
+  // 自定义 provider（providers.json，design.md 4.7）要在恢复历史会话前注册，dormant 会话才能找到对应 client
+  const providerConfig = new CustomProviderService({
+    registry,
+    logger,
+    env: process.env,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+  });
+  try {
+    await providerConfig.load();
+  } catch (error) {
+    logger.error("加载自定义 provider 失败：%s", String(error));
+  }
   // 设置了 AGENTDECK_DATA_DIR 才持久化会话（design.md 4.5）；恢复失败只记日志，不影响启动
   const store = config.dataDir ? new AgentStore({ dataDir: config.dataDir, logger }) : undefined;
   manager = new AgentManager({ registry, logger, ...(store ? { store } : {}) });
@@ -172,6 +185,7 @@ async function main(): Promise<void> {
     version: SIDECAR_VERSION,
     manager,
     registry,
+    providerConfig,
     logger,
   });
 

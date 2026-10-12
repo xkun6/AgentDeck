@@ -7,6 +7,7 @@ export {
   CLAUDE_PROVIDER_ID,
   ClaudeAgentClient,
   ClaudeAgentSession,
+  type ClaudeLaunchOverride,
 } from "./claude-agent.js";
 export {
   ClaudeCliSession,

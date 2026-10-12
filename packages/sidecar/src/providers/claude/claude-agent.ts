@@ -118,10 +118,27 @@ const PLAN_PERMISSION_ACTIONS: AgentPermissionAction[] = [
   { id: "keep_planning", label: "继续规划", behavior: "deny" },
 ];
 
+/**
+ * 启动配置覆盖（自定义中转 provider 用，design.md 4.7）；不传时行为与内置 claude provider 完全相同。
+ */
+export interface ClaudeLaunchOverride {
+  /** 从继承环境中剔除的变量（不区分大小写），在 envOverlay 之前生效 */
+  stripEnv?: readonly string[];
+  /** 叠加到子进程环境的变量（最后应用） */
+  envOverlay?: Readonly<Record<string, string>>;
+  /** 追加到 claude 启动参数末尾（如 --settings / --disallowedTools） */
+  extraArgs?: readonly string[];
+}
+
 export interface ClaudeAgentClientOptions {
   logger: Logger;
   /** sidecar 进程环境；传给 claude 前会剔除 AGENTDECK_* 与父 Claude 会话变量 */
   env: NodeJS.ProcessEnv;
+  /** provider id，默认 `claude`（自定义中转为 `custom:<id>`） */
+  providerId?: string;
+  /** 显示名，默认 `Claude Code` */
+  label?: string;
+  launch?: ClaudeLaunchOverride;
   /** 创建 claude 子进程会话（测试可注入假实现） */
   cliFactory?: ClaudeCliFactory;
   resolveExecutable?: () => Promise<ClaudeExecutableResolution>;
@@ -129,12 +146,13 @@ export interface ClaudeAgentClientOptions {
 }
 
 export class ClaudeAgentClient implements AgentClient {
-  readonly provider = CLAUDE_PROVIDER_ID;
+  readonly provider: string;
   readonly kind = "claude" as const;
-  readonly label = "Claude Code";
+  readonly label: string;
 
   private readonly logger: Logger;
   private readonly childEnv: Record<string, string>;
+  private readonly extraArgs: readonly string[];
   private readonly cliFactory: ClaudeCliFactory;
   private readonly resolveExecutable: () => Promise<ClaudeExecutableResolution>;
   private readonly terminateProcess: ProcessTerminator | undefined;
@@ -143,8 +161,11 @@ export class ClaudeAgentClient implements AgentClient {
   private modelProbe: Promise<AgentModelDefinition[] | null> | null = null;
 
   constructor(options: ClaudeAgentClientOptions) {
+    this.provider = options.providerId ?? CLAUDE_PROVIDER_ID;
+    this.label = options.label ?? "Claude Code";
     this.logger = options.logger;
-    this.childEnv = buildClaudeChildEnv(options.env);
+    this.childEnv = buildClaudeChildEnv(options.env, options.launch);
+    this.extraArgs = options.launch?.extraArgs ? [...options.launch.extraArgs] : [];
     this.cliFactory = options.cliFactory ?? createClaudeCliSession;
     this.resolveExecutable =
       options.resolveExecutable ??
@@ -169,7 +190,7 @@ export class ClaudeAgentClient implements AgentClient {
   }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
     const models = (await this.loadModels(opts?.cwd)) ?? CLAUDE_MODELS;
     return {
-      models: models.map((model) => ({ ...model })),
+      models: models.map((model) => ({ ...model, provider: this.provider })),
       modes: CLAUDE_MODES.map((mode) => ({ ...mode })),
     };
   }
@@ -198,6 +219,7 @@ export class ClaudeAgentClient implements AgentClient {
         executablePath: resolution.path,
         cwd,
         env: this.childEnv,
+        ...(this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
         model: null,
         permissionMode: DEFAULT_MODE,
         resumeSessionId: null,
@@ -206,7 +228,7 @@ export class ClaudeAgentClient implements AgentClient {
         controlTimeoutMs: MODEL_PROBE_TIMEOUT_MS,
         ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       });
-      const models = mapInitializeModels(await cli.initialized);
+      const models = mapInitializeModels(await cli.initialized, this.provider);
       if (models) {
         this.modelCache = { at: Date.now(), models };
       }
@@ -246,6 +268,8 @@ export class ClaudeAgentClient implements AgentClient {
     return new ClaudeAgentSession({
       logger: this.logger,
       env: this.childEnv,
+      providerId: this.provider,
+      ...(this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
       cliFactory: this.cliFactory,
       ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       executablePath: resolution.path,
@@ -285,6 +309,10 @@ export interface ClaudeAgentSessionOptions {
   logger: Logger;
   /** 已清洗的子进程环境 */
   env: Record<string, string>;
+  /** 默认 `claude` */
+  providerId?: string;
+  /** 追加到 claude 启动参数末尾 */
+  extraArgs?: readonly string[];
   cliFactory?: ClaudeCliFactory;
   terminateProcess?: ProcessTerminator;
   executablePath: string;
@@ -315,10 +343,11 @@ interface ToolUseEntry {
 }
 
 export class ClaudeAgentSession implements AgentSession {
-  readonly provider = CLAUDE_PROVIDER_ID;
+  readonly provider: string;
 
   private readonly logger: Logger;
   private readonly env: Record<string, string>;
+  private readonly extraArgs: readonly string[] | undefined;
   private readonly cliFactory: ClaudeCliFactory;
   private readonly terminateProcess: ProcessTerminator | undefined;
   private readonly executablePath: string;
@@ -345,8 +374,10 @@ export class ClaudeAgentSession implements AgentSession {
 
   constructor(options: ClaudeAgentSessionOptions) {
     assertClaudeMode(options.modeId);
+    this.provider = options.providerId ?? CLAUDE_PROVIDER_ID;
     this.logger = options.logger;
     this.env = options.env;
+    this.extraArgs = options.extraArgs;
     this.cliFactory = options.cliFactory ?? createClaudeCliSession;
     this.terminateProcess = options.terminateProcess;
     this.executablePath = options.executablePath;
@@ -467,7 +498,7 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   describePersistence(): AgentPersistenceHandle | null {
-    return this.sessionId ? { provider: CLAUDE_PROVIDER_ID, sessionId: this.sessionId } : null;
+    return this.sessionId ? { provider: this.provider, sessionId: this.sessionId } : null;
   }
 
   async setModel(modelId: string | null): Promise<void> {
@@ -508,6 +539,7 @@ export class ClaudeAgentSession implements AgentSession {
       executablePath: this.executablePath,
       cwd: this.cwd,
       env: { ...this.env },
+      ...(this.extraArgs && this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
       model,
       permissionMode: this.mode,
       resumeSessionId: this.sessionId,
@@ -869,7 +901,7 @@ export class ClaudeAgentSession implements AgentSession {
     const description = options.description ?? options.decisionReason;
     const request: AgentPermissionRequest = {
       id: requestId,
-      provider: CLAUDE_PROVIDER_ID,
+      provider: this.provider,
       name: toolName,
       kind: isPlan ? "plan" : "tool",
       title: isPlan ? "批准执行计划？" : (options.title ?? `允许使用 ${options.displayName ?? toolName}？`),
@@ -960,14 +992,23 @@ export class ClaudeAgentSession implements AgentSession {
 // 辅助
 // ---------------------------------------------------------------------------
 
-export function buildClaudeChildEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+export function buildClaudeChildEnv(
+  env: NodeJS.ProcessEnv,
+  launch?: Pick<ClaudeLaunchOverride, "stripEnv" | "envOverlay">,
+): Record<string, string> {
   const childEnv = createExternalProcessEnv(env) as Record<string, string>;
+  const strip = new Set([
+    ...PARENT_SESSION_ENV_VARS,
+    ...(launch?.stripEnv ?? []).map((key) => key.toUpperCase()),
+  ]);
   for (const key of Object.keys(childEnv)) {
-    if (PARENT_SESSION_ENV_VARS.includes(key.toUpperCase())) {
+    if (strip.has(key.toUpperCase())) {
       delete childEnv[key];
     }
   }
-  return childEnv;
+  return launch?.envOverlay
+    ? (createExternalProcessEnv(childEnv, launch.envOverlay) as Record<string, string>)
+    : childEnv;
 }
 
 function assertClaudeMode(modeId: string): asserts modeId is ClaudePermissionMode {
@@ -988,6 +1029,7 @@ function normalizeModel(modelId: string | null | undefined): string | null {
 /** initialize 应答里的模型列表 → AgentModelDefinition；没有可用条目返回 null */
 export function mapInitializeModels(
   response: ClaudeInitializeResponse,
+  providerId: string = CLAUDE_PROVIDER_ID,
 ): AgentModelDefinition[] | null {
   if (!Array.isArray(response.models)) {
     return null;
@@ -1006,16 +1048,16 @@ export function mapInitializeModels(
       typeof entry.description === "string" && entry.description ? entry.description : undefined;
     if (id === "default") {
       // `default` 表示不传 --model；沿用内置的中文标签
-      models.push({ ...builtinDefault, ...(description ? { description } : {}) });
+      models.push({ ...builtinDefault, provider: providerId, ...(description ? { description } : {}) });
     } else {
-      models.push({ provider: CLAUDE_PROVIDER_ID, id, label, ...(description ? { description } : {}) });
+      models.push({ provider: providerId, id, label, ...(description ? { description } : {}) });
     }
   }
   if (models.length === 0) {
     return null;
   }
   if (!seen.has("default")) {
-    models.unshift({ ...builtinDefault });
+    models.unshift({ ...builtinDefault, provider: providerId });
   }
   return models;
 }

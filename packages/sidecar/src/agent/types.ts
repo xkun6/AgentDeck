@@ -10,6 +10,7 @@ import type {
   AgentProviderId,
   AgentProviderKind,
   AgentStreamEvent,
+  ProviderProfileExtends,
 } from "@agentdeck/protocol";
 
 import type { Logger } from "../logger.js";
@@ -59,6 +60,8 @@ export interface AgentClient {
   readonly provider: AgentProviderId;
   readonly kind: AgentProviderKind;
   readonly label: string;
+  /** 来自 providers.json 的自定义 provider（design.md 4.7）；内置 provider 不设置 */
+  readonly custom?: { extends: ProviderProfileExtends; description?: string };
   isAvailable(): Promise<AgentAvailability>;
   fetchCatalog(opts?: {
     cwd?: string;

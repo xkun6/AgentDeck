@@ -197,7 +197,10 @@ export function planToTodoItems(plan: unknown): { text: string; completed: boole
 }
 
 /** model/list 的一项 → AgentModelDefinition（隐藏模型跳过） */
-export function toModelDefinition(raw: unknown): AgentModelDefinition | null {
+export function toModelDefinition(
+  raw: unknown,
+  providerId: string = CODEX_PROVIDER_ID,
+): AgentModelDefinition | null {
   const record = asRecord(raw);
   if (!record || record.hidden === true) return null;
   const id = str(record.id) ?? str(record.model);
@@ -205,7 +208,7 @@ export function toModelDefinition(raw: unknown): AgentModelDefinition | null {
   const label = str(record.displayName) ?? str(record.display_name) ?? id;
   const description = str(record.description);
   return {
-    provider: CODEX_PROVIDER_ID,
+    provider: providerId,
     id,
     label,
     ...(description ? { description } : {}),
@@ -213,7 +216,10 @@ export function toModelDefinition(raw: unknown): AgentModelDefinition | null {
   };
 }
 
-async function listCodexModels(client: CodexAppServerClient): Promise<AgentModelDefinition[]> {
+async function listCodexModels(
+  client: CodexAppServerClient,
+  providerId: string,
+): Promise<AgentModelDefinition[]> {
   const models: AgentModelDefinition[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < MODEL_LIST_MAX_PAGES; page += 1) {
@@ -222,7 +228,7 @@ async function listCodexModels(client: CodexAppServerClient): Promise<AgentModel
     );
     const data = Array.isArray(response?.data) ? response.data : [];
     for (const entry of data) {
-      const model = toModelDefinition(entry);
+      const model = toModelDefinition(entry, providerId);
       if (model && !models.some((m) => m.id === model.id)) {
         models.push(model);
       }
@@ -301,32 +307,77 @@ async function openAppServer(
 // Client
 // ---------------------------------------------------------------------------
 
+/**
+ * 启动配置覆盖（自定义中转 provider 用，design.md 4.7）；不传时行为与内置 codex provider 完全相同。
+ */
+export interface CodexLaunchOverride {
+  /** 从继承环境中剔除的变量（不区分大小写），在 envOverlay 之前生效 */
+  stripEnv?: readonly string[];
+  /** 叠加到 app-server 进程环境的变量（最后应用） */
+  envOverlay?: Readonly<Record<string, string>>;
+  /** 合并进 thread/start、thread/resume 的 `config` 覆盖（如 model_provider / model_providers） */
+  threadConfig?: Readonly<Record<string, unknown>>;
+}
+
 export interface CodexAgentClientOptions {
   logger: Logger;
   env: NodeJS.ProcessEnv;
   /** 测试注入：替代默认的可执行文件定位 */
   resolveLaunch?: () => CodexLaunch | null | Promise<CodexLaunch | null>;
+  /** provider id，默认 `codex`（自定义中转为 `custom:<id>`） */
+  providerId?: string;
+  /** 显示名，默认 `Codex` */
+  label?: string;
+  launch?: CodexLaunchOverride;
 }
 
 const NOT_FOUND_REASON =
   "未找到 Codex CLI：请先安装（npm i -g @openai/codex），或用环境变量 AGENTDECK_CODEX_PATH 指定 codex 可执行文件";
 
+/** 剔除 stripEnv（不区分大小写）后叠加 envOverlay；都没有时原样返回 */
+export function applyCodexEnvOverride(
+  env: NodeJS.ProcessEnv,
+  launch: CodexLaunchOverride | undefined,
+): NodeJS.ProcessEnv {
+  if (!launch?.stripEnv?.length && !launch?.envOverlay) {
+    return env;
+  }
+  const strip = new Set((launch.stripEnv ?? []).map((key) => key.toUpperCase()));
+  const result: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!strip.has(key.toUpperCase())) {
+      result[key] = value;
+    }
+  }
+  return { ...result, ...launch.envOverlay };
+}
+
 export class CodexAgentClient implements AgentClient {
-  readonly provider = CODEX_PROVIDER_ID;
+  readonly provider: string;
   readonly kind = "codex" as const;
-  readonly label = "Codex";
+  readonly label: string;
 
   private readonly sessions = new Set<CodexAgentSession>();
+  /** 已应用 launch 覆盖的环境（解析可执行文件与拉起 app-server 共用） */
+  private readonly env: NodeJS.ProcessEnv;
+  private readonly logger: Logger;
+  private readonly threadConfig: Readonly<Record<string, unknown>> | undefined;
 
-  constructor(private readonly options: CodexAgentClientOptions) {}
+  constructor(private readonly options: CodexAgentClientOptions) {
+    this.provider = options.providerId ?? CODEX_PROVIDER_ID;
+    this.label = options.label ?? "Codex";
+    this.logger = options.logger;
+    this.env = applyCodexEnvOverride(options.env, options.launch);
+    this.threadConfig = options.launch?.threadConfig;
+  }
 
   private async resolveLaunch(): Promise<CodexLaunch | null> {
     if (this.options.resolveLaunch) {
       return this.options.resolveLaunch();
     }
     return resolveCodexLaunch({
-      env: this.options.env,
-      onWarning: (message) => this.options.logger.warn("[codex] %s", message),
+      env: this.env,
+      onWarning: (message) => this.logger.warn("[codex] %s", message),
     });
   }
 
@@ -350,10 +401,10 @@ export class CodexAgentClient implements AgentClient {
         killSignal: "SIGKILL",
         maxBuffer: 64 * 1024,
         shell: false,
-        baseEnv: this.options.env,
+        baseEnv: this.env,
         ...(launch.envOverlay ? { envOverlay: launch.envOverlay } : {}),
       });
-      this.options.logger.debug("[codex] %s → %s", command.join(" "), stdout.trim());
+      this.logger.debug("[codex] %s → %s", command.join(" "), stdout.trim());
       return { available: true, command };
     } catch (error) {
       return {
@@ -371,29 +422,42 @@ export class CodexAgentClient implements AgentClient {
     let client: CodexAppServerClient | null = null;
     try {
       const launch = await this.requireLaunch();
-      client = await openAppServer(launch, opts?.cwd ?? os.homedir(), this.options);
-      const models = await listCodexModels(client);
+      client = await openAppServer(launch, opts?.cwd ?? os.homedir(), {
+        logger: this.logger,
+        env: this.env,
+      });
+      const models = await listCodexModels(client, this.provider);
       return { models, modes };
     } catch (error) {
-      this.options.logger.warn("[codex] 获取模型列表失败：%s", errorMessage(error));
+      this.logger.warn("[codex] 获取模型列表失败：%s", errorMessage(error));
       return { models: [], modes };
     } finally {
       await client?.dispose().catch(() => undefined);
     }
   }
 
+  private async sessionBaseDeps(): Promise<
+    Pick<CodexSessionDeps, "launch" | "logger" | "env" | "providerId" | "threadConfig" | "onClosed">
+  > {
+    return {
+      launch: await this.requireLaunch(),
+      logger: this.logger,
+      env: this.env,
+      providerId: this.provider,
+      ...(this.threadConfig ? { threadConfig: this.threadConfig } : {}),
+      onClosed: (s) => this.sessions.delete(s),
+    };
+  }
+
   async createSession(cfg: AgentSessionConfig): Promise<AgentSession> {
     const modeId = cfg.modeId ?? DEFAULT_CODEX_MODE_ID;
     assertCodexMode(modeId);
     const session = new CodexAgentSession({
-      launch: await this.requireLaunch(),
-      logger: this.options.logger,
-      env: this.options.env,
+      ...(await this.sessionBaseDeps()),
       cwd: cfg.cwd,
       model: cfg.model ?? null,
       modeId,
       threadId: null,
-      onClosed: (s) => this.sessions.delete(s),
     });
     this.sessions.add(session);
     try {
@@ -407,14 +471,11 @@ export class CodexAgentClient implements AgentClient {
 
   async resumeSession(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession> {
     const session = new CodexAgentSession({
-      launch: await this.requireLaunch(),
-      logger: this.options.logger,
-      env: this.options.env,
+      ...(await this.sessionBaseDeps()),
       cwd: cfg.cwd,
       model: null,
       modeId: DEFAULT_CODEX_MODE_ID,
       threadId: handle.sessionId,
-      onClosed: (s) => this.sessions.delete(s),
     });
     this.sessions.add(session);
     try {
@@ -462,6 +523,10 @@ interface CodexSessionDeps {
   launch: CodexLaunch;
   logger: Logger;
   env: NodeJS.ProcessEnv;
+  /** 默认 `codex` */
+  providerId?: string;
+  /** 合并进 thread/start、thread/resume 的 `config` 覆盖 */
+  threadConfig?: Readonly<Record<string, unknown>>;
   cwd: string;
   model: string | null;
   modeId: string;
@@ -503,7 +568,7 @@ const CANCEL_RESPONSE: AgentPermissionResponse = {
 };
 
 export class CodexAgentSession implements AgentSession {
-  readonly provider = CODEX_PROVIDER_ID;
+  readonly provider: string;
 
   private client: CodexAppServerClient | null = null;
   private connecting: Promise<CodexAppServerClient> | null = null;
@@ -525,6 +590,7 @@ export class CodexAgentSession implements AgentSession {
   private closed = false;
 
   constructor(private readonly deps: CodexSessionDeps) {
+    this.provider = deps.providerId ?? CODEX_PROVIDER_ID;
     this.threadId = deps.threadId;
     this.model = deps.model;
     this.modeId = deps.modeId;
@@ -554,7 +620,7 @@ export class CodexAgentSession implements AgentSession {
   }
 
   describePersistence(): AgentPersistenceHandle | null {
-    return this.threadId ? { provider: CODEX_PROVIDER_ID, sessionId: this.threadId } : null;
+    return this.threadId ? { provider: this.provider, sessionId: this.threadId } : null;
   }
 
   async startTurn(
@@ -693,7 +759,7 @@ export class CodexAgentSession implements AgentSession {
     if (modelId === null && this.threadLoaded && this.client && !this.client.isClosed) {
       // 线程已按旧模型启动：恢复默认需要显式传默认模型
       try {
-        const models = await listCodexModels(this.client);
+        const models = await listCodexModels(this.client, this.provider);
         const fallback = models.find((m) => m.isDefault) ?? models[0];
         this.model = fallback?.id ?? null;
         this.modelOverridePending = this.model !== null;
@@ -809,6 +875,8 @@ export class CodexAgentSession implements AgentSession {
       approvalPolicy: preset.approvalPolicy,
       sandbox: preset.sandbox,
       ...(this.model ? { model: this.model } : {}),
+      // 自定义中转：model_provider / model_providers 等配置覆盖（codex 0.162.1 thread/start、thread/resume 均支持 config）
+      ...(this.deps.threadConfig ? { config: structuredClone(this.deps.threadConfig) } : {}),
     };
     if (this.threadId) {
       await client.request(
@@ -1197,7 +1265,7 @@ export class CodexAgentSession implements AgentSession {
     }
     const full: AgentPermissionRequest = {
       id: randomUUID(),
-      provider: CODEX_PROVIDER_ID,
+      provider: this.provider,
       kind: "tool",
       actions: PERMISSION_ACTIONS.map((a) => ({ ...a })),
       ...request,

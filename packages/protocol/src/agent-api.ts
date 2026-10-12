@@ -15,12 +15,73 @@ export type AgentProviderKind = "claude" | "codex" | "acp" | "mock";
 
 export interface ProviderInfo {
   id: AgentProviderId;
-  kind: AgentProviderKind;
+  kind: AgentProviderKind; // 自定义项取 extends 的值
   label: string;
   available: boolean;
   unavailableReason?: string;
   command?: string[]; // ACP 的启动命令；claude/codex 为解析到的可执行文件
+  /** 来自 providers.json 的自定义 provider（id 形如 `custom:<id>`） */
+  custom?: boolean;
+  extends?: ProviderProfileExtends;
+  description?: string;
 }
+
+// ---------------------------------------------------------------------------
+// 4.7 自定义 provider / 三方中转
+// ---------------------------------------------------------------------------
+
+export type ProviderProfileExtends = "claude" | "codex" | "acp";
+export type ProviderProfileAuthMode = "auth_token" | "api_key";
+
+export interface ProviderProfileModel {
+  id: string;
+  label: string;
+  description?: string;
+  isDefault?: boolean;
+}
+
+/** providers.json 中的一项；provider id 为 `custom:<id>` */
+export interface ProviderProfile {
+  /** ^[a-z][a-z0-9-]{0,31}$ */
+  id: string;
+  extends: ProviderProfileExtends;
+  /** 1–40 字 */
+  label: string;
+  description?: string;
+  /** 默认 true；false 时不出现在 provider.list */
+  enabled?: boolean;
+  /** http(s) URL，保存时去掉末尾 / */
+  baseUrl?: string;
+  apiKey?: string;
+  /** 仅 claude，默认 auth_token */
+  authMode?: ProviderProfileAuthMode;
+  /** 额外环境变量，最后应用（可覆盖推导值） */
+  env?: Record<string, string>;
+  /** acp 必填；claude / codex 可选：覆盖可执行文件 */
+  command?: string[];
+  models?: ProviderProfileModel[];
+  /** 仅 claude */
+  disallowedTools?: string[];
+}
+
+/** `<AGENTDECK_DATA_DIR>/providers.json` */
+export interface ProviderConfigFile {
+  version: 1;
+  providers: ProviderProfile[];
+}
+
+/** provider.test 的结果（不发起对话，不计费） */
+export interface ProviderTestResult {
+  ok: boolean;
+  status?: number;
+  latencyMs?: number;
+  models?: { id: string; label: string }[];
+  /** 中文错误信息，不含密钥 */
+  error?: string;
+}
+
+/** 自定义 provider 的 id 前缀 */
+export const CUSTOM_PROVIDER_ID_PREFIX = "custom:";
 
 export interface AgentMode {
   id: string;
@@ -229,12 +290,16 @@ export const AGENT_RPC_METHODS = {
   agentClose: "agent.close",
   agentTimeline: "agent.timeline",
   agentDelete: "agent.delete",
+  providerConfigGet: "provider.config.get",
+  providerConfigSet: "provider.config.set",
+  providerTest: "provider.test",
 } as const;
 
 export const AGENT_RPC_NOTIFICATIONS = {
   agentStream: "agent.stream",
   agentState: "agent.state",
   agentRemoved: "agent.removed",
+  providerChanged: "provider.changed",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -278,6 +343,18 @@ export interface AgentRpcMethods {
     result: { epoch: string; entries: AgentStreamEnvelope[] };
   };
   "agent.delete": { params: { agentId: string }; result: Record<string, never> };
+  /** 含明文 apiKey（仅本机 token 鉴权的连接可见，前端负责遮挡显示）；未设 AGENTDECK_DATA_DIR 时 path 为 null */
+  "provider.config.get": {
+    params: AgentRpcEmptyParams;
+    result: { providers: ProviderProfile[]; path: string | null };
+  };
+  /** 整表替换；校验失败返回 -32602（data.issues）；未设 AGENTDECK_DATA_DIR 时返回 NOT_SUPPORTED */
+  "provider.config.set": {
+    params: { providers: ProviderProfile[] };
+    result: { providers: ProviderInfo[] };
+  };
+  /** 可测试未保存的表单 */
+  "provider.test": { params: { profile: ProviderProfile }; result: ProviderTestResult };
 }
 
 export type AgentRpcMethodName = keyof AgentRpcMethods;
@@ -288,6 +365,8 @@ export interface AgentRpcNotifications {
   "agent.stream": AgentStreamEnvelope;
   "agent.state": { agent: AgentSnapshot };
   "agent.removed": { agentId: string };
+  /** providers.json 被替换后广播，前端据此刷新 provider.list */
+  "provider.changed": Record<string, never>;
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

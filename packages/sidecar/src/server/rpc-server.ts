@@ -13,6 +13,9 @@ import {
   type AgentRpcNotificationName,
   type AgentRpcNotifications,
   type AgentRpcResult,
+  type ProviderInfo,
+  type ProviderProfile,
+  type ProviderTestResult,
 } from "@agentdeck/protocol";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { z } from "zod";
@@ -20,15 +23,33 @@ import { z } from "zod";
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentRpcError } from "../agent/errors.js";
 import { createSilentLogger, type Logger } from "../logger.js";
+import {
+  createProviderProfilesSchema,
+  providerProfileSchema,
+  toProviderProfile,
+} from "../providers/custom/schema.js";
+import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 
 export const RPC_PATH = "/rpc";
+
+/** provider.config.* / provider.test 的实现（providers/custom 的 CustomProviderService） */
+export interface ProviderConfigHandler {
+  /** 与内置 provider 冲突的 profile id */
+  reservedIds(): ReadonlySet<string>;
+  getConfig(): { providers: ProviderProfile[]; path: string | null };
+  /** 入参已通过整表校验 */
+  setConfig(profiles: ProviderProfile[]): Promise<ProviderInfo[]>;
+  test(profile: ProviderProfile): Promise<ProviderTestResult>;
+}
 
 export interface RpcServerOptions {
   token: string;
   version: string;
   manager: AgentManager;
   registry: Pick<ProviderRegistry, "get" | "listProviderInfo">;
+  /** 不传时 provider.config.get 返回空表、set 返回 NOT_SUPPORTED，provider.test 仍可用 */
+  providerConfig?: ProviderConfigHandler;
   logger?: Logger;
 }
 
@@ -287,6 +308,39 @@ export class RpcServer {
         await manager.deleteAgent(params.agentId);
         return {};
       }),
+      ...this.createProviderConfigMethods(),
+    ];
+  }
+
+  /** 4.7：provider.config.get / set、provider.test */
+  private createProviderConfigMethods(): Array<[string, RegisteredMethod]> {
+    const handler = this.options.providerConfig;
+    // 内置 provider 在进程生命周期内不变，冲突 id 在构造时确定即可
+    const profilesSchema = createProviderProfilesSchema(handler?.reservedIds() ?? new Set());
+    return [
+      defineMethod(AGENT_RPC_METHODS.providerConfigGet, emptyParams, () =>
+        handler ? handler.getConfig() : { providers: [], path: null },
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.providerConfigSet,
+        z.object({ providers: profilesSchema }),
+        async (params) => {
+          if (!handler) {
+            throw new AgentRpcError("NOT_SUPPORTED", "未启用自定义 provider 配置");
+          }
+          const providers = await handler.setConfig(params.providers.map(toProviderProfile));
+          this.broadcast(AGENT_RPC_NOTIFICATIONS.providerChanged, {});
+          return { providers };
+        },
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.providerTest,
+        z.object({ profile: providerProfileSchema }),
+        (params) => {
+          const profile = toProviderProfile(params.profile);
+          return handler ? handler.test(profile) : testProviderProfile(profile);
+        },
+      ),
     ];
   }
 
