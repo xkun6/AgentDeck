@@ -386,3 +386,5 @@ ACP：
 - Agent 适配层移植自 paseo：Apache-2.0，见 `legal/paseo.Apache-2.0.txt`；被移植/修改的文件头注明 `Derived from paseo <原路径> (Apache-2.0); modified for AgentDeck`。
 - 部分前端代码源自 Hermes Agent 上游（Nous Research，MIT），见 `legal/hermes-agent-upstream.MIT.txt`。
 - HarmonyOS Sans 字体许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
+- 随包分发的第三方组件（P7）：Node.js 运行时 → `legal/nodejs.LICENSE.txt`；sidecar bundle 内的 npm 包（以 `dist-sidecar/meta.json` 为准）→ `legal/sidecar-third-party.txt`；前端生产依赖 → `legal/web-third-party.txt`；汇总见 `NOTICE.md`。依赖或 Node 版本变化时需重新生成这些文件。
+- `@anthropic-ai/claude-agent-sdk` 为 Anthropic 专有条款（非开源），其 JS 被打进 sidecar bundle；不随包分发 `claude` 可执行文件，运行时使用用户本机安装的 Claude Code。
