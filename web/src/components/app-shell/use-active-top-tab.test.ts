@@ -17,7 +17,7 @@ describe("TOP_TABS", () => {
   });
 
   it("把设置页归到 02 设置", () => {
-    for (const path of ["/common", "/notifications", "/theme", "/coding-agents", "/env", "/about"]) {
+    for (const path of ["/common", "/notifications", "/theme", "/agent-providers", "/coding-agents", "/env", "/about"]) {
       expect(tabFor(path)).toBe("settings");
     }
   });

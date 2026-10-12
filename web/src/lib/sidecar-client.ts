@@ -153,6 +153,7 @@ export class SidecarClient {
   private agentStateListeners = new Set<Listener<AgentSnapshot>>();
   private agentsListeners = new Set<Listener<AgentSnapshot[]>>();
   private epochListeners = new Set<Listener<{ epoch: string | null; previous: string | null }>>();
+  private providerChangedListeners = new Set<Listener<void>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -211,6 +212,11 @@ export class SidecarClient {
   /** 每次（重）连成功或 epoch 变化后拉到的完整 `agent.list`。 */
   onAgents(listener: Listener<AgentSnapshot[]>): () => void {
     return subscribe(this.agentsListeners, listener);
+  }
+
+  /** `provider.changed` 通知（providers.json 被替换，需刷新 provider.list 与模型目录）。 */
+  onProviderChanged(listener: Listener<void>): () => void {
+    return subscribe(this.providerChangedListeners, listener);
   }
 
   /** sidecar 重启（epoch 变化）。`epoch` 为 null 表示已知 agent 全部消失但新 epoch 尚未得知。 */
@@ -505,6 +511,10 @@ export class SidecarClient {
     if (record.method === AGENT_RPC_NOTIFICATIONS.agentState && record.params) {
       const agent = (record.params as { agent?: AgentSnapshot }).agent;
       if (agent) emitTo(this.agentStateListeners, agent);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.providerChanged) {
+      emitTo(this.providerChangedListeners, undefined);
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.agentRemoved && record.params) {

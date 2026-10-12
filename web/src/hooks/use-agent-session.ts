@@ -5,6 +5,7 @@
 // - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式、列表、历史、删除）。
 import { useEffect, useMemo } from "react";
 import { useStore } from "jotai";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { createStore } from "jotai";
 import type {
   AgentPermissionResponse,
@@ -13,6 +14,8 @@ import type {
   AgentModelDefinition,
   AgentMode,
   ProviderInfo,
+  ProviderProfile,
+  ProviderTestResult,
 } from "@agentdeck/protocol";
 import {
   getSidecarClient,
@@ -39,6 +42,7 @@ import {
   sidecarConnectionAtom,
   upsertAgentSnapshotAtom,
 } from "@/stores/agents";
+import { invalidateProviderQueries } from "@/lib/agent-query-keys";
 
 type JotaiStore = ReturnType<typeof createStore>;
 
@@ -57,6 +61,8 @@ export interface SendAgentPromptOptions {
   displayText?: string;
   /** 乐观消息里展示的图片。 */
   displayImages?: ImageEntry[];
+  /** 会话所用中转当前处于停用状态（PROVIDER_NOT_FOUND 时提示启用而不是「已删除」）。 */
+  providerDisabled?: boolean;
 }
 
 /** 把 sidecar 错误转成给用户看的中文。 */
@@ -88,6 +94,8 @@ export function humanizeSidecarError(error: unknown): string {
 
 export const SESSION_UNRECOVERABLE_MESSAGE = "该会话无法恢复，请新建会话";
 export const SESSION_RESUME_BUSY_MESSAGE = "会话正在恢复或运行中";
+export const SESSION_PROVIDER_DELETED_MESSAGE = "该会话使用的中转已被删除，请新建会话";
+export const SESSION_PROVIDER_DISABLED_MESSAGE = "该会话使用的中转已停用，请在「Agent 与中转」中启用后重试，或新建会话";
 
 /** 会话未加载（dormant）或已关闭（closed）：发送时 sidecar 会先尝试自动恢复。 */
 export function isInactiveAgent(agent: Pick<AgentSnapshot, "status"> | null | undefined): boolean {
@@ -98,6 +106,8 @@ export interface AgentSendErrorInfo {
   message: string;
   /** 会话已不可恢复：界面应禁用输入并提供「新建会话」入口 */
   unrecoverable: boolean;
+  /** 会话的 provider 已不存在（PROVIDER_NOT_FOUND）：新建会话时不能沿用原 Agent */
+  providerMissing?: boolean;
 }
 
 /**
@@ -106,10 +116,15 @@ export interface AgentSendErrorInfo {
  */
 export function describeAgentSendError(
   error: unknown,
-  context: { resuming: boolean; lastError?: string | null },
+  context: { resuming: boolean; lastError?: string | null; providerDisabled?: boolean },
 ): AgentSendErrorInfo {
   if (error instanceof SidecarRpcError) {
     switch (error.businessCode) {
+      case "PROVIDER_NOT_FOUND":
+        // 中转被删除 / 停用后，dormant / closed 会话恢复时返回（design.md 4.7）
+        return context.providerDisabled
+          ? { message: SESSION_PROVIDER_DISABLED_MESSAGE, unrecoverable: false, providerMissing: true }
+          : { message: SESSION_PROVIDER_DELETED_MESSAGE, unrecoverable: true, providerMissing: true };
       case "NOT_SUPPORTED":
       case "AGENT_CLOSED":
         return { message: SESSION_UNRECOVERABLE_MESSAGE, unrecoverable: true };
@@ -134,12 +149,14 @@ export function describeAgentSendError(
 /** sendPrompt 抛出的错误：`message` 已是中文提示，`original` 为原始错误。 */
 export class AgentSendError extends Error {
   readonly unrecoverable: boolean;
+  readonly providerMissing: boolean;
   readonly original: unknown;
 
   constructor(info: AgentSendErrorInfo, cause: unknown) {
     super(info.message);
     this.name = "AgentSendError";
     this.unrecoverable = info.unrecoverable;
+    this.providerMissing = info.providerMissing === true;
     this.original = cause;
   }
 }
@@ -185,15 +202,30 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
   return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
-/** 在应用根部调用一次：绑定 store 并发起首次连接。 */
+/** `provider.changed` → provider.list / 模型目录 / 中转配置的查询缓存失效并重新拉取。 */
+export function bindProviderChangesToQueries(
+  client: Pick<SidecarClient, "onProviderChanged">,
+  queryClient: Pick<QueryClient, "invalidateQueries">,
+): () => void {
+  return client.onProviderChanged(() => {
+    void invalidateProviderQueries(queryClient);
+  });
+}
+
+/** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
+  const queryClient = useQueryClient();
   useEffect(() => {
     const client = getSidecarClient();
     const unbind = bindSidecarToStore(client, store);
+    const unbindProviders = bindProviderChangesToQueries(client, queryClient);
     client.connect().catch(() => {});
-    return unbind;
-  }, [store]);
+    return () => {
+      unbind();
+      unbindProviders();
+    };
+  }, [queryClient, store]);
 }
 
 export function createAgentSessionActions(client: SidecarClient, store: JotaiStore) {
@@ -207,6 +239,22 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       cwd?: string,
     ): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
       return client.request("provider.listModels", cwd ? { provider, cwd } : { provider });
+    },
+
+    /** provider.config.get：含明文 apiKey，界面负责遮挡显示，不得打日志。 */
+    async getProviderConfig(): Promise<{ providers: ProviderProfile[]; path: string | null }> {
+      return client.request("provider.config.get");
+    },
+
+    /** provider.config.set：整表替换，返回最新 provider.list（含内置项）。 */
+    async setProviderConfig(providers: ProviderProfile[]): Promise<ProviderInfo[]> {
+      const result = await client.request("provider.config.set", { providers });
+      return result.providers;
+    },
+
+    /** provider.test：测未保存的表单（只请求 /v1/models，不发起对话）。 */
+    async testProvider(profile: ProviderProfile): Promise<ProviderTestResult> {
+      return client.request("provider.test", { profile }, { timeoutMs: 20_000 });
     },
 
     async createSession(input: CreateAgentSessionInput): Promise<AgentSnapshot> {
@@ -244,6 +292,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         const info = describeAgentSendError(error, {
           resuming,
           lastError: store.get(agentSnapshotsAtom)[agentId]?.lastError,
+          providerDisabled: options.providerDisabled,
         });
         store.set(failAgentPromptAtom, { agentId, clientMessageId, message: info.message });
         throw new AgentSendError(info, error);

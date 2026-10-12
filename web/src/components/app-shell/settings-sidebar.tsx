@@ -6,6 +6,7 @@ import {
   MonitorCog,
   Palette,
   SlidersHorizontal,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import s from "./debug-sidebar.module.css";
@@ -20,6 +21,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   { label: "常规", path: "/common", icon: SlidersHorizontal },
   { label: "通知", path: "/notifications", icon: Bell },
   { label: "主题", path: "/theme", icon: Palette },
+  { label: "Agent 与中转", path: "/agent-providers", icon: Waypoints },
   { label: "编程 Agent", path: "/coding-agents", icon: Bot },
   { label: "环境", path: "/env", icon: MonitorCog },
   { label: "关于", path: "/about", icon: Info },

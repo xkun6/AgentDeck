@@ -122,6 +122,21 @@
   outline: none;
 }
 
+/* 分组标题（Agent 菜单的「内置」/「中转」）：非选项，键盘导航跳过。 */
+.groupTitle {
+  padding: 8px 8px 4px 28px;
+  color: var(--h-text-4);
+  font-size: var(--h-font-size-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.groupTitle:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--h-line-soft);
+}
+
 .option {
   display: flex;
   align-items: flex-start;

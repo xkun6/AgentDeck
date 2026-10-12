@@ -1,6 +1,6 @@
 // 输入框工具栏的「chip 式」下拉选择：图标 + 当前值 + 下拉箭头，菜单用 shared-ui Popover。
 // 标签（Agent / 模型 / 模式）不常驻显示，放进 aria-label、tooltip 与菜单标题。
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { Popover } from "@agentdeck/shared-ui";
 import s from "./chip-select.module.css";
@@ -15,6 +15,8 @@ export interface ChipSelectOption {
   badge?: string;
   disabled?: boolean;
   danger?: boolean;
+  /** 分组名：与上一项不同时在其前面显示分组标题（同组选项须相邻） */
+  group?: string;
 }
 
 export interface ChipSelectProps {
@@ -167,34 +169,41 @@ export function ChipSelect({
           >
             {options.map((option, index) => {
               const selected = option.value === value;
+              const groupTitle = option.group && option.group !== options[index - 1]?.group ? option.group : null;
               return (
-                <div
-                  key={option.value || "__default__"}
-                  id={optionId(index)}
-                  className={s.option}
-                  role="option"
-                  aria-selected={selected}
-                  aria-disabled={option.disabled ? true : undefined}
-                  data-active={index === active ? "true" : undefined}
-                  data-danger={option.danger ? "true" : undefined}
-                  onMouseEnter={() => {
-                    if (!option.disabled) setActive(index);
-                  }}
-                  onClick={() => choose(index)}
-                >
-                  <span className={s.check} aria-hidden="true">
-                    {selected ? <Check /> : null}
-                  </span>
-                  <span className={s.optionText}>
-                    <span className={s.optionLabel}>
-                      <span className={s.optionName}>{option.label}</span>
-                      {option.badge ? <span className={s.badge}>{option.badge}</span> : null}
+                <Fragment key={option.value || "__default__"}>
+                  {groupTitle ? (
+                    <div className={s.groupTitle} role="presentation">
+                      {groupTitle}
+                    </div>
+                  ) : null}
+                  <div
+                    id={optionId(index)}
+                    className={s.option}
+                    role="option"
+                    aria-selected={selected}
+                    aria-disabled={option.disabled ? true : undefined}
+                    data-active={index === active ? "true" : undefined}
+                    data-danger={option.danger ? "true" : undefined}
+                    onMouseEnter={() => {
+                      if (!option.disabled) setActive(index);
+                    }}
+                    onClick={() => choose(index)}
+                  >
+                    <span className={s.check} aria-hidden="true">
+                      {selected ? <Check /> : null}
                     </span>
-                    {option.description ? (
-                      <span className={s.optionDescription}>{option.description}</span>
-                    ) : null}
-                  </span>
-                </div>
+                    <span className={s.optionText}>
+                      <span className={s.optionLabel}>
+                        <span className={s.optionName}>{option.label}</span>
+                        {option.badge ? <span className={s.badge}>{option.badge}</span> : null}
+                      </span>
+                      {option.description ? (
+                        <span className={s.optionDescription}>{option.description}</span>
+                      ) : null}
+                    </span>
+                  </div>
+                </Fragment>
               );
             })}
           </div>

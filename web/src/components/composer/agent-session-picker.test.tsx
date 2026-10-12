@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { ProviderInfo } from "@agentdeck/protocol";
+import type { ProviderInfo, ProviderProfile } from "@agentdeck/protocol";
 import { stubRadixGlobals } from "@/test-utils/radix";
 import { AgentSessionPicker } from "./agent-session-picker";
 import { resolveProvider } from "@/lib/agent-selection";
@@ -219,5 +219,69 @@ describe("AgentSessionPicker", () => {
     expect(resolveProvider("mock", PROVIDERS)).toBe("mock");
     expect(resolveProvider(null, [PROVIDERS[0]!, PROVIDERS[2]!])).toBe("mock");
     expect(resolveProvider(null, [PROVIDERS[0]!])).toBeNull();
+  });
+
+  it("中转分组：「内置」/「中转」标题，显示名用 label，副文字为「基于 … · host」，停用置灰", () => {
+    const providers: ProviderInfo[] = [
+      ...PROVIDERS,
+      { id: "custom:relay", kind: "claude", label: "我的中转", available: true, custom: true, extends: "claude" },
+    ];
+    const profiles: ProviderProfile[] = [
+      { id: "relay", extends: "claude", label: "我的中转", baseUrl: "http://127.0.0.1:8787" },
+      { id: "off", extends: "codex", label: "停用中转", enabled: false },
+    ];
+    const onChange = vi.fn();
+    render(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: null, modeId: null }}
+        onChange={onChange}
+        providers={providers}
+        providerProfiles={profiles}
+        catalog={CATALOG}
+      />,
+    );
+    const list = openMenu("Agent：Codex");
+    const titles = [...list.querySelectorAll('[role="presentation"]')].map((node) => node.textContent);
+    expect(titles).toEqual(["内置", "中转"]);
+    const names = within(list).getAllByRole("option").map((option) => option.textContent ?? "");
+    expect(names.findIndex((name) => name.includes("Mock"))).toBeLessThan(names.findIndex((name) => name.includes("我的中转")));
+
+    const relay = within(list).getByRole("option", { name: /我的中转/ });
+    expect(relay.textContent).toContain("基于 Claude Code · 127.0.0.1:8787");
+    expect(relay.getAttribute("aria-disabled")).toBeNull();
+    const off = within(list).getByRole("option", { name: /停用中转/ });
+    expect(off.getAttribute("aria-disabled")).toBe("true");
+    expect(off.textContent).toContain("已停用");
+
+    fireEvent.click(off);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(relay);
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "custom:relay", model: null, modeId: null });
+  });
+
+  it("没有中转时不显示分组标题", () => {
+    render(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: null, modeId: null }}
+        onChange={vi.fn()}
+        providers={PROVIDERS}
+        providerProfiles={[]}
+        catalog={CATALOG}
+      />,
+    );
+    const list = openMenu("Agent：Codex");
+    expect(list.querySelectorAll('[role="presentation"]')).toHaveLength(0);
+  });
+
+  it("记忆的中转被删除或停用：resolveProvider 回退到默认 Agent，不报错", () => {
+    const providers: ProviderInfo[] = [
+      ...PROVIDERS,
+      { id: "custom:relay", kind: "claude", label: "我的中转", available: true, custom: true },
+    ];
+    expect(resolveProvider("custom:relay", providers)).toBe("custom:relay");
+    // 删除 / 停用后 provider.list 中不再有该项
+    expect(resolveProvider("custom:relay", PROVIDERS)).toBe("codex");
+    // provider.list 尚未加载时保持记忆值，不提前回退
+    expect(resolveProvider("custom:relay", null)).toBe("custom:relay");
   });
 });

@@ -12,7 +12,7 @@ const PROVIDER_FALLBACK_LABELS: Record<string, string> = {
 export function agentProviderLabel(provider: string, providers?: ProviderInfo[] | null): string {
   return providers?.find((item) => item.id === provider)?.label
     ?? PROVIDER_FALLBACK_LABELS[provider]
-    ?? (provider.startsWith("acp:") ? provider.slice(4) : provider);
+    ?? (provider.startsWith("acp:") ? provider.slice(4) : provider.startsWith("custom:") ? provider.slice(7) : provider);
 }
 
 function firstUserMessage(runtime: ChatSessionRuntime | undefined): string {

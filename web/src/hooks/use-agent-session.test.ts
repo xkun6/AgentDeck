@@ -9,6 +9,8 @@ import {
   createAgentSessionActions,
   describeAgentSendError,
   isInactiveAgent,
+  SESSION_PROVIDER_DELETED_MESSAGE,
+  SESSION_PROVIDER_DISABLED_MESSAGE,
   SESSION_RESUME_BUSY_MESSAGE,
   SESSION_UNRECOVERABLE_MESSAGE,
 } from "./use-agent-session";
@@ -70,6 +72,20 @@ describe("describeAgentSendError", () => {
     expect(describeAgentSendError(rpcError("TURN_IN_PROGRESS"), { resuming: false }).message).toContain("上一轮");
   });
 
+  it("PROVIDER_NOT_FOUND → 中转已删除（不可恢复）；中转停用时提示启用（可重试）", () => {
+    expect(describeAgentSendError(rpcError("PROVIDER_NOT_FOUND"), { resuming: true })).toEqual({
+      message: SESSION_PROVIDER_DELETED_MESSAGE,
+      unrecoverable: true,
+      providerMissing: true,
+    });
+    expect(SESSION_PROVIDER_DELETED_MESSAGE).toBe("该会话使用的中转已被删除，请新建会话");
+    expect(describeAgentSendError(rpcError("PROVIDER_NOT_FOUND"), { resuming: true, providerDisabled: true })).toEqual({
+      message: SESSION_PROVIDER_DISABLED_MESSAGE,
+      unrecoverable: false,
+      providerMissing: true,
+    });
+  });
+
   it("isInactiveAgent 只认 dormant / closed", () => {
     expect(isInactiveAgent(snapshot({ status: "dormant" }))).toBe(true);
     expect(isInactiveAgent(snapshot({ status: "closed" }))).toBe(true);
@@ -123,6 +139,23 @@ describe("dormant 会话发送", () => {
     const error = await actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-3" }).catch((e: unknown) => e);
     expect((error as AgentSendError).unrecoverable).toBe(false);
     expect(noticeTexts(store)).toEqual(["发送失败：恢复会话失败：claude 不可用"]);
+  });
+});
+
+describe("中转被删除的会话发送", () => {
+  it("抛出 providerMissing 的 AgentSendError，并在时间线提示中转已删除", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ provider: "custom:gone", status: "closed" }));
+    const client = fakeClient(async () => {
+      throw rpcError("PROVIDER_NOT_FOUND", "未找到 provider");
+    });
+    const actions = createAgentSessionActions(client, store);
+    const error = await actions.sendPrompt(AGENT, "hi").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AgentSendError);
+    expect((error as AgentSendError).unrecoverable).toBe(true);
+    expect((error as AgentSendError).providerMissing).toBe(true);
+    expect((error as AgentSendError).message).toBe(SESSION_PROVIDER_DELETED_MESSAGE);
+    expect(noticeTexts(store)).toEqual([`发送失败：${SESSION_PROVIDER_DELETED_MESSAGE}`]);
   });
 });
 

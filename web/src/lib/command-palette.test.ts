@@ -37,6 +37,7 @@ describe("command palette item building and filtering", () => {
       "/history",
       "/projects",
       "/console",
+      "/agent-providers",
       "/coding-agents",
       "/env",
       "/common",

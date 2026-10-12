@@ -1,0 +1,400 @@
+/* 添加 / 编辑中转弹窗：头 / 可滚动正文 / 固定底栏。只用 token，遵守 4px 网格。 */
+
+.dialog {
+  width: 680px;
+  max-width: calc(100vw - 32px);
+  max-height: min(88vh, 880px);
+  font-family: var(--h-font-ui);
+}
+
+.head {
+  flex: 0 0 auto;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.title {
+  margin: 0;
+  color: var(--h-text);
+  font-size: var(--h-font-size-lg);
+  font-weight: 600;
+  line-height: var(--h-line-height-tight);
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ── 分区 ─────────────────────────────────────────────────────────────── */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--h-button-height-sm);
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--h-text-2);
+  font-size: var(--h-font-size-sm);
+  font-weight: 600;
+}
+
+.sectionAside {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.sectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+/* ── 分段选择（基于 / 认证方式） ───────────────────────────────────────── */
+
+.segmented {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  border: 1px solid var(--h-line);
+}
+
+.segment {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-left: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  color: var(--h-text-2);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--h-duration-fast) var(--h-ease-standard),
+    color var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.segment:first-child {
+  border-left: 0;
+}
+
+.segment:hover:not([data-active="true"]) {
+  background: var(--h-bg-chip);
+}
+
+.segment:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: -2px;
+}
+
+.segment[data-active="true"] {
+  background: var(--h-color-accent-soft);
+  color: var(--h-text);
+  box-shadow: inset 0 -2px 0 var(--h-accent);
+}
+
+.segmentLabel {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: var(--h-font-size-sm);
+  font-weight: 600;
+  line-height: var(--h-line-height-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segmentHint {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  line-height: var(--h-line-height-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 密钥输入 ─────────────────────────────────────────────────────────── */
+
+.secret {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* ── 模型表 ───────────────────────────────────────────────────────────── */
+
+.table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--h-line-soft);
+}
+
+.tableHead,
+.tableRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 48px 40px;
+  gap: 8px;
+  align-items: start;
+  padding: 4px 8px;
+}
+
+.tableHead {
+  padding-block: 8px 4px;
+  border-bottom: 1px solid var(--h-line-soft);
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  font-weight: 600;
+}
+
+.tableRow + .tableRow {
+  border-top: 1px dashed var(--h-line-soft);
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.center {
+  align-items: center;
+  text-align: center;
+}
+
+.cellError {
+  color: var(--h-color-danger-fg);
+  font-size: var(--h-font-size-xs);
+  line-height: var(--h-line-height-normal);
+}
+
+.defaultToggle[data-active="true"] {
+  color: var(--h-accent);
+}
+
+.defaultToggle[data-active="true"] svg {
+  fill: currentColor;
+}
+
+/* ── 接口拉取的模型 ───────────────────────────────────────────────────── */
+
+.fetched {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--h-color-accent-border);
+  background: var(--h-bg-soft);
+}
+
+.fetchedList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 4px 16px;
+  max-height: 160px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.fetchedActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--h-text-2);
+  font-size: var(--h-font-size-sm);
+  line-height: var(--h-line-height-normal);
+  cursor: pointer;
+}
+
+.check input {
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--h-accent);
+}
+
+.check > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 高级 ─────────────────────────────────────────────────────────────── */
+
+.disclosure {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  min-height: var(--h-button-height-sm);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  font-family: inherit;
+  font-size: var(--h-font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.disclosure:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
+}
+
+.disclosureIcon {
+  color: var(--h-text-3);
+  transition: transform var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.disclosureIcon[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.envList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.envRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ── 文本 ─────────────────────────────────────────────────────────────── */
+
+.muted {
+  margin: 0;
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  line-height: var(--h-line-height-normal);
+}
+
+.mono {
+  font-family: var(--h-font-mono);
+}
+
+.note {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--h-line);
+  background: var(--h-bg-soft);
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  line-height: var(--h-line-height-normal);
+  overflow-wrap: anywhere;
+}
+
+.path {
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+}
+
+/* ── 底栏 ─────────────────────────────────────────────────────────────── */
+
+/* 测试结果 / 保存错误：固定在底栏上方，不随正文滚动。 */
+.status {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 20px 0;
+  border-top: 1px solid var(--h-line-soft);
+}
+
+.status + .foot {
+  border-top: 0;
+}
+
+.foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--h-line-soft);
+}
+
+.footTest {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.footHint {
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  line-height: var(--h-line-height-normal);
+}
+
+.footActions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .segmented {
+    grid-auto-flow: row;
+  }
+
+  .segment {
+    border-left: 0;
+    border-top: 1px solid var(--h-line);
+  }
+
+  .segment:first-child {
+    border-top: 0;
+  }
+}

@@ -16,6 +16,7 @@ export const SETTINGS_ROUTES = [
   "/common",
   "/notifications",
   "/theme",
+  "/agent-providers",
   "/coding-agents",
   "/env",
   "/about",

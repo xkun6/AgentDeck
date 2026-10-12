@@ -2,8 +2,9 @@
 // 纯展示组件：数据与记忆由 hooks/use-agent-catalog.ts 的 useAgentSessionSelection 提供。
 // 三个选择器都是 chip 式下拉（ChipSelect），由输入框工具栏排成一组。
 import { Bot, Cpu, ShieldAlert, SlidersHorizontal } from "lucide-react";
-import type { AgentMode, AgentModelDefinition, ProviderInfo } from "@agentdeck/protocol";
+import type { AgentMode, AgentModelDefinition, ProviderInfo, ProviderProfile } from "@agentdeck/protocol";
 import { findMode, isDangerousMode, type AgentSelection } from "@/lib/agent-selection";
+import { buildProviderMenuEntries, PROVIDER_GROUP_RELAY } from "@/lib/provider-profiles";
 import { ChipSelect, type ChipSelectOption } from "./chip-select";
 import s from "./agent-session-picker.module.css";
 
@@ -12,6 +13,8 @@ export interface AgentSessionPickerProps {
   onChange: (next: AgentSelection) => void;
   /** null 表示仍在加载 */
   providers: ProviderInfo[] | null;
+  /** providers.json 中的中转配置：用于列出已停用的中转（置灰）与「基于 … · host」副文字 */
+  providerProfiles?: ProviderProfile[] | null;
   providersError?: string;
   catalog: { models: AgentModelDefinition[]; modes: AgentMode[] } | null;
   catalogLoading?: boolean;
@@ -23,14 +26,19 @@ export interface AgentSessionPickerProps {
 
 const DANGEROUS_MODE_WARNING = "危险模式：Agent 将不经确认直接执行命令和修改文件";
 
-function providerOptions(providers: ProviderInfo[] | null): ChipSelectOption[] {
-  return (providers ?? []).map((provider) => ({
-    value: provider.id,
-    label: provider.label,
-    disabled: !provider.available,
-    description: provider.available
-      ? undefined
-      : `不可用${provider.unavailableReason ? `：${provider.unavailableReason}` : ""}`,
+/** 「内置」/「中转」分组；没有中转时不显示分组标题。 */
+function providerOptions(
+  providers: ProviderInfo[] | null,
+  profiles: ProviderProfile[] | null | undefined,
+): ChipSelectOption[] {
+  const entries = buildProviderMenuEntries(providers, profiles);
+  const grouped = entries.some((entry) => entry.group === PROVIDER_GROUP_RELAY);
+  return entries.map((entry) => ({
+    value: entry.value,
+    label: entry.label,
+    disabled: entry.disabled,
+    description: entry.description,
+    ...(grouped ? { group: entry.group } : {}),
   }));
 }
 
@@ -68,6 +76,7 @@ export function AgentSessionPicker({
   selection,
   onChange,
   providers,
+  providerProfiles,
   providersError,
   catalog,
   catalogLoading,
@@ -104,7 +113,7 @@ export function AgentSessionPicker({
           icon={<Bot />}
           value={provider ? providerValue : ""}
           displayValue={providerDisplay}
-          options={providerOptions(providers)}
+          options={providerOptions(providers, providerProfiles)}
           onChange={(next) => onChange({ provider: next || null, model: null, modeId: null })}
           disabled={disabled || providerLocked || !providers || providers.length === 0}
         />

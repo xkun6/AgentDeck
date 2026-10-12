@@ -24,10 +24,14 @@ import {
   AgentSendError,
   humanizeSidecarError,
   isInactiveAgent,
+  SESSION_PROVIDER_DELETED_MESSAGE,
+  SESSION_PROVIDER_DISABLED_MESSAGE,
   SESSION_UNRECOVERABLE_MESSAGE,
   useAgentSession,
 } from "@/hooks/use-agent-session";
 import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
+import { useProviderConfig } from "@/hooks/use-provider-config";
+import { relaySessionState } from "@/lib/provider-profiles";
 import { useComposerTimer } from "@/hooks/use-composer-timer";
 import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
 import { agentProviderLabel } from "@/lib/agent-session-display";
@@ -104,9 +108,19 @@ export function DetailRoute() {
   // dormant（sidecar 重启后的历史会话）/ closed：发送时自动恢复；starting：恢复进行中
   const inactive = isInactiveAgent(snapshot);
   const resuming = snapshot?.status === "starting";
-  // 发送时被告知无法恢复（NOT_SUPPORTED / AGENT_CLOSED）
-  const [sendUnrecoverable, setSendUnrecoverable] = useState(false);
-  const unrecoverable = (inactive && snapshot?.resumable === false) || sendUnrecoverable;
+  // 发送时被告知无法恢复（NOT_SUPPORTED / AGENT_CLOSED / 中转已删除 PROVIDER_NOT_FOUND）
+  const [sendUnrecoverable, setSendUnrecoverable] = useState<{ message: string; providerMissing: boolean } | null>(null);
+  const providerConfigQuery = useProviderConfig();
+  // 中转会话（design.md 4.7）：sidecar 启动时找不到 provider 会把 resumable 记为 false，
+  // 但中转重新启用后发送时会重新判断，因此只有「已从配置删除」才在发送前判定为不可恢复。
+  const relayState = relaySessionState(snapshot?.provider, providerConfigQuery.data?.providers);
+  const relayDeleted = inactive && relayState === "deleted";
+  // 会话所用中转仍在配置里但已停用：恢复会返回 PROVIDER_NOT_FOUND，提示启用而不是「已删除」
+  const providerDisabled = relayState === "disabled";
+  const staticUnrecoverable = relayDeleted || (inactive && snapshot?.resumable === false && relayState === "builtin");
+  const unrecoverable = staticUnrecoverable || sendUnrecoverable !== null;
+  const unrecoverableMessage = sendUnrecoverable?.message
+    ?? (relayDeleted ? SESSION_PROVIDER_DELETED_MESSAGE : SESSION_UNRECOVERABLE_MESSAGE);
   const [recreateState, setRecreateState] = useState<{ pending: boolean; error?: string }>({ pending: false });
   const navigate = useNavigate();
   const lastRemoved = useAtomValue(lastRemovedAgentAtom);
@@ -217,12 +231,15 @@ export function DetailRoute() {
       await actions.sendPrompt(taskId, prepared.prompt, {
         displayText: prepared.displayText,
         displayImages: prepared.displayImages,
+        providerDisabled,
       });
     } catch (error) {
-      if (error instanceof AgentSendError && error.unrecoverable) setSendUnrecoverable(true);
+      if (error instanceof AgentSendError && error.unrecoverable) {
+        setSendUnrecoverable({ message: error.message, providerMissing: error.providerMissing });
+      }
       throw error;
     }
-  }, [actions, taskId]);
+  }, [actions, providerDisabled, taskId]);
 
   const onSend = useCallback(async (payload: ComposerSubmitPayload) => {
     if (!taskId) return;
@@ -294,7 +311,7 @@ export function DetailRoute() {
     previousBusyRef.current = false;
     userInterruptedRef.current = false;
     setControlError(undefined);
-    setSendUnrecoverable(false);
+    setSendUnrecoverable(null);
     setRecreateState({ pending: false });
   }, [taskId]);
 
@@ -345,9 +362,15 @@ export function DetailRoute() {
     }
   }, [actions, snapshot, taskId]);
 
-  // 不可恢复的会话：一键以同一 Agent / 工作区新建会话。
+  // 不可恢复的会话：一键以同一 Agent / 工作区新建会话；原 Agent（中转）已删除时回到新任务页并带上工作区。
+  const recreateProviderMissing = sendUnrecoverable?.providerMissing === true || relayDeleted;
   const onRecreate = useCallback(async () => {
     if (!snapshot) return;
+    if (recreateProviderMissing) {
+      setActiveId(null);
+      navigate(snapshot.cwd ? `/?workspace=${encodeURIComponent(snapshot.cwd)}` : "/");
+      return;
+    }
     setRecreateState({ pending: true });
     try {
       const agent = await actions.createSession({ provider: snapshot.provider, cwd: snapshot.cwd });
@@ -356,7 +379,7 @@ export function DetailRoute() {
     } catch (error) {
       setRecreateState({ pending: false, error: humanizeSidecarError(error) });
     }
-  }, [actions, navigate, setActiveId, snapshot]);
+  }, [actions, navigate, recreateProviderMissing, setActiveId, snapshot]);
 
   // ---- 展示 ----------------------------------------------------------------
   const title = snapshot?.title?.trim()
@@ -385,18 +408,20 @@ export function DetailRoute() {
   const sessionNotice: { tone: "info" | "danger"; text: string; detail?: string } | null = !snapshot
     ? null
     : unrecoverable
-      ? { tone: "danger", text: SESSION_UNRECOVERABLE_MESSAGE, detail: snapshot.lastError ?? undefined }
+      ? { tone: "danger", text: unrecoverableMessage, detail: snapshot.lastError ?? undefined }
       : resuming
         ? { tone: "info", text: "正在恢复会话…" }
-        : inactive
-          ? {
-              tone: "info",
-              text: snapshot.status === "closed"
-                ? "该会话已关闭，发送消息将尝试恢复"
-                : "历史会话，发送消息将自动恢复",
-              detail: snapshot.lastError ?? undefined,
-            }
-          : null;
+        : inactive && providerDisabled
+          ? { tone: "info", text: SESSION_PROVIDER_DISABLED_MESSAGE }
+          : inactive
+            ? {
+                tone: "info",
+                text: snapshot.status === "closed"
+                  ? "该会话已关闭，发送消息将尝试恢复"
+                  : "历史会话，发送消息将自动恢复",
+                detail: snapshot.lastError ?? undefined,
+              }
+            : null;
 
   const hasActiveComposerPrefill = composerPrefill.sessionId === taskId && composerPrefill.nonce > 0;
   const composerInitial = hasActiveComposerPrefill ? composerPrefill.text : storedComposerDraft;
@@ -500,7 +525,11 @@ export function DetailRoute() {
                     onClick={() => void onRecreate()}
                     disabled={recreateState.pending}
                   >
-                    {recreateState.pending ? "正在新建…" : "新建会话（同 Agent / 工作区）"}
+                    {recreateState.pending
+                      ? "正在新建…"
+                      : recreateProviderMissing
+                        ? "新建会话（同工作区）"
+                        : "新建会话（同 Agent / 工作区）"}
                   </button>
                 ) : null}
               </div>
@@ -525,7 +554,7 @@ export function DetailRoute() {
               showMeta={false}
               loading={runtimeIsBusy}
               disabled={unrecoverable || notFound || missing}
-              placeholder={unrecoverable ? SESSION_UNRECOVERABLE_MESSAGE : undefined}
+              placeholder={unrecoverable ? unrecoverableMessage : undefined}
               onStop={onStop}
               toolbarExtra={
                 snapshot ? (

@@ -621,6 +621,16 @@
   line-height: 1.65;
 }
 
+.inlineLink {
+  color: var(--h-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inlineLink:hover {
+  color: var(--h-text);
+}
+
 .debugActionBar {
   display: flex;
   flex-wrap: wrap;

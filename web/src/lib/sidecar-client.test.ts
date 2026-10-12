@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentSnapshot, AgentStreamEnvelope } from "@agentdeck/protocol";
+import { QueryClient } from "@tanstack/react-query";
 import { SidecarClient, SidecarRpcError } from "./sidecar-client";
+import { bindProviderChangesToQueries } from "@/hooks/use-agent-session";
 
 interface RpcFrame {
   jsonrpc: "2.0";
@@ -323,5 +325,43 @@ describe("SidecarClient", () => {
     socket.push({ jsonrpc: "2.0", method: "agent.removed", params: { agentId: "a1" } });
     expect(removed).toEqual(["a1"]);
     expect(client.lastSeq("a1")).toBe(0);
+  });
+
+  it("provider.changed 通知：通知订阅方，经 bindProviderChangesToQueries 让 provider 相关查询失效", async () => {
+    const { client, current } = setup(server());
+    const queryClient = new QueryClient();
+    const seeds: Array<[readonly unknown[], unknown]> = [
+      [["agentdeck", "providers"], []],
+      [["agentdeck", "catalog", "custom:relay", "/w"], { models: [], modes: [] }],
+      [["agentdeck", "catalog", "claude", ""], { models: [], modes: [] }],
+      [["agentdeck", "provider-config"], { providers: [], path: null }],
+      [["agentdeck", "unrelated"], 1],
+    ];
+    for (const [key, value] of seeds) queryClient.setQueryData(key, value);
+    let notified = 0;
+    client.onProviderChanged(() => {
+      notified += 1;
+    });
+    const unbind = bindProviderChangesToQueries(client, queryClient);
+    await client.connect();
+
+    current().push({ jsonrpc: "2.0", method: "provider.changed", params: {} });
+    expect(notified).toBe(1);
+    await waitFor(
+      () => queryClient.getQueryState(["agentdeck", "provider-config"])?.isInvalidated === true,
+      "缓存失效",
+    );
+    const invalidated = (key: readonly unknown[]) => queryClient.getQueryState(key)?.isInvalidated;
+    expect(invalidated(["agentdeck", "providers"])).toBe(true);
+    expect(invalidated(["agentdeck", "catalog", "custom:relay", "/w"])).toBe(true);
+    expect(invalidated(["agentdeck", "catalog", "claude", ""])).toBe(true);
+    expect(invalidated(["agentdeck", "unrelated"])).toBe(false);
+
+    unbind();
+    queryClient.setQueryData(["agentdeck", "providers"], []);
+    current().push({ jsonrpc: "2.0", method: "provider.changed", params: {} });
+    expect(notified).toBe(2);
+    expect(invalidated(["agentdeck", "providers"])).toBe(false);
+    queryClient.clear();
   });
 });

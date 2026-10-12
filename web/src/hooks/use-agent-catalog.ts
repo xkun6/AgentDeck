@@ -14,12 +14,14 @@ import {
   type AgentSelection,
 } from "@/lib/agent-selection";
 import { sidecarConnectionAtom } from "@/stores/agents";
+import { AGENT_QUERY_KEYS } from "@/lib/agent-query-keys";
+import { useProviderConfig } from "@/hooks/use-provider-config";
 
 export function useAgentProviders() {
   const actions = useAgentSession();
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   return useQuery({
-    queryKey: ["agentdeck", "providers"],
+    queryKey: AGENT_QUERY_KEYS.providers,
     queryFn: () => actions.listProviders(),
     enabled: connected,
     staleTime: 30_000,
@@ -31,7 +33,7 @@ export function useAgentCatalog(provider: string | null, cwd: string) {
   const actions = useAgentSession();
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   return useQuery({
-    queryKey: ["agentdeck", "catalog", provider ?? "", cwd],
+    queryKey: [...AGENT_QUERY_KEYS.catalog, provider ?? "", cwd],
     queryFn: () => actions.listModels(provider!, cwd || undefined),
     enabled: connected && Boolean(provider),
     staleTime: 60_000,
@@ -46,6 +48,7 @@ export function useAgentSessionSelection(cwd: string) {
   const [pickedDangerousModeId, setPickedDangerousModeId] = useState<string | null>(null);
   const providersQuery = useAgentProviders();
   const providers = providersQuery.data ?? null;
+  const providerConfigQuery = useProviderConfig();
   const provider = resolveProvider(stored.provider, providers);
   const catalogQuery = useAgentCatalog(provider, cwd);
   const catalog = catalogQuery.data ?? null;
@@ -72,6 +75,7 @@ export function useAgentSessionSelection(cwd: string) {
     selection,
     onChange,
     providers,
+    providerProfiles: providerConfigQuery.data?.providers ?? null,
     providersLoading: providersQuery.isLoading || (!providersQuery.data && providersQuery.fetchStatus === "idle"),
     providersError: providersQuery.error ? humanizeSidecarError(providersQuery.error) : undefined,
     catalog,

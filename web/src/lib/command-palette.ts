@@ -98,6 +98,7 @@ export const COMMAND_PALETTE_COMMANDS: readonly CommandPaletteItem[] = [
   command("command-history", "对话历史", "/history · 搜索和管理会话", ["history", "sessions", "chat", "conversation", "历史", "会话"], "history", "/history", 1),
   command("command-projects", "项目 / 工作空间", "/projects · 查看已登记项目", ["project", "workspace", "folder", "cwd", "工作区", "目录"], "project", "/projects", 2),
   command("command-console", "终端", "/console · 在工作区打开终端", ["console", "terminal", "command", "shell", "终端", "命令行"], "console", "/console", 3),
+  command("command-agent-providers", "Agent 与中转", "/agent-providers · 管理三方中转与 Agent 可用状态", ["agents", "providers", "relay", "proxy", "claude", "codex", "acp", "中转", "接口", "密钥"], "agents", "/agent-providers", 4),
   command("command-coding-agents", "编程 Agent", "/coding-agents · 检测已安装的 Agent CLI", ["agents", "claude", "codex", "acp", "cli", "编程", "检测"], "agents", "/coding-agents", 4),
   command("command-env", "环境检测", "/env · 检查本机 CLI 与可选工具", ["env", "environment", "tools", "diagnostics", "环境", "检测"], "env", "/env", 5),
   command("command-settings", "常规设置", "/common · 显示、发送快捷键与助手名称", ["settings", "preferences", "common", "设置", "常规"], "settings", "/common", 6, false),

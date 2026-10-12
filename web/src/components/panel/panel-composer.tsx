@@ -92,6 +92,7 @@ export function PanelComposer() {
             selection={agent.selection}
             onChange={agent.onChange}
             providers={agent.providers}
+            providerProfiles={agent.providerProfiles}
             providersError={agent.providersError}
             catalog={agent.catalog}
             catalogLoading={agent.catalogLoading}

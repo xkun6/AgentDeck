@@ -3,8 +3,9 @@
 // 检测 Claude Code / Codex CLI 的安装、版本与登录态（Rust coding_agents.rs，
 // 不读任何 token 密文）。
 // 边界：本页只做检测 + 指引，不代写 ~/.claude / ~/.codex 配置文件——
-// 多账号与中转切换请使用 cc-switch。
+// 三方中转在「Agent 与中转」（/agent-providers）中配置，不改 CLI 自身配置。
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -219,7 +220,9 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
           </h3>
           <p>
             AgentDeck 直接驱动本机的 Claude Code 与 Codex CLI 执行编码任务，会话中实时展示它们的输出、工具调用与权限请求。
-            本页只做检测与指引，不会改写 CLI 自身的配置文件（多账号/中转切换请使用 cc-switch）。
+            本页只做检测与指引，不会改写 CLI 自身的配置文件；三方中转请在
+            {" "}<Link className={s.inlineLink} to="/agent-providers">Agent 与中转</Link>{" "}
+            中配置（只对 AgentDeck 启动的会话生效）。
           </p>
         </div>
         <span
