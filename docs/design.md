@@ -257,6 +257,46 @@ export interface AgentSnapshot {
 - 目录在前、文件在后，各自按名称不区分大小写排序；默认隐藏以 `.` 开头的条目与 Windows 隐藏属性条目。
 - 读取失败（不存在 / 无权限）不抛错，返回 `error`（中文）与空 entries，便于前端就地提示。
 
+### 4.7 自定义 provider / 三方中转（参照 paseo `docs/custom-providers.md`）
+
+用户可基于 Claude Code / Codex / ACP 定义任意多个「中转 provider」：同一个本机 CLI，换接口地址、密钥、模型列表，每个配置在 Agent 列表中显示为独立一项。
+
+**配置文件** `<AGENTDECK_DATA_DIR>/providers.json`（原子写入；未设 `AGENTDECK_DATA_DIR` 时 get 返回空、set 返回 `NOT_SUPPORTED`）：
+
+```ts
+interface ProviderConfigFile { version: 1; providers: ProviderProfile[] }
+
+interface ProviderProfile {
+  id: string;                       // ^[a-z][a-z0-9-]{0,31}$，provider id 为 `custom:<id>`
+  extends: "claude" | "codex" | "acp";
+  label: string;                    // 1–40 字
+  description?: string;
+  enabled?: boolean;                // 默认 true；false 时不出现在 provider.list
+  baseUrl?: string;                 // http(s) URL，去掉末尾 /
+  apiKey?: string;
+  authMode?: "auth_token" | "api_key"; // 仅 claude，默认 auth_token
+  env?: Record<string, string>;     // 额外环境变量，最后应用（可覆盖推导值）
+  command?: string[];               // acp 必填；claude / codex 可选：覆盖可执行文件
+  models?: { id: string; label: string; description?: string; isDefault?: boolean }[];
+  disallowedTools?: string[];       // 仅 claude
+}
+```
+
+**对子进程的映射**：
+- 公共：先从继承环境中剔除该族的凭据变量（claude：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`；codex：`OPENAI_BASE_URL` / `OPENAI_API_KEY`），再应用推导值，最后应用 `env`。
+- claude：`baseUrl` → `ANTHROPIC_BASE_URL`；`apiKey` → `authMode` 为 `auth_token` 时写 `ANTHROPIC_AUTH_TOKEN`，为 `api_key` 时写 `ANTHROPIC_API_KEY`；`disallowedTools` → `--disallowedTools`，设置了 `baseUrl` 且未显式给出时默认 `["WebSearch"]`（三方接口不支持服务端 WebSearch）。用户 `~/.claude/settings.json` 的 `env` 优先级高于进程环境，因此中转配置还必须通过 `--settings <json>` 以 flag 级设置注入同一组 env，保证中转值生效。
+- codex：`apiKey` → `OPENAI_API_KEY`；`baseUrl` 存在时注入 Codex 配置 `model_provider = "<id>"`、`model_providers.<id> = { name: label, base_url: baseUrl（不以 /v1 结尾则补 /v1）, wire_api: "responses", env_key: "OPENAI_API_KEY"（有 apiKey 时）, requires_openai_auth: false（有 apiKey 时）}`；注入方式以本机 codex app-server 实际支持的为准（thread/start 的 config 覆盖或启动参数 `-c`）。端点必须支持 OpenAI Responses API。
+- acp：`command` 为启动命令，`env` 合并进环境；`baseUrl` / `apiKey` 不使用。
+- `models` 非空时作为静态模型列表（替代动态发现）；为空时 claude / codex 沿用各自的动态发现，并在中转环境下运行。
+
+**协议补充**：
+- `ProviderInfo` 增加 `custom?: boolean`、`extends?: "claude" | "codex" | "acp"`、`description?: string`；自定义项 `kind` 取 `extends` 的值。
+- `provider.config.get {}` → `{ providers: ProviderProfile[]; path: string | null }`（含明文 apiKey，仅本机 token 鉴权的连接可见；前端负责遮挡显示）。
+- `provider.config.set { providers: ProviderProfile[] }` → `{ providers: ProviderInfo[] }`：整表替换；校验失败返回 `-32602`（`data.issues`）；id 重复或与内置 id 冲突同样视为校验失败。写盘后重建自定义 provider，已在运行的会话继续使用旧配置直到关闭；之后恢复（resume）使用新配置；被删除 provider 的会话恢复时返回 `PROVIDER_NOT_FOUND`。成功后广播通知 `provider.changed {}`，前端据此刷新 provider.list。
+- `provider.test { profile: ProviderProfile }` → `{ ok: boolean; status?: number; latencyMs?: number; models?: { id: string; label: string }[]; error?: string }`：可测试未保存的表单。claude：`GET {baseUrl}/v1/models`，头 `anthropic-version: 2023-06-01` 加 `Authorization: Bearer <key>`（auth_token）或 `x-api-key: <key>`（api_key）；codex：`GET {baseUrl 补 /v1}/models`，头 `Authorization: Bearer <key>`；10 秒超时；2xx 即 ok，并尽量从响应 `data[].id`（`display_name` 作为 label）解析模型列表；acp：只检查 command 能否解析。不发起任何对话，不计费。
+- 日志与错误信息中不得出现 apiKey 与 `env` 的值（只打印键名）。
+- 旧的 `<AGENTDECK_DATA_DIR>/acp-agents.json` 继续读取（兼容），新界面只写 `providers.json`。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
