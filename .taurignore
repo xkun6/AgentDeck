@@ -4,3 +4,5 @@ packages/
 docs/
 tmp/
 node_modules/
+binaries/
+dist-sidecar/

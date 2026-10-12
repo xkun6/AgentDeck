@@ -207,8 +207,14 @@ fn entry_kind(path: &Path) -> EntryKind {
     }
 }
 
-/// 按顺序定位 sidecar 入口：`AGENTDECK_SIDECAR_ENTRY` → `<resource_dir>/sidecar/bundle.mjs`
-/// → 开发态 `<dev_root>/packages/sidecar/src/main.ts`（cwd = `<dev_root>/packages/sidecar`）。
+/// 按顺序定位 sidecar 入口：`AGENTDECK_SIDECAR_ENTRY` → 开发态
+/// `<dev_root>/packages/sidecar/src/main.ts`（cwd = `<dev_root>/packages/sidecar`）
+/// → `<resource_dir>/sidecar/bundle.mjs`。
+///
+/// 开发态排在资源 bundle 之前：tauri-build 每次编译都会把 `bundle.resources` 复制到
+/// `target/<profile>/`，而 Windows 上 `resource_dir` 就是 exe 目录，否则 `tauri dev`
+/// 会误用旧的 `target/debug/sidecar/bundle.mjs`。`dev_root` 只在 debug 构建且源码存在时命中，
+/// release 构建恒走资源 bundle。
 pub fn resolve_entry(resource_dir: Option<&Path>, dev_root: Option<&Path>) -> Option<SidecarEntry> {
     if let Some(path) = env_path(ENTRY_ENV) {
         if path.is_file() {
@@ -228,6 +234,16 @@ pub fn resolve_entry(resource_dir: Option<&Path>, dev_root: Option<&Path>) -> Op
             path.display()
         );
     }
+    if let Some(root) = dev_root {
+        let package_dir = root.join("packages").join("sidecar");
+        if package_dir.join("src").join("main.ts").is_file() {
+            return Some(SidecarEntry {
+                script: PathBuf::from("src").join("main.ts"),
+                kind: EntryKind::Ts,
+                cwd: package_dir,
+            });
+        }
+    }
     if let Some(dir) = resource_dir {
         let sidecar_dir = dir.join("sidecar");
         let bundle = sidecar_dir.join("bundle.mjs");
@@ -236,16 +252,6 @@ pub fn resolve_entry(resource_dir: Option<&Path>, dev_root: Option<&Path>) -> Op
                 script: bundle,
                 kind: EntryKind::Js,
                 cwd: sidecar_dir,
-            });
-        }
-    }
-    if let Some(root) = dev_root {
-        let package_dir = root.join("packages").join("sidecar");
-        if package_dir.join("src").join("main.ts").is_file() {
-            return Some(SidecarEntry {
-                script: PathBuf::from("src").join("main.ts"),
-                kind: EntryKind::Ts,
-                cwd: package_dir,
             });
         }
     }
@@ -748,7 +754,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn resolve_entry_prefers_env_then_resource_then_dev() {
+    fn resolve_entry_prefers_env_then_dev_then_resource() {
         let tmp = TempDir::new().unwrap();
         let resource_dir = tmp.path().join("resources");
         let dev_root = tmp.path().join("repo");
@@ -780,16 +786,33 @@ mod tests {
 
         // 指向不存在的文件 → 继续后续候选。
         std::env::set_var(ENTRY_ENV, tmp.path().join("missing.mjs"));
-        let entry = resolve_entry(Some(&resource_dir), Some(&dev_root)).unwrap();
+        let entry = resolve_entry(Some(&resource_dir), None).unwrap();
         assert_eq!(
             entry.script,
             resource_dir.join("sidecar").join("bundle.mjs")
         );
         std::env::remove_var(ENTRY_ENV);
 
-        let entry = resolve_entry(Some(&resource_dir), Some(&dev_root)).unwrap();
+        // 打包态（release，无 dev_root）走资源 bundle。
+        let entry = resolve_entry(Some(&resource_dir), None).unwrap();
         assert_eq!(entry.kind, EntryKind::Js);
         assert_eq!(entry.cwd, resource_dir.join("sidecar"));
+        assert_eq!(
+            entry.node_args(),
+            vec![resource_dir
+                .join("sidecar")
+                .join("bundle.mjs")
+                .into_os_string()]
+        );
+
+        // 开发态源码优先于 target 目录里由 tauri-build 复制来的 bundle。
+        let entry = resolve_entry(Some(&resource_dir), Some(&dev_root)).unwrap();
+        assert_eq!(entry.kind, EntryKind::Ts);
+        assert_eq!(entry.cwd, dev_root.join("packages").join("sidecar"));
+
+        // dev_root 下没有源码（如 debug 安装包拷到别的机器）→ 回退资源 bundle。
+        let entry = resolve_entry(Some(&resource_dir), Some(tmp.path())).unwrap();
+        assert_eq!(entry.kind, EntryKind::Js);
 
         let entry = resolve_entry(None, Some(&dev_root)).unwrap();
         assert_eq!(entry.kind, EntryKind::Ts);

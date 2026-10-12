@@ -31,3 +31,7 @@ Thumbs.db
 issues/
 # Temp
 tmp/
+
+# 打包产物（scripts/fetch-node.mjs、scripts/build-sidecar.mjs 生成）
+binaries/
+dist-sidecar/

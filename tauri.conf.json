@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "local.agentdeck.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --filter @agentdeck/web dev",
-    "beforeBuildCommand": "pnpm --filter @agentdeck/web build:desktop",
+    "beforeDevCommand": "pnpm run tauri:before-dev",
+    "beforeBuildCommand": "pnpm run tauri:before-build",
     "devUrl": "http://localhost:9545",
     "frontendDist": "./web/dist"
   },
@@ -17,10 +17,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis",
-      "dmg",
-      "deb",
-      "appimage"
+      "nsis"
     ],
     "icon": [
       "icons/32x32.png",
@@ -36,9 +33,13 @@
     "shortDescription": "AgentDeck multi-agent desktop",
     "longDescription": "AgentDeck: a desktop app for orchestrating locally installed coding agents.",
     "licenseFile": "legal/EULA.zh-CN.rtf",
+    "externalBin": [
+      "binaries/node"
+    ],
     "resources": {
       "legal/agency-agents.MIT.txt": "agency-agents.MIT.txt",
-      "legal/HarmonyOS_Sans_LICENSE.txt": "HarmonyOS_Sans_LICENSE.txt"
+      "legal/HarmonyOS_Sans_LICENSE.txt": "HarmonyOS_Sans_LICENSE.txt",
+      "dist-sidecar/bundle.mjs": "sidecar/bundle.mjs"
     },
     "windows": {
       "nsis": {
