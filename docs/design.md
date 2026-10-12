@@ -313,7 +313,9 @@ interface ProviderProfile {
 - 合并顺序（后者覆盖前者）：`settingsFile` 内容 → `settings` → 中转推导的 env（baseUrl / apiKey / 置空另一个凭据）→ `profile.env`。对象按键深合并，数组与标量整体替换。合并结果作为**一份** JSON 通过 `--settings` 传入（flag 级，优先级高于用户 / 项目 / local 设置，低于企业策略）。
 - 表单未填 baseUrl / apiKey 时，不推导也不置空对应变量，settings 中 `env` 里的 `ANTHROPIC_BASE_URL` / 凭据照常生效（启动前仍会剔除继承环境中的同名变量）；`provider.test` 未填 baseUrl / apiKey 时回退使用合并后 settings.env 中的值。
 - `settingsFile` 每次启动会话时读取：不存在或不是合法 JSON 对象 → `provider.list` 中该项不可用（`unavailableReason` 为中文原因），启动 / 恢复返回 `PROVIDER_UNAVAILABLE`。`provider.config.set` 只校验其为绝对路径，不要求文件已存在。
-- `--settings` 与用户 settings 之间按 Claude Code 自身规则合并（如 hooks、permissions 数组是合并还是替换），实测结论见下条。
+- `--settings` 与用户 settings 之间按 Claude Code 自身规则合并（Claude Code 2.1.296 实测）：`env` 按键合并、同名键以 flag 为准；`hooks` 跨来源叠加（两边的 hook 都执行）；`permissions.allow` 跨来源叠加（deny 推断同理，未单独测）。
+- WebSearch 默认禁用的条件：表单 baseUrl 或合并后 settings.env 中的 `ANTHROPIC_BASE_URL` 任一非空，且未显式给出 `disallowedTools`。
+- settingsFile 在建会话、恢复会话、模型探测前都会重新读取；模型探测读取失败时回退静态别名而不报错；`isAvailable` 先检查 CLI 再检查文件。合并后的整份设置（含文件内容与其中密钥）会出现在 claude 的命令行中。文件选择由前端直接调用 dialog 插件的 open。
 - 脱敏：`settings.env` 的值与 `profile.env` 同样规则脱敏；日志中不打印 settings 全文。
 
 ## 5. sidecar 内部结构（packages/sidecar）
