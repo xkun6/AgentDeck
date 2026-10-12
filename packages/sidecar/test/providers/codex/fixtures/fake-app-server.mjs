@@ -1,0 +1,245 @@
+// 假的 `codex app-server`：按行读 JSON-RPC，按剧本回放通知与审批请求（字段形状取自 codex-cli 0.162.1）。
+// 用法：node fake-app-server.mjs app-server
+// 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
+// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / patch / fail / error / hang / crash / plan / unknownreq / resolved。
+import { appendFileSync } from "node:fs";
+import readline from "node:readline";
+
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex-cli 0.162.1-fake\n");
+  process.exit(0);
+}
+
+const LOG = process.env.FAKE_CODEX_LOG;
+let CWD = "C:\\work"; // thread/start 时替换为客户端传入的 cwd
+let THREAD_ID = "thr_fake"; // thread/resume 时替换为被恢复的线程 id
+let turnCounter = 0;
+let activeTurn = null; // { id, onInterrupt?: () => void }
+let serverRequestId = 1000;
+const waitingResponses = new Map();
+
+function log(direction, msg) {
+  if (LOG) appendFileSync(LOG, `${JSON.stringify({ direction, msg })}\n`);
+}
+
+function send(msg) {
+  log("out", msg);
+  process.stdout.write(`${JSON.stringify(msg)}\n`);
+}
+
+const notify = (method, params) => send({ method, params });
+const respond = (id, result) => send({ id, result });
+const respondError = (id, code, message) => send({ id, error: { code, message } });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 发 server→client 请求并等待客户端应答 */
+function serverRequest(method, params) {
+  const id = serverRequestId++;
+  return new Promise((resolve) => {
+    waitingResponses.set(id, resolve);
+    send({ id, method, params });
+  });
+}
+
+function turnObj(id, status, error = null) {
+  return { id, rootTurnId: id, items: [], itemsView: "notLoaded", status, error, startedAt: null, completedAt: null, durationMs: null };
+}
+
+function completeTurn(turnId, status, error = null) {
+  if (activeTurn?.id === turnId) activeTurn = null;
+  notify("turn/completed", { threadId: THREAD_ID, turn: turnObj(turnId, status, error) });
+}
+
+const base = (turnId) => ({ threadId: THREAD_ID, turnId });
+
+async function agentMessage(turnId, itemId, chunks) {
+  notify("item/started", { ...base(turnId), item: { type: "agentMessage", id: itemId, text: "", phase: "final_answer" }, startedAtMs: Date.now() });
+  for (const delta of chunks) {
+    notify("item/agentMessage/delta", { ...base(turnId), itemId, delta });
+  }
+  notify("item/completed", { ...base(turnId), item: { type: "agentMessage", id: itemId, text: chunks.join(""), phase: "final_answer" }, completedAtMs: Date.now() });
+}
+
+function tokenUsage(turnId) {
+  const last = { totalTokens: 120, inputTokens: 100, cachedInputTokens: 40, cacheWriteInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 5 };
+  notify("thread/tokenUsage/updated", { ...base(turnId), tokenUsage: { total: last, last, modelContextWindow: 200000 } });
+}
+
+const scenarios = {
+  async hello(turnId) {
+    notify("item/started", { ...base(turnId), item: { type: "reasoning", id: "rs_1", summary: [], content: [] } });
+    notify("item/reasoning/summaryTextDelta", { ...base(turnId), itemId: "rs_1", delta: "思考", summaryIndex: 0 });
+    notify("item/reasoning/summaryTextDelta", { ...base(turnId), itemId: "rs_1", delta: "中", summaryIndex: 0 });
+    notify("item/completed", { ...base(turnId), item: { type: "reasoning", id: "rs_1", summary: ["思考中"], content: [] } });
+    // 只有 completed、没有 delta 的推理项：应整段补发
+    notify("item/completed", { ...base(turnId), item: { type: "reasoning", id: "rs_2", summary: ["补充推理"], content: [] } });
+    await agentMessage(turnId, "msg_1", ["Hel", "lo"]);
+    // completed 文本比 delta 多：只补发缺失后缀
+    notify("item/agentMessage/delta", { ...base(turnId), itemId: "msg_2", delta: "A" });
+    notify("item/completed", { ...base(turnId), item: { type: "agentMessage", id: "msg_2", text: "AB" } });
+    tokenUsage(turnId);
+    completeTurn(turnId, "completed");
+  },
+
+  async shell(turnId) {
+    const item = {
+      type: "commandExecution", id: "exec_1", command: "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'echo hi'",
+      cwd: "C:\\work", processId: "1", source: "unifiedExecStartup", status: "inProgress",
+      commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null,
+    };
+    notify("item/started", { ...base(turnId), item, startedAtMs: Date.now() });
+    const answer = await serverRequest("item/commandExecution/requestApproval", {
+      kind: "command", ...base(turnId), itemId: "exec_1", startedAtMs: Date.now(), environmentId: null,
+      reason: "需要运行命令", command: "echo hi", cwd: "C:\\work",
+    });
+    const accepted = answer?.result?.decision === "accept";
+    notify("item/completed", {
+      ...base(turnId),
+      item: accepted
+        ? { ...item, status: "completed", aggregatedOutput: "hi\r\n", exitCode: 0, durationMs: 5 }
+        : { ...item, status: "declined" },
+      completedAtMs: Date.now(),
+    });
+    if (answer?.result?.decision === "cancel") {
+      completeTurn(turnId, "interrupted");
+      return;
+    }
+    await agentMessage(turnId, "msg_shell", [accepted ? "done" : "skipped"]);
+    completeTurn(turnId, "completed");
+  },
+
+  async patch(turnId) {
+    const diff = "@@ -1 +1 @@\n-old\n+new\n";
+    const item = { type: "fileChange", id: "patch_1", changes: [{ path: `${CWD}\\src\\a.txt`, kind: { type: "update", move_path: null }, diff }], status: "inProgress" };
+    notify("item/started", { ...base(turnId), item, startedAtMs: Date.now() });
+    const answer = await serverRequest("item/fileChange/requestApproval", { ...base(turnId), itemId: "patch_1", startedAtMs: Date.now(), reason: "写文件", grantRoot: null });
+    const accepted = answer?.result?.decision === "accept";
+    notify("item/completed", { ...base(turnId), item: { ...item, status: accepted ? "completed" : "declined" }, completedAtMs: Date.now() });
+    // 新增文件（内容非 diff）→ write
+    notify("item/completed", {
+      ...base(turnId),
+      item: { type: "fileChange", id: "patch_2", changes: [{ path: `${CWD}\\new.txt`, kind: { type: "add" }, diff: "hello\n" }], status: "completed" },
+      completedAtMs: Date.now(),
+    });
+    completeTurn(turnId, "completed");
+  },
+
+  async fail(turnId) {
+    completeTurn(turnId, "failed", { message: "boom", codexErrorInfo: "usageLimitExceeded", additionalDetails: null });
+  },
+
+  async error(turnId) {
+    notify("error", { ...base(turnId), willRetry: true, error: { message: "重连中", codexErrorInfo: null } });
+    notify("error", { ...base(turnId), willRetry: false, error: { message: "stream disconnected", codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } } } });
+    completeTurn(turnId, "failed", { message: "stream disconnected" });
+  },
+
+  async hang(turnId) {
+    activeTurn.onInterrupt = () => completeTurn(turnId, "interrupted");
+  },
+
+  async crash() {
+    process.stderr.write("fatal: fake crash\n");
+    await sleep(10);
+    process.exit(3);
+  },
+
+  async plan(turnId) {
+    notify("turn/plan/updated", {
+      ...base(turnId), explanation: null,
+      plan: [{ step: "第一步", status: "completed" }, { step: "第二步", status: "inProgress" }],
+    });
+    completeTurn(turnId, "completed");
+  },
+
+  async unknownreq(turnId) {
+    const answer = await serverRequest("item/tool/requestUserInput", { ...base(turnId), itemId: "q1", questions: [] });
+    notify("item/completed", {
+      ...base(turnId),
+      item: { type: "agentMessage", id: "msg_u", text: answer?.error ? `error:${answer.error.code}` : "ok" },
+    });
+    completeTurn(turnId, "completed");
+  },
+
+  async resolved(turnId) {
+    const id = serverRequestId;
+    void serverRequest("item/commandExecution/requestApproval", {
+      kind: "command", ...base(turnId), itemId: "exec_r", startedAtMs: Date.now(), environmentId: null, command: "ls", cwd: "C:\\work",
+    });
+    await sleep(50);
+    notify("serverRequest/resolved", { threadId: THREAD_ID, requestId: id });
+    await sleep(50);
+    completeTurn(turnId, "completed");
+  },
+};
+
+async function handleRequest(msg) {
+  const { id, method, params } = msg;
+  switch (method) {
+    case "initialize":
+      if (process.env.FAKE_CODEX_INIT_FAIL === "1") {
+        respondError(id, -32600, "init refused");
+        return;
+      }
+      respond(id, { userAgent: "fake/0.162.1", codexHome: "/tmp/codex", platformFamily: "windows", platformOs: "windows" });
+      return;
+    case "model/list":
+      respond(id, {
+        data: [
+          { id: "gpt-a", model: "gpt-a", displayName: "GPT-A", description: "默认模型", hidden: false, isDefault: true },
+          { id: "gpt-hidden", model: "gpt-hidden", displayName: "Hidden", description: "", hidden: true, isDefault: false },
+          { id: "gpt-b", model: "gpt-b", displayName: "GPT-B", description: "", hidden: false, isDefault: false },
+        ],
+        nextCursor: null,
+      });
+      return;
+    case "thread/start":
+      if (params?.cwd) CWD = params.cwd;
+      respond(id, { thread: { id: THREAD_ID }, model: params?.model ?? "gpt-a", cwd: params?.cwd, approvalPolicy: params?.approvalPolicy, sandbox: { type: "readOnly", networkAccess: false } });
+      notify("thread/started", { thread: { id: THREAD_ID } });
+      return;
+    case "thread/resume":
+      THREAD_ID = params.threadId;
+      if (params?.cwd) CWD = params.cwd;
+      respond(id, { thread: { id: params.threadId }, model: "gpt-a" });
+      return;
+    case "turn/start": {
+      const turnId = `turn_${++turnCounter}`;
+      activeTurn = { id: turnId };
+      respond(id, { turn: turnObj(turnId, "inProgress") });
+      const text = params?.input?.find?.((p) => p.type === "text")?.text ?? "";
+      const name = text.trim().split(/\s+/)[0] ?? "";
+      const scenario = scenarios[name] ?? scenarios.hello;
+      await sleep(5);
+      notify("turn/started", { threadId: THREAD_ID, turn: turnObj(turnId, "inProgress") });
+      await scenario(turnId);
+      return;
+    }
+    case "turn/interrupt":
+      if (!activeTurn || activeTurn.id !== params?.turnId) {
+        respondError(id, -32600, "no active turn to interrupt");
+        return;
+      }
+      respond(id, {});
+      activeTurn.onInterrupt?.();
+      return;
+    default:
+      respondError(id, -32601, `unknown method ${method}`);
+  }
+}
+
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  const msg = JSON.parse(line);
+  log("in", msg);
+  if (msg.method === undefined && msg.id !== undefined) {
+    const resolve = waitingResponses.get(msg.id);
+    waitingResponses.delete(msg.id);
+    resolve?.(msg);
+    return;
+  }
+  if (msg.id === undefined) return; // 通知（initialized）
+  void handleRequest(msg);
+});
+rl.on("close", () => process.exit(0));
