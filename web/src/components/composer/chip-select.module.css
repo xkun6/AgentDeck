@@ -1,0 +1,223 @@
+/* chip 式下拉：统一高度 28px，图标 + 当前值 + 箭头；菜单为 shared-ui Popover。 */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 64px;
+  max-width: 176px;
+  height: var(--h-button-height-sm);
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-button-font-size-md);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--h-duration-fast) var(--h-ease-standard),
+    border-color var(--h-duration-fast) var(--h-ease-standard),
+    color var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.chip:hover:not(:disabled),
+.chip[data-state="open"] {
+  border-color: var(--h-color-border-strong);
+  background: var(--h-bg-chip);
+}
+
+.chip:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 1px;
+}
+
+/* 禁用（会话休眠 / 不可恢复 / 忙碌）：去底色、虚线边框、弱化文字。 */
+.chip:disabled {
+  border-style: dashed;
+  background: transparent;
+  color: var(--h-text-4);
+  cursor: not-allowed;
+}
+
+.chip[data-danger="true"],
+.chip[data-danger="true"]:hover:not(:disabled),
+.chip[data-danger="true"][data-state="open"] {
+  border-color: var(--h-color-danger-border);
+  background: var(--h-color-danger-bg);
+  color: var(--h-color-danger-fg);
+}
+
+.icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+}
+
+.chip[data-danger="true"] .icon,
+.chip:disabled .icon {
+  color: inherit;
+}
+
+.icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.value {
+  min-width: 0;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caret {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  color: var(--h-text-3);
+  transition: transform var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.chip[data-state="open"] .caret {
+  transform: rotate(180deg);
+}
+
+.chip[data-danger="true"] .caret,
+.chip:disabled .caret {
+  color: inherit;
+}
+
+/* ── 菜单 ─────────────────────────────────────────────────────────────── */
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  min-width: max(var(--radix-popover-trigger-width), 200px);
+  max-width: 320px;
+  max-height: min(360px, var(--radix-popover-content-available-height));
+  padding: 4px;
+  font-family: var(--h-font-cn);
+}
+
+.menuTitle {
+  flex: 0 0 auto;
+  padding: 4px 8px 8px;
+  color: var(--h-text-3);
+  font-size: var(--h-button-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: var(--h-button-height-md);
+  padding: 8px 8px 8px 4px;
+  border-radius: 0;
+  color: var(--h-text);
+  font-size: var(--h-button-font-size-md);
+  line-height: 1.35;
+  cursor: pointer;
+  user-select: none;
+}
+
+.option[data-active="true"] {
+  background: var(--h-bg-chip);
+}
+
+.list:focus-visible .option[data-active="true"] {
+  box-shadow: inset 2px 0 0 var(--h-accent);
+}
+
+.option[aria-disabled="true"] {
+  color: var(--h-text-4);
+  cursor: not-allowed;
+}
+
+.option[data-danger="true"] {
+  color: var(--h-color-danger-fg);
+}
+
+.option[data-danger="true"][data-active="true"] {
+  background: var(--h-color-danger-bg);
+}
+
+.check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.optionText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.optionLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.optionName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--h-line);
+  color: var(--h-text-3);
+  font-size: var(--h-button-font-size-xs);
+  line-height: 1.4;
+}
+
+.option[data-danger="true"] .badge {
+  border-color: var(--h-color-danger-border);
+  color: var(--h-color-danger-fg);
+}
+
+.optionDescription {
+  color: var(--h-text-3);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.option[aria-disabled="true"] .optionDescription {
+  color: var(--h-text-4);
+}
+
+.option[data-danger="true"] .optionDescription {
+  color: inherit;
+  opacity: 0.86;
+}

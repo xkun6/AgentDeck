@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCommandPaletteShortcut } from "./command-palette-shortcut";
+import { commandPaletteShortcutLabel, isCommandPaletteShortcut } from "./command-palette-shortcut";
 
 describe("isCommandPaletteShortcut", () => {
   it("accepts Meta+K and Ctrl+K", () => {
@@ -16,5 +16,13 @@ describe("isCommandPaletteShortcut", () => {
 
   it("does not intercept IME composition", () => {
     expect(isCommandPaletteShortcut({ key: "k", metaKey: true, isComposing: true })).toBe(false);
+  });
+});
+
+describe("commandPaletteShortcutLabel", () => {
+  it("macOS 显示 ⌘K，Windows / Linux 显示 Ctrl K", () => {
+    expect(commandPaletteShortcutLabel("macos")).toBe("⌘K");
+    expect(commandPaletteShortcutLabel("windows")).toBe("Ctrl K");
+    expect(commandPaletteShortcutLabel("linux")).toBe("Ctrl K");
   });
 });

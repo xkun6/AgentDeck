@@ -26,6 +26,8 @@
 /* App-shell layout sizing — aligned with prototypes' --topbar-h / --sidebar-w / --statusbar-h. */
 :root {
   --h-topbar-h: 48px;
+  /* 自绘标题栏窗口按钮宽度（Windows 11 为 46px，取最近的 4px 网格值）。 */
+  --h-window-control-w: 48px;
   --h-statusbar-h: 28px;
   --h-sidebar-w: 248px;
   --h-tab-h: 36px;

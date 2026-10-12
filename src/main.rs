@@ -120,6 +120,10 @@ fn main() {
                     .min_inner_size(960.0, 680.0);
             #[cfg(target_os = "macos")]
             let window_builder = window_builder.title_bar_style(tauri::TitleBarStyle::Transparent);
+            // Windows / Linux：去掉原生标题栏，由前端顶栏自绘窗口控制按钮（拖动区 + 最小化 /
+            // 最大化 / 关闭）。保留系统阴影；无边框窗口的边缘缩放由 Tauri 内置处理。
+            #[cfg(not(target_os = "macos"))]
+            let window_builder = window_builder.decorations(false).shadow(true);
             window_builder.build()?;
 
             instance::clear_stale_focus_request(&data_dir);

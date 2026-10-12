@@ -36,10 +36,10 @@ describe("PanelComposer", () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain('aria-label="Agent"');
-    expect(html).toContain('aria-label="模型"');
-    expect(html).toContain('aria-label="模式"');
-    expect(html).toContain("Codex（不可用：未找到 codex）");
+    expect(html).toContain('aria-label="Agent：Mock Agent"');
+    expect(html).toContain('aria-label="模型：默认模型"');
+    expect(html).toContain('aria-label="模式：默认模式"');
+    expect(html).toContain('aria-haspopup="listbox"');
     expect(html).not.toContain("思考强度");
   });
 

@@ -88,7 +88,8 @@ interface GooseComposerProps {
   loadingPlaceholder?: string;
   onDraftChange?: (text: string) => void;
   initialWorkspacePath?: string;
-  /** 工具栏里工作区按钮之后的额外控件（AgentDeck 的 Agent / 模型 / 模式选择器）。 */
+  /** 工具栏里工作区按钮之后的额外控件（AgentDeck 的 Agent / 模型 / 模式选择器）；
+   * 与左侧工具以细分隔线隔开，窄宽度时整体换到第二行。 */
   toolbarExtra?: ReactNode;
   /** 工作区变化时回调（宿主据此按 cwd 拉取模型列表等）。 */
   onWorkspaceChange?: (path: string) => void;
@@ -621,11 +622,11 @@ export function GooseComposer({
               onClick={() => void pickWorkspace()}
               disabled={controlsDisabled}
               data-active={Boolean(workspacePath)}
-              title={workspacePath || "选择工作区"}
+              title={workspacePath ? `工作区：${workspacePath}` : "选择工作区"}
+              aria-label={workspacePath ? `工作区：${workspacePath}` : "选择工作区"}
             >
               <Folder className={s.toolIcon} aria-hidden="true" />
-              <span>工作区</span>
-              {workspacePath ? <small>{fileNameFromPath(workspacePath)}</small> : null}
+              <span>{workspacePath ? fileNameFromPath(workspacePath) : "工作区"}</span>
             </button>
             {workspacePath ? (
               <button
@@ -639,9 +640,15 @@ export function GooseComposer({
                 <X aria-hidden="true" />
               </button>
             ) : null}
-            {toolbarExtra}
             {showMeta && <span className={s.pill}>本地模式</span>}
           </div>
+
+          {toolbarExtra ? (
+            <>
+              <span className={s.toolbarDivider} aria-hidden="true" />
+              <div className={s.toolbarExtra}>{toolbarExtra}</div>
+            </>
+          ) : null}
 
           <div className={s.rightTools}>
             {loading ? <span className={s.liveDot} aria-hidden="true" /> : null}

@@ -4,7 +4,10 @@ import { Moon, Search, Sun } from "lucide-react";
 import { useTheme } from "@agentdeck/shared-ui";
 import { useCommandPalette } from "@/components/command-palette";
 import { DESKTOP_VERSION, versionLabel } from "@/lib/build-info";
+import { commandPaletteShortcutLabel } from "@/lib/command-palette-shortcut";
+import { useWindowControls } from "@/hooks/use-window-controls";
 import { TOP_TABS } from "./use-active-top-tab";
+import { WindowControls } from "./window-controls";
 import s from "./app-top-bar.module.css";
 
 export function AppTopBar() {
@@ -12,6 +15,7 @@ export function AppTopBar() {
   const location = useLocation();
   const { config: themeConfig, update: updateTheme } = useTheme();
   const { openCommandPalette } = useCommandPalette();
+  const windowControls = useWindowControls();
   const isDarkTheme = ["dark", "dark-modern", "dracula", "catppuccin-mocha"].includes(themeConfig.theme);
   const nextTheme = isDarkTheme ? "light-modern" : "dark-modern";
   const ThemeIcon =
@@ -23,7 +27,12 @@ export function AppTopBar() {
   };
 
   return (
-    <header className={s.topbar} data-window-drag data-tauri-drag-region="deep">
+    <header
+      className={s.topbar}
+      data-window-drag
+      data-tauri-drag-region="deep"
+      data-window-controls={windowControls ? "true" : undefined}
+    >
       <a
         className={s.brand}
         aria-label="AgentDeck 首页"
@@ -69,7 +78,7 @@ export function AppTopBar() {
       >
         <Search size={12} />
         <span>搜索命令 / 会话 / 文件…</span>
-        <span className={s.searchKbd}>⌘ K</span>
+        <kbd className={s.searchKbd}>{commandPaletteShortcutLabel()}</kbd>
       </button>
 
       <div className={s.actions}>
@@ -83,6 +92,12 @@ export function AppTopBar() {
         >
           <ThemeIcon size={16} />
         </button>
+        {windowControls ? (
+          <>
+            <span className={s.divider} aria-hidden="true" />
+            <WindowControls {...windowControls} />
+          </>
+        ) : null}
       </div>
     </header>
   );

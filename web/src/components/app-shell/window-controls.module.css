@@ -1,0 +1,53 @@
+/* 仿 Windows 11 标题栏按钮：与顶栏等高，细线图标；关闭按钮悬停为 danger 底 + 白色图标。 */
+
+.controls {
+  display: flex;
+  align-self: stretch;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--h-window-control-w);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  cursor: default;
+  transition:
+    background var(--h-duration-fast) var(--h-ease-standard),
+    color var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.button:hover {
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+}
+
+.button:active {
+  background: var(--h-bg-soft);
+}
+
+.button[data-kind="close"]:hover,
+.button[data-kind="close"]:active {
+  background: var(--h-danger);
+  color: var(--h-color-fg-on-danger);
+}
+
+.button:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: -2px;
+}
+
+.glyph {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: geometricPrecision;
+}

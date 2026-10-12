@@ -40,6 +40,7 @@ import type {
   WriteWorkspaceFileInput,
   WriteWorkspaceFileResult,
   HermesGitBridge,
+  DesktopWindowControls,
 } from "./runtime";
 import { BUILD_COMMIT, DESKTOP_VERSION, versionLabel } from "./build-info";
 import type { SidecarStatusPayload } from "./sidecar-client";
@@ -448,6 +449,59 @@ const tauriBridge = {
   },
 };
 
+// 自绘标题栏的窗口控制。只在主窗口没有原生标题栏（Windows / Linux，见 src/main.rs）时挂载，
+// 由 installTauriBridge 在 React 挂载前用 isDecorated() 判定，组件只看 windowControls 是否存在。
+const tauriWindowControls: DesktopWindowControls = {
+  async minimize(): Promise<void> {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().minimize();
+  },
+
+  async toggleMaximize(): Promise<void> {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().toggleMaximize();
+  },
+
+  async close(): Promise<void> {
+    // close() 触发 CloseRequested：托盘可用时 Rust 侧拦截并隐藏到托盘。
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().close();
+  },
+
+  async isMaximized(): Promise<boolean> {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    return getCurrentWindow().isMaximized();
+  },
+
+  onResized(handler: () => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().onResized(() => handler()))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch((error) => {
+        console.warn("Failed to register window resize handler", error);
+      });
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+};
+
+async function resolveWindowControls(): Promise<DesktopWindowControls | null> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    return (await getCurrentWindow().isDecorated()) ? null : tauriWindowControls;
+  } catch {
+    // 拿不到窗口信息时保留原状（不渲染自绘按钮），不影响启动。
+    return null;
+  }
+}
+
 // Overlay shown while the Rust side starts the Node sidecar before React can
 // mount. Pre-React, plain DOM. Phases follow the `sidecar-status` event
 // (starting / failed / stopped); failures expose the full error text and a
@@ -772,6 +826,7 @@ export async function installTauriBridge(): Promise<void> {
   // Install before any React component mounts a Tauri event listener, so the
   // StrictMode mount→unmount teardown race can't leak an unhandled rejection.
   installTauriRejectionGuard();
+  const windowControlsReady = resolveWindowControls();
 
   // Mount the bridge first so the fatal-error dialog and ui_store work while we
   // wait for the sidecar.
@@ -781,6 +836,9 @@ export async function installTauriBridge(): Promise<void> {
   if (!isSidecarReady(status)) {
     await waitForSidecarReady(status);
   }
+
+  const windowControls = await windowControlsReady;
+  if (windowControls && window.hermesDesktop) window.hermesDesktop.windowControls = windowControls;
 
   window.__HERMES_RUNTIME__ = { platform: "tauri" };
 

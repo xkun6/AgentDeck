@@ -1,9 +1,10 @@
 // 新建会话的「Agent（provider）+ 模型 + 模式」选择器（design.md 第 6 节）。
 // 纯展示组件：数据与记忆由 hooks/use-agent-catalog.ts 的 useAgentSessionSelection 提供。
-import type { ChangeEvent } from "react";
-import { Bot, Cpu, SlidersHorizontal } from "lucide-react";
+// 三个选择器都是 chip 式下拉（ChipSelect），由输入框工具栏排成一组。
+import { Bot, Cpu, ShieldAlert, SlidersHorizontal } from "lucide-react";
 import type { AgentMode, AgentModelDefinition, ProviderInfo } from "@agentdeck/protocol";
 import { findMode, isDangerousMode, type AgentSelection } from "@/lib/agent-selection";
+import { ChipSelect, type ChipSelectOption } from "./chip-select";
 import s from "./agent-session-picker.module.css";
 
 export interface AgentSessionPickerProps {
@@ -20,13 +21,47 @@ export interface AgentSessionPickerProps {
   providerLocked?: boolean;
 }
 
-export function providerOptionLabel(provider: ProviderInfo): string {
-  if (provider.available) return provider.label;
-  return `${provider.label}（不可用${provider.unavailableReason ? `：${provider.unavailableReason}` : ""}）`;
+const DANGEROUS_MODE_WARNING = "危险模式：Agent 将不经确认直接执行命令和修改文件";
+
+function providerOptions(providers: ProviderInfo[] | null): ChipSelectOption[] {
+  return (providers ?? []).map((provider) => ({
+    value: provider.id,
+    label: provider.label,
+    disabled: !provider.available,
+    description: provider.available
+      ? undefined
+      : `不可用${provider.unavailableReason ? `：${provider.unavailableReason}` : ""}`,
+  }));
 }
 
-export function modeOptionLabel(mode: AgentMode): string {
-  return isDangerousMode(mode) ? `${mode.label}（危险：跳过权限确认）` : mode.label;
+function modelOptions(models: AgentModelDefinition[], loading: boolean | undefined): ChipSelectOption[] {
+  return [
+    { value: "", label: loading ? "加载中…" : "默认模型", description: "使用 Agent 的默认模型" },
+    ...models.map((model) => ({
+      value: model.id,
+      label: model.label,
+      badge: model.isDefault ? "默认" : undefined,
+      description: model.description,
+    })),
+  ];
+}
+
+function modeOptions(modes: AgentMode[]): ChipSelectOption[] {
+  return [
+    { value: "", label: "默认模式", description: "使用 Agent 的默认模式" },
+    ...modes.map((mode) => {
+      const dangerous = isDangerousMode(mode);
+      return {
+        value: mode.id,
+        label: mode.label,
+        badge: dangerous ? "危险" : undefined,
+        danger: dangerous,
+        description: dangerous
+          ? ["跳过权限确认", mode.description].filter(Boolean).join("；")
+          : mode.description,
+      };
+    }),
+  ];
 }
 
 export function AgentSessionPicker({
@@ -41,102 +76,71 @@ export function AgentSessionPicker({
   providerLocked,
 }: AgentSessionPickerProps) {
   const providerValue = selection.provider ?? "";
-  const providerKnown = providers?.some((provider) => provider.id === providerValue) ?? false;
+  const provider = providers?.find((item) => item.id === providerValue);
   const catalogDisabled = disabled || !selection.provider || !catalog;
   const error = providersError ?? catalogError;
-  const dangerous = isDangerousMode(findMode(selection.modeId, catalog?.modes));
+  const selectedMode = findMode(selection.modeId, catalog?.modes);
+  const dangerous = isDangerousMode(selectedMode);
+  const models = catalog?.models ?? [];
+  const modes = catalog?.modes ?? [];
+  const selectedModel = models.find((model) => model.id === selection.model);
 
-  const onProvider = (event: ChangeEvent<HTMLSelectElement>) => {
-    const next = event.target.value || null;
-    onChange({ provider: next, model: null, modeId: null });
-  };
-  const onModel = (event: ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...selection, model: event.target.value || null });
-  };
-  const onMode = (event: ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...selection, modeId: event.target.value || null });
-  };
+  const providerDisplay = provider
+    ? provider.label
+    : providers === null
+      ? "加载中…"
+      : providers.length === 0
+        ? "没有可用的 Agent"
+        : "请选择";
+  const modelDisplay = selectedModel?.label ?? selection.model ?? (catalogLoading ? "加载中…" : "默认模型");
+  const modeDisplay = selectedMode?.label ?? "默认模式";
 
   return (
     <div className={s.picker} role="group" aria-label="Agent 设置">
-      <label className={s.field} title="选择驱动本会话的 Agent">
-        <Bot className={s.icon} aria-hidden="true" />
-        <span className={s.label}>Agent</span>
-        <select
-          className={s.select}
-          aria-label="Agent"
-          value={providerKnown ? providerValue : ""}
-          onChange={onProvider}
+      <div className={s.chips}>
+        <ChipSelect
+          label="Agent"
+          hint={providerLocked ? "已建会话不能更换 Agent" : "选择驱动本会话的 Agent"}
+          icon={<Bot />}
+          value={provider ? providerValue : ""}
+          displayValue={providerDisplay}
+          options={providerOptions(providers)}
+          onChange={(next) => onChange({ provider: next || null, model: null, modeId: null })}
           disabled={disabled || providerLocked || !providers || providers.length === 0}
-        >
-          {!providerKnown ? (
-            <option value="" disabled>
-              {providers === null ? "加载中…" : providers.length === 0 ? "没有可用的 Agent" : "请选择"}
-            </option>
-          ) : null}
-          {(providers ?? []).map((provider) => (
-            <option
-              key={provider.id}
-              value={provider.id}
-              disabled={!provider.available}
-              title={provider.unavailableReason}
-            >
-              {providerOptionLabel(provider)}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className={s.field} title="模型（留空使用 Agent 默认）">
-        <Cpu className={s.icon} aria-hidden="true" />
-        <span className={s.label}>模型</span>
-        <select
-          className={s.select}
-          aria-label="模型"
+        />
+        <ChipSelect
+          label="模型"
+          hint="留空使用 Agent 默认模型"
+          icon={<Cpu />}
           value={selection.model ?? ""}
-          onChange={onModel}
+          displayValue={modelDisplay}
+          options={modelOptions(models, catalogLoading)}
+          onChange={(next) => onChange({ ...selection, model: next || null })}
           disabled={catalogDisabled}
-        >
-          <option value="">{catalogLoading ? "加载中…" : "默认模型"}</option>
-          {(catalog?.models ?? []).map((model) => (
-            <option key={model.id} value={model.id} title={model.description}>
-              {model.isDefault ? `${model.label}（默认）` : model.label}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label
-        className={`${s.field} ${dangerous ? s.fieldDanger : ""}`}
-        title="模式（留空使用 Agent 默认）"
-      >
-        <SlidersHorizontal className={s.icon} aria-hidden="true" />
-        <span className={s.label}>模式</span>
-        <select
-          className={s.select}
-          aria-label="模式"
+        />
+        <ChipSelect
+          label="模式"
+          hint={dangerous ? DANGEROUS_MODE_WARNING : "留空使用 Agent 默认模式"}
+          icon={dangerous ? <ShieldAlert /> : <SlidersHorizontal />}
           value={selection.modeId ?? ""}
-          onChange={onMode}
-          disabled={catalogDisabled || (catalog?.modes.length ?? 0) === 0}
-        >
-          <option value="">默认模式</option>
-          {(catalog?.modes ?? []).map((mode) => (
-            <option key={mode.id} value={mode.id} title={mode.description}>
-              {modeOptionLabel(mode)}
-            </option>
-          ))}
-        </select>
-      </label>
+          displayValue={modeDisplay}
+          options={modeOptions(modes)}
+          onChange={(next) => onChange({ ...selection, modeId: next || null })}
+          disabled={catalogDisabled || modes.length === 0}
+          danger={dangerous}
+        />
+      </div>
 
       {dangerous ? (
-        <span className={s.warning} role="alert">
-          危险模式：Agent 将不经确认直接执行命令和修改文件
+        <span className={s.notice} data-tone="danger" role="alert">
+          <ShieldAlert className={s.noticeIcon} aria-hidden="true" />
+          <span>{DANGEROUS_MODE_WARNING}</span>
         </span>
       ) : null}
 
       {error ? (
-        <span className={s.error} role="alert" title={error}>
-          {error}
+        <span className={s.notice} data-tone="error" role="alert" title={error}>
+          <span className={s.noticeText}>{error}</span>
         </span>
       ) : null}
     </div>

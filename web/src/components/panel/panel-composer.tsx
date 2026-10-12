@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useSearchParams } from "react-router-dom";
+import { FolderOpen } from "lucide-react";
 import { useCreateAndSendSession, WORKSPACE_REQUIRED_MESSAGE } from "@/hooks/use-create-and-send-session";
 import { useAgentSessionSelection } from "@/hooks/use-agent-catalog";
 import {
@@ -101,7 +102,8 @@ export function PanelComposer() {
       />
       {!cwd ? (
         <p className={s.hint} role="note">
-          {WORKSPACE_REQUIRED_MESSAGE}（点击输入框工具栏中的工作区按钮选择）
+          <FolderOpen className={s.hintIcon} aria-hidden="true" />
+          <span>{WORKSPACE_REQUIRED_MESSAGE}（点击输入框工具栏中的工作区按钮选择）</span>
         </p>
       ) : null}
     </div>

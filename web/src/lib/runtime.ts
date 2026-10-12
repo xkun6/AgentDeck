@@ -304,6 +304,17 @@ export interface FsListResult {
   error?: string;
 }
 
+/** 自绘标题栏的窗口控制（仅无原生标题栏的 Windows / Linux 主窗口由 tauri-bridge 挂载）。 */
+export interface DesktopWindowControls {
+  minimize(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  /** 走 CloseRequested，与原生关闭按钮一致（托盘可用时隐藏到托盘）。 */
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  /** 窗口尺寸变化（含最大化 / 还原）时回调；返回取消订阅函数。 */
+  onResized(handler: () => void): () => void;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -357,6 +368,8 @@ declare global {
        *  scale setting. Fire-and-forget; far better than CSS `zoom`, which leaves
        *  viewport units un-scaled and overflows the fixed window. */
       setUiZoom?(factor: number): void;
+      /** 主窗口无原生标题栏时才存在（macOS 保留原生红绿灯，不挂载）。 */
+      windowControls?: DesktopWindowControls;
     };
   }
 }

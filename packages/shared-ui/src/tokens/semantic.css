@@ -50,6 +50,8 @@
   --h-color-danger-bg: var(--h-err-soft);
   --h-color-danger-fg: var(--h-status-danger);
   --h-color-danger-border: var(--h-err-border);
+  /* 实心 danger 底上的前景（如自绘标题栏关闭按钮悬停）。 */
+  --h-color-fg-on-danger: #ffffff;
 
   --h-color-info-bg: var(--h-info-soft);
   --h-color-info-fg: var(--h-status-warning);
@@ -69,5 +71,6 @@
 [data-theme="dracula"],
 [data-theme="catppuccin-mocha"] {
   --h-color-bg-page-canvas: var(--h-bg-pane);
+  --h-color-fg-on-danger: #ffffff;
   --h-texture-pinhole-grid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M0 0H24M0 0V24' fill='none' stroke='%23f1f1ef' stroke-opacity='.055' stroke-width='1'/%3E%3Ccircle cx='0' cy='0' r='1.5' fill='%23f1f1ef' fill-opacity='.16'/%3E%3C/svg%3E");
 }

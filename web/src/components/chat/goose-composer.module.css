@@ -448,16 +448,19 @@
   stroke-width: 2;
 }
 
+/* 工具栏：左侧工具 | 细分隔线 | 选择器组（toolbarExtra） | 发送。
+   各单元格高度一致（32px）并垂直居中；窄宽度时选择器组整体换到第二行。 */
 .toolbar {
-  --composer-action-height: var(--h-button-height-lg);
+  --composer-action-height: var(--h-button-height-md);
   --composer-tool-height: var(--h-button-height-sm);
 
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "tools divider extra actions";
+  align-items: start;
+  column-gap: 8px;
+  row-gap: 8px;
   min-width: 0;
-  min-height: var(--composer-action-height);
   margin-top: 8px;
 }
 
@@ -465,19 +468,32 @@
 .rightTools {
   display: flex;
   align-items: center;
-  gap: 8px;
   min-width: 0;
-  min-height: var(--composer-action-height);
+  height: var(--composer-action-height);
 }
 
 .leftTools {
-  flex: 1 1 auto;
-  overflow: hidden;
+  grid-area: tools;
+  gap: 4px;
 }
 
 .rightTools {
-  flex: 0 0 auto;
-  margin-left: auto;
+  grid-area: actions;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.toolbarDivider {
+  grid-area: divider;
+  width: 1px;
+  height: 16px;
+  margin-top: 8px;
+  background: var(--h-line);
+}
+
+.toolbarExtra {
+  grid-area: extra;
+  min-width: 0;
 }
 
 .iconButton,
@@ -497,19 +513,14 @@
 .iconButton {
   width: var(--composer-tool-height);
   height: var(--composer-tool-height);
-  background: var(--h-bg-soft);
+  background: transparent;
   color: var(--h-text-2);
   padding: 0;
 }
 
-.iconButton:hover:not(:disabled),
-.iconButton[data-active="true"] {
+.iconButton:hover:not(:disabled) {
   background: var(--h-bg-chip);
   color: var(--h-text);
-}
-
-.iconButton[data-active="true"] {
-  color: var(--h-accent);
 }
 
 .iconButton:disabled {
@@ -517,22 +528,25 @@
   opacity: 0.55;
 }
 
+/* 工作区：显示所选目录名，过长省略；悬停 tooltip 为完整路径。 */
 .toolButton {
   flex: 0 1 auto;
-  max-width: min(232px, 34%);
+  max-width: 160px;
   height: var(--composer-tool-height);
-  gap: 8px;
-  border-radius: 0;
-  background: var(--h-bg-soft);
+  gap: 4px;
+  background: transparent;
   color: var(--h-text-2);
-  font-size: 12px;
-  padding: 0 12px;
+  font-size: var(--h-button-font-size-md);
+  padding: 0 8px 0 4px;
   min-width: 0;
 }
 
-.toolButton:hover:not(:disabled),
-.toolButton[data-active="true"] {
+.toolButton:hover:not(:disabled) {
   background: var(--h-bg-chip);
+  color: var(--h-text);
+}
+
+.toolButton[data-active="true"] {
   color: var(--h-text);
 }
 
@@ -540,6 +554,15 @@
   cursor: not-allowed;
   color: var(--h-text-3);
   opacity: 0.55;
+}
+
+.toolButton span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .workspaceClearButton {
@@ -551,7 +574,7 @@
   flex: 0 0 auto;
   border: 0;
   border-radius: 0;
-  background: var(--h-bg-soft);
+  background: transparent;
   color: var(--h-text-3);
   cursor: pointer;
   padding: 0;
@@ -573,27 +596,6 @@
   stroke-width: 2.2;
 }
 
-.toolButton span,
-.toolButton small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.toolButton span {
-  flex: 0 0 auto;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.toolButton small {
-  color: inherit;
-  opacity: 0.76;
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
 .toolIcon {
   width: 16px;
   height: 16px;
@@ -605,7 +607,7 @@
   display: inline-flex;
   align-items: center;
   max-width: 160px;
-  height: 28px;
+  height: var(--composer-tool-height);
   padding: 0 12px;
   border-radius: 0;
   background: var(--h-bg-soft);
@@ -614,22 +616,23 @@
   white-space: nowrap;
 }
 
+/* 发送：与侧栏「新建对话」一致的主按钮；不可发送时为禁用样式。 */
 .sendButton {
   --composer-send-accent: var(--h-accent);
 
   flex: 0 0 auto;
-  min-width: 88px;
+  min-width: 72px;
   height: var(--composer-action-height);
   gap: 8px;
   border: 1px solid var(--composer-send-accent);
   border-radius: 0;
   background: var(--composer-send-accent);
-  color: var(--h-accent-contrast, #fff);
+  color: var(--h-accent-contrast);
   box-shadow: none;
-  font-size: 13px;
+  font-size: var(--h-button-font-size-lg);
   font-weight: 600;
   line-height: 1;
-  padding: 0 16px;
+  padding: 0 12px;
   transition:
     background 0.15s,
     border-color 0.15s,
@@ -651,11 +654,11 @@
 }
 
 .sendButton[data-mode="stop"] {
-  min-width: 44px;
+  min-width: var(--composer-action-height);
   border-color: var(--composer-send-accent);
   background: var(--composer-send-accent);
-  color: var(--h-accent-contrast, #fff);
-  padding: 0 12px;
+  color: var(--h-accent-contrast);
+  padding: 0 8px;
 }
 
 .sendButton[data-mode="stop"]:hover:not(:disabled) {
@@ -669,46 +672,24 @@
   flex: 0 0 auto;
 }
 
-@container hermes-composer (max-width: 760px) {
+@container hermes-composer (max-width: 640px) {
   .toolbar {
-    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "tools actions"
+      "extra extra";
   }
 
-  .leftTools,
-  .rightTools {
-    gap: 4px;
-  }
-
-  .toolButton {
-    max-width: none;
-    padding: 0 8px;
-  }
-
-  .toolButton small,
-  .leftTools > button small {
-    display: none;
-  }
-
-  .sendButton {
-    min-width: 76px;
-    padding: 0 12px;
-  }
-}
-
-@container hermes-composer (max-width: 620px) {
-  .toolButton,
-  .leftTools > button[aria-haspopup="menu"] {
-    width: var(--composer-tool-height);
-    padding: 0;
-  }
-
-  .toolButton span,
-  .leftTools > button[aria-haspopup="menu"] span {
+  .toolbarDivider {
     display: none;
   }
 }
 
-@container hermes-composer (max-width: 520px) {
+@container hermes-composer (max-width: 320px) {
+  .toolButton span {
+    display: none;
+  }
+
   .sendButton {
     min-width: var(--composer-action-height);
     width: var(--composer-action-height);
@@ -748,14 +729,6 @@
     border-radius: 0;
   }
 
-  .toolbar {
-    align-items: flex-end;
-  }
-
-  .leftTools {
-    flex-wrap: wrap;
-  }
-
   .modelGrid {
     grid-template-columns: 1fr;
     max-height: 360px;
@@ -772,17 +745,5 @@
   .providerItem {
     flex: 0 0 auto;
     width: auto;
-  }
-
-  .sendButton {
-    min-width: 84px;
-    height: var(--h-button-height-lg);
-    gap: 8px;
-    padding: 0 16px;
-  }
-
-  .sendButton[data-mode="stop"] {
-    min-width: 44px;
-    padding: 0 12px;
   }
 }
