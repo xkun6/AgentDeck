@@ -37,6 +37,13 @@
       "binaries/node"
     ],
     "resources": {
+      "LICENSE": "LICENSE",
+      "NOTICE.md": "NOTICE.md",
+      "legal/paseo.Apache-2.0.txt": "paseo.Apache-2.0.txt",
+      "legal/hermes-agent-upstream.MIT.txt": "hermes-agent-upstream.MIT.txt",
+      "legal/nodejs.LICENSE.txt": "nodejs.LICENSE.txt",
+      "legal/sidecar-third-party.txt": "sidecar-third-party.txt",
+      "legal/web-third-party.txt": "web-third-party.txt",
       "legal/agency-agents.MIT.txt": "agency-agents.MIT.txt",
       "legal/HarmonyOS_Sans_LICENSE.txt": "HarmonyOS_Sans_LICENSE.txt",
       "dist-sidecar/bundle.mjs": "sidecar/bundle.mjs"

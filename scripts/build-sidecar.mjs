@@ -5,7 +5,7 @@
 //
 // 用法：node scripts/build-sidecar.mjs（或 pnpm sidecar:build）
 
-import { readFileSync, statSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,29 +13,11 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarDir = resolve(repoRoot, "packages", "sidecar");
 const outfile = resolve(repoRoot, "dist-sidecar", "bundle.mjs");
+// metafile 用于核对打进 bundle 的第三方包（NOTICE.md / legal/sidecar-third-party.txt）
+const metafileOut = resolve(repoRoot, "dist-sidecar", "meta.json");
 
 // esbuild 是 @agentdeck/sidecar 的 devDependency，从该包解析
 const { build } = createRequire(resolve(sidecarDir, "package.json"))("esbuild");
-
-// 源码用 `createRequire(import.meta.url)` 加载 which，esbuild 不会跟踪这种 require，
-// 打包时把它改写成静态 import，让 which 进入 bundle。源码改成静态 import 后此插件自动失效。
-const inlineCreateRequireWhich = {
-  name: "inline-create-require-which",
-  setup(builder) {
-    builder.onLoad({ filter: /executable-resolution[\\/]executable-resolution\.ts$/ }, (args) => {
-      const source = readFileSync(args.path, "utf8");
-      const pattern = 'const which = require("which") as Which;';
-      if (!source.includes('require("which")')) return undefined;
-      if (!source.includes(pattern)) {
-        throw new Error(`${args.path} 中 require("which") 的写法变了，请同步更新 build-sidecar.mjs`);
-      }
-      const contents =
-        'import __bundledWhich from "which";\n' +
-        source.replace(pattern, "const which = __bundledWhich as unknown as Which;");
-      return { contents, loader: "ts" };
-    });
-  },
-};
 
 const result = await build({
   absWorkingDir: sidecarDir,
@@ -50,10 +32,11 @@ const result = await build({
     js: 'import { createRequire as __agentdeckCreateRequire } from "node:module"; const require = __agentdeckCreateRequire(import.meta.url);',
   },
   external: ["bufferutil", "utf-8-validate", "@anthropic-ai/claude-agent-sdk-*"],
-  plugins: [inlineCreateRequireWhich],
   logLevel: "warning",
   metafile: true,
 });
+
+writeFileSync(metafileOut, JSON.stringify(result.metafile, null, 2));
 
 const inputs = Object.keys(result.metafile.inputs).length;
 const size = statSync(outfile).size;
