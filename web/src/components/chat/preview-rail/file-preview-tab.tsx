@@ -81,7 +81,7 @@ export function FilePreviewTab({ workspaceRoot, filePath, onSelectFile }: FilePr
       return a.name.localeCompare(b.name);
     });
   }, [list.data?.entries]);
-  // Derive the parent client-side: `/api/fs/list` no longer returns `parent`.
+  // 「上一级」只在工作区内移动，按路径推导即可（fs_list 的 parent 可能越出工作区）。
   const parent = useMemo(() => parentDir(dir), [dir]);
   const canGoUp = Boolean(dir && workspaceRoot && dir !== workspaceRoot && parent);
   const crumbs = useMemo(() => buildBreadcrumbs(dir), [dir]);
@@ -262,7 +262,10 @@ export function FilePreviewTab({ workspaceRoot, filePath, onSelectFile }: FilePr
           </button>
         ))}
         {list.isError || list.data?.error ? (
-          <div className={s.crumb}>{fsListErrorText(list.data?.error)}</div>
+          <div className={s.crumb}>
+            {list.data?.error
+              ?? (list.error instanceof Error && list.error.message ? list.error.message : fsListErrorText())}
+          </div>
         ) : !list.isLoading && entries.length === 0 ? (
           <div className={s.crumb}>空目录</div>
         ) : null}

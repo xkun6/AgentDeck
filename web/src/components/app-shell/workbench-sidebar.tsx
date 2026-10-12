@@ -3,11 +3,12 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useNavigate, useLocation } from "react-router-dom";
 import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
 import type { AgentSnapshot } from "@agentdeck/protocol";
-import { Folder, MessageSquare, Plus, TerminalSquare } from "lucide-react";
+import { Folder, MessageSquare, Plus, TerminalSquare, Trash2 } from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom } from "@/stores/agents";
 import { activeSessionIdAtom } from "@/stores/ui";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
   AGENT_STATUS_LABELS,
   agentDisplayTitle,
@@ -32,7 +33,7 @@ function sectionLabel(index: number, label: string): string {
 function statusTone(agent: AgentSnapshot, running: boolean): StatusDotTone | null {
   if (running) return "success";
   if (agent.status === "error") return "danger";
-  if (agent.status === "closed") return null;
+  if (agent.status === "closed" || agent.status === "dormant") return null;
   return "warning";
 }
 
@@ -44,9 +45,10 @@ interface SessionRowProps {
   projectName?: string;
   tooltip: string;
   onClick: () => void;
+  onDelete: () => void;
 }
 
-function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick }: SessionRowProps) {
+function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick, onDelete }: SessionRowProps) {
   return (
     <div
       className={s.sessionRow}
@@ -76,6 +78,19 @@ function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick }
           ) : null}
         </div>
       </div>
+      <button
+        type="button"
+        className={s.rowMore}
+        aria-label={`删除会话：${title}`}
+        title="删除会话"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete();
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <Trash2 size={12} aria-hidden="true" />
+      </button>
     </div>
   );
 }
@@ -87,6 +102,7 @@ export function WorkbenchSidebar() {
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const agents = useAtomValue(agentListAtom);
   const { data: providers } = useAgentProviders();
+  const deleteSession = useDeleteAgentSession();
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [pinnedProjectPaths, setPinnedProjectPaths] = useState(readPinnedWorkspaceProjectPaths);
 
@@ -158,6 +174,7 @@ export function WorkbenchSidebar() {
         projectName={projectNameByPath.get(agent.cwd) ?? workspaceNameFromPath(agent.cwd)}
         tooltip={`${title}\n${provider} · ${status}\n${agent.cwd}`}
         onClick={() => goSession(agent)}
+        onDelete={() => void deleteSession(agent, title)}
       />
     );
   };

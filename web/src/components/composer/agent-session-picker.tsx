@@ -3,7 +3,7 @@
 import type { ChangeEvent } from "react";
 import { Bot, Cpu, SlidersHorizontal } from "lucide-react";
 import type { AgentMode, AgentModelDefinition, ProviderInfo } from "@agentdeck/protocol";
-import { isDangerousMode, type AgentSelection } from "@/lib/agent-selection";
+import { findMode, isDangerousMode, type AgentSelection } from "@/lib/agent-selection";
 import s from "./agent-session-picker.module.css";
 
 export interface AgentSessionPickerProps {
@@ -26,7 +26,7 @@ export function providerOptionLabel(provider: ProviderInfo): string {
 }
 
 export function modeOptionLabel(mode: AgentMode): string {
-  return isDangerousMode(mode.id) ? `${mode.label}（危险：跳过权限确认）` : mode.label;
+  return isDangerousMode(mode) ? `${mode.label}（危险：跳过权限确认）` : mode.label;
 }
 
 export function AgentSessionPicker({
@@ -44,7 +44,7 @@ export function AgentSessionPicker({
   const providerKnown = providers?.some((provider) => provider.id === providerValue) ?? false;
   const catalogDisabled = disabled || !selection.provider || !catalog;
   const error = providersError ?? catalogError;
-  const dangerous = isDangerousMode(selection.modeId);
+  const dangerous = isDangerousMode(findMode(selection.modeId, catalog?.modes));
 
   const onProvider = (event: ChangeEvent<HTMLSelectElement>) => {
     const next = event.target.value || null;

@@ -4,8 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 import { useAgentSession, humanizeSidecarError } from "@/hooks/use-agent-session";
 import {
+  findMode,
+  isDangerousMode,
   readAgentSelection,
   resolveCatalogChoice,
+  resolveModeChoice,
   resolveProvider,
   writeAgentSelection,
   type AgentSelection,
@@ -39,6 +42,8 @@ export function useAgentCatalog(provider: string | null, cwd: string) {
 /** 新建会话的 Agent / 模型 / 模式选择：读写 ui_store 记忆，并按可用性与目录校正。 */
 export function useAgentSessionSelection(cwd: string) {
   const [stored, setStored] = useState<AgentSelection>(readAgentSelection);
+  // 本次手动选中的危险模式（只有它会被保留；记忆里的危险模式不恢复）
+  const [pickedDangerousModeId, setPickedDangerousModeId] = useState<string | null>(null);
   const providersQuery = useAgentProviders();
   const providers = providersQuery.data ?? null;
   const provider = resolveProvider(stored.provider, providers);
@@ -48,7 +53,7 @@ export function useAgentSessionSelection(cwd: string) {
   const selection: AgentSelection = {
     provider,
     model: resolveCatalogChoice(stored.model, catalog?.models),
-    modeId: resolveCatalogChoice(stored.modeId, catalog?.modes),
+    modeId: resolveModeChoice(stored.modeId, catalog?.modes, pickedDangerousModeId),
   };
 
   // 写 ui_store 不能放进 setState 的 updater：updater 在渲染期执行，
@@ -57,9 +62,11 @@ export function useAgentSessionSelection(cwd: string) {
     const merged = next.provider !== provider
       ? { provider: next.provider, model: null, modeId: null }
       : next;
-    writeAgentSelection(merged);
+    const modes = next.provider !== provider ? undefined : catalog?.modes;
+    setPickedDangerousModeId(isDangerousMode(findMode(merged.modeId, modes)) ? merged.modeId : null);
+    writeAgentSelection(merged, modes);
     setStored(merged);
-  }, [provider]);
+  }, [catalog?.modes, provider]);
 
   return {
     selection,

@@ -6,7 +6,7 @@ import { WorktreePanel } from "./worktree-panel";
 const worktreesMock = vi.hoisted(() => ({
   worktrees: [
     { path: "C:/repo", branch: "main", isMain: true, locked: false, detached: false },
-    { path: "C:/repo-wt", branch: "hermes/feat", isMain: false, locked: false, detached: false },
+    { path: "C:/repo-wt", branch: "agentdeck/feat", isMain: false, locked: false, detached: false },
   ],
   branches: [
     { name: "main", checkedOut: true, isDefault: true },

@@ -280,4 +280,48 @@ describe("SidecarClient", () => {
     await waitFor(() => lists.length === 2, "列表通知");
     expect(lists[1]!.map((agent) => agent.id)).toEqual(["a2"]);
   });
+
+  it("打开持久化会话：timeline 历史条目保留原 epoch 也照常投递（只按 seq 去重），并标记 replay", async () => {
+    const { client, current, delivered } = setup(server((frame, socket) => {
+      if (frame.method === "agent.timeline") {
+        // 顶层 epoch 为当前进程；历史条目来自之前两次 sidecar 进程
+        socket.reply(frame.id, {
+          epoch: "e-now",
+          entries: [envelope("a1", 1, "e-old1"), envelope("a1", 2, "e-old2"), envelope("a1", 3, "e-old2")],
+        });
+        return true;
+      }
+      return false;
+    }));
+    const metas: boolean[] = [];
+    client.onStream((_item, meta) => metas.push(meta.replay));
+    await client.connect();
+
+    await client.syncAgent("a1");
+    current().push({ jsonrpc: "2.0", method: "agent.stream", params: envelope("a1", 4, "e-now") });
+    current().push({ jsonrpc: "2.0", method: "agent.stream", params: envelope("a1", 3, "e-now") });
+
+    expect(delivered.map((item) => [item.seq, item.epoch])).toEqual([
+      [1, "e-old1"],
+      [2, "e-old2"],
+      [3, "e-old2"],
+      [4, "e-now"],
+    ]);
+    expect(metas).toEqual([true, true, true, false]);
+    expect(client.epoch).toBe("e-now");
+  });
+
+  it("agent.removed 通知：清掉该 agent 的序号并通知订阅方", async () => {
+    const { client, current } = setup(server());
+    const removed: string[] = [];
+    client.onAgentRemoved((agentId) => removed.push(agentId));
+    await client.connect();
+    const socket = current();
+    socket.push({ jsonrpc: "2.0", method: "agent.stream", params: envelope("a1", 1) });
+    expect(client.lastSeq("a1")).toBe(1);
+
+    socket.push({ jsonrpc: "2.0", method: "agent.removed", params: { agentId: "a1" } });
+    expect(removed).toEqual(["a1"]);
+    expect(client.lastSeq("a1")).toBe(0);
+  });
 });

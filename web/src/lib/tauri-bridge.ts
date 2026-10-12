@@ -25,6 +25,8 @@ import type {
   FilePickerResult,
   FilePreview,
   PreviewFileChangedPayload,
+  FsListInput,
+  FsListResult,
   ReadWorkspaceFileInput,
   ExternalTerminalResult,
   TerminalEventPayload,
@@ -344,6 +346,10 @@ const tauriBridge = {
 
   async readWorkspaceFile(input: ReadWorkspaceFileInput): Promise<FilePreview> {
     return invokeCommand("read_workspace_file", { input });
+  },
+
+  async fsList(input: FsListInput): Promise<FsListResult> {
+    return invokeCommand("fs_list", { input });
   },
 
   async readFileDataUrl(path: string): Promise<string> {

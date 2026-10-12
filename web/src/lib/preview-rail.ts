@@ -165,7 +165,7 @@ export function buildBreadcrumbs(dir: string): Breadcrumb[] {
  * Parent of an absolute directory, or `null` at the filesystem root. Reuses
  * {@link buildBreadcrumbs} so POSIX and Windows splitting stay in one place —
  * the parent is simply the second-to-last breadcrumb. Used to drive the ".."
- * control client-side now that `/api/fs/list` no longer returns `parent`.
+ * control client-side (e.g. clamping navigation to the workspace root).
  */
 export function parentDir(dir: string): string | null {
   const crumbs = buildBreadcrumbs(dir);
@@ -173,9 +173,9 @@ export function parentDir(dir: string): string | null {
 }
 
 /**
- * Human message for a `/api/fs/list` failure. `code` is the upstream HTTP-200
- * soft-error string (errno-style); `undefined` covers transport/HTTP failures
- * surfaced via TanStack Query's `isError`.
+ * Human message for a directory-listing failure keyed by an errno-style `code`;
+ * `undefined` gives the generic fallback. Rust `fs_list` already returns a
+ * Chinese `error` message, which callers show directly.
  */
 export function fsListErrorText(code?: string | null): string {
   switch (code) {

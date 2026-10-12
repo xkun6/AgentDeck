@@ -188,7 +188,7 @@ describe("reduceAgentEvent", () => {
     expect(runtime.agentUsage).toEqual({ inputTokens: 3 });
   });
 
-  it("同 epoch 下 seq 不大于已归约序号的事件被忽略；epoch 变化后重新接收", () => {
+  it("按 seq 去重，与 epoch 无关：重复或更旧的 seq 一律忽略", () => {
     const first = reduceAgentEvent(
       createEmptyChatRuntime(0),
       env(1, { type: "timeline", item: { type: "user_message", text: "一次" } }),
@@ -197,14 +197,17 @@ describe("reduceAgentEvent", () => {
     expect(duplicated).toBe(first);
     const older = reduceAgentEvent(first, env(0, { type: "timeline", item: { type: "user_message", text: "旧" } }));
     expect(older).toBe(first);
+    // 历史条目保留原 epoch：同一 seq 换了 epoch 也不能重复归约
+    const otherEpoch = reduceAgentEvent(first, env(1, { type: "timeline", item: { type: "user_message", text: "一次" } }, "e2"));
+    expect(otherEpoch).toBe(first);
 
-    const nextEpoch = reduceAgentEvent(
+    const next = reduceAgentEvent(
       first,
-      env(1, { type: "timeline", item: { type: "user_message", text: "新 epoch" } }, "e2"),
+      env(2, { type: "timeline", item: { type: "user_message", text: "新 epoch" } }, "e2"),
     );
-    expect(nextEpoch.messages).toHaveLength(2);
-    expect(nextEpoch.agentEpoch).toBe("e2");
-    expect(nextEpoch.agentLastSeq).toBe(1);
+    expect(next.messages).toHaveLength(2);
+    expect(next.agentEpoch).toBe("e2");
+    expect(next.agentLastSeq).toBe(2);
   });
 });
 

@@ -25,13 +25,14 @@ function firstUserMessage(runtime: ChatSessionRuntime | undefined): string {
   return "";
 }
 
-/** 标题 → 首条用户消息 → 「<Agent> 会话」。 */
+/** 用户自定义标题 → sidecar 记录的首条消息预览（preview）→ 本地首条用户消息 → 「<Agent> 会话」。 */
 export function agentDisplayTitle(
   agent: AgentSnapshot,
   runtime: ChatSessionRuntime | undefined,
   providers?: ProviderInfo[] | null,
 ): string {
   return agent.title?.trim()
+    || agent.preview?.trim()
     || firstUserMessage(runtime)
     || `${agentProviderLabel(agent.provider, providers)} 会话`;
 }

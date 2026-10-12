@@ -288,6 +288,22 @@ export interface HermesGitBridge {
   repoStatus(input: { repoPath: string }): Promise<RepoStatus | null>;
 }
 
+/** Rust `fs_list` 命令的入参与返回（docs/design.md 4.6）。 */
+export interface FsListInput {
+  /** 缺省列主目录；Windows 下空字符串列盘符（非 Windows 列 `/`）。 */
+  path?: string;
+  showHidden?: boolean;
+}
+
+export interface FsListResult {
+  path: string;
+  parent: string | null;
+  home: string;
+  entries: { name: string; path: string; isDir: boolean }[];
+  /** 读取失败（不存在 / 无权限）时的中文说明，此时 entries 为空 */
+  error?: string;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -327,6 +343,8 @@ declare global {
       onTerminalOutput?(handler: (event: TerminalEventPayload) => void): () => void;
       readFileDataUrl?(path: string): Promise<string>;
       readWorkspaceFile?(input: ReadWorkspaceFileInput): Promise<FilePreview>;
+      /** 本地目录列表（Rust `fs_list`）。 */
+      fsList?(input: FsListInput): Promise<FsListResult>;
       writeWorkspaceFile?(input: WriteWorkspaceFileInput): Promise<WriteWorkspaceFileResult>;
       /** Git ops backing the review pane (issue #328). */
       git?: HermesGitBridge;

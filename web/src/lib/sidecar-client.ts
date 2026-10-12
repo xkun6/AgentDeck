@@ -10,6 +10,11 @@
 //   用 `agent.timeline { sinceSeq }` 补齐，期间到达的实时事件先缓冲，补齐后按序投递；
 // - 重连成功后对所有已知 agent 补齐，再拉 `agent.list` 刷新快照；
 // - `epoch` 变化（sidecar 重启）时丢弃全部旧序号，通知订阅方并重新拉 `agent.list`。
+//
+// 会话持久化（design.md 4.5）：sidecar 重启后旧会话以 dormant / closed 留在列表里，
+// seq 跨进程连续递增；timeline 返回的历史条目保留原 seq 与原 epoch，因此这里只按 seq
+// 去重，epoch 只取 `agent.timeline` 响应顶层与实时事件上的当前进程 epoch。
+// 经 timeline 补齐投递的事件带 `replay: true`，订阅方据此跳过桌面通知等副作用。
 import {
   AGENT_RPC_NOTIFICATIONS,
   type AgentRpcErrorObject,
@@ -71,6 +76,11 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/** 事件投递附带信息：`replay` 为 true 表示来自 `agent.timeline` 补齐（历史回放）。 */
+export interface SidecarStreamMeta {
+  replay: boolean;
 }
 
 interface AgentSeqTracker {
@@ -138,7 +148,8 @@ export class SidecarClient {
   private trackers = new Map<string, AgentSeqTracker>();
 
   private stateListeners = new Set<Listener<SidecarConnectionState>>();
-  private streamListeners = new Set<Listener<AgentStreamEnvelope>>();
+  private streamListeners = new Set<(envelope: AgentStreamEnvelope, meta: SidecarStreamMeta) => void>();
+  private agentRemovedListeners = new Set<Listener<string>>();
   private agentStateListeners = new Set<Listener<AgentSnapshot>>();
   private agentsListeners = new Set<Listener<AgentSnapshot[]>>();
   private epochListeners = new Set<Listener<{ epoch: string | null; previous: string | null }>>();
@@ -180,8 +191,16 @@ export class SidecarClient {
   }
 
   /** 连续、去重后的 agent 事件流（实时 + 补齐）。 */
-  onStream(listener: Listener<AgentStreamEnvelope>): () => void {
-    return subscribe(this.streamListeners, listener);
+  onStream(listener: (envelope: AgentStreamEnvelope, meta: SidecarStreamMeta) => void): () => void {
+    this.streamListeners.add(listener);
+    return () => {
+      this.streamListeners.delete(listener);
+    };
+  }
+
+  /** `agent.removed` 通知（会话被删除）。 */
+  onAgentRemoved(listener: Listener<string>): () => void {
+    return subscribe(this.agentRemovedListeners, listener);
   }
 
   /** `agent.state` 通知。 */
@@ -486,6 +505,13 @@ export class SidecarClient {
     if (record.method === AGENT_RPC_NOTIFICATIONS.agentState && record.params) {
       const agent = (record.params as { agent?: AgentSnapshot }).agent;
       if (agent) emitTo(this.agentStateListeners, agent);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.agentRemoved && record.params) {
+      const agentId = (record.params as { agentId?: unknown }).agentId;
+      if (typeof agentId !== "string") return;
+      this.trackers.delete(agentId);
+      emitTo(this.agentRemovedListeners, agentId);
     }
   }
 
@@ -520,11 +546,18 @@ export class SidecarClient {
     void this.refreshAgents().catch(() => {});
   }
 
-  private deliver(envelope: AgentStreamEnvelope): void {
+  private deliver(envelope: AgentStreamEnvelope, replay = false): void {
     const tracker = this.tracker(envelope.agentId);
     if (envelope.seq <= tracker.lastSeq) return;
     tracker.lastSeq = envelope.seq;
-    emitTo(this.streamListeners, envelope);
+    const meta: SidecarStreamMeta = { replay };
+    for (const listener of [...this.streamListeners]) {
+      try {
+        listener(envelope, meta);
+      } catch (error) {
+        console.error("[sidecar-client] 订阅回调出错", error);
+      }
+    }
   }
 
   private handleLiveEnvelope(envelope: AgentStreamEnvelope): void {
@@ -574,10 +607,10 @@ export class SidecarClient {
     if (this.noteEpoch(result.epoch) && sinceSeq > 0) {
       // 旧序号已作废：按新 epoch 从头拉一次
       const full = await this.request("agent.timeline", { agentId, sinceSeq: 0 });
-      for (const envelope of [...full.entries].sort(bySeq)) this.deliver(envelope);
+      for (const envelope of [...full.entries].sort(bySeq)) this.deliver(envelope, true);
       return;
     }
-    for (const envelope of [...result.entries].sort(bySeq)) this.deliver(envelope);
+    for (const envelope of [...result.entries].sort(bySeq)) this.deliver(envelope, true);
   }
 
   /** 拉取 `agent.list` 并通知订阅方。 */

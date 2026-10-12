@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useNavigate } from "react-router-dom";
 import { LoadingState, StatusDot } from "@agentdeck/shared-ui";
-import { Search } from "lucide-react";
+import { Search, Trash2 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { activeSessionIdAtom } from "@/stores/ui";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
   AGENT_STATUS_LABELS,
   agentDisplayTitle,
@@ -19,12 +20,13 @@ import { workspaceNameFromPath } from "@/lib/workspaces";
 import { TopBar } from "@/components/top-bar/top-bar";
 import s from "./history.module.css";
 
-type StatusFilter = "all" | "running" | "idle" | "error" | "closed";
+type StatusFilter = "all" | "running" | "idle" | "dormant" | "error" | "closed";
 
 const STATUS_LABELS: Record<StatusFilter, string> = {
   all: "全部",
   running: "运行中",
   idle: "空闲",
+  dormant: AGENT_STATUS_LABELS.dormant,
   error: "出错",
   closed: "已关闭",
 };
@@ -37,6 +39,7 @@ function statusKind(agent: AgentSnapshot, running: boolean): Exclude<StatusFilte
   if (running) return "running";
   if (agent.status === "error") return "error";
   if (agent.status === "closed") return "closed";
+  if (agent.status === "dormant") return "dormant";
   return "idle";
 }
 
@@ -55,6 +58,7 @@ export function HistoryRoute() {
   const connection = useAtomValue(sidecarConnectionAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const { data: providers } = useAgentProviders();
+  const deleteSession = useDeleteAgentSession();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -70,7 +74,7 @@ export function HistoryRoute() {
   );
 
   const statusCounts = useMemo(() => {
-    const counts: Record<StatusFilter, number> = { all: rows.length, running: 0, idle: 0, error: 0, closed: 0 };
+    const counts: Record<StatusFilter, number> = { all: rows.length, running: 0, idle: 0, dormant: 0, error: 0, closed: 0 };
     for (const row of rows) counts[row.kind] += 1;
     return counts;
   }, [rows]);
@@ -203,7 +207,19 @@ export function HistoryRoute() {
                       {workspaceNameFromPath(agent.cwd) || "—"}
                     </span>
                     <span className={s.cellTimestamp}>{updated}</span>
-                    <span />
+                    <button
+                      type="button"
+                      className={s.cellMore}
+                      aria-label={`删除会话：${title}`}
+                      title="删除会话"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteSession(agent, title);
+                      }}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
                   </div>
                 );
               })}

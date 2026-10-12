@@ -12,7 +12,8 @@ import type {
 import { describePermissionCommand, describeToolCall } from "@/lib/agent-tool-detail";
 import { imagePartFromSource } from "@/lib/message-images";
 import { notifyFromAgentEvent } from "@/lib/notifications";
-import { agentSnapshotsAtom } from "@/stores/agents";
+import { agentSnapshotsAtom, lastRemovedAgentAtom } from "@/stores/agents";
+import { activeSessionIdAtom } from "@/stores/ui";
 
 export interface ToolEntry {
   tool_id: string;
@@ -277,9 +278,12 @@ export const removeApprovalAtom = atom(
 // ── AgentDeck：sidecar 事件 → ChatSessionRuntime ─────────────────────────────
 //
 // 会话 id 直接使用 sidecar 的 agentId。sidecar-client 已保证事件按 seq 连续投递，
-// 这里再按 (epoch, seq) 去重一次，timeline 回放与实时事件重叠时不会重复归约。
+// 这里再按 seq 去重一次，timeline 回放与实时事件重叠时不会重复归约。
+// sidecar 持久化会话后 seq 跨进程连续递增，历史条目保留原 epoch（design.md 4.5），
+// 所以去重只看 seq，不能因为 epoch 不同而丢弃或重复归约历史条目。
 
 const AGENT_PENDING_PROGRESS = "正在等待 Agent 响应…";
+export const AGENT_RESUMING_PROGRESS = "正在恢复会话…";
 const AGENT_RECONNECT_STATUS = "连接中断，正在重连…";
 
 function agentAssistantMessageId(turnId: string | undefined, seq: number): string {
@@ -638,17 +642,13 @@ function reduceAgentEventInner(
   }
 }
 
-/** 把一个 sidecar 事件归约进会话运行时；同 epoch 下 seq 不大于已归约序号的事件直接忽略。 */
+/** 把一个 sidecar 事件归约进会话运行时；seq 不大于已归约序号的事件直接忽略（与 epoch 无关）。 */
 export function reduceAgentEvent(
   runtime: ChatSessionRuntime,
   envelope: AgentStreamEnvelope,
   now = Date.now(),
 ): ChatSessionRuntime {
-  if (
-    runtime.agentEpoch === envelope.epoch &&
-    runtime.agentLastSeq !== undefined &&
-    envelope.seq <= runtime.agentLastSeq
-  ) {
+  if (runtime.agentLastSeq !== undefined && envelope.seq <= runtime.agentLastSeq) {
     return runtime;
   }
   const next = reduceAgentEventInner(runtime, envelope);
@@ -661,13 +661,16 @@ export function reduceAgentEvent(
   };
 }
 
-export const applyAgentEventAtom = atom(null, (get, set, envelope: AgentStreamEnvelope) => {
-  // 通知旁路：用归约前的运行时判断是否「在场」的回合，避免回放重复通知。
-  notifyFromAgentEvent(
-    envelope,
-    get(chatRuntimeBySessionAtom)[envelope.agentId],
-    get(agentSnapshotsAtom)[envelope.agentId]?.title,
-  );
+export const applyAgentEventAtom = atom(null, (get, set, envelope: AgentStreamEnvelope, replay = false) => {
+  // 通知旁路：用归约前的运行时判断是否「在场」的回合，避免回放重复通知；
+  // timeline 补齐（打开历史会话、断线补齐）的事件一律不通知。
+  if (!replay) {
+    notifyFromAgentEvent(
+      envelope,
+      get(chatRuntimeBySessionAtom)[envelope.agentId],
+      get(agentSnapshotsAtom)[envelope.agentId]?.title,
+    );
+  }
   set(chatRuntimeBySessionAtom, (state) =>
     updateSessionRuntime(state, envelope.agentId, (runtime) => reduceAgentEvent(runtime, envelope)),
   );
@@ -679,7 +682,15 @@ export const startAgentPromptAtom = atom(
   (
     _get,
     set,
-    params: { agentId: string; clientMessageId: string; text: string; images?: ImageEntry[]; now?: number },
+    params: {
+      agentId: string;
+      clientMessageId: string;
+      text: string;
+      images?: ImageEntry[];
+      /** 占位助手消息的进度文案（恢复 dormant / closed 会话时为「正在恢复会话…」）。 */
+      progressText?: string;
+      now?: number;
+    },
   ) => {
     const now = params.now ?? Date.now();
     const assistantId = agentPendingAssistantId(params.clientMessageId);
@@ -709,7 +720,7 @@ export const startAgentPromptAtom = atom(
             role: "assistant",
             createdAt: now,
             status: "streaming",
-            parts: [{ type: "progress", text: AGENT_PENDING_PROGRESS }],
+            parts: [{ type: "progress", text: params.progressText ?? AGENT_PENDING_PROGRESS }],
           },
         ],
         streamStatus: "streaming",
@@ -776,16 +787,20 @@ export const reconcileAgentRuntimesAtom = atom(
   },
 );
 
-/** sidecar 重启（epoch 变化）：旧序号作废，进行中的回合以错误收尾。 */
+/**
+ * sidecar 重启（epoch 变化）：进行中的回合以错误收尾，挂起的审批作废。
+ * 已归约的 seq 保留：持久化会话的 seq 跨进程连续递增，之后的 timeline 回放按 seq 去重；
+ * 未持久化时旧 agent 会从 agent.list 中消失，新 agent 的 id 不会与之冲突。
+ */
 export const resetAgentRuntimesForEpochAtom = atom(null, (_get, set) => {
   const now = Date.now();
   set(chatRuntimeBySessionAtom, (state) => {
     let changed = false;
     const next: ChatRuntimeBySession = { ...state };
     for (const [agentId, runtime] of Object.entries(state)) {
-      if (runtime.agentEpoch === undefined && runtime.agentLastSeq === undefined) continue;
+      if (!isStreamingStatus(runtime.streamStatus) && runtime.pendingApprovals.length === 0) continue;
       changed = true;
-      let updated: ChatSessionRuntime = { ...runtime, agentEpoch: undefined, agentLastSeq: undefined, pendingApprovals: [] };
+      let updated: ChatSessionRuntime = { ...runtime, pendingApprovals: [] };
       if (isStreamingStatus(runtime.streamStatus)) {
         updated = appendAgentNotice(
           finishAgentTurn(updated, now, "error", undefined),
@@ -800,4 +815,38 @@ export const resetAgentRuntimesForEpochAtom = atom(null, (_get, set) => {
     }
     return changed ? next : state;
   });
+});
+
+/**
+ * 打开 dormant / closed 会话并回放完 timeline 后调用：历史里若留有未收尾的回合
+ * （sidecar 在回合中途退出，没写入结束事件），该回合已不可能继续，静默收尾并清掉挂起审批。
+ */
+export const settleInactiveAgentRuntimeAtom = atom(null, (get, set, agentId: string) => {
+  const status = get(agentSnapshotsAtom)[agentId]?.status;
+  if (status !== "dormant" && status !== "closed") return;
+  const now = Date.now();
+  set(chatRuntimeBySessionAtom, (state) => {
+    const runtime = state[agentId];
+    if (!runtime || (!runtime.activeTurnId && runtime.pendingApprovals.length === 0)) return state;
+    const settled = runtime.activeTurnId
+      ? finishAgentTurn(runtime, now, "canceled", undefined)
+      : { ...runtime, pendingApprovals: [] };
+    return { ...state, [agentId]: settled };
+  });
+});
+
+/** agent.removed / agent.delete 成功：从快照与会话运行时中移除，清掉指向它的当前会话，并记录给正在查看它的页面。 */
+export const removeAgentAtom = atom(null, (get, set, agentId: string) => {
+  set(agentSnapshotsAtom, (state) => {
+    if (!(agentId in state)) return state;
+    const { [agentId]: _removed, ...rest } = state;
+    return rest;
+  });
+  set(chatRuntimeBySessionAtom, (state) => {
+    if (!(agentId in state)) return state;
+    const { [agentId]: _removed, ...rest } = state;
+    return rest;
+  });
+  if (get(activeSessionIdAtom) === agentId) set(activeSessionIdAtom, null);
+  set(lastRemovedAgentAtom, { agentId, nonce: (get(lastRemovedAgentAtom)?.nonce ?? 0) + 1 });
 });

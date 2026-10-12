@@ -15,13 +15,20 @@ export const AGENT_SELECTION_STORAGE_KEY = "agentdeck.composer.agent-selection";
 const EMPTY_SELECTION: AgentSelection = { provider: null, model: null, modeId: null };
 
 /**
- * 跳过权限确认的危险模式（design.md 5.3）：Claude `bypassPermissions`、Codex `full-access`。
- * 选择器中醒目标注，且绝不默认选中——因此也不写入记忆。
+ * 跳过权限确认的危险模式由 sidecar 用 `AgentMode.dangerous` 标出（design.md 4.5，
+ * 如 Claude `bypassPermissions`、Codex `full-access`）。选择器中醒目标注，且绝不默认选中——
+ * 因此不写入记忆，记忆里残留的危险模式也不会被恢复。
  */
-const DANGEROUS_MODE_IDS = new Set(["bypassPermissions", "full-access"]);
+export function isDangerousMode(mode: Pick<AgentMode, "dangerous"> | null | undefined): boolean {
+  return mode?.dangerous === true;
+}
 
-export function isDangerousMode(modeId: string | null | undefined): boolean {
-  return Boolean(modeId && DANGEROUS_MODE_IDS.has(modeId));
+export function findMode(
+  modeId: string | null | undefined,
+  modes: AgentMode[] | null | undefined,
+): AgentMode | undefined {
+  if (!modeId || !modes) return undefined;
+  return modes.find((mode) => mode.id === modeId);
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -35,15 +42,30 @@ export function readAgentSelection(): AgentSelection {
   return {
     provider: stringOrNull(record.provider),
     model: stringOrNull(record.model),
-    modeId: isDangerousMode(stringOrNull(record.modeId)) ? null : stringOrNull(record.modeId),
+    modeId: stringOrNull(record.modeId),
   };
 }
 
-export function writeAgentSelection(selection: AgentSelection): void {
+/** 写入记忆；`modes` 为当前目录，危险模式不写入。 */
+export function writeAgentSelection(selection: AgentSelection, modes?: AgentMode[] | null): void {
   writeUiValue(AGENT_SELECTION_STORAGE_KEY, {
     ...selection,
-    modeId: isDangerousMode(selection.modeId) ? null : selection.modeId,
+    modeId: isDangerousMode(findMode(selection.modeId, modes)) ? null : selection.modeId,
   });
+}
+
+/**
+ * 解析要展示的模式：目录未加载或已不存在 → 默认；危险模式只有本次手动选中的那个（`pickedDangerousModeId`）
+ * 才保留，其余（例如来自记忆）一律回落到默认，保证危险模式不会被默认选中。
+ */
+export function resolveModeChoice(
+  value: string | null,
+  modes: AgentMode[] | null | undefined,
+  pickedDangerousModeId: string | null = null,
+): string | null {
+  const mode = findMode(value, modes);
+  if (!mode) return null;
+  return isDangerousMode(mode) && mode.id !== pickedDangerousModeId ? null : mode.id;
 }
 
 /** 记住的 provider 可用就用它；否则取第一个可用的真实 Agent，最后才回落到 mock。 */

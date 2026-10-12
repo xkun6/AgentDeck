@@ -12,7 +12,7 @@ import { LoadingState } from "@agentdeck/shared-ui";
 import { ArrowUp, Folder, X } from "lucide-react";
 import type { FsEntry } from "@agentdeck/protocol";
 import { useFsList } from "@/hooks/use-fs-list";
-import { parentDir } from "@/lib/preview-rail";
+import { buildBreadcrumbs, parentDir } from "@/lib/preview-rail";
 import s from "./workspace-picker-modal.module.css";
 
 interface WorkspacePickerModalProps {
@@ -39,10 +39,45 @@ function prettyFsError(err: unknown): string {
   return err.message;
 }
 
-function splitBreadcrumb(
+const DRIVE_LIST_LABEL = "此电脑";
+
+function isWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path);
+}
+
+/** Windows 盘符根目录（`C:\`）：fs_list 返回的 parent 为 null，「上一级」回到盘符列表。 */
+function isWindowsDriveRoot(path: string): boolean {
+  return /^[A-Za-z]:[\\/]?$/.test(path.trim());
+}
+
+/**
+ * 「上一级」的目标：优先用 fs_list 返回的 parent；Windows 盘符根目录回到盘符列表（空字符串）；
+ * 读取失败（无 parent）时按路径推导；盘符列表与 POSIX 根目录没有上一级（null）。
+ */
+export function workspaceParentTarget(path: string, parent: string | null | undefined): string | null {
+  if (parent) return parent;
+  if (!path) return null;
+  if (isWindowsDriveRoot(path)) return "";
+  return parentDir(path);
+}
+
+/** `~` 开头的手动输入按主目录展开（fs_list 不认 `~`）。 */
+export function expandHomePath(input: string, home: string): string {
+  if (!home || !input.startsWith("~")) return input;
+  if (input === "~") return home;
+  if (input.startsWith("~/") || input.startsWith("~\\")) return `${home}${input.slice(1)}`;
+  return input;
+}
+
+export function splitBreadcrumb(
   absPath: string,
   home: string,
 ): Array<{ label: string; path: string }> {
+  // Windows：「此电脑」（盘符列表）+ 盘符 + 各级目录
+  if (absPath === "" && isWindowsPath(home)) return [{ label: DRIVE_LIST_LABEL, path: "" }];
+  if (isWindowsPath(absPath)) {
+    return [{ label: DRIVE_LIST_LABEL, path: "" }, ...buildBreadcrumbs(absPath)];
+  }
   if (!home) {
     return absPath ? [{ label: absPath, path: absPath }] : [];
   }
@@ -74,7 +109,8 @@ export function WorkspacePickerModal({
   const manualInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const [currentPath, setCurrentPath] = useState(initialPath?.trim() ?? "");
+  // null = 用户主目录；Windows 下空字符串 = 盘符列表
+  const [currentPath, setCurrentPath] = useState<string | null>(initialPath?.trim() || null);
   const [manualInput, setManualInput] = useState("");
   const [selectedName, setSelectedName] = useState<string | null>(null);
 
@@ -85,16 +121,15 @@ export function WorkspacePickerModal({
     [data],
   );
 
-  const resolvedPath = data?.path ?? currentPath;
-  // `/api/fs/list` no longer returns `parent`; derive it from the resolved path.
-  const parentPath = parentDir(resolvedPath);
+  const resolvedPath = data?.path ?? currentPath ?? "";
+  const parentPath = workspaceParentTarget(resolvedPath, data?.parent);
   const [lastKnownHome, setLastKnownHome] = useState("");
   const home = data?.home ?? lastKnownHome;
   const breadcrumb = useMemo(() => splitBreadcrumb(resolvedPath, home), [resolvedPath, home]);
 
   // After first fetch, normalize state so breadcrumb / footer immediately reflect the resolved abs path.
   useEffect(() => {
-    if (data?.path && data.path !== currentPath) {
+    if (data?.path !== undefined && data.path !== currentPath) {
       setCurrentPath(data.path);
     }
   }, [data?.path, currentPath]);
@@ -124,9 +159,9 @@ export function WorkspacePickerModal({
   const handleManualSubmit = useCallback(() => {
     const next = manualInput.trim();
     if (!next) return;
-    setCurrentPath(next);
+    setCurrentPath(expandHomePath(next, home));
     setManualInput("");
-  }, [manualInput]);
+  }, [home, manualInput]);
 
   const handleManualKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
@@ -237,7 +272,7 @@ export function WorkspacePickerModal({
 
   if (!open || typeof document === "undefined") return null;
 
-  const errorText = query.isError ? prettyFsError(query.error) : null;
+  const errorText = data?.error ?? (query.isError ? prettyFsError(query.error) : null);
   const isInitialLoad = query.isPending;
 
   return createPortal(
@@ -272,7 +307,7 @@ export function WorkspacePickerModal({
             ref={manualInputRef}
             type="text"
             className={s.wpManualInput}
-            placeholder="粘贴 home 内路径，回车跳转（如 ~/projects/foo）"
+            placeholder="粘贴目录路径，回车跳转（如 ~/projects/foo）"
             value={manualInput}
             onChange={(event) => setManualInput(event.target.value)}
             onKeyDown={handleManualKey}
@@ -293,8 +328,8 @@ export function WorkspacePickerModal({
           <button
             type="button"
             className={s.wpUpButton}
-            onClick={() => parentPath && navigateTo(parentPath)}
-            disabled={!parentPath}
+            onClick={() => parentPath !== null && navigateTo(parentPath)}
+            disabled={parentPath === null}
             aria-label="上一级"
             title="上一级"
           >

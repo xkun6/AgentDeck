@@ -195,3 +195,11 @@ describe("tauri bridge", () => {
     expect(error.message).toBe("Desktop runtime not ready");
   });
 });
+
+describe("tauri bridge fs_list", () => {
+  it("fsList 按仓库惯例把参数包在 input 里调 fs_list", async () => {
+    await installTauriBridge();
+    await window.hermesDesktop?.fsList?.({ path: "", showHidden: false });
+    expect(mockInvoke).toHaveBeenCalledWith("fs_list", { input: { path: "", showHidden: false } });
+  });
+});

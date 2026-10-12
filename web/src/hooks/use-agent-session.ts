@@ -2,7 +2,7 @@
 // lib/sidecar-client.ts：
 // - bindSidecarToStore：把连续去重后的事件流 / 快照 / 连接状态写进 jotai store；
 // - useSidecarBridge：在应用根部挂一次，负责绑定与首次连接；
-// - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式、列表、历史）。
+// - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式、列表、历史、删除）。
 import { useEffect, useMemo } from "react";
 import { useStore } from "jotai";
 import type { createStore } from "jotai";
@@ -20,17 +20,21 @@ import {
   type SidecarClient,
 } from "@/lib/sidecar-client";
 import {
+  AGENT_RESUMING_PROGRESS,
   applyAgentEventAtom,
   ensureChatSessionAtom,
   failAgentPromptAtom,
   markStreamsReconnectingAtom,
   reconcileAgentRuntimesAtom,
+  removeAgentAtom,
   removeApprovalAtom,
   resetAgentRuntimesForEpochAtom,
+  settleInactiveAgentRuntimeAtom,
   startAgentPromptAtom,
   type ImageEntry,
 } from "@/stores/chat";
 import {
+  agentSnapshotsAtom,
   replaceAgentSnapshotsAtom,
   sidecarConnectionAtom,
   upsertAgentSnapshotAtom,
@@ -82,6 +86,64 @@ export function humanizeSidecarError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export const SESSION_UNRECOVERABLE_MESSAGE = "该会话无法恢复，请新建会话";
+export const SESSION_RESUME_BUSY_MESSAGE = "会话正在恢复或运行中";
+
+/** 会话未加载（dormant）或已关闭（closed）：发送时 sidecar 会先尝试自动恢复。 */
+export function isInactiveAgent(agent: Pick<AgentSnapshot, "status"> | null | undefined): boolean {
+  return agent?.status === "dormant" || agent?.status === "closed";
+}
+
+export interface AgentSendErrorInfo {
+  message: string;
+  /** 会话已不可恢复：界面应禁用输入并提供「新建会话」入口 */
+  unrecoverable: boolean;
+}
+
+/**
+ * agent.send 错误 → 中文提示。`resuming` 表示发送时会话为 dormant / closed（会触发自动恢复），
+ * `lastError` 取自最新快照（恢复失败时 sidecar 写入的原因）。
+ */
+export function describeAgentSendError(
+  error: unknown,
+  context: { resuming: boolean; lastError?: string | null },
+): AgentSendErrorInfo {
+  if (error instanceof SidecarRpcError) {
+    switch (error.businessCode) {
+      case "NOT_SUPPORTED":
+      case "AGENT_CLOSED":
+        return { message: SESSION_UNRECOVERABLE_MESSAGE, unrecoverable: true };
+      case "TURN_IN_PROGRESS":
+        if (context.resuming) return { message: SESSION_RESUME_BUSY_MESSAGE, unrecoverable: false };
+        break;
+      case "PROVIDER_UNAVAILABLE":
+        if (context.resuming) {
+          return {
+            message: context.lastError?.trim() || error.message || "恢复会话失败",
+            unrecoverable: false,
+          };
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return { message: humanizeSidecarError(error), unrecoverable: false };
+}
+
+/** sendPrompt 抛出的错误：`message` 已是中文提示，`original` 为原始错误。 */
+export class AgentSendError extends Error {
+  readonly unrecoverable: boolean;
+  readonly original: unknown;
+
+  constructor(info: AgentSendErrorInfo, cause: unknown) {
+    super(info.message);
+    this.name = "AgentSendError";
+    this.unrecoverable = info.unrecoverable;
+    this.original = cause;
+  }
+}
+
 export function newClientMessageId(): string {
   try {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -111,8 +173,9 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
         store.set(markStreamsReconnectingAtom);
       }
     }),
-    client.onStream((envelope) => store.set(applyAgentEventAtom, envelope)),
+    client.onStream((envelope, meta) => store.set(applyAgentEventAtom, envelope, meta.replay)),
     client.onAgentState((agent) => store.set(upsertAgentSnapshotAtom, agent)),
+    client.onAgentRemoved((agentId) => store.set(removeAgentAtom, agentId)),
     client.onAgents((agents) => {
       store.set(replaceAgentSnapshotsAtom, agents);
       store.set(reconcileAgentRuntimesAtom, agents);
@@ -165,18 +228,25 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       options: SendAgentPromptOptions = {},
     ): Promise<{ turnId: string; clientMessageId: string }> {
       const clientMessageId = options.clientMessageId ?? newClientMessageId();
+      // dormant / closed 会话：sidecar 先自动恢复（starting → idle → running）再开始本轮
+      const resuming = isInactiveAgent(store.get(agentSnapshotsAtom)[agentId]);
       store.set(startAgentPromptAtom, {
         agentId,
         clientMessageId,
         text: options.displayText ?? promptDisplayText(prompt),
         images: options.displayImages,
+        ...(resuming ? { progressText: AGENT_RESUMING_PROGRESS } : {}),
       });
       try {
         const { turnId } = await client.request("agent.send", { agentId, prompt, clientMessageId });
         return { turnId, clientMessageId };
       } catch (error) {
-        store.set(failAgentPromptAtom, { agentId, clientMessageId, message: humanizeSidecarError(error) });
-        throw error;
+        const info = describeAgentSendError(error, {
+          resuming,
+          lastError: store.get(agentSnapshotsAtom)[agentId]?.lastError,
+        });
+        store.set(failAgentPromptAtom, { agentId, clientMessageId, message: info.message });
+        throw new AgentSendError(info, error);
       }
     },
 
@@ -214,10 +284,20 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       return client.refreshAgents();
     },
 
-    /** 用 agent.timeline 补齐该 agent 的全部历史（已归约的部分按 seq 去重）。 */
+    /**
+     * 用 agent.timeline 补齐该 agent 的全部历史（已归约的部分按 seq 去重，历史条目跨 epoch 保留）。
+     * dormant / closed 会话回放后收尾历史里未结束的回合。
+     */
     async loadTimeline(agentId: string): Promise<void> {
       store.set(ensureChatSessionAtom, agentId);
       await client.syncAgent(agentId);
+      store.set(settleInactiveAgentRuntimeAtom, agentId);
+    },
+
+    /** agent.delete：sidecar 关闭并删除会话（含磁盘目录），随后本地移除（agent.removed 也会触发同样处理）。 */
+    async deleteSession(agentId: string): Promise<void> {
+      await client.request("agent.delete", { agentId });
+      store.set(removeAgentAtom, agentId);
     },
   };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useCallback, useRef, useState, type CSSProperties } from "react";
 import { useAtom, useAtomValue } from "jotai";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Check, Copy, PanelRight } from "lucide-react";
 import type { AgentPermissionResponse, ProviderInfo } from "@agentdeck/protocol";
 import {
@@ -14,8 +14,19 @@ import {
   rightRailVisibleAtom,
 } from "@/stores/ui";
 import { chatRuntimeBySessionAtom, createEmptyChatRuntime, type PendingApproval } from "@/stores/chat";
-import { agentListLoadedAtom, agentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
-import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
+import {
+  agentListLoadedAtom,
+  agentSnapshotsAtom,
+  lastRemovedAgentAtom,
+  sidecarConnectionAtom,
+} from "@/stores/agents";
+import {
+  AgentSendError,
+  humanizeSidecarError,
+  isInactiveAgent,
+  SESSION_UNRECOVERABLE_MESSAGE,
+  useAgentSession,
+} from "@/hooks/use-agent-session";
 import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useComposerTimer } from "@/hooks/use-composer-timer";
 import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
@@ -90,7 +101,15 @@ export function DetailRoute() {
   const providersQuery = useAgentProviders();
   const catalogQuery = useAgentCatalog(snapshot?.provider ?? null, snapshot?.cwd ?? "");
   const runtimeIsBusy = isRuntimeRunning(runtime) || snapshot?.status === "running";
-  const closed = snapshot?.status === "closed";
+  // dormant（sidecar 重启后的历史会话）/ closed：发送时自动恢复；starting：恢复进行中
+  const inactive = isInactiveAgent(snapshot);
+  const resuming = snapshot?.status === "starting";
+  // 发送时被告知无法恢复（NOT_SUPPORTED / AGENT_CLOSED）
+  const [sendUnrecoverable, setSendUnrecoverable] = useState(false);
+  const unrecoverable = (inactive && snapshot?.resumable === false) || sendUnrecoverable;
+  const [recreateState, setRecreateState] = useState<{ pending: boolean; error?: string }>({ pending: false });
+  const navigate = useNavigate();
+  const lastRemoved = useAtomValue(lastRemovedAgentAtom);
 
   const [timelineState, setTimelineState] = useState<{ id?: string; loading: boolean; error?: string }>({
     loading: false,
@@ -115,6 +134,13 @@ export function DetailRoute() {
   useEffect(() => {
     if (urlTaskId && urlTaskId !== activeSessionId) setActiveId(urlTaskId);
   }, [urlTaskId, activeSessionId, setActiveId]);
+
+  // 正在查看的会话被删除（本页、侧栏、历史页或其它客户端）：回到首页。
+  useEffect(() => {
+    if (!lastRemoved || !taskId || lastRemoved.agentId !== taskId) return;
+    navigate("/", { replace: true });
+    setActiveId(null);
+  }, [lastRemoved, navigate, setActiveId, taskId]);
 
   // 历史：从 agent.timeline 回放重建（经 reduceAgentEvent，按 seq 去重）。
   useEffect(() => {
@@ -187,10 +213,15 @@ export function DetailRoute() {
   const submitPayload = useCallback(async (payload: ComposerSubmitPayload) => {
     if (!taskId) return;
     const prepared = await prepareAgentPrompt(payload);
-    await actions.sendPrompt(taskId, prepared.prompt, {
-      displayText: prepared.displayText,
-      displayImages: prepared.displayImages,
-    });
+    try {
+      await actions.sendPrompt(taskId, prepared.prompt, {
+        displayText: prepared.displayText,
+        displayImages: prepared.displayImages,
+      });
+    } catch (error) {
+      if (error instanceof AgentSendError && error.unrecoverable) setSendUnrecoverable(true);
+      throw error;
+    }
   }, [actions, taskId]);
 
   const onSend = useCallback(async (payload: ComposerSubmitPayload) => {
@@ -263,6 +294,8 @@ export function DetailRoute() {
     previousBusyRef.current = false;
     userInterruptedRef.current = false;
     setControlError(undefined);
+    setSendUnrecoverable(false);
+    setRecreateState({ pending: false });
   }, [taskId]);
 
   const onStop = useCallback(async () => {
@@ -312,13 +345,30 @@ export function DetailRoute() {
     }
   }, [actions, snapshot, taskId]);
 
+  // 不可恢复的会话：一键以同一 Agent / 工作区新建会话。
+  const onRecreate = useCallback(async () => {
+    if (!snapshot) return;
+    setRecreateState({ pending: true });
+    try {
+      const agent = await actions.createSession({ provider: snapshot.provider, cwd: snapshot.cwd });
+      setActiveId(agent.id);
+      navigate(`/tasks/${encodeURIComponent(agent.id)}`);
+    } catch (error) {
+      setRecreateState({ pending: false, error: humanizeSidecarError(error) });
+    }
+  }, [actions, navigate, setActiveId, snapshot]);
+
   // ---- 展示 ----------------------------------------------------------------
-  const title = snapshot?.title?.trim() || firstUserText(runtime.messages) || (providerLabel ? `${providerLabel} 会话` : "会话详情");
+  const title = snapshot?.title?.trim()
+    || snapshot?.preview?.trim()
+    || firstUserText(runtime.messages)
+    || (providerLabel ? `${providerLabel} 会话` : "会话详情");
   const model = snapshot?.model ?? "";
   const sub = snapshot
     ? [providerLabel, model ? `模型 ${model}` : "", snapshot.cwd].filter(Boolean).join(" · ")
     : undefined;
-  const pendingApproval = runtime.pendingApprovals[0] ?? null;
+  // dormant / closed 下 sidecar 拒绝权限应答（AGENT_CLOSED），不展示审批
+  const pendingApproval = inactive ? null : runtime.pendingApprovals[0] ?? null;
   const notFound = timelineState.id === taskId && Boolean(timelineState.error) && !snapshot;
   const missing = agentListLoaded && !snapshot && runtime.messages.length === 0;
 
@@ -330,8 +380,23 @@ export function DetailRoute() {
   const timelineStatus =
     runtime.statusMessage ||
     (notFound || missing ? timelineState.error ?? "会话不存在（Agent 服务可能已重启），请新建会话" : undefined) ||
-    (closed ? "该会话已关闭，如需继续请新建会话" : undefined) ||
     (runtimeIsBusy && chatMessages.length === 0 ? "任务运行中，等待输出…" : undefined);
+
+  const sessionNotice: { tone: "info" | "danger"; text: string; detail?: string } | null = !snapshot
+    ? null
+    : unrecoverable
+      ? { tone: "danger", text: SESSION_UNRECOVERABLE_MESSAGE, detail: snapshot.lastError ?? undefined }
+      : resuming
+        ? { tone: "info", text: "正在恢复会话…" }
+        : inactive
+          ? {
+              tone: "info",
+              text: snapshot.status === "closed"
+                ? "该会话已关闭，发送消息将尝试恢复"
+                : "历史会话，发送消息将自动恢复",
+              detail: snapshot.lastError ?? undefined,
+            }
+          : null;
 
   const hasActiveComposerPrefill = composerPrefill.sessionId === taskId && composerPrefill.nonce > 0;
   const composerInitial = hasActiveComposerPrefill ? composerPrefill.text : storedComposerDraft;
@@ -417,6 +482,29 @@ export function DetailRoute() {
             {runtimeIsBusy && stall.isStalled ? (
               <StallNotice silenceMs={stall.silenceMs} onInterrupt={onStop} />
             ) : null}
+            {sessionNotice ? (
+              <div className={s.sessionNotice} data-tone={sessionNotice.tone} role="status">
+                <div className={s.sessionNoticeText}>
+                  <span>{sessionNotice.text}</span>
+                  {sessionNotice.detail ? (
+                    <span className={s.sessionNoticeDetail}>{sessionNotice.detail}</span>
+                  ) : null}
+                  {recreateState.error ? (
+                    <span className={s.sessionNoticeDetail}>新建失败：{recreateState.error}</span>
+                  ) : null}
+                </div>
+                {unrecoverable ? (
+                  <button
+                    type="button"
+                    className={s.sessionNoticeAction}
+                    onClick={() => void onRecreate()}
+                    disabled={recreateState.pending}
+                  >
+                    {recreateState.pending ? "正在新建…" : "新建会话（同 Agent / 工作区）"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <QueuePanel
               entries={queuedPrompts}
               busy={runtimeIsBusy}
@@ -436,7 +524,8 @@ export function DetailRoute() {
               loadingPlaceholder={composerLoadingPlaceholder}
               showMeta={false}
               loading={runtimeIsBusy}
-              disabled={closed || notFound || missing}
+              disabled={unrecoverable || notFound || missing}
+              placeholder={unrecoverable ? SESSION_UNRECOVERABLE_MESSAGE : undefined}
               onStop={onStop}
               toolbarExtra={
                 snapshot ? (
@@ -447,7 +536,7 @@ export function DetailRoute() {
                     catalog={catalog}
                     catalogLoading={catalogQuery.isLoading}
                     catalogError={controlError}
-                    disabled={runtimeIsBusy || closed}
+                    disabled={runtimeIsBusy || inactive || resuming}
                     providerLocked
                   />
                 ) : null

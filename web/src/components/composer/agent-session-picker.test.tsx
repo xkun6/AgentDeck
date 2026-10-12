@@ -18,7 +18,7 @@ const CATALOG = {
   modes: [
     { id: "read-only", label: "只读" },
     { id: "auto", label: "自动" },
-    { id: "full-access", label: "完全访问" },
+    { id: "full-access", label: "完全访问", dangerous: true },
   ],
 };
 
@@ -77,6 +77,26 @@ describe("AgentSessionPicker", () => {
       />,
     );
     expect(screen.getByRole("alert").textContent).toContain("危险模式");
+  });
+
+  it("危险与否只看 AgentMode.dangerous，不按 id 判断", () => {
+    render(
+      <AgentSessionPicker
+        selection={{ provider: "claude", model: null, modeId: "bypassPermissions" }}
+        onChange={vi.fn()}
+        providers={PROVIDERS}
+        catalog={{
+          models: [],
+          modes: [
+            { id: "bypassPermissions", label: "未标记" },
+            { id: "custom-yolo", label: "全自动", dangerous: true },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByRole("option", { name: "未标记" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "全自动（危险：跳过权限确认）" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("模型列表为空时只有默认选项（ACP 首次建会话前）", () => {
