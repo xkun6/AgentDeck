@@ -734,16 +734,16 @@ mod tests {
     #[test]
     fn macos_terminal_source_command_stays_short() {
         assert_eq!(
-            macos_terminal_source_command(Path::new("/Users/alice/Hermes Scripts/open.zsh")),
-            ". '/Users/alice/Hermes Scripts/open.zsh'"
+            macos_terminal_source_command(Path::new("/Users/alice/AgentDeck Scripts/open.zsh")),
+            ". '/Users/alice/AgentDeck Scripts/open.zsh'"
         );
     }
 
     #[test]
     fn applescript_quote_escapes_terminal_script_literals() {
         assert_eq!(
-            applescript_quote("echo \"hi\" && echo C:\\Hermes"),
-            "\"echo \\\"hi\\\" && echo C:\\\\Hermes\""
+            applescript_quote("echo \"hi\" && echo C:\\AgentDeck"),
+            "\"echo \\\"hi\\\" && echo C:\\\\AgentDeck\""
         );
     }
 
@@ -773,7 +773,7 @@ mod tests {
             env_vars.get("TERM_PROGRAM").map(String::as_str),
             Some("AgentDeck")
         );
-        assert!(!env_vars.keys().any(|key| key.starts_with("HERMES_")));
+        assert!(!env_vars.keys().any(|key| key.starts_with("AGENTDECK_")));
     }
 
     #[test]

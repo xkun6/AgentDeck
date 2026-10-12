@@ -107,7 +107,7 @@ async fn choose_log_save_path(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .set_title("导出 Hermes 日志")
+        .set_title("导出 AgentDeck 日志")
         .set_file_name(file_name)
         .add_filter(format.filter_label(), &extensions)
         .save_file(move |path| {
@@ -129,7 +129,7 @@ fn safe_file_name(file_name: &str, format: LogSnapshotFormat) -> String {
         .collect::<String>();
 
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
-        cleaned = "hermes-logs".to_string();
+        cleaned = "agentdeck-logs".to_string();
     }
 
     let extension = format.extension();
@@ -172,12 +172,12 @@ mod tests {
     #[test]
     fn ensure_extension_replaces_missing_or_different_extension() {
         assert_eq!(
-            ensure_extension(PathBuf::from("/tmp/hermes"), LogSnapshotFormat::Jsonl),
-            PathBuf::from("/tmp/hermes.jsonl")
+            ensure_extension(PathBuf::from("/tmp/agentdeck"), LogSnapshotFormat::Jsonl),
+            PathBuf::from("/tmp/agentdeck.jsonl")
         );
         assert_eq!(
-            ensure_extension(PathBuf::from("/tmp/hermes.txt"), LogSnapshotFormat::Log),
-            PathBuf::from("/tmp/hermes.log")
+            ensure_extension(PathBuf::from("/tmp/agentdeck.txt"), LogSnapshotFormat::Log),
+            PathBuf::from("/tmp/agentdeck.log")
         );
     }
 }

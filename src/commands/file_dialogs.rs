@@ -264,7 +264,7 @@ mod tests {
             Err(AppError::InvalidRequest(_))
         ));
         assert!(matches!(
-            validate_open_target("/no/such/path/hermes-xyz-404"),
+            validate_open_target("/no/such/path/agentdeck-xyz-404"),
             Err(AppError::InvalidRequest(_))
         ));
     }
@@ -280,8 +280,8 @@ mod tests {
     #[test]
     fn accepts_safe_external_urls() {
         assert_eq!(
-            validate_external_url(" https://hermesagent.org.cn/path?q=1 ").unwrap(),
-            "https://hermesagent.org.cn/path?q=1"
+            validate_external_url(" https://example.com/path?q=1 ").unwrap(),
+            "https://example.com/path?q=1"
         );
         assert_eq!(
             validate_external_url("http://example.com").unwrap(),
@@ -293,10 +293,10 @@ mod tests {
         );
         assert_eq!(
             validate_external_url(
-                "obsidian://open?vault=Hermes&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF"
+                "obsidian://open?vault=AgentDeck&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF"
             )
             .unwrap(),
-            "obsidian://open?vault=Hermes&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF"
+            "obsidian://open?vault=AgentDeck&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF"
         );
     }
 

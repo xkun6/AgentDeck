@@ -74,7 +74,7 @@ async fn choose_session_save_path(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .set_title("导出 Hermes 会话")
+        .set_title("导出 AgentDeck 会话")
         .set_file_name(file_name)
         .add_filter("JSON 会话文件", &["json"])
         .save_file(move |path| {

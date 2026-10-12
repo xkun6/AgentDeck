@@ -38,7 +38,7 @@ pub struct CodingAgentStatus {
     /// 人话补充（过期时间、凭据位置等），不含任何秘密。
     pub login_detail: Option<String>,
     pub config_dir: String,
-    /// hermes 侧对应的委派技能名（用于设置页联动技能开关）。
+    /// 对应的委派技能名（用于设置页联动技能开关）。
     pub skill_name: String,
     pub install_hint: String,
     pub login_hint: String,

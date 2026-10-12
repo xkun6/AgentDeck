@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- AgentDeck 应用图标源文件：墨色圆角方底 + 三张叠放的卡片（甲板），前卡印终端提示符。
+       颜色取自 packages/shared-ui/src/tokens/primitive.css：
+       persimmon-500 #ff7a3d、persimmon-600 #c95722、bone-100 #f6f1e3、ink #171716。
+       重新生成：pnpm exec tauri icon icons/source/agentdeck.svg -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="#171716"/>
+  <rect x="292" y="236" width="400" height="520" rx="60" fill="#f6f1e3" fill-opacity="0.28"
+        transform="rotate(-16 492 496)"/>
+  <rect x="312" y="252" width="400" height="520" rx="60" fill="#c95722"
+        transform="rotate(-6 512 512)"/>
+  <g transform="rotate(5 552 532)">
+    <rect x="352" y="272" width="400" height="520" rx="60" fill="#ff7a3d"/>
+    <path d="M452 452 L552 532 L452 612" fill="none" stroke="#ffffff" stroke-width="56"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M592 620 L662 620" fill="none" stroke="#ffffff" stroke-width="56"
+          stroke-linecap="round"/>
+  </g>
+</svg>

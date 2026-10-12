@@ -1314,9 +1314,9 @@ fn ensure_git_repo(dir: &Path) -> AppResult<()> {
             dir,
             &[
                 "-c",
-                "user.email=hermes@localhost",
+                "user.email=agentdeck@localhost",
                 "-c",
-                "user.name=Hermes",
+                "user.name=AgentDeck",
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -1378,7 +1378,7 @@ fn add_worktree_impl(
     let slug = slugify(name.unwrap_or(""));
     let sanitized = sanitize_branch(branch.unwrap_or(""));
     let branch_name = if sanitized.is_empty() {
-        format!("hermes/{slug}")
+        format!("agentdeck/{slug}")
     } else {
         sanitized
     };
@@ -1833,12 +1833,12 @@ mod tests {
 
     #[test]
     fn parse_worktrees_reads_porcelain() {
-        let out = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo/.worktrees/feat\nHEAD def\nbranch refs/heads/hermes/feat\nlocked\n";
+        let out = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo/.worktrees/feat\nHEAD def\nbranch refs/heads/agentdeck/feat\nlocked\n";
         let trees = parse_worktrees(out);
         assert_eq!(trees.len(), 2);
         assert_eq!(trees[0].0, "/repo");
         assert_eq!(trees[0].1.as_deref(), Some("main"));
-        assert_eq!(trees[1].1.as_deref(), Some("hermes/feat"));
+        assert_eq!(trees[1].1.as_deref(), Some("agentdeck/feat"));
         assert!(trees[1].3, "second worktree is locked");
     }
 
@@ -1848,7 +1848,7 @@ mod tests {
         let repo = dir.path().to_string_lossy().to_string();
 
         let added = add_worktree_impl(&repo, Some("Login Page"), None, None, None).unwrap();
-        assert_eq!(added.branch, "hermes/login-page", "default branch name");
+        assert_eq!(added.branch, "agentdeck/login-page", "default branch name");
         assert!(
             std::path::Path::new(&added.path).is_dir(),
             "worktree dir created"
@@ -1860,13 +1860,13 @@ mod tests {
         assert!(list[0].is_main, "main worktree first");
         assert!(list
             .iter()
-            .any(|w| w.branch.as_deref() == Some("hermes/login-page")));
+            .any(|w| w.branch.as_deref() == Some("agentdeck/login-page")));
 
         // The branch picker sees the new branch as checked out, with its path.
         let branches = list_branches_impl(dir.path());
         let feat = branches
             .iter()
-            .find(|b| b.name == "hermes/login-page")
+            .find(|b| b.name == "agentdeck/login-page")
             .expect("branch listed");
         assert!(feat.checked_out);
         // On Windows, git porcelain output uses forward slashes while Rust
@@ -2048,7 +2048,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().to_string_lossy().to_string();
         let added = add_worktree_impl(&repo, Some("scratch"), None, None, None).unwrap();
-        assert_eq!(added.branch, "hermes/scratch");
+        assert_eq!(added.branch, "agentdeck/scratch");
         assert!(std::path::Path::new(&added.path).is_dir());
     }
 

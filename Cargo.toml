@@ -51,15 +51,12 @@ tauri-plugin-clipboard-manager = "2.3.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
 # Read-only registry access for live PATH/PATHEXT resolution (path_resolver.rs).
 winreg = "0.55"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
 
 [dev-dependencies]
 pretty_assertions = "1"

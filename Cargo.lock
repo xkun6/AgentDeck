@@ -21,8 +21,6 @@ dependencies = [
  "libc",
  "log",
  "notify",
- "objc2",
- "objc2-foundation",
  "open",
  "portable-pty",
  "pretty_assertions",

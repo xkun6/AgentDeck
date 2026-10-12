@@ -502,7 +502,9 @@ fn effective_path_item(
         ),
         ShellProbeOutcome::Disabled => (
             EnvironmentCheckStatus::Ok,
-            format!("已按 HERMES_DESKTOP_DISABLE_SHELL_PATH 跳过登录 shell 导入，共 {entry_count} 个目录"),
+            format!(
+                "已按 AGENTDECK_DISABLE_SHELL_PATH 跳过登录 shell 导入，共 {entry_count} 个目录"
+            ),
         ),
         ShellProbeOutcome::NotApplicable => (
             EnvironmentCheckStatus::Ok,

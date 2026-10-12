@@ -33,11 +33,11 @@ const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(20);
 /// Marker printed right before the PATH value so profile noise (echo in
 /// .zprofile etc.) cannot corrupt parsing.
 #[allow(dead_code)]
-const PATH_MARKER: &str = "__HERMES_PATH_MARKER__";
+const PATH_MARKER: &str = "__AGENTDECK_PATH_MARKER__";
 
 /// Escape hatch: set to "1" to skip the login-shell probe entirely.
 #[allow(dead_code)]
-const DISABLE_SHELL_PATH_ENV: &str = "HERMES_DESKTOP_DISABLE_SHELL_PATH";
+const DISABLE_SHELL_PATH_ENV: &str = "AGENTDECK_DISABLE_SHELL_PATH";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathSource {
@@ -335,9 +335,7 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::process:
 /// Merge PATH entry lists, deduping while keeping the first occurrence.
 /// Order: `primary` (login shell / registry — matches what the user's
 /// terminal resolves), then process-PATH extras, then existing well-known
-/// dirs as a safety net. The desktop never resolves `hermes` from PATH and
-/// the in-app terminal prepends its shim dir explicitly, so demoting the
-/// process PATH cannot re-enable a global hermes install.
+/// dirs as a safety net.
 fn merge_path_entries(
     primary: Vec<(PathBuf, PathSource)>,
     process: Vec<PathBuf>,

@@ -40,7 +40,7 @@ const IMAGE_PREVIEW_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const FILE_DATA_URL_MAX_BYTES: u64 = 16 * 1024 * 1024;
 /// Bytes sampled from the head of a file to decide text vs binary.
 const BINARY_SNIFF_BYTES: usize = 4096;
-/// Match the upstream `hermes:fs:writeText` cap (1 MB). The spot editor's save
+/// Match the upstream desktop bridge `fs:writeText` cap (1 MB). The spot editor's save
 /// is the only writer, so this is a hard ceiling that keeps the command from
 /// being abused as a bulk-write primitive.
 const TEXT_WRITE_MAX_BYTES: usize = 1_000_000;
@@ -389,7 +389,7 @@ pub fn read_file_data_url(input: ReadFileDataUrlInput) -> AppResult<String> {
 }
 
 /// Core, AppHandle-free write logic so it can be unit-tested directly. Mirrors
-/// the Electron `hermes:fs:writeText` hardening: a size cap, a **strict**
+/// the upstream Electron `fs:writeText` hardening: a size cap, a **strict**
 /// workspace-containment guard ([`resolve_within_root_strict`] — unlike reads,
 /// a missing or un-canonicalizable root is a hard error), and an
 /// existing-regular-file requirement (the spot editor only ever saves a file it

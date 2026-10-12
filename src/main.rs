@@ -156,6 +156,7 @@ fn main() {
             commands::file_dialogs::create_workspace_project,
             commands::file_dialogs::open_workspace_path,
             commands::file_dialogs::open_external_url,
+            commands::fs::fs_list,
             commands::log_export::export_log_snapshot,
             commands::session_export::export_session_json,
             commands::devtools::toggle_devtools,
