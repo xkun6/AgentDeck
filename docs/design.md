@@ -194,7 +194,7 @@ export type AgentStreamEvent =
   | { type: "permission_resolved"; requestId: string; response: AgentPermissionResponse }
   | { type: "usage_updated"; usage: AgentUsage }
   | { type: "model_changed"; modelId: string | null }
-  | { type: "mode_changed"; modeId: string };
+  | { type: "mode_changed"; modeId: string | null }; // null = 回到「跟随 provider 设置」
 
 export interface AgentStreamEnvelope {
   agentId: string; seq: number; epoch: string; timestamp: number; event: AgentStreamEvent;
@@ -374,7 +374,7 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local --permission-mode <m> --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 与 `system` 的 status 等子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 与 `system` 的 status 等子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：设置项 / 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
@@ -400,9 +400,15 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。
 - detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent / Skill→plain_text、MCP 等→unknown；TodoWrite 只发 `todo`。
-- 始终传 `--allow-dangerously-skip-permissions` 以允许会话中途切到 `bypassPermissions`；默认模式仍为 `default`，前端须把 bypassPermissions 标为危险选项且不得默认选中。
+- 始终传 `--allow-dangerously-skip-permissions` 以允许会话中途切到 `bypassPermissions`；前端须把 bypassPermissions 标为危险选项且不得默认选中。
+- 模式表顺序：`default`「逐项审批」、`acceptEdits`「自动接受编辑」、`auto`「自动模式」（独立分类器模型审查，常规操作直接执行，越权 / 可疑 / 高风险操作被拦截；出处 code.claude.com/docs/en/permission-modes）、`plan`「计划模式」、`bypassPermissions`「跳过所有审批」（dangerous）。CLI 的 `manual` 是 `default` 的别名（2.1.296 实测两者都回报 `default`），传参仍用 `default`。
+- modeId 为 null（前端「默认模式」）时**不传** `--permission-mode`，跟随用户 Claude 设置中的默认模式；initialize 应答的 `current_permission_mode` 记为会话「基础模式」。跟随设置时直接进入 plan（新建选计划模式或恢复）：先不带参数启动读取基础模式，再立即发 `set_permission_mode plan`。
+- 批准计划后切回进入 plan 之前的模式；之前为 null 则切回基础模式且快照 modeId 回到 null；基础模式未知或本身为 plan 时退回 `default`。
 - 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`（不设置 `CLAUDE_CODE_ENTRYPOINT`）；子代理内部消息（带 `parent_tool_use_id`）不进主时间线；AskUserQuestion 暂按普通工具权限处理。
 - `fetchCatalog` 起一个临时 claude 进程只发 `initialize`（不对话、不计费），读取应答中的 `models`（value / displayName / description）后关闭；成功结果缓存 10 分钟，失败回退静态别名（default / sonnet / opus / haiku），`default` 保留中文标签。
+- 设置模型发现（参照 paseo）：之后追加用户 Claude 设置（`$CLAUDE_CONFIG_DIR/settings.json`，否则 `~/.claude/settings.json`；允许 BOM，读取失败忽略，只读）中顶层 `model` 与 `env` 的 `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` / `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`，去重并保留原样 id；只读 settings 文件中的 env，不读进程环境。带 `[1m]` 的显示名追加「· 1M 上下文」。「默认模型」说明为「跟随 Claude Code 设置（当前：X）」，X 取 `env.ANTHROPIC_MODEL`，否则取 `model`。设置每次 fetchCatalog 重读，探测结果仍缓存 10 分钟。
+- 1M 上下文的实际表达（实测）：选 `opus[1m]` 时请求体 model 为去掉后缀的 `claude-opus-5-5`，另带 beta 头 `context-1m-2025-08-07`；选 `opus` 则不带该 beta 头。
+- 中转：配了静态 `models` 时只用静态列表；未配时按中转合并后的 settings 追加，不读用户 settings。注意中转的 claude 运行时仍加载用户 settings（`--setting-sources user,...`），中转未设 `model` 时用户设置中的 model 仍会生效。
 
 Codex（以本机 0.162.1 协议为准）：
 - 模式 `read-only` / `auto`（默认）/ `full-access`；`setMode` 只在切换后的下一轮带一次 approvalPolicy + sandboxPolicy。
