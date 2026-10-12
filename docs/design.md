@@ -289,6 +289,32 @@ interface AgentClient {
 - 能解析到真实 `.exe` 就 `shell:false` 直接 spawn；`.cmd` shim 优先解析出背后的 exe 或 js（js 用 `process.execPath` 执行）；万不得已才 `shell:true` 并按 paseo `windows-command.ts` 做 cmd 转义。**内联 JSON 参数绝不能经过 cmd.exe。**
 - 关闭会话时 tree-kill 整棵子进程树。
 
+### 5.3 provider 实现约定（P3 落地时确定，前端需知）
+
+通用：
+- 同一 callId 的 `tool_call` 先推 running，再推 completed / failed / canceled，后者覆盖前者；中断或关闭时仍在运行的工具补推 `canceled`。
+- `assistant_message` 一轮内可能有多条（不同 `messageId`），前端按 messageId 分段拼接；`reasoning` 不带 messageId。
+- 首轮 `thread_started` 与 `turn_started` 的先后不固定（Claude、ACP 先 thread_started，Codex 先 turn_started），前端不得依赖二者顺序。
+
+Claude：
+- 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。
+- detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent / Skill→plain_text、MCP 等→unknown；TodoWrite 只发 `todo`。
+- 始终设 `allowDangerouslySkipPermissions: true` 以允许会话中途切到 `bypassPermissions`；默认模式仍为 `default`，前端须把 bypassPermissions 标为危险选项且不得默认选中。
+- 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`；子代理内部消息（带 `parent_tool_use_id`）不进主时间线；AskUserQuestion 暂按普通工具权限处理。
+- `fetchCatalog` 只返回静态别名（default / sonnet / opus / haiku）。
+
+Codex（以本机 0.162.1 协议为准）：
+- 模式 `read-only` / `auto`（默认）/ `full-access`；`setMode` 只在切换后的下一轮带一次 approvalPolicy + sandboxPolicy。
+- 审批 actions：`accept`「允许」/ `decline`「拒绝」；拒绝时 `interrupt:true` 使本轮以 `turn_canceled` 结束；被拒绝的命令 tool_call 为 failed，error「用户拒绝了该操作」。
+- 多文件 fileChange 的 detail 只显示第一个文件，完整列表在 `metadata.files`；新增文件为 `write` detail。
+- 子进程意外退出后下一轮自动重启并 `thread/resume`。
+
+ACP：
+- models / modes 只有建会话后才可得；首次建会话前 `provider.listModels` 返回空，之后返回最近一次会话的缓存。
+- 权限 actions 为 `{ id: optionId, label: name, behavior }`，可能含 allow_once / allow_always / reject_once / reject_always 多项，前端按 actions 渲染并回传 `selectedActionId`。
+- `turn_failed.code`：`REFUSAL`、`PROCESS_EXITED`、`ACP_<错误码>`；进程崩溃后该 agent 不可再用（再 send 返回 `PROVIDER_UNAVAILABLE`），前端应提示新建会话。
+- 工具 `name` 为 ACP kind（如 execute），完整标题在 `metadata.title`。
+
 ## 6. 前端接缝（P4）
 
 保留 Hermes 的渲染层：`ChatSessionRuntime` / `HermesUIMessage` / `ChatMessage` / `MessageTimeline` / `GooseComposer` / `PreviewRail`。替换三处：
