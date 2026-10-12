@@ -243,7 +243,7 @@ export interface AgentSnapshot {
 
 ### 4.6 本地文件列表（Rust 命令，P5）
 
-- 命令 `fs_list { path?: string, showHidden?: boolean }` → `{ path, parent: string | null, home, entries: { name, path, isDir }[], error?: string }`。
+- 命令 `fs_list`，参数按仓库惯例包在 `input` 中：`invoke("fs_list", { input: { path?: string, showHidden?: boolean } })`（`input` 可省略）→ `{ path, parent: string | null, home, entries: { name, path, isDir }[], error?: string }`（无错误时不含 `error` 字段）。非 Windows 下 `path` 为空字符串列根目录 `/`。
 - `path` 缺省时列出用户主目录；Windows 下 `path` 为空字符串时返回盘符列表（entries 为 `C:\` 等，parent 为 null）。
 - 目录在前、文件在后，各自按名称不区分大小写排序；默认隐藏以 `.` 开头的条目与 Windows 隐藏属性条目。
 - 读取失败（不存在 / 无权限）不抛错，返回 `error`（中文）与空 entries，便于前端就地提示。
