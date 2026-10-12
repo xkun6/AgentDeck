@@ -308,6 +308,14 @@ interface ProviderProfile {
 - `provider.test` 未填 baseUrl 时，claude 用 `https://api.anthropic.com`，codex 用 `https://api.openai.com/v1`。
 - 已删除 / 停用 provider 的会话：运行中继续使用旧 client；关闭或 dormant 后恢复返回 `PROVIDER_NOT_FOUND`。
 
+**Claude 中转的整份设置（settings）**（仅 `extends: "claude"`）：
+- `ProviderProfile` 增加 `settingsFile?: string`（绝对路径，指向一个 Claude Code settings.json）与 `settings?: Record<string, unknown>`（内联 JSON 对象）。两者可同时使用；其它 extends 填写时校验失败。
+- 合并顺序（后者覆盖前者）：`settingsFile` 内容 → `settings` → 中转推导的 env（baseUrl / apiKey / 置空另一个凭据）→ `profile.env`。对象按键深合并，数组与标量整体替换。合并结果作为**一份** JSON 通过 `--settings` 传入（flag 级，优先级高于用户 / 项目 / local 设置，低于企业策略）。
+- 表单未填 baseUrl / apiKey 时，不推导也不置空对应变量，settings 中 `env` 里的 `ANTHROPIC_BASE_URL` / 凭据照常生效（启动前仍会剔除继承环境中的同名变量）；`provider.test` 未填 baseUrl / apiKey 时回退使用合并后 settings.env 中的值。
+- `settingsFile` 每次启动会话时读取：不存在或不是合法 JSON 对象 → `provider.list` 中该项不可用（`unavailableReason` 为中文原因），启动 / 恢复返回 `PROVIDER_UNAVAILABLE`。`provider.config.set` 只校验其为绝对路径，不要求文件已存在。
+- `--settings` 与用户 settings 之间按 Claude Code 自身规则合并（如 hooks、permissions 数组是合并还是替换），实测结论见下条。
+- 脱敏：`settings.env` 的值与 `profile.env` 同样规则脱敏；日志中不打印 settings 全文。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
