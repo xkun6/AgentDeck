@@ -9,24 +9,28 @@ import { reservedProfileIds } from "./schema.js";
 import { loadProviderProfiles, providersConfigPath, saveProviderProfiles } from "./store.js";
 import { testProviderProfile, type ProviderTestDeps } from "./test-connection.js";
 
-export { createCustomProviderClient, CustomProviderClient } from "./custom-client.js";
+export { createCustomClaudeLaunch, createCustomProviderClient, CustomProviderClient } from "./custom-client.js";
 export {
   buildClaudeLaunchOverride,
   buildCodexLaunchOverride,
   codexModelProviderKey,
+  deepMergeSettings,
   deriveClaudeEnv,
   deriveCodexEnv,
+  mergeClaudeSettings,
   normalizeOpenAiBaseUrl,
   resolveDisallowedTools,
 } from "./launch.js";
-export { collectSecrets, createRedactingLogger, redactText } from "./redact.js";
+export { addSecrets, collectSecrets, createRedactingLogger, redactText } from "./redact.js";
 export {
   createProviderProfilesSchema,
   customProviderId,
+  isAbsoluteSettingsPath,
   providerProfileSchema,
   reservedProfileIds,
   toProviderProfile,
 } from "./schema.js";
+export { readClaudeSettingsFile } from "./settings-file.js";
 export {
   loadProviderProfiles,
   PROVIDERS_CONFIG_FILE,

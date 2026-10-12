@@ -2,8 +2,9 @@
 import type { ProviderProfile, ProviderTestResult } from "@agentdeck/protocol";
 
 import { findExecutable } from "../../utils/executable-resolution/executable-resolution.js";
-import { deriveClaudeEnv, deriveCodexEnv, normalizeOpenAiBaseUrl } from "./launch.js";
+import { deriveCodexEnv, mergeClaudeSettings, normalizeOpenAiBaseUrl, settingsEnvOf } from "./launch.js";
 import { collectSecrets, redactText } from "./redact.js";
+import { readClaudeSettingsFile } from "./settings-file.js";
 
 export const PROVIDER_TEST_TIMEOUT_MS = 10_000;
 const ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com";
@@ -23,10 +24,17 @@ export interface ProviderTestRequest {
   headers: Record<string, string>;
 }
 
-/** claude / codex 的模型列表请求（URL 与请求头按 4.7 规则） */
-export function buildProviderTestRequest(profile: ProviderProfile): ProviderTestRequest | null {
+/**
+ * claude / codex 的模型列表请求（URL 与请求头按 4.7 规则）。
+ * claude 取合并后 settings.env 中的值：表单未填 baseUrl / apiKey 时回退到 settingsFile（`fileSettings`）/ 内联设置里的
+ * ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY，鉴权头按实际取到的凭据类型决定。
+ */
+export function buildProviderTestRequest(
+  profile: ProviderProfile,
+  fileSettings?: Record<string, unknown>,
+): ProviderTestRequest | null {
   if (profile.extends === "claude") {
-    const env = deriveClaudeEnv(profile);
+    const env = settingsEnvOf(mergeClaudeSettings(profile, fileSettings));
     const base = (env.ANTHROPIC_BASE_URL || ANTHROPIC_DEFAULT_BASE_URL).replace(/\/+$/, "");
     const headers: Record<string, string> = { "anthropic-version": ANTHROPIC_VERSION };
     if (env.ANTHROPIC_AUTH_TOKEN) {
@@ -52,7 +60,7 @@ export async function testProviderProfile(
   profile: ProviderProfile,
   deps: ProviderTestDeps = {},
 ): Promise<ProviderTestResult> {
-  const secrets = collectSecrets(profile);
+  let secrets = collectSecrets(profile);
   const now = deps.now ?? Date.now;
 
   if (profile.extends === "acp") {
@@ -68,7 +76,17 @@ export async function testProviderProfile(
       : { ok: false, latencyMs, error: redactText(`未找到命令「${command}」，请确认已安装并在 PATH 中`, secrets) };
   }
 
-  const request = buildProviderTestRequest(profile);
+  let fileSettings: Record<string, unknown> | undefined;
+  if (profile.extends === "claude" && profile.settingsFile) {
+    try {
+      fileSettings = await readClaudeSettingsFile(profile.settingsFile);
+    } catch (error) {
+      return { ok: false, error: redactText((error as Error).message, secrets) };
+    }
+    secrets = collectSecrets(profile, fileSettings);
+  }
+
+  const request = buildProviderTestRequest(profile, fileSettings);
   if (!request) {
     return { ok: false, error: "不支持测试该类型的 provider" };
   }
