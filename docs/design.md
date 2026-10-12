@@ -7,7 +7,7 @@
 AgentDeck 是一个多 Agent 编排桌面工具：
 - **界面与框架**：派生自 Hermes-CN-Desktop（Tauri v2 + React + Vite + TanStack Query + Jotai + CSS Modules）。
 - **调用方式**：借鉴 paseo（Apache-2.0），自己不直接调模型 API，而是驱动用户本机已安装的编程 Agent：
-  - Claude Code：`@anthropic-ai/claude-agent-sdk` 的 `query()`（streaming input 长会话）
+  - Claude Code：直接拉起用户本机 `claude` CLI，走 stream-json stdio 协议（长会话），不依赖 claude-agent-sdk
   - Codex：`codex app-server` 子进程，stdio 上的换行分隔 JSON-RPC
   - 通用 ACP：`@agentclientprotocol/sdk` 的 `ClientSideConnection`（gemini / qwen / kimi / hermes acp 等）
 - **不包含**：Hermes Python Core、模型供应商配置、记忆、技能、cron、IM 接入、profiles 等 Hermes 专属功能。
@@ -309,11 +309,12 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**：一个会话一个长生命周期 `query({ prompt: AsyncIterable<SDKUserMessage>, options })`，每轮 push 一条用户消息；`includePartialMessages: true`；`canUseTool` → `permission_requested`，allow 时必须回传 `updatedInput`；`interrupt()` 外包 3 秒超时；`systemPrompt: { type: "preset", preset: "claude_code" }`；`settingSources: ["user","project","local"]`。
-  可执行文件定位顺序：设置项 / 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → SDK 自带平台包（仅开发态存在）→ 报不可用。**必须传 `pathToClaudeCodeExecutable` 指向真实 exe，不能传 .cmd**；用 `spawnClaudeCodeProcess` 接管 spawn 并 `shell:false`。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local --permission-mode <m> --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 与 `system` 的 status 等子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+  可执行文件定位顺序：设置项 / 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
-  可执行文件定位：`AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 npm `codex.cmd` → `node_modules/@openai/codex/bin/codex.js` 用当前 node 执行 → 报不可用。
+  可执行文件定位：`AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 PATH 或 `%APPDATA%
+pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；同样跳过 `node_modules` 内的 PATH 目录，只运行用户本机全局安装的 codex。
 - **ACP**：`spawn(command)` + NDJSON 流 → `ClientSideConnection`；`initialize { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile:false, writeTextFile:false }, terminal:false } }`；`newSession { cwd, mcpServers: [] }`；`prompt` 的 Promise resolve 即 turn 结束；`sessionUpdate`：`agent_message_chunk`→assistant_message、`agent_thought_chunk`→reasoning、`tool_call`/`tool_call_update`→tool_call（按 toolCallId 合并）、`plan`→todo；`requestPermission`：options 映射为 actions，按 selectedActionId 或 allow_once/allow_always、reject_once/reject_always 选；中断 `cancel { sessionId }`；模型 `unstable_setSessionModel`，失败忽略。
   内置命令目录：`acp:gemini` = `npx -y @google/gemini-cli --acp`、`acp:qwen` = `npx -y @qwen-code/qwen-code --acp`、`acp:kimi` = `kimi acp`、`acp:hermes` = `hermes acp`；另支持用户在 `AGENTDECK_DATA_DIR/acp-agents.json` 自定义 `{ id, label, command: string[] }[]`。
 
@@ -333,9 +334,9 @@ interface AgentClient {
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。
 - detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent / Skill→plain_text、MCP 等→unknown；TodoWrite 只发 `todo`。
-- 始终设 `allowDangerouslySkipPermissions: true` 以允许会话中途切到 `bypassPermissions`；默认模式仍为 `default`，前端须把 bypassPermissions 标为危险选项且不得默认选中。
-- 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`；子代理内部消息（带 `parent_tool_use_id`）不进主时间线；AskUserQuestion 暂按普通工具权限处理。
-- `fetchCatalog` 只返回静态别名（default / sonnet / opus / haiku）。
+- 始终传 `--allow-dangerously-skip-permissions` 以允许会话中途切到 `bypassPermissions`；默认模式仍为 `default`，前端须把 bypassPermissions 标为危险选项且不得默认选中。
+- 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`（不设置 `CLAUDE_CODE_ENTRYPOINT`）；子代理内部消息（带 `parent_tool_use_id`）不进主时间线；AskUserQuestion 暂按普通工具权限处理。
+- `fetchCatalog` 起一个临时 claude 进程只发 `initialize`（不对话、不计费），读取应答中的 `models`（value / displayName / description）后关闭；成功结果缓存 10 分钟，失败回退静态别名（default / sonnet / opus / haiku），`default` 保留中文标签。
 
 Codex（以本机 0.162.1 协议为准）：
 - 模式 `read-only` / `auto`（默认）/ `full-access`；`setMode` 只在切换后的下一轮带一次 approvalPolicy + sandboxPolicy。
@@ -375,7 +376,7 @@ ACP：
 ### 7.1 打包方案（P7）
 
 - **node 运行时**：`scripts/fetch-node.mjs` 下载固定版本的官方 Node 24 LTS（Windows x64 zip，优先 npmmirror 镜像，失败回退 nodejs.org），用同源的 `SHASUMS256.txt` 校验后取出 `node.exe`，放到 `binaries/node-x86_64-pc-windows-msvc.exe`（`binaries/` 加入 .gitignore）；已存在且校验通过则跳过。`tauri.conf.json` 的 `bundle.externalBin` 配置 `binaries/node`，打包后位于主程序同目录的 `node.exe`，对应 3.1 的第 2 个候选。
-- **sidecar 代码**：`scripts/build-sidecar.mjs` 用 esbuild 把 `packages/sidecar/src/main.ts` 打成单文件 `dist-sidecar/bundle.mjs`（`--format=esm --platform=node --target=node24`，banner 注入 `createRequire`，`bufferutil` / `utf-8-validate` 设为 external），`tauri.conf.json` 的 `bundle.resources` 把它映射为资源目录下的 `sidecar/bundle.mjs`，对应 3.1 的第 2 个入口候选。claude-agent-sdk 的平台二进制不打包（打包态必须解析到用户本机的 claude）。
+- **sidecar 代码**：`scripts/build-sidecar.mjs` 用 esbuild 把 `packages/sidecar/src/main.ts` 打成单文件 `dist-sidecar/bundle.mjs`（`--format=esm --platform=node --target=node24`，banner 注入 `createRequire`，`bufferutil` / `utf-8-validate` 设为 external），`tauri.conf.json` 的 `bundle.resources` 把它映射为资源目录下的 `sidecar/bundle.mjs`，对应 3.1 的第 2 个入口候选。bundle 中不含任何 Anthropic / OpenAI 代码，Claude Code 与 Codex 均运行用户本机安装的 CLI。
 - **构建命令**：`pnpm tauri:build` 的 `beforeBuildCommand` 依次执行 fetch-node、build-sidecar、web build。`pnpm tauri:dev` 仍以 `node --import tsx` 运行源码，但 externalBin 在 dev 时也必须存在，所以 dev 前也执行 fetch-node。
 - **安装包**：NSIS（per-user 安装）；`installer/nsis/hooks.nsh` 卸载时询问是否删除数据目录（`%APPDATA%\local.agentdeck.desktop`）。
 - **验收**：release 构建后直接运行 `target/release/agentdeck.exe`（旁边有 node.exe 与资源），确认 sidecar 以 bundle 方式启动、mock 会话可跑通、退出无残留；NSIS 安装包能生成。在干净机器上的安装测试由用户执行。
@@ -387,4 +388,4 @@ ACP：
 - 部分前端代码源自 Hermes Agent 上游（Nous Research，MIT），见 `legal/hermes-agent-upstream.MIT.txt`。
 - HarmonyOS Sans 字体许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
 - 随包分发的第三方组件（P7）：Node.js 运行时 → `legal/nodejs.LICENSE.txt`；sidecar bundle 内的 npm 包（以 `dist-sidecar/meta.json` 为准）→ `legal/sidecar-third-party.txt`；前端生产依赖 → `legal/web-third-party.txt`；汇总见 `NOTICE.md`。依赖或 Node 版本变化时需重新生成这些文件。
-- `@anthropic-ai/claude-agent-sdk` 为 Anthropic 专有条款（非开源），其 JS 被打进 sidecar bundle；不随包分发 `claude` 可执行文件，运行时使用用户本机安装的 Claude Code。
+- 不包含也不分发 Anthropic / OpenAI 的代码或可执行文件：Claude provider 自行实现 Claude Code CLI 的 stream-json 协议（未使用 claude-agent-sdk），Codex 走本机 `codex app-server`。
