@@ -331,6 +331,8 @@ declare global {
       downloadExternalImage?(input: DownloadExternalImageInput): Promise<DownloadedImageResult>;
       pickFiles?(): Promise<FilePickerResult>;
       pickDirectory?(): Promise<FilePickerResult>;
+      /** 选择单个 .json 文件 */
+      pickJsonFile?(input?: { title?: string }): Promise<FilePickerResult>;
       createWorkspaceProject?(): Promise<FilePickerResult>;
       openWorkspacePath?(input: { path: string }): Promise<ExternalRequestResult>;
       openExternalUrl?(input: { url: string }): Promise<SimpleResult>;

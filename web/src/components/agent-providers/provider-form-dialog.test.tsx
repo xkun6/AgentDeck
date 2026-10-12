@@ -173,4 +173,89 @@ describe("ProviderFormDialog", () => {
       profiles[1],
     ]);
   });
+
+  it("Claude 设置：内联 JSON 实时校验并禁止保存，格式化，保存时写入路径与对象；非 Claude 不显示", async () => {
+    const { request, onClose } = setup(async (method) => {
+      if (method === "provider.config.set") return { providers: PROVIDERS };
+      throw new Error(`unexpected ${method}`);
+    });
+    change(input(/名称/), "Mine");
+    const save = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+    const textarea = screen.getByLabelText("内联 JSON") as HTMLTextAreaElement;
+    // 纯 web 模式（无 pickJsonFile）只保留输入框
+    expect(screen.queryByRole("button", { name: /浏览/ })).toBeNull();
+
+    change(textarea, '{ "env": ');
+    expect(screen.getByText(/^不是合法的 JSON/)).toBeTruthy();
+    expect(textarea.getAttribute("data-invalid")).toBe("true");
+    expect(save.disabled).toBe(true);
+    change(textarea, "[1]");
+    expect(screen.getByText("必须是 JSON 对象（{ … }），不能是数组或其它值")).toBeTruthy();
+    expect(save.disabled).toBe(true);
+
+    change(textarea, '{"env":{"API_TIMEOUT_MS":"600000"}}');
+    expect(screen.queryByText(/JSON 对象（/)).toBeNull();
+    expect(save.disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /格式化/ }));
+    expect(textarea.value).toBe('{\n  "env": {\n    "API_TIMEOUT_MS": "600000"\n  }\n}');
+
+    // 相对路径本地拦下
+    change(input("设置文件"), "relay.json");
+    fireEvent.click(save);
+    expect(await screen.findByText("设置文件路径必须是绝对路径")).toBeTruthy();
+    expect(request).not.toHaveBeenCalled();
+
+    change(input("设置文件"), "C:\\cfg\\relay.json");
+    fireEvent.click(save);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [, params] = request.mock.calls[0]!;
+    expect((params as { providers: ProviderProfile[] }).providers).toEqual([
+      {
+        id: "mine",
+        extends: "claude",
+        label: "Mine",
+        authMode: "auth_token",
+        settingsFile: "C:\\cfg\\relay.json",
+        settings: { env: { API_TIMEOUT_MS: "600000" } },
+      },
+    ]);
+
+    fireEvent.click(screen.getByRole("radio", { name: /Codex/ }));
+    expect(screen.queryByLabelText("内联 JSON")).toBeNull();
+    expect(screen.queryByLabelText("设置文件")).toBeNull();
+  });
+
+  it("Claude 设置：「浏览…」经 bridge 选择 .json 文件；校验错误 providers.<i>.settingsFile / settings 就地显示", async () => {
+    const pickJsonFile = vi.fn(async () => ({ canceled: false, paths: ["D:\\cfg\\picked.json"] }));
+    const previous = window.hermesDesktop;
+    window.hermesDesktop = { windowType: "tauri", pickJsonFile };
+    try {
+      setup(async (method) => {
+        if (method === "provider.config.set") {
+          throw new SidecarRpcError({
+            code: -32602,
+            message: "参数错误",
+            data: {
+              issues: [
+                { path: "providers.0.settingsFile", message: "服务端：设置文件路径必须是绝对路径" },
+                { path: "providers.0.settings", message: "服务端：settings 必须是 JSON 对象" },
+              ],
+            },
+          });
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      change(input(/名称/), "Picked");
+      fireEvent.click(screen.getByRole("button", { name: /浏览/ }));
+      await waitFor(() => expect(input("设置文件").value).toBe("D:\\cfg\\picked.json"));
+      expect(pickJsonFile).toHaveBeenCalledWith({ title: "选择 Claude 设置文件" });
+
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+      expect(await screen.findByText("服务端：设置文件路径必须是绝对路径")).toBeTruthy();
+      expect(screen.getByText("服务端：settings 必须是 JSON 对象")).toBeTruthy();
+      expect(input("设置文件").getAttribute("data-invalid")).toBe("true");
+    } finally {
+      window.hermesDesktop = previous;
+    }
+  });
 });

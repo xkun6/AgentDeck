@@ -305,6 +305,30 @@
   align-items: center;
 }
 
+/* ── Claude 设置 ──────────────────────────────────────────────────────── */
+.pathRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+.settingsText {
+  min-height: 128px;
+  max-height: 320px;
+}
+.noteList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 12px 8px 24px;
+  border-left: 2px solid var(--h-line);
+  background: var(--h-bg-soft);
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  line-height: var(--h-line-height-normal);
+}
+
 /* ── 文本 ─────────────────────────────────────────────────────────────── */
 
 .muted {

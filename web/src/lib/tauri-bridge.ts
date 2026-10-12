@@ -220,6 +220,20 @@ const tauriBridge = {
     return invokeCommand("pick_directory");
   },
 
+  /** 选择单个 .json 文件（中转的 Claude 设置文件）：直接调用 dialog 插件的 open（capabilities 已授权 dialog:allow-open）。 */
+  async pickJsonFile(input?: { title?: string }): Promise<FilePickerResult> {
+    const selected = await invokeCommand<string | string[] | null>("plugin:dialog|open", {
+      options: {
+        title: input?.title ?? "选择 JSON 文件",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      },
+    });
+    const paths = selected == null ? [] : Array.isArray(selected) ? selected : [selected];
+    return { canceled: paths.length === 0, paths };
+  },
+
   async createWorkspaceProject(): Promise<FilePickerResult> {
     return invokeCommand("create_workspace_project");
   },

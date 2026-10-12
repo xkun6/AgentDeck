@@ -3,11 +3,15 @@ import type { ProviderInfo, ProviderProfile } from "@agentdeck/protocol";
 import {
   buildProviderMenuEntries,
   emptyProviderForm,
+  formatSettingsText,
   formToProfile,
+  isAbsoluteSettingsPath,
   issuePathToField,
   joinCommandLine,
   mapIssuesToForm,
   mergeFetchedModels,
+  parseSettingsText,
+  profileHasClaudeSettings,
   profileHost,
   profileToForm,
   readRpcIssues,
@@ -327,5 +331,80 @@ describe("会话所用中转的状态（已删除 / 停用的会话恢复）", (
     expect(relaySessionState("custom:off", profiles)).toBe("disabled");
     expect(relaySessionState("custom:gone", profiles)).toBe("deleted");
     expect(relaySessionState("custom:gone", [])).toBe("deleted");
+  });
+});
+
+describe("Claude 设置（settings.json）", () => {
+  it("parseSettingsText：留空不使用；非法 JSON / 非对象报错；对象通过", () => {
+    expect(parseSettingsText("")).toEqual({ kind: "empty" });
+    expect(parseSettingsText("  \n ")).toEqual({ kind: "empty" });
+    const bad = parseSettingsText("{ env: ");
+    expect(bad.kind).toBe("error");
+    expect(bad.kind === "error" && bad.message).toMatch(/^不是合法的 JSON/);
+    for (const text of ["[1, 2]", "\"text\"", "42", "null"]) {
+      expect(parseSettingsText(text)).toEqual({ kind: "error", message: "必须是 JSON 对象（{ … }），不能是数组或其它值" });
+    }
+    expect(parseSettingsText(' { "env": { "A": "1" } } ')).toEqual({ kind: "ok", value: { env: { A: "1" } } });
+  });
+
+  it("formatSettingsText：合法对象按 2 空格缩进，非法返回 null", () => {
+    expect(formatSettingsText('{"env":{"A":"1"},"x":[1]}')).toBe('{\n  "env": {\n    "A": "1"\n  },\n  "x": [\n    1\n  ]\n}');
+    expect(formatSettingsText("{ bad")).toBeNull();
+    expect(formatSettingsText("")).toBeNull();
+  });
+
+  it("formToProfile：空值不写入；路径去空白；内联 JSON 解析为对象；非 claude 不提交", () => {
+    expect(formToProfile(form({ settingsFile: "  ", settingsText: " " }))).not.toHaveProperty("settingsFile");
+    expect(formToProfile(form({ settingsFile: "  ", settingsText: " " }))).not.toHaveProperty("settings");
+    expect(
+      formToProfile(form({ settingsFile: "  C:\\cfg\\relay.json ", settingsText: '{ "env": { "API_TIMEOUT_MS": "600000" } }' })),
+    ).toMatchObject({ settingsFile: "C:\\cfg\\relay.json", settings: { env: { API_TIMEOUT_MS: "600000" } } });
+    const codex = formToProfile(form({ extends: "codex", settingsFile: "/x.json", settingsText: "{}" }));
+    expect(codex).not.toHaveProperty("settingsFile");
+    expect(codex).not.toHaveProperty("settings");
+    // 非法 JSON 不写入（保存前由 validateProviderForm 拦下）
+    expect(formToProfile(form({ settingsText: "{ bad" }))).not.toHaveProperty("settings");
+  });
+
+  it("profileToForm → formToProfile 往返：settings 格式化为多行文本", () => {
+    const profile: ProviderProfile = {
+      id: "s",
+      extends: "claude",
+      label: "S",
+      authMode: "auth_token",
+      settingsFile: "/home/me/relay.json",
+      settings: { env: { A: "1" }, permissions: { allow: ["Bash(ls)"] } },
+    };
+    const state = profileToForm(profile);
+    expect(state.settingsFile).toBe("/home/me/relay.json");
+    expect(state.settingsText).toBe(JSON.stringify(profile.settings, null, 2));
+    expect(formToProfile(state)).toEqual(profile);
+  });
+
+  it("validateProviderForm：设置文件须为绝对路径、内联 JSON 须为对象；非 claude 不校验", () => {
+    expect(validateProviderForm(form({ settingsFile: "relay.json" })).settingsFile).toBe("设置文件路径必须是绝对路径");
+    expect(validateProviderForm(form({ settingsFile: "C:relay.json" })).settingsFile).toBeTruthy();
+    expect(validateProviderForm(form({ settingsFile: "C:\\cfg\\relay.json" })).settingsFile).toBeUndefined();
+    expect(validateProviderForm(form({ settingsFile: "\\\\server\\share\\relay.json" })).settingsFile).toBeUndefined();
+    expect(validateProviderForm(form({ settingsFile: "/etc/relay.json" })).settingsFile).toBeUndefined();
+    expect(validateProviderForm(form({ settingsText: "[]" })).settings).toContain("JSON 对象");
+    expect(validateProviderForm(form({ settingsText: "{ bad" })).settings).toMatch(/^不是合法的 JSON/);
+    expect(validateProviderForm(form({ extends: "codex", settingsFile: "x", settingsText: "{" }))).toEqual({});
+  });
+
+  it("isAbsoluteSettingsPath 与 issues 路径映射", () => {
+    expect(isAbsoluteSettingsPath("D:/a.json")).toBe(true);
+    expect(isAbsoluteSettingsPath("\\a.json")).toBe(false);
+    expect(isAbsoluteSettingsPath("./a.json")).toBe(false);
+    expect(issuePathToField("providers.0.settingsFile", 0)).toBe("settingsFile");
+    expect(issuePathToField("providers.0.settings", 0)).toBe("settings");
+    expect(issuePathToField("profile.settings.env", null)).toBe("settings");
+  });
+
+  it("profileHasClaudeSettings：只有基于 Claude Code 且配置了文件或内联设置才标记", () => {
+    expect(profileHasClaudeSettings({ id: "a", extends: "claude", label: "A" })).toBe(false);
+    expect(profileHasClaudeSettings({ id: "a", extends: "claude", label: "A", settingsFile: "/a.json" })).toBe(true);
+    expect(profileHasClaudeSettings({ id: "a", extends: "claude", label: "A", settings: {} })).toBe(true);
+    expect(profileHasClaudeSettings({ id: "a", extends: "codex", label: "A", settings: {} })).toBe(false);
   });
 });

@@ -15,6 +15,7 @@ import {
   customProviderId,
   isCustomProviderId,
   PROFILE_EXTENDS_LABELS,
+  profileHasClaudeSettings,
   profileHost,
 } from "@/lib/provider-profiles";
 import { sidecarConnectionAtom } from "@/stores/agents";
@@ -223,6 +224,8 @@ export function AgentProvidersRoute() {
                 const providerId = customProviderId(profile.id);
                 const status = relayStatus(profile, infoById.get(providerId), Boolean(providers));
                 const host = profile.extends === "acp" ? "" : profileHost(profile.baseUrl);
+                // 未填 Base URL 但配置了 Claude 设置：地址可能来自 settings.env，不能断言是官方接口
+                const hostLabel = host || (profileHasClaudeSettings(profile) ? "接口见 Claude 设置" : "官方接口");
                 const busy = pendingId === profile.id;
                 const enabled = profile.enabled !== false;
                 return (
@@ -239,6 +242,19 @@ export function AgentProvidersRoute() {
                         <Badge tone="neutral" variant="outline" size="sm">
                           基于 {PROFILE_EXTENDS_LABELS[profile.extends]}
                         </Badge>
+                        {profileHasClaudeSettings(profile) ? (
+                          <Badge
+                            tone="info"
+                            variant="outline"
+                            size="sm"
+                            title={[
+                              profile.settingsFile ? `设置文件：${profile.settingsFile}` : null,
+                              profile.settings ? "内联 JSON 设置" : null,
+                            ].filter(Boolean).join("；")}
+                          >
+                            含设置
+                          </Badge>
+                        ) : null}
                       </div>
                       <div className={s.rowMeta}>
                         <code className={s.rowId}>{providerId}</code>
@@ -247,7 +263,7 @@ export function AgentProvidersRoute() {
                             {profile.command?.[0] ?? "—"}
                           </span>
                         ) : (
-                          <span className={s.rowHost} title={host || "官方接口"}>{host || "官方接口"}</span>
+                          <span className={s.rowHost} title={hostLabel}>{hostLabel}</span>
                         )}
                         <span>{modelSummary(profile)}</span>
                       </div>
