@@ -297,6 +297,17 @@ interface ProviderProfile {
 - 日志与错误信息中不得出现 apiKey 与 `env` 的值（只打印键名）。
 - 旧的 `<AGENTDECK_DATA_DIR>/acp-agents.json` 继续读取（兼容），新界面只写 `providers.json`。
 
+**落地细则**（实现与上文有出入时以此为准）：
+- Claude：`--settings` 直接接受内联 JSON（shell:false 传参，不落临时文件）；`--settings` 的 env 中还要把**未选用的凭据变量置为 `""`**，否则用户 settings 里的另一个凭据会随请求发给三方（已用诱饵 settings 实测）。密钥因此会出现在 claude 进程的命令行与环境中，同用户进程可见；`providers.json` 为明文。
+- Codex：经 `thread/start` / `thread/resume` 的 `config` 字段注入 `{ model_provider, model_providers }`，键名为 `agentdeck-<id>`（避免与用户 `config.toml` 中同名 provider 合并而带出用户密钥）。Codex 的 `model/list` 只返回内置 OpenAI 目录、不会请求中转，因此 **codex 中转应填写 `models`**。
+- 「与内置冲突」：id 不得等于内置 id（claude / codex / mock）、ACP 条目去掉 `acp:` 后的名字（含 acp-agents.json 条目），以及保留字 `acp` / `custom`。可选文本字段传空字符串视为未填写；校验错误路径形如 `providers.<i>.<field>`，message 为中文。
+- `provider.config.set` 返回完整 provider.list（含内置项）。
+- `models` 非空时，`agent.create` 未传 model 则以 `isDefault` 模型启动，快照中 model 仍为 null。
+- `command` 覆盖（claude / codex）：只认 `command[0]` 为可执行文件，解析不到即不可用，不回退 PATH；`command[1..]` 作为附加参数。
+- 脱敏：apiKey 一律脱敏；env 值长度 ≥ 6 才脱敏；`turn_failed` 与 timeline 中的错误同样脱敏。
+- `provider.test` 未填 baseUrl 时，claude 用 `https://api.anthropic.com`，codex 用 `https://api.openai.com/v1`。
+- 已删除 / 停用 provider 的会话：运行中继续使用旧 client；关闭或 dormant 后恢复返回 `PROVIDER_NOT_FOUND`。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
