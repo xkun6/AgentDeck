@@ -5,17 +5,21 @@ import type {
   AgentPromptInput,
   AgentProviderId,
   AgentSnapshot,
+  AgentStatus,
   AgentStreamEnvelope,
   AgentStreamEvent,
 } from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
 import { withTimeout } from "../utils/promise-timeout.js";
+import type { AgentStore, PersistedAgentMeta } from "./agent-store.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS, AgentStreamCoalescer } from "./coalescer.js";
 import { AgentRpcError } from "./errors.js";
 import type { AgentClient, AgentSession } from "./types.js";
 
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+const PREVIEW_MAX_CHARS = 120;
+export const RESUME_NOT_SUPPORTED_MESSAGE = "该会话无法恢复，请新建会话";
 
 export interface AgentClientLookup {
   get(provider: AgentProviderId): AgentClient | undefined;
@@ -24,6 +28,7 @@ export interface AgentClientLookup {
 export interface AgentManagerListener {
   onStream?(envelope: AgentStreamEnvelope): void;
   onState?(agent: AgentSnapshot): void;
+  onRemoved?(agentId: string): void;
 }
 
 export interface AgentManagerOptions {
@@ -34,6 +39,8 @@ export interface AgentManagerOptions {
   /** 进程级 epoch，默认随机生成 */
   epoch?: string;
   now?: () => number;
+  /** 会话持久化（设置了 AGENTDECK_DATA_DIR 时传入）；不传则纯内存 */
+  store?: AgentStore;
 }
 
 export interface CreateAgentParams {
@@ -46,22 +53,33 @@ export interface CreateAgentParams {
 
 interface ManagedAgent {
   id: string;
-  client: AgentClient;
-  session: AgentSession;
+  /** 历史会话的 provider 可能已不存在 */
+  client: AgentClient | undefined;
+  /** 活跃的原生会话；dormant / closed 时为 null */
+  session: AgentSession | null;
   snapshot: AgentSnapshot;
-  seq: number;
-  entries: AgentStreamEnvelope[];
+  /** null：历史会话的 timeline 尚未从磁盘读取（首次 agent.timeline / 恢复时惰性加载） */
+  entries: AgentStreamEnvelope[] | null;
+  entriesLoading: Promise<AgentStreamEnvelope[]> | null;
   /** 事件尾链：保证同一 agent 的事件按到达顺序串行处理 */
   tail: Promise<void>;
   unsubscribe: () => void;
-  /** agent.send 已受理、startTurn 尚未返回 */
+  /** agent.send 已受理（含恢复会话）、startTurn 尚未返回 */
   sending: boolean;
   finishedTurnIds: Set<string>;
+  /** 没有可用会话（关闭中 / 已关闭 / dormant） */
   closed: boolean;
+  /** 进行中的恢复 */
+  resuming: Promise<void> | null;
+  /** 进行中的关闭 */
+  closing: Promise<void> | null;
+  /** 已从注册表删除 */
+  removed: boolean;
 }
 
 /**
- * 会话注册表：分配 agentId、维护 seq/epoch、串行处理事件、合并文本、权限中转、单 turn 约束。
+ * 会话注册表：分配 agentId、维护 seq/epoch、串行处理事件、合并文本、权限中转、单 turn 约束，
+ * 以及会话持久化与恢复（design.md 4.5）。
  */
 export class AgentManager {
   readonly epoch: string;
@@ -72,9 +90,11 @@ export class AgentManager {
   private readonly logger: Logger;
   private readonly now: () => number;
   private readonly coalescer: AgentStreamCoalescer;
+  private readonly store: AgentStore | undefined;
 
   constructor(options: AgentManagerOptions) {
     this.registry = options.registry;
+    this.store = options.store;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
@@ -154,31 +174,60 @@ export class AgentManager {
       pendingPermissions: [],
       lastError: null,
       persistence: session.describePersistence(),
+      lastSeq: 0,
+      resumable: false,
       createdAt: now,
       updatedAt: now,
     };
     const agent: ManagedAgent = {
-      id,
-      client,
+      ...newManagedAgent(id, client, snapshot),
       session,
-      snapshot,
-      seq: 0,
       entries: [],
-      tail: Promise.resolve(),
-      unsubscribe: () => undefined,
-      sending: false,
-      finishedTurnIds: new Set(),
       closed: false,
     };
+    this.refreshResumable(agent);
     this.agents.set(id, agent);
     agent.unsubscribe = session.subscribe((event) => this.enqueueEvent(agent, event));
     this.logger.info("创建 agent %s（provider=%s, cwd=%s）", id, params.provider, params.cwd);
+    void this.persistNow(agent);
     this.emitState(agent);
     return cloneSnapshot(snapshot);
   }
 
+  /**
+   * 启动时从磁盘恢复历史会话（design.md 4.5）：starting / idle / running / error → dormant，
+   * closed 保持 closed；timeline 惰性读取。未启用持久化时为空操作。返回恢复的数量。
+   */
+  async restore(): Promise<number> {
+    if (!this.store) {
+      return 0;
+    }
+    const metas = await this.store.loadAll();
+    let restored = 0;
+    for (const meta of metas) {
+      if (this.agents.has(meta.id)) {
+        continue;
+      }
+      const snapshot: AgentSnapshot = {
+        ...meta,
+        status: meta.status === "closed" ? "closed" : "dormant",
+        activeTurnId: null,
+        pendingPermissions: [],
+      };
+      const agent = newManagedAgent(meta.id, this.registry.get(meta.provider), snapshot);
+      this.refreshResumable(agent);
+      this.agents.set(meta.id, agent);
+      restored += 1;
+    }
+    this.logger.info("从 %s 恢复了 %d 个历史会话", this.store.agentsDir, restored);
+    return restored;
+  }
+
+  /** 按 updatedAt 倒序 */
   listAgents(): AgentSnapshot[] {
-    return Array.from(this.agents.values(), (agent) => cloneSnapshot(agent.snapshot));
+    return Array.from(this.agents.values(), (agent) => cloneSnapshot(agent.snapshot)).sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
   }
 
   getAgent(agentId: string): AgentSnapshot {
@@ -190,13 +239,31 @@ export class AgentManager {
     prompt: AgentPromptInput,
     clientMessageId?: string,
   ): Promise<{ turnId: string }> {
-    const agent = this.requireOpenAgent(agentId);
+    const agent = this.requireAgent(agentId);
+    // 恢复期间也持有 sending：并发 send 只触发一次恢复，其余按单 turn 约束返回 TURN_IN_PROGRESS
     if (agent.sending || agent.snapshot.status === "running" || agent.snapshot.activeTurnId) {
       throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束或先取消");
+    }
+    if (agent.session === null) {
+      this.assertResumable(agent);
+    } else if (agent.closed) {
+      throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
     }
 
     agent.sending = true;
     try {
+      if (agent.session === null) {
+        agent.resuming = this.resumeAgent(agent);
+        try {
+          await agent.resuming;
+        } finally {
+          agent.resuming = null;
+        }
+      }
+      const session = agent.session as AgentSession | null;
+      if (agent.closed || !session) {
+        throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
+      }
       this.enqueueEvent(agent, {
         type: "timeline",
         item: {
@@ -205,7 +272,7 @@ export class AgentManager {
           ...(clientMessageId !== undefined ? { clientMessageId } : {}),
         },
       });
-      const { turnId } = await agent.session.startTurn(
+      const { turnId } = await session.startTurn(
         prompt,
         clientMessageId !== undefined ? { clientMessageId } : undefined,
       );
@@ -239,7 +306,7 @@ export class AgentManager {
     if (!agent.snapshot.activeTurnId && agent.snapshot.status !== "running" && !agent.sending) {
       return;
     }
-    await agent.session.interrupt();
+    await agent.session?.interrupt();
     await agent.tail;
   }
 
@@ -253,7 +320,7 @@ export class AgentManager {
     if (!pending) {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
-    await agent.session.respondToPermission(requestId, response);
+    await this.requireSession(agent).respondToPermission(requestId, response);
     // 兜底：session 未发 permission_resolved 时补发（已解决的会在处理时被去重丢弃）
     this.enqueueEvent(agent, { type: "permission_resolved", requestId, response });
     await agent.tail;
@@ -261,10 +328,11 @@ export class AgentManager {
 
   async setModel(agentId: string, modelId: string | null): Promise<AgentSnapshot> {
     const agent = this.requireOpenAgent(agentId);
-    if (!agent.session.setModel) {
+    const session = this.requireSession(agent);
+    if (!session.setModel) {
       throw new AgentRpcError("NOT_SUPPORTED", `provider ${agent.snapshot.provider} 不支持切换模型`);
     }
-    await agent.session.setModel(modelId);
+    await session.setModel(modelId);
     this.enqueueEvent(agent, { type: "model_changed", modelId });
     await agent.tail;
     return cloneSnapshot(agent.snapshot);
@@ -272,10 +340,11 @@ export class AgentManager {
 
   async setMode(agentId: string, modeId: string): Promise<AgentSnapshot> {
     const agent = this.requireOpenAgent(agentId);
-    if (!agent.session.setMode) {
+    const session = this.requireSession(agent);
+    if (!session.setMode) {
       throw new AgentRpcError("NOT_SUPPORTED", `provider ${agent.snapshot.provider} 不支持切换模式`);
     }
-    await agent.session.setMode(modeId);
+    await session.setMode(modeId);
     this.enqueueEvent(agent, { type: "mode_changed", modeId });
     await agent.tail;
     return cloneSnapshot(agent.snapshot);
@@ -283,48 +352,228 @@ export class AgentManager {
 
   async close(agentId: string): Promise<void> {
     const agent = this.requireAgent(agentId);
-    await this.closeAgent(agent);
+    await this.closeAgent(agent, "closed");
   }
 
-  timeline(agentId: string, sinceSeq?: number): { epoch: string; entries: AgentStreamEnvelope[] } {
+  /** agent.delete：若在运行先关闭，然后从磁盘与注册表删除，广播 agent.removed */
+  async deleteAgent(agentId: string): Promise<void> {
     const agent = this.requireAgent(agentId);
+    await this.closeAgent(agent, "closed");
+    // 先删磁盘：失败时 agent 留在注册表（已关闭），错误返回给调用方
+    await this.store?.deleteAgent(agent.id);
+    if (agent.removed) {
+      return;
+    }
+    agent.removed = true;
+    this.agents.delete(agent.id);
+    this.coalescer.flushAndDiscard(agent.id);
+    this.logger.info("删除 agent %s", agent.id);
+    for (const listener of this.listeners) {
+      try {
+        listener.onRemoved?.(agent.id);
+      } catch (error) {
+        this.logger.error("agent.removed 监听器出错：%s", String(error));
+      }
+    }
+  }
+
+  /** 历史条目保留原 seq / epoch；返回的 epoch 为当前进程 epoch */
+  async timeline(
+    agentId: string,
+    sinceSeq?: number,
+  ): Promise<{ epoch: string; entries: AgentStreamEnvelope[] }> {
+    const agent = this.requireAgent(agentId);
+    const entries = await this.loadEntries(agent);
     const since = sinceSeq ?? 0;
     return {
       epoch: this.epoch,
-      entries: agent.entries.filter((entry) => entry.seq > since),
+      entries: entries.filter((entry) => entry.seq > since),
     };
   }
 
-  /** 关闭全部会话（sidecar 退出前调用） */
+  /**
+   * 关闭全部会话并落盘（sidecar 退出前调用）。
+   * 先落盘一次，防止关闭会话超时、进程被强制退出时丢数据；启用持久化时关闭后的状态记为 dormant。
+   */
   async shutdown(): Promise<void> {
-    const open = Array.from(this.agents.values()).filter((agent) => !agent.closed);
-    await Promise.allSettled(open.map((agent) => this.closeAgent(agent)));
+    await this.flush();
+    const live = Array.from(this.agents.values()).filter(
+      (agent) => agent.session !== null || agent.resuming !== null,
+    );
+    const finalStatus: AgentStatus = this.store ? "dormant" : "closed";
+    await Promise.allSettled(live.map((agent) => this.closeAgent(agent, finalStatus)));
     this.coalescer.flushAll();
+    await this.flush();
+  }
+
+  /** 强制落盘全部待写数据（未启用持久化时为空操作） */
+  async flush(): Promise<void> {
+    await this.store?.flushAll();
   }
 
   // -------------------------------------------------------------------------
   // 内部
   // -------------------------------------------------------------------------
 
-  private async closeAgent(agent: ManagedAgent): Promise<void> {
-    if (agent.closed) {
+  private closeAgent(agent: ManagedAgent, finalStatus: AgentStatus): Promise<void> {
+    if (!agent.closing) {
+      agent.closing = this.doCloseAgent(agent, finalStatus).finally(() => {
+        agent.closing = null;
+      });
+    }
+    return agent.closing;
+  }
+
+  private async doCloseAgent(agent: ManagedAgent, finalStatus: AgentStatus): Promise<void> {
+    if (agent.resuming) {
+      await agent.resuming.catch(() => undefined);
+    }
+    const session = agent.session;
+    if (!session) {
+      // 未加载的历史会话被显式关闭：只改状态
+      if (finalStatus === "closed" && agent.snapshot.status !== "closed") {
+        agent.snapshot.status = "closed";
+        this.touch(agent);
+        await this.persistNow(agent);
+        this.emitState(agent);
+      }
       return;
     }
     agent.closed = true;
     try {
-      await withTimeout(agent.session.close(), SESSION_CLOSE_TIMEOUT_MS, "关闭会话超时");
+      await withTimeout(session.close(), SESSION_CLOSE_TIMEOUT_MS, "关闭会话超时");
     } catch (error) {
       this.logger.warn("关闭 agent %s 出错：%s", agent.id, String(error));
     }
     await agent.tail;
     this.coalescer.flushAndDiscard(agent.id);
     agent.unsubscribe();
-    agent.snapshot.status = "closed";
+    agent.unsubscribe = () => undefined;
+    agent.session = null;
+    agent.snapshot.status = finalStatus;
     agent.snapshot.activeTurnId = null;
     agent.snapshot.pendingPermissions = [];
     this.touch(agent);
+    await this.persistNow(agent);
     this.logger.info("关闭 agent %s", agent.id);
     this.emitState(agent);
+  }
+
+  /** 不可恢复时：dormant 返回 NOT_SUPPORTED（4.5），closed 返回 AGENT_CLOSED（4.4） */
+  private assertResumable(agent: ManagedAgent): void {
+    if (agent.snapshot.resumable && agent.snapshot.persistence && agent.client?.resumeSession) {
+      return;
+    }
+    if (agent.snapshot.status === "dormant") {
+      throw new AgentRpcError("NOT_SUPPORTED", RESUME_NOT_SUPPORTED_MESSAGE);
+    }
+    throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agent.id}`);
+  }
+
+  /** dormant / closed → starting → idle；失败时回到原状态并写 lastError */
+  private async resumeAgent(agent: ManagedAgent): Promise<void> {
+    const client = agent.client!;
+    const persistence = agent.snapshot.persistence!;
+    const previousStatus = agent.snapshot.status;
+    // 先读历史 timeline：seq 从磁盘与 meta 中较大者继续递增
+    await this.loadEntries(agent);
+
+    agent.snapshot.status = "starting";
+    this.touch(agent);
+    this.emitState(agent);
+
+    let session: AgentSession;
+    try {
+      const availability = await client.isAvailable();
+      if (!availability.available) {
+        throw new Error(availability.reason ?? `provider ${agent.snapshot.provider} 当前不可用`);
+      }
+      session = await client.resumeSession!(structuredClone(persistence), {
+        cwd: agent.snapshot.cwd,
+      });
+    } catch (error) {
+      const message = errorMessage(error);
+      const notSupported = error instanceof AgentRpcError && error.code === "NOT_SUPPORTED";
+      this.logger.warn("恢复 agent %s 失败：%s", agent.id, message);
+      agent.snapshot.status = previousStatus;
+      agent.snapshot.lastError = `恢复会话失败：${message}`;
+      if (notSupported) {
+        agent.snapshot.resumable = false;
+      }
+      this.touch(agent);
+      await this.persistNow(agent);
+      this.emitState(agent);
+      if (notSupported) {
+        throw new AgentRpcError("NOT_SUPPORTED", RESUME_NOT_SUPPORTED_MESSAGE);
+      }
+      throw new AgentRpcError("PROVIDER_UNAVAILABLE", `恢复会话失败：${message}`);
+    }
+
+    agent.session = session;
+    agent.closed = false;
+    agent.finishedTurnIds = new Set();
+    agent.unsubscribe = session.subscribe((event) => this.enqueueEvent(agent, event));
+
+    // 恢复后重新设置快照记录的模型 / 模式（provider 发出的变化事件与快照相同，会被去重）
+    const { model, modeId } = agent.snapshot;
+    if (model != null && session.setModel) {
+      await session.setModel(model).catch((error: unknown) => {
+        this.logger.warn("恢复 agent %s 后设置模型 %s 失败：%s", agent.id, model, errorMessage(error));
+      });
+    }
+    if (modeId != null && session.setMode) {
+      await session.setMode(modeId).catch((error: unknown) => {
+        this.logger.warn(
+          "恢复 agent %s 后设置模式 %s 失败：%s",
+          agent.id,
+          modeId,
+          errorMessage(error),
+        );
+      });
+    }
+    await agent.tail;
+
+    agent.snapshot.persistence = session.describePersistence() ?? persistence;
+    this.refreshResumable(agent);
+    agent.snapshot.status = "idle";
+    this.touch(agent);
+    this.logger.info("恢复 agent %s（provider=%s）", agent.id, agent.snapshot.provider);
+    this.emitState(agent);
+  }
+
+  private loadEntries(agent: ManagedAgent): Promise<AgentStreamEnvelope[]> {
+    if (agent.entries) {
+      return Promise.resolve(agent.entries);
+    }
+    if (!agent.entriesLoading) {
+      const empty = { entries: [] as AgentStreamEnvelope[], lastSeq: 0 };
+      const load = this.store ? this.store.readTimeline(agent.id) : Promise.resolve(empty);
+      agent.entriesLoading = load
+        .catch((error: unknown) => {
+          this.logger.warn("读取 agent %s 的 timeline 失败：%s", agent.id, errorMessage(error));
+          return empty;
+        })
+        .then(({ entries, lastSeq }) => {
+          agent.entries = entries;
+          agent.snapshot.lastSeq = Math.max(agent.snapshot.lastSeq, lastSeq);
+          agent.entriesLoading = null;
+          return entries;
+        });
+    }
+    return agent.entriesLoading;
+  }
+
+  private refreshResumable(agent: ManagedAgent): void {
+    agent.snapshot.resumable = Boolean(
+      agent.snapshot.persistence?.sessionId && agent.client?.resumeSession,
+    );
+  }
+
+  private requireSession(agent: ManagedAgent): AgentSession {
+    if (!agent.session) {
+      throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agent.id}`);
+    }
+    return agent.session;
   }
 
   private requireAgent(agentId: string): ManagedAgent {
@@ -338,7 +587,12 @@ export class AgentManager {
   private requireOpenAgent(agentId: string): ManagedAgent {
     const agent = this.requireAgent(agentId);
     if (agent.closed) {
-      throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
+      throw new AgentRpcError(
+        "AGENT_CLOSED",
+        agent.snapshot.status === "dormant"
+          ? `agent 尚未加载：${agentId}（发送消息时自动恢复）`
+          : `agent 已关闭：${agentId}`,
+      );
     }
     return agent;
   }
@@ -400,6 +654,13 @@ export class AgentManager {
     const stateChanged = this.applyToSnapshot(agent, event);
     this.touch(agent);
     this.emitEnvelope(agent, event);
+    if (
+      event.type === "turn_completed" ||
+      event.type === "turn_failed" ||
+      event.type === "turn_canceled"
+    ) {
+      void this.persistNow(agent);
+    }
     if (stateChanged) {
       this.emitState(agent);
     }
@@ -410,10 +671,11 @@ export class AgentManager {
     const snapshot = agent.snapshot;
     switch (event.type) {
       case "thread_started":
-        snapshot.persistence = agent.session.describePersistence() ?? {
+        snapshot.persistence = agent.session?.describePersistence() ?? {
           provider: snapshot.provider,
           sessionId: event.sessionId,
         };
+        this.refreshResumable(agent);
         return true;
       case "turn_started":
         if (agent.closed || agent.finishedTurnIds.has(event.turnId)) {
@@ -454,6 +716,13 @@ export class AgentManager {
         snapshot.modeId = event.modeId;
         return true;
       case "timeline":
+        if (event.item.type === "user_message" && snapshot.preview === undefined) {
+          const preview = toPreview(event.item.text);
+          if (preview) {
+            snapshot.preview = preview;
+            return true;
+          }
+        }
         return false;
     }
   }
@@ -478,20 +747,35 @@ export class AgentManager {
     return true;
   }
 
+  /** 更新 updatedAt 并安排 meta 防抖落盘 */
   private touch(agent: ManagedAgent): void {
     agent.snapshot.updatedAt = this.now();
+    if (!agent.removed) {
+      this.store?.scheduleMeta(agent.id, () => toPersistedMeta(agent.snapshot));
+    }
+  }
+
+  /** 立即落盘 meta（写失败只记日志，不抛错） */
+  private persistNow(agent: ManagedAgent): Promise<void> {
+    if (!this.store || agent.removed) {
+      return Promise.resolve();
+    }
+    return this.store.flushMeta(agent.id, () => toPersistedMeta(agent.snapshot));
   }
 
   private emitEnvelope(agent: ManagedAgent, event: AgentStreamEvent): void {
-    agent.seq += 1;
+    agent.snapshot.lastSeq += 1;
     const envelope: AgentStreamEnvelope = {
       agentId: agent.id,
-      seq: agent.seq,
+      seq: agent.snapshot.lastSeq,
       epoch: this.epoch,
       timestamp: this.now(),
       event,
     };
-    agent.entries.push(envelope);
+    agent.entries?.push(envelope);
+    if (!agent.removed) {
+      this.store?.appendEntry(agent.id, envelope);
+    }
     for (const listener of this.listeners) {
       try {
         listener.onStream?.(envelope);
@@ -502,6 +786,9 @@ export class AgentManager {
   }
 
   private emitState(agent: ManagedAgent): void {
+    if (agent.removed) {
+      return;
+    }
     for (const listener of this.listeners) {
       try {
         listener.onState?.(cloneSnapshot(agent.snapshot));
@@ -524,4 +811,46 @@ function promptToText(prompt: AgentPromptInput): string {
 
 function cloneSnapshot(snapshot: AgentSnapshot): AgentSnapshot {
   return structuredClone(snapshot);
+}
+
+function newManagedAgent(
+  id: string,
+  client: AgentClient | undefined,
+  snapshot: AgentSnapshot,
+): ManagedAgent {
+  return {
+    id,
+    client,
+    session: null,
+    snapshot,
+    entries: null,
+    entriesLoading: null,
+    tail: Promise.resolve(),
+    unsubscribe: () => undefined,
+    sending: false,
+    finishedTurnIds: new Set(),
+    closed: true,
+    resuming: null,
+    closing: null,
+    removed: false,
+  };
+}
+
+/** meta.json：快照中除 pendingPermissions / activeTurnId 外的字段 */
+function toPersistedMeta(snapshot: AgentSnapshot): PersistedAgentMeta {
+  const { pendingPermissions: _pending, activeTurnId: _active, ...rest } = snapshot;
+  return structuredClone(rest);
+}
+
+/** 首条用户消息预览：去掉首尾空白、换行压成空格，取前 120 个字符（按码点） */
+export function toPreview(text: string): string | undefined {
+  const normalized = text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return Array.from(normalized).slice(0, PREVIEW_MAX_CHARS).join("");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

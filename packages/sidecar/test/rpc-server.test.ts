@@ -324,6 +324,32 @@ describe("mock 会话", () => {
     expect(error.error.data?.code).toBe("AGENT_CLOSED");
   });
 
+  test("close 后再 send：mock 可恢复时自动恢复并完成一轮", async () => {
+    const agent = await createAgent();
+    await client.call("agent.send", { agentId: agent.id, prompt: "一" });
+    await client.waitForTurnEnd(agent.id, 1);
+    await client.call("agent.close", { agentId: agent.id });
+    await client.call("agent.send", { agentId: agent.id, prompt: "二" });
+    await expect(client.waitForTurnEnd(agent.id, 2)).resolves.toMatchObject({
+      type: "turn_completed",
+    });
+    const statuses = client.states.filter((s) => s.id === agent.id).map((s) => s.status);
+    expect(statuses.slice(statuses.indexOf("closed"))).toEqual(
+      expect.arrayContaining(["closed", "starting", "idle", "running"]),
+    );
+  });
+
+  test("agent.delete 广播 agent.removed，之后查询返回 AGENT_NOT_FOUND", async () => {
+    const agent = await createAgent();
+    await expect(client.call("agent.delete", { agentId: agent.id })).resolves.toEqual({});
+    await client.waitFor(() => client.removed.includes(agent.id));
+    expect((await client.call("agent.list")).agents).toEqual([]);
+    const error = await expectRpcError(client.call("agent.timeline", { agentId: agent.id }));
+    expect(error.error.data?.code).toBe("AGENT_NOT_FOUND");
+    const invalid = await client.request("agent.delete", { agentId: "" });
+    expect(invalid.error?.code).toBe(-32602);
+  });
+
   test("未知 agent 返回 AGENT_NOT_FOUND", async () => {
     const error = await expectRpcError(client.call("agent.timeline", { agentId: "missing" }));
     expect(error.error.data?.code).toBe("AGENT_NOT_FOUND");

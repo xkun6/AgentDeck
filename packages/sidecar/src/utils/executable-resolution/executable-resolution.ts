@@ -1,16 +1,11 @@
 // Derived from paseo packages/server/src/executable-resolution/executable-resolution.ts (Apache-2.0); modified for AgentDeck
-import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
+import which from "which";
 import { execCommand } from "../spawn.js";
 import { isWindowsCommandScript } from "../windows-command.js";
 import { windowsExecutableResolution } from "./windows.js";
 
 export { quoteWindowsArgument, quoteWindowsCommand } from "../windows-command.js";
-
-type Which = (command: string, options: { all: true }) => Promise<string[]>;
-
-const require = createRequire(import.meta.url);
-const which = require("which") as Which;
 const PROBE_TIMEOUT_MS = 2000;
 
 function hasPathSeparator(value: string): boolean {

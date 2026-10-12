@@ -161,6 +161,7 @@ export class RpcServer {
     this.unsubscribeManager = options.manager.subscribe({
       onStream: (envelope) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentStream, envelope),
       onState: (agent) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentState, { agent }),
+      onRemoved: (agentId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentRemoved, { agentId }),
     });
   }
 
@@ -282,6 +283,10 @@ export class RpcServer {
         }),
         (params) => manager.timeline(params.agentId, params.sinceSeq),
       ),
+      defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
+        await manager.deleteAgent(params.agentId);
+        return {};
+      }),
     ];
   }
 

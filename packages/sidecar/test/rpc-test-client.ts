@@ -31,6 +31,7 @@ export class RpcCallError extends Error {
 export class TestRpcClient {
   readonly streams: AgentStreamEnvelope[] = [];
   readonly states: AgentSnapshot[] = [];
+  readonly removed: string[] = [];
   readonly rawResponses: RawResponse[] = [];
   private nextId = 1;
   private readonly pending = new Map<string | number, (response: RawResponse) => void>();
@@ -153,6 +154,8 @@ export class TestRpcClient {
         this.streams.push(message.params as AgentStreamEnvelope);
       } else if (message.method === "agent.state") {
         this.states.push((message.params as { agent: AgentSnapshot }).agent);
+      } else if (message.method === "agent.removed") {
+        this.removed.push((message.params as { agentId: string }).agentId);
       }
     } else {
       const response = message as unknown as RawResponse;

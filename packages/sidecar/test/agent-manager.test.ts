@@ -228,7 +228,7 @@ describe("AgentManager", () => {
     expect(manager.getAgent(agent.id).pendingPermissions).toEqual([]);
     expect(states.at(-1)?.pendingPermissions).toEqual([]);
 
-    const timeline = manager.timeline(agent.id).entries.map((e) => e.event);
+    const timeline = (await manager.timeline(agent.id)).entries.map((e) => e.event);
     // permission_requested 自动补上当前 turnId；permission_resolved 不重复
     expect(timeline).toContainEqual({
       type: "permission_requested",
@@ -246,9 +246,9 @@ describe("AgentManager", () => {
     await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(1));
     await manager.respondToPermission(agent.id, "perm-1", { behavior: "deny" });
     expect(manager.getAgent(agent.id).pendingPermissions).toEqual([]);
-    const resolved = manager
-      .timeline(agent.id)
-      .entries.filter((e) => e.event.type === "permission_resolved");
+    const resolved = (await manager.timeline(agent.id)).entries.filter(
+      (e) => e.event.type === "permission_resolved",
+    );
     expect(resolved).toHaveLength(1);
   });
 
@@ -277,7 +277,7 @@ describe("AgentManager", () => {
     }
     session.emit({ type: "turn_completed", turnId });
     await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
-    const events = manager.timeline(agent.id).entries.map((e) => e.event);
+    const events = (await manager.timeline(agent.id)).entries.map((e) => e.event);
     const texts = events.flatMap((e) =>
       e.type === "timeline" && e.item.type === "assistant_message" ? [e.item.text] : [],
     );
@@ -310,9 +310,9 @@ describe("AgentManager", () => {
     await expect(manager.setModel(agent.id, "m1")).resolves.toMatchObject({ model: "m1" });
     session.emitsModelChanged = true;
     await manager.setModel(agent.id, "m1");
-    const changes = manager
-      .timeline(agent.id)
-      .entries.filter((e) => e.event.type === "model_changed");
+    const changes = (await manager.timeline(agent.id)).entries.filter(
+      (e) => e.event.type === "model_changed",
+    );
     expect(changes).toHaveLength(1);
   });
 
@@ -356,12 +356,12 @@ describe("AgentManager", () => {
     session.emit({ type: "usage_updated", usage: { inputTokens: 1 } });
     session.emit({ type: "turn_completed", turnId });
     await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
-    const all = manager.timeline(agent.id);
+    const all = await manager.timeline(agent.id);
     expect(all.epoch).toBe(manager.epoch);
     expect(all.entries.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
-    expect(manager.timeline(agent.id, 2).entries.map((e) => e.seq)).toEqual([3, 4]);
-    expect(manager.timeline(agent.id, 4).entries).toEqual([]);
-    expect(() => manager.timeline("missing")).toThrow(AgentRpcError);
+    expect((await manager.timeline(agent.id, 2)).entries.map((e) => e.seq)).toEqual([3, 4]);
+    expect((await manager.timeline(agent.id, 4)).entries).toEqual([]);
+    await expect(manager.timeline("missing")).rejects.toThrow(AgentRpcError);
   });
 });
 

@@ -71,6 +71,7 @@ export const CODEX_MODES: AgentMode[] = [
     id: "full-access",
     label: "完全访问",
     description: "无沙箱、不请求审批，可修改任意文件与访问网络",
+    dangerous: true,
   },
 ];
 

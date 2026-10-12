@@ -6,6 +6,7 @@
  */
 import packageJson from "../package.json" with { type: "json" };
 import { AgentManager } from "./agent/agent-manager.js";
+import { AgentStore } from "./agent/agent-store.js";
 import { createLogger, type Logger } from "./logger.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { RpcServer } from "./server/rpc-server.js";
@@ -15,6 +16,7 @@ const SIDECAR_VERSION: string = packageJson.version;
 const PARENT_POLL_INTERVAL_MS = 2_000;
 /** Rust 关闭 stdin 后只等 3 秒，这里要在此之前完成清理 */
 const SHUTDOWN_TIMEOUT_MS = 2_500;
+const SHUTDOWN_FLUSH_TIMEOUT_MS = 300;
 const EXIT_CONFIG_ERROR = 2;
 
 interface SidecarEnv {
@@ -101,6 +103,7 @@ async function main(): Promise<void> {
     try {
       await withTimeout(
         (async () => {
+          // manager.shutdown 先落盘、再关闭会话、最后再落盘一次
           await manager?.shutdown();
           await registry?.shutdown();
           await server?.close();
@@ -110,6 +113,12 @@ async function main(): Promise<void> {
       );
     } catch (error) {
       logger.warn("关闭过程出错：%s", String(error));
+      // 超时也要尽量把已排队的持久化数据写完再退出
+      await withTimeout(
+        manager?.flush() ?? Promise.resolve(),
+        SHUTDOWN_FLUSH_TIMEOUT_MS,
+        "落盘超时",
+      ).catch((flushError: unknown) => logger.warn("退出前落盘失败：%s", String(flushError)));
     }
     logger.info("sidecar 退出（code=%d）", exitCode);
     logger.close();
@@ -150,7 +159,14 @@ async function main(): Promise<void> {
     env: process.env,
     ...(config.dataDir ? { dataDir: config.dataDir } : {}),
   });
-  manager = new AgentManager({ registry, logger });
+  // 设置了 AGENTDECK_DATA_DIR 才持久化会话（design.md 4.5）；恢复失败只记日志，不影响启动
+  const store = config.dataDir ? new AgentStore({ dataDir: config.dataDir, logger }) : undefined;
+  manager = new AgentManager({ registry, logger, ...(store ? { store } : {}) });
+  try {
+    await manager.restore();
+  } catch (error) {
+    logger.error("恢复历史会话失败：%s", String(error));
+  }
   server = new RpcServer({
     token: config.token,
     version: SIDECAR_VERSION,

@@ -128,6 +128,78 @@ describe("main.ts 端到端", () => {
     expect(log).toContain("开始关闭：stdin");
   });
 
+  test("AGENTDECK_DATA_DIR：跑一轮 → 退出 → 同目录重启 → dormant + 历史 timeline → send 自动恢复且 seq 接续", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "agentdeck-sidecar-data-"));
+    tempDirs.push(dataDir);
+    const env = { AGENTDECK_TOKEN: TOKEN, AGENTDECK_DATA_DIR: dataDir };
+
+    // 第一次启动：建会话跑一轮
+    const first = startSidecar(env);
+    const firstReady = await first.ready;
+    const c1 = await TestRpcClient.connect(`ws://127.0.0.1:${firstReady.port}/rpc?token=${TOKEN}`);
+    const { agent } = await c1.call("agent.create", { provider: "mock", cwd: PACKAGE_DIR });
+    await c1.call("agent.send", { agentId: agent.id, prompt: "第一轮\n持久化" });
+    await expect(c1.waitForTurnEnd(agent.id)).resolves.toMatchObject({ type: "turn_completed" });
+    const firstEntries = (await c1.call("agent.timeline", { agentId: agent.id })).entries;
+    const firstLastSeq = firstEntries.at(-1)!.seq;
+    expect(firstEntries.map((e) => e.seq)).toEqual(
+      Array.from({ length: firstLastSeq }, (_, i) => i + 1),
+    );
+
+    first.child.stdin!.end();
+    expect(await withTimeout(first.exited, 5_000, "第一次关闭 stdin 后未退出")).toEqual({
+      code: 0,
+      signal: null,
+    });
+    await c1.close();
+
+    const agentDir = path.join(dataDir, "agents", agent.id);
+    const meta = JSON.parse(readFileSync(path.join(agentDir, "meta.json"), "utf8"));
+    expect(meta).toMatchObject({ id: agent.id, lastSeq: firstLastSeq, preview: "第一轮 持久化" });
+    expect(meta).not.toHaveProperty("pendingPermissions");
+    const timelineLines = readFileSync(path.join(agentDir, "timeline.jsonl"), "utf8")
+      .trimEnd()
+      .split("\n");
+    expect(timelineLines).toHaveLength(firstLastSeq);
+
+    // 第二次启动：同一数据目录
+    const second = startSidecar(env);
+    const secondReady = await second.ready;
+    const c2 = await TestRpcClient.connect(
+      `ws://127.0.0.1:${secondReady.port}/rpc?token=${TOKEN}`,
+    );
+    const { agents } = await c2.call("agent.list");
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({
+      id: agent.id,
+      status: "dormant",
+      resumable: true,
+      lastSeq: firstLastSeq,
+      preview: "第一轮 持久化",
+    });
+
+    const history = await c2.call("agent.timeline", { agentId: agent.id });
+    expect(history.entries).toEqual(firstEntries);
+    expect(history.epoch).not.toBe(firstEntries[0]!.epoch);
+
+    await c2.call("agent.send", { agentId: agent.id, prompt: "第二轮" });
+    await expect(c2.waitForTurnEnd(agent.id)).resolves.toMatchObject({ type: "turn_completed" });
+    const newSeqs = c2.streams.filter((s) => s.agentId === agent.id).map((s) => s.seq);
+    expect(newSeqs[0]).toBe(firstLastSeq + 1);
+    expect(newSeqs).toEqual(Array.from({ length: newSeqs.length }, (_, i) => firstLastSeq + 1 + i));
+    const statuses = c2.states.filter((s) => s.id === agent.id).map((s) => s.status);
+    expect(statuses.slice(0, 3)).toEqual(["starting", "idle", "running"]);
+    const replyText = c2
+      .eventsFor(agent.id)
+      .map((e) => (e.type === "timeline" && e.item.type === "assistant_message" ? e.item.text : ""))
+      .join("");
+    expect(replyText).toBe("Mock 回复：第二轮");
+
+    second.child.stdin!.end();
+    await withTimeout(second.exited, 5_000, "第二次关闭 stdin 后未退出");
+    await c2.close();
+  });
+
   test("缺少 AGENTDECK_TOKEN 时以退出码 2 退出", async () => {
     const sidecar = startSidecar({});
     sidecar.ready.catch(() => undefined);

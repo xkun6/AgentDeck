@@ -76,7 +76,12 @@ export const CLAUDE_MODES: AgentMode[] = [
   { id: "default", label: "默认", description: "敏感操作逐项请求审批" },
   { id: "acceptEdits", label: "自动接受编辑", description: "文件编辑自动通过，其它操作仍需审批" },
   { id: "plan", label: "计划模式", description: "只读分析并给出计划，批准后才执行" },
-  { id: "bypassPermissions", label: "跳过所有审批", description: "所有工具调用直接执行（危险）" },
+  {
+    id: "bypassPermissions",
+    label: "跳过所有审批",
+    description: "所有工具调用直接执行（危险）",
+    dangerous: true,
+  },
 ];
 
 const DEFAULT_MODE: PermissionMode = "default";

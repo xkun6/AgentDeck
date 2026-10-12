@@ -26,6 +26,8 @@ export interface AgentMode {
   id: string;
   label: string;
   description?: string;
+  /** 跳过权限确认类模式（Claude bypassPermissions、Codex full-access），前端据此标红 */
+  dangerous?: boolean;
 }
 export interface AgentModelDefinition {
   provider: AgentProviderId;
@@ -128,7 +130,8 @@ export interface AgentStreamEnvelope {
   event: AgentStreamEvent;
 }
 
-export type AgentStatus = "starting" | "idle" | "running" | "error" | "closed";
+/** `dormant`：已持久化但未加载到内存的会话（sidecar 重启后的历史会话），再 send 时自动恢复 */
+export type AgentStatus = "starting" | "idle" | "running" | "error" | "closed" | "dormant";
 export interface AgentPersistenceHandle {
   provider: AgentProviderId;
   sessionId: string;
@@ -149,6 +152,12 @@ export interface AgentSnapshot {
   lastUsage?: AgentUsage;
   lastError?: string | null;
   persistence?: AgentPersistenceHandle | null;
+  /** 首条用户消息前 120 字（首尾空白去掉、换行压成空格） */
+  preview?: string;
+  /** 该 agent 当前最大 seq，无事件为 0 */
+  lastSeq: number;
+  /** 有 persistence 句柄且 provider 支持 resumeSession */
+  resumable: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -219,11 +228,13 @@ export const AGENT_RPC_METHODS = {
   agentSetMode: "agent.setMode",
   agentClose: "agent.close",
   agentTimeline: "agent.timeline",
+  agentDelete: "agent.delete",
 } as const;
 
 export const AGENT_RPC_NOTIFICATIONS = {
   agentStream: "agent.stream",
   agentState: "agent.state",
+  agentRemoved: "agent.removed",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -266,6 +277,7 @@ export interface AgentRpcMethods {
     params: { agentId: string; sinceSeq?: number };
     result: { epoch: string; entries: AgentStreamEnvelope[] };
   };
+  "agent.delete": { params: { agentId: string }; result: Record<string, never> };
 }
 
 export type AgentRpcMethodName = keyof AgentRpcMethods;
@@ -275,6 +287,7 @@ export type AgentRpcResult<M extends AgentRpcMethodName> = AgentRpcMethods[M]["r
 export interface AgentRpcNotifications {
   "agent.stream": AgentStreamEnvelope;
   "agent.state": { agent: AgentSnapshot };
+  "agent.removed": { agentId: string };
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

@@ -54,6 +54,24 @@ function shouldUseWindowsShell(
   return process.platform === "win32" && !hasPathSeparator(command) && !extname(command);
 }
 
+/**
+ * 走 shell 时自己把命令与参数拼成单个命令串、args 传空数组：与 Node 内部的拼接方式一致，
+ * 但避免 `shell:true` + args 数组触发 DEP0190 警告。Windows 下按 cmd 规则转义（windows-command.ts）。
+ */
+function resolveShellInvocation(
+  command: string,
+  args: string[],
+  shell: boolean | string,
+): [string, string[]] {
+  if (shell === false) {
+    return [command, args];
+  }
+  if (process.platform === "win32") {
+    return [[quoteWindowsCommand(command), ...args.map(quoteWindowsArgument)].join(" "), []];
+  }
+  return [[command, ...args].join(" "), []];
+}
+
 export function spawnProcess(
   command: string,
   args: string[],
@@ -61,12 +79,8 @@ export function spawnProcess(
 ): ChildProcess {
   const { baseEnv, env, envOverlay, ...spawnOptions } = options ?? {};
   const resolvedBaseEnv = env ?? baseEnv ?? process.env;
-  const isWindows = process.platform === "win32";
   const shell = shouldUseWindowsShell(command, spawnOptions.shell);
-
-  const shouldQuoteForShell = isWindows && shell !== false;
-  const resolvedCommand = shouldQuoteForShell ? quoteWindowsCommand(command) : command;
-  const resolvedArgs = shouldQuoteForShell ? args.map(quoteWindowsArgument) : args;
+  const [resolvedCommand, resolvedArgs] = resolveShellInvocation(command, args, shell);
   const childEnv =
     options?.envMode === "internal"
       ? ({ ...resolvedBaseEnv, ...envOverlay } as NodeJS.ProcessEnv)
@@ -92,11 +106,8 @@ export async function execCommand(
 ): Promise<ExecCommandResult> {
   const { baseEnv, env, envOverlay } = options ?? {};
   const resolvedBaseEnv = env ?? baseEnv ?? process.env;
-  const isWindows = process.platform === "win32";
   const shell = shouldUseWindowsShell(command, options?.shell);
-  const shouldQuoteForShell = isWindows && shell !== false;
-  const resolvedCommand = shouldQuoteForShell ? quoteWindowsCommand(command) : command;
-  const resolvedArgs = shouldQuoteForShell ? args.map(quoteWindowsArgument) : args;
+  const [resolvedCommand, resolvedArgs] = resolveShellInvocation(command, args, shell);
   const childEnv =
     options?.envMode === "internal"
       ? ({ ...resolvedBaseEnv, ...envOverlay } as NodeJS.ProcessEnv)

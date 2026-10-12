@@ -58,6 +58,11 @@ export class MockAgentClient implements AgentClient {
     }
     return new MockAgentSession(cfg);
   }
+
+  /** 恢复：沿用原 sessionId 的新会话（mock 没有真实上下文可恢复） */
+  async resumeSession(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession> {
+    return new MockAgentSession({ cwd: cfg.cwd }, handle.sessionId);
+  }
 }
 
 interface ActiveTurn {
@@ -83,9 +88,10 @@ export class MockAgentSession implements AgentSession {
   private active: ActiveTurn | null = null;
   private closed = false;
 
-  constructor(cfg: AgentSessionConfig) {
+  constructor(cfg: AgentSessionConfig, resumeSessionId: string | null = null) {
     this.model = cfg.model ?? null;
     this.modeId = cfg.modeId ?? "default";
+    this.sessionId = resumeSessionId;
   }
 
   get id(): string | null {
