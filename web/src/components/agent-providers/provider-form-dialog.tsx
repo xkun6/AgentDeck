@@ -428,7 +428,12 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
                     onChange={(event) => update({ baseUrl: event.target.value }, "baseUrl", "models")}
                   />
                 </Field>
-                <Field label="API Key" htmlFor={fieldId("apiKey")} error={errors.apiKey}>
+                <Field
+                  label="API Key"
+                  htmlFor={fieldId("apiKey")}
+                  error={errors.apiKey}
+                  hint={isClaude ? "中转只会发送这里配置的密钥，你本机 Claude 的登录凭据不会发给三方。" : undefined}
+                >
                   <SecretInput
                     id={fieldId("apiKey")}
                     label="API Key"

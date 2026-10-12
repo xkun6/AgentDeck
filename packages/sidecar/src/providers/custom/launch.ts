@@ -16,6 +16,13 @@ export const CLAUDE_CREDENTIAL_ENV = [
 ] as const;
 export const CODEX_CREDENTIAL_ENV = ["OPENAI_BASE_URL", "OPENAI_API_KEY"] as const;
 
+/**
+ * 中转没有任何凭据时写入 ANTHROPIC_AUTH_TOKEN 的占位值：Claude Code 2.1.296 实测，中转地址 + 两个凭据都为空时，
+ * 会把用户的 claude.ai OAuth 令牌（.credentials.json 或 CLAUDE_CODE_OAUTH_TOKEN）作为 Bearer 发给中转；
+ * 设了 AUTH_TOKEN 后不再使用 OAuth。provider.test 不发送该占位值。
+ */
+export const RELAY_NO_KEY_PLACEHOLDER = "agentdeck-no-key";
+
 /** 三方接口不支持 Anthropic 服务端 WebSearch：设置了 baseUrl 且未显式给出 disallowedTools 时默认禁用 */
 export const DEFAULT_RELAY_DISALLOWED_TOOLS = ["WebSearch"] as const;
 
@@ -82,8 +89,8 @@ export function settingsEnvOf(settings: Record<string, unknown> | undefined): Re
 }
 
 /**
- * 中转推导出的 `--settings` env：未选用的另一个凭据变量置空（压住用户 settings 里的密钥），再叠加推导值与 profile.env。
- * 未填 apiKey 时不置空任何凭据，未填 baseUrl 时不写 ANTHROPIC_BASE_URL，让 settings 中的值生效。
+ * 表单推导出的 `--settings` env：填了 apiKey 时未选用的另一个凭据变量置空，再叠加推导值与 profile.env。
+ * 未填 apiKey / baseUrl 时不写对应变量，让 settings 中的值生效（中转的凭据隔离由 isolateRelayCredentials 统一处理）。
  */
 function derivedSettingsEnv(profile: ProviderProfile): Record<string, string> {
   const env: Record<string, string> = {};
@@ -97,7 +104,7 @@ function derivedSettingsEnv(profile: ProviderProfile): Record<string, string> {
 
 /**
  * 合并出传给 `--settings` 的整份设置（design.md 4.7）：
- * settingsFile 内容 → profile.settings → 推导 env（含置空的另一个凭据）→ profile.env。
+ * settingsFile 内容 → profile.settings → 推导 env（含置空的另一个凭据）→ profile.env，最后做中转凭据隔离。
  */
 export function mergeClaudeSettings(
   profile: ProviderProfile,
@@ -108,14 +115,36 @@ export function mergeClaudeSettings(
   if (profile.settings) merged = deepMergeSettings(merged, profile.settings);
   const env = derivedSettingsEnv(profile);
   if (Object.keys(env).length > 0) merged = deepMergeSettings(merged, { env });
-  return merged;
+  return isolateRelayCredentials(merged);
+}
+
+/**
+ * 中转只发送该 profile 自己提供的凭据：合并后有效 ANTHROPIC_BASE_URL 非空即为中转，此时两个凭据变量都显式写入，
+ * 未提供（缺省或空白）的置 ""，压住用户 settings 里的密钥；两个都没提供时 AUTH_TOKEN 写占位值，压住用户 OAuth 令牌。
+ * 非中转（只换模型 / 设置、不换端点）原样返回。
+ */
+function isolateRelayCredentials(merged: Record<string, unknown>): Record<string, unknown> {
+  const env = settingsEnvOf(merged);
+  if (!env.ANTHROPIC_BASE_URL?.trim()) {
+    return merged;
+  }
+  const provided = (key: string): string => (env[key]?.trim() ? env[key]! : "");
+  const authToken = provided("ANTHROPIC_AUTH_TOKEN");
+  const apiKey = provided("ANTHROPIC_API_KEY");
+  return deepMergeSettings(merged, {
+    env: {
+      ANTHROPIC_AUTH_TOKEN: authToken || (apiKey ? "" : RELAY_NO_KEY_PLACEHOLDER),
+      ANTHROPIC_API_KEY: apiKey,
+    },
+  });
 }
 
 /**
  * Claude 中转的启动覆盖：
  * - 进程环境：剔除继承的 ANTHROPIC_* 凭据变量，再叠加推导值与 profile.env；
  * - `--settings <json>`：settingsFile、内联 settings 与推导 env 合并成一份 flag 级设置（flag 设置优先于用户
- *   ~/.claude/settings.json），并把未选用的另一个凭据变量置空，避免用户设置里的密钥一并发给中转；
+ *   ~/.claude/settings.json）；中转时两个凭据变量都显式写入（未提供的置空，都没有时写占位值），
+ *   避免用户设置里的密钥或 OAuth 登录令牌一并发给中转；
  * - `--disallowedTools a,b`；
  * - command[1..] 作为附加参数放在最前（command[0] 由调用方用于定位可执行文件）。
  * `fileSettings` 为调用方读到的 settingsFile 内容（每次启动会话时读取）。

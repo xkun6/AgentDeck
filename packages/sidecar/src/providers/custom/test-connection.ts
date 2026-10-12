@@ -2,7 +2,13 @@
 import type { ProviderProfile, ProviderTestResult } from "@agentdeck/protocol";
 
 import { findExecutable } from "../../utils/executable-resolution/executable-resolution.js";
-import { deriveCodexEnv, mergeClaudeSettings, normalizeOpenAiBaseUrl, settingsEnvOf } from "./launch.js";
+import {
+  deriveCodexEnv,
+  mergeClaudeSettings,
+  normalizeOpenAiBaseUrl,
+  RELAY_NO_KEY_PLACEHOLDER,
+  settingsEnvOf,
+} from "./launch.js";
 import { collectSecrets, redactText } from "./redact.js";
 import { readClaudeSettingsFile } from "./settings-file.js";
 
@@ -28,6 +34,7 @@ export interface ProviderTestRequest {
  * claude / codex 的模型列表请求（URL 与请求头按 4.7 规则）。
  * claude 取合并后 settings.env 中的值：表单未填 baseUrl / apiKey 时回退到 settingsFile（`fileSettings`）/ 内联设置里的
  * ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY，鉴权头按实际取到的凭据类型决定。
+ * 只使用 profile 自己提供的凭据（不读取用户 ~/.claude 与进程环境）；没有凭据（含中转占位值）就不带鉴权头。
  */
 export function buildProviderTestRequest(
   profile: ProviderProfile,
@@ -37,7 +44,7 @@ export function buildProviderTestRequest(
     const env = settingsEnvOf(mergeClaudeSettings(profile, fileSettings));
     const base = (env.ANTHROPIC_BASE_URL || ANTHROPIC_DEFAULT_BASE_URL).replace(/\/+$/, "");
     const headers: Record<string, string> = { "anthropic-version": ANTHROPIC_VERSION };
-    if (env.ANTHROPIC_AUTH_TOKEN) {
+    if (env.ANTHROPIC_AUTH_TOKEN && env.ANTHROPIC_AUTH_TOKEN !== RELAY_NO_KEY_PLACEHOLDER) {
       headers.authorization = `Bearer ${env.ANTHROPIC_AUTH_TOKEN}`;
     } else if (env.ANTHROPIC_API_KEY) {
       headers["x-api-key"] = env.ANTHROPIC_API_KEY;

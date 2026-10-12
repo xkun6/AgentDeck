@@ -19,6 +19,7 @@ export {
   deriveCodexEnv,
   mergeClaudeSettings,
   normalizeOpenAiBaseUrl,
+  RELAY_NO_KEY_PLACEHOLDER,
   resolveDisallowedTools,
 } from "./launch.js";
 export { addSecrets, collectSecrets, createRedactingLogger, redactText } from "./redact.js";

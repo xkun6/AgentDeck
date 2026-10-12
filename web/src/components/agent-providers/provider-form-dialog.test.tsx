@@ -40,6 +40,7 @@ function setup(
   return { request: fake.request, onClose };
 }
 
+const CREDENTIAL_NOTE = "中转只会发送这里配置的密钥，你本机 Claude 的登录凭据不会发给三方。";
 const input = (label: string | RegExp) => screen.getByLabelText(label) as HTMLInputElement;
 const change = (element: HTMLElement, value: string) => fireEvent.change(element, { target: { value } });
 
@@ -50,9 +51,11 @@ describe("ProviderFormDialog", () => {
     expect(input(/^id/).value).toBe("claude-2");
     expect(screen.getByLabelText("API Key")).toBeTruthy();
     expect(screen.getByRole("radiogroup", { name: "认证方式" })).toBeTruthy();
+    expect(screen.getByText(CREDENTIAL_NOTE)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("radio", { name: /Codex/ }));
     expect(screen.queryByRole("radiogroup", { name: "认证方式" })).toBeNull();
+    expect(screen.queryByText(CREDENTIAL_NOTE)).toBeNull();
     expect(screen.getByText(/Codex 不会从中转发现模型/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("radio", { name: /ACP/ }));

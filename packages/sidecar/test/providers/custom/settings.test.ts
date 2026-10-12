@@ -1,6 +1,7 @@
 // Claude 中转的整份 settings（design.md 4.7）：schema 规则、深合并顺序、未填 baseUrl / apiKey 时沿用 settings.env、
-// settingsFile 读取（不存在 / 非法 JSON / BOM / 每次启动重新读取 / PROVIDER_UNAVAILABLE）、provider.test 回退与脱敏。
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// settingsFile 读取（不存在 / 非法 JSON / BOM / 每次启动重新读取 / PROVIDER_UNAVAILABLE）、provider.test 回退与脱敏、
+// 中转凭据隔离（中转只发送 profile 自己提供的凭据，未提供的置空，都没有时写占位值）。
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -8,7 +9,7 @@ import path from "node:path";
 import { format } from "node:util";
 
 import type { ProviderProfile } from "@agentdeck/protocol";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AgentManager } from "../../../src/agent/agent-manager.js";
 import { AgentRpcError } from "../../../src/agent/errors.js";
@@ -32,6 +33,7 @@ import {
   mergeClaudeSettings,
   providerProfileSchema,
   readClaudeSettingsFile,
+  RELAY_NO_KEY_PLACEHOLDER,
   reservedProfileIds,
   testProviderProfile,
   toProviderProfile,
@@ -208,6 +210,103 @@ describe("深合并与合并顺序", () => {
   });
 });
 
+describe("中转凭据隔离：中转只发送 profile 自己提供的凭据", () => {
+  const claudeProfile = (overrides: Partial<ProviderProfile> = {}): ProviderProfile => ({
+    id: "r",
+    extends: "claude",
+    label: "r",
+    ...overrides,
+  });
+  const envOf = (profile: ProviderProfile, fileSettings?: Record<string, unknown>) =>
+    settingsOf(buildClaudeLaunchOverride(profile, fileSettings).extraArgs)?.env;
+
+  test.each<[string, ProviderProfile, Record<string, unknown> | undefined, Record<string, string>]>([
+    [
+      "表单 apiKey（auth_token）",
+      claudeProfile({ baseUrl: "http://relay", apiKey: "sk-form" }),
+      undefined,
+      { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "sk-form", ANTHROPIC_API_KEY: "" },
+    ],
+    [
+      "表单 apiKey（api_key）",
+      claudeProfile({ baseUrl: "http://relay", apiKey: "sk-form", authMode: "api_key" }),
+      undefined,
+      { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_API_KEY: "sk-form" },
+    ],
+    [
+      "内联 settings 只给 AUTH_TOKEN",
+      claudeProfile({ settings: { env: { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "sk-inline" } } }),
+      undefined,
+      { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "sk-inline", ANTHROPIC_API_KEY: "" },
+    ],
+    [
+      "settingsFile 只给 AUTH_TOKEN（复现的泄露场景）",
+      claudeProfile({ settingsFile: "C:\relay.json" }),
+      { env: { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "sk-file" } },
+      { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "sk-file", ANTHROPIC_API_KEY: "" },
+    ],
+    [
+      "settingsFile 只给 API_KEY",
+      claudeProfile({ settingsFile: "C:\relay.json" }),
+      { env: { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_API_KEY: "sk-file" } },
+      { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_API_KEY: "sk-file" },
+    ],
+    [
+      "profile.env 只给 API_KEY（地址来自表单）",
+      claudeProfile({ baseUrl: "http://relay", env: { ANTHROPIC_API_KEY: "sk-env" } }),
+      undefined,
+      { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_API_KEY: "sk-env" },
+    ],
+  ])("只给一种凭据（%s）→ 另一种置空", (_name, profile, fileSettings, expected) => {
+    expect(envOf(profile, fileSettings)).toEqual(expected);
+    expect(mergeClaudeSettings(profile, fileSettings).env).toEqual(expected);
+  });
+
+  test("两种都给 → 都保留（来源可以不同）", () => {
+    const profile = claudeProfile({
+      settings: { env: { ANTHROPIC_API_KEY: "sk-inline-key" } },
+      env: { ANTHROPIC_AUTH_TOKEN: "sk-env-token" },
+    });
+    expect(envOf(profile, { env: { ANTHROPIC_BASE_URL: "http://relay" } })).toEqual({
+      ANTHROPIC_BASE_URL: "http://relay",
+      ANTHROPIC_AUTH_TOKEN: "sk-env-token",
+      ANTHROPIC_API_KEY: "sk-inline-key",
+    });
+  });
+
+  test.each<[string, ProviderProfile, Record<string, unknown> | undefined]>([
+    ["只填表单 baseUrl", claudeProfile({ baseUrl: "http://relay" }), undefined],
+    ["地址只在 settingsFile", claudeProfile({ settingsFile: "C:\relay.json" }), { env: { ANTHROPIC_BASE_URL: "http://relay" } }],
+    [
+      "凭据为空串 / 空白视为未提供",
+      claudeProfile({ baseUrl: "http://relay", settings: { env: { ANTHROPIC_AUTH_TOKEN: "  ", ANTHROPIC_API_KEY: "" } } }),
+      undefined,
+    ],
+  ])("都不给（%s）→ AUTH_TOKEN 写占位值，API_KEY 置空（压住用户 OAuth 令牌）", (_name, profile, fileSettings) => {
+    expect(envOf(profile, fileSettings)).toEqual({
+      ANTHROPIC_BASE_URL: "http://relay",
+      ANTHROPIC_AUTH_TOKEN: RELAY_NO_KEY_PLACEHOLDER,
+      ANTHROPIC_API_KEY: "",
+    });
+    expect(RELAY_NO_KEY_PLACEHOLDER).toBe("agentdeck-no-key");
+  });
+
+  test("非中转（有效 ANTHROPIC_BASE_URL 为空）不置空、不写占位值", () => {
+    // 只换凭据 / 设置，不换端点
+    expect(envOf(claudeProfile({ settings: { env: { ANTHROPIC_AUTH_TOKEN: "sk-inline" } } }))).toEqual({
+      ANTHROPIC_AUTH_TOKEN: "sk-inline",
+    });
+    expect(settingsOf(buildClaudeLaunchOverride(claudeProfile({ settings: { model: "opus" } })).extraArgs)).toEqual({
+      model: "opus",
+    });
+    expect(buildClaudeLaunchOverride(claudeProfile()).extraArgs).toEqual([]);
+    // profile.env 把 settings 里的地址覆盖为空串：同样视为非中转
+    expect(
+      envOf(claudeProfile({ env: { ANTHROPIC_BASE_URL: "" } }), { env: { ANTHROPIC_BASE_URL: "http://relay", ANTHROPIC_API_KEY: "sk-file" } }),
+    ).toEqual({ ANTHROPIC_BASE_URL: "", ANTHROPIC_API_KEY: "sk-file" });
+  });
+});
+
 describe("settingsFile 读取", () => {
   test("不存在 / 非法 JSON / 不是对象 → 中文错误；带 UTF-8 BOM 可读", async () => {
     await expect(readClaudeSettingsFile(path.join(dir, "missing.json"))).rejects.toThrow(/设置文件不存在/);
@@ -366,6 +465,45 @@ describe("provider.test 回退到 settings.env", () => {
     expect(failed.ok).toBe(false);
     expect(failed.error).toContain("HTTP 401");
     expect(failed.error).not.toContain("sk-file-secret-123");
+  });
+
+  describe("不读取用户凭据", () => {
+    beforeEach(() => {
+      // 用户 Claude 配置目录：settings.json 带诱饵凭据，.credentials.json 带假 OAuth 令牌；进程环境同样带诱饵
+      const configDir = path.join(dir, "user-claude");
+      mkdirSync(configDir);
+      writeFileSync(
+        path.join(configDir, "settings.json"),
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "decoy-user-token", ANTHROPIC_API_KEY: "decoy-user-key" } }),
+      );
+      writeFileSync(
+        path.join(configDir, ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: "fake-oauth-token", refreshToken: "x", expiresAt: 0, scopes: [] } }),
+      );
+      vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+      vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "decoy-env-token");
+      vi.stubEnv("ANTHROPIC_API_KEY", "decoy-env-key");
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "decoy-env-oauth");
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    test("中转没有任何凭据 → 不带鉴权头（也不发送占位值）", async () => {
+      const result = await testProviderProfile({ id: "r", extends: "claude", label: "r", baseUrl: base });
+      expect(result.ok).toBe(true);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.headers.authorization).toBeUndefined();
+      expect(seen[0]!.headers["x-api-key"]).toBeUndefined();
+    });
+
+    test("中转只有 settingsFile 的 API_KEY → 只带 x-api-key，不带用户的 AUTH_TOKEN", async () => {
+      const file = writeJson("s.json", JSON.stringify({ env: { ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: "sk-file-key" } }));
+      const result = await testProviderProfile({ id: "r", extends: "claude", label: "r", settingsFile: file });
+      expect(result.ok).toBe(true);
+      expect(seen[0]!.headers["x-api-key"]).toBe("sk-file-key");
+      expect(seen[0]!.headers.authorization).toBeUndefined();
+    });
   });
 });
 
