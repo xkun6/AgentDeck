@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentStreamEnvelope, AgentStreamEvent } from "@agentdeck/protocol";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { AgentManager } from "../../../src/agent/agent-manager.js";
 import { createLogger } from "../../../src/logger.js";
@@ -41,9 +41,9 @@ function describeEvent(event: AgentStreamEvent): string {
 }
 
 describe.skipIf(!SMOKE)("Claude Code 真实冒烟", () => {
+  // 注意：跳过时 describe 回调仍会在收集阶段执行，这里不能有文件系统副作用
   const cwd = path.join(REPO_ROOT, "tmp", `claude-smoke-${Date.now()}`);
-  mkdirSync(cwd, { recursive: true });
-  const logger = createLogger({ logDir: path.join(REPO_ROOT, "tmp", "claude-smoke-logs") });
+  const logger = createLogger();
   const client = new ClaudeAgentClient({ logger, env: process.env });
   const manager = new AgentManager({ registry: { get: (id) => (id === "claude" ? client : undefined) }, logger });
   const envelopes: AgentStreamEnvelope[] = [];
@@ -58,6 +58,10 @@ describe.skipIf(!SMOKE)("Claude Code 真实冒烟", () => {
           .catch((error: unknown) => logger.error("自动批准失败：%s", String(error)));
       }
     },
+  });
+
+  beforeAll(() => {
+    mkdirSync(cwd, { recursive: true });
   });
 
   afterAll(async () => {
