@@ -65,4 +65,4 @@ AgentDeck 的 Claude Code 与 Codex 适配均直接调用**用户本机安装的
 
 ### 前端依赖（web bundle）
 
-React 前端的生产依赖（React、TanStack Query、Jotai、Radix UI、xterm.js、KaTeX、Mermaid、Recharts 等，以及 `@agentdeck/protocol`、`@agentdeck/shared-ui` 的依赖）打包在主程序内。包清单、许可证类型与许可全文见 `legal/web-third-party.txt`（由 `pnpm licenses list --prod` 在 `@agentdeck/web`、`@agentdeck/protocol`、`@agentdeck/shared-ui` 范围生成，列出的是依赖树，可能多于实际打进 bundle 的代码）。
+React 前端的生产依赖（React、TanStack Query、Jotai、Radix UI、xterm.js、KaTeX、Mermaid 等，以及 `@agentdeck/protocol`、`@agentdeck/shared-ui` 的依赖）打包在主程序内。包清单、许可证类型与许可全文见 `legal/web-third-party.txt`（由 `pnpm licenses list --prod` 在 `@agentdeck/web`、`@agentdeck/protocol`、`@agentdeck/shared-ui` 范围生成，列出的是依赖树，可能多于实际打进 bundle 的代码）。

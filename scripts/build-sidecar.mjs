@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 用 esbuild 把 packages/sidecar/src/main.ts 打成单文件 dist-sidecar/bundle.mjs（design.md 7.1）。
 // 打包态由 Rust 以 `<exe 目录>/node.exe <resource_dir>/sidecar/bundle.mjs` 拉起，旁边没有 node_modules，
-// 所以除可选原生加速包与 claude-agent-sdk 平台二进制外，全部依赖都必须打进 bundle。
+// 所以除 ws 的可选原生加速包（bufferutil / utf-8-validate）外，全部依赖都必须打进 bundle。
 //
 // 用法：node scripts/build-sidecar.mjs（或 pnpm sidecar:build）
 
@@ -31,7 +31,7 @@ const result = await build({
   banner: {
     js: 'import { createRequire as __agentdeckCreateRequire } from "node:module"; const require = __agentdeckCreateRequire(import.meta.url);',
   },
-  external: ["bufferutil", "utf-8-validate", "@anthropic-ai/claude-agent-sdk-*"],
+  external: ["bufferutil", "utf-8-validate"],
   logLevel: "warning",
   metafile: true,
 });
