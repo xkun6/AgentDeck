@@ -239,7 +239,16 @@ export interface AgentSnapshot {
 - 写入：timeline 逐条追加；meta 在状态变化时以「写临时文件 + rename」原子更新，500ms 防抖，turn 结束与 shutdown 时强制落盘。损坏的行/文件记日志后跳过，不得导致 sidecar 启动失败。
 - 启动：扫描全部 meta.json，原状态为 starting / idle / running / error 的恢复为 `dormant`，`closed` 保持 `closed`；timeline 在首次 `agent.timeline` 请求时惰性读取；seq 从持久化的 `lastSeq` 继续递增。`agent.list` 按 `updatedAt` 倒序返回。
 - 恢复：对 `dormant` 或 `closed` 的 agent 调 `agent.send` 时，若 `resumable` 则自动 `client.resumeSession(persistence, { cwd })`（状态 dormant/closed → starting → idle → running），若快照记录了非 null 的 model / modeId 则恢复后重新设置；不可恢复时返回 `-32000` + `NOT_SUPPORTED`（message「该会话无法恢复，请新建会话」）。恢复失败返回 `PROVIDER_UNAVAILABLE` 并把错误写入 lastError。
-- `agent.timeline` 返回的 `epoch` 为当前进程 epoch；历史条目保留原 seq，前端按 seq 去重。
+- `agent.timeline` 返回的 `epoch` 为当前进程 epoch；历史条目保留原 seq 与原 epoch，前端按 seq 去重。
+
+**P6 落地细则**（实现与上文有出入时以此为准）：
+- 不可恢复时的错误码：`dormant` 且不可恢复 → `NOT_SUPPORTED`；`closed` 且不可恢复 → `AGENT_CLOSED`。
+- seq 续号：`max(meta.lastSeq, timeline 中最大 seq) + 1`，防止 meta 防抖未落盘时 seq 回退。
+- ACP agent 的 `resumeSession` 返回 `NOT_SUPPORTED` 时，把该 agent 的 `resumable` 置为 false 并落盘。
+- `dormant` 状态下调 `agent.setModel` / `agent.setMode` / `agent.permission.respond` → `AGENT_CLOSED`；对 `dormant` 调 `agent.close` 直接转为 `closed`。
+- 恢复进行中再次 `agent.send` → 立即返回 `TURN_IN_PROGRESS`。
+- `agent.delete` 删磁盘目录失败 → `INTERNAL_ERROR`，agent 保持 `closed` 留在注册表。
+- mock provider 恢复时沿用原 sessionId。
 
 ### 4.6 本地文件列表（Rust 命令，P5）
 
