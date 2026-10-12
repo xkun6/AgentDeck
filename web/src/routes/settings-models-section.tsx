@@ -1,0 +1,2721 @@
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from "react";
+import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
+import {
+  closestCenter,
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  rectSortingStrategy,
+  SortableContext,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useConfig, useModelInfo, useSaveConfig } from "@/hooks/use-config";
+import { useDeleteEnv, useEnvVars, useRevealEnv, useSetEnv } from "@/hooks/use-env";
+import { useGateway } from "@/hooks/use-gateway";
+import { providerModelsErrorText, useProviderModels } from "@/hooks/use-provider-models";
+import type { ModelInfo, ProviderProbeResult } from "@agentdeck/protocol";
+import {
+  apiModeBadgeLabel,
+  apiModeDisplayName,
+  BUILTIN_PROVIDER_CATALOG,
+  buildCustomProviderDeleteUpdate,
+  buildProviderConfigUpdate,
+  buildProviderOrderUpdate,
+  buildProviderSettingsUpdate,
+  chatEndpointPreviewUrl,
+  customProviderPresetsFromConfig,
+  detectCustomApiModeFromUrl,
+  getProviderCredentialPreview,
+  getProviderEntry,
+  parseContextWindowInput,
+  providerApiKeyLabels,
+  providerHasSavedCredentials,
+  resolveSelectedProvider,
+  shouldUpdateDefaultModelOnSave,
+  sortProvidersForModelsPage,
+  TOP5_PROVIDER_IDS,
+  type ProviderPreset,
+} from "@/lib/provider-catalog";
+import {
+  probeAnthropicMessagesProvider,
+  probeChatCompletionsProvider,
+  probeGeminiProvider,
+} from "@/lib/provider-probe";
+import { getProviderIconUrl } from "@/lib/provider-icons";
+import { useProviderCatalog } from "@/hooks/use-provider-catalog";
+import { useOAuthProviders } from "@/hooks/use-oauth-providers";
+import { ModelCombobox } from "@/components/settings/model-combobox";
+import { translateEnvCategory, translateEnvVar } from "@/lib/env-translations";
+import { rememberLastUsedModel } from "@/lib/last-used-model";
+import { useConfirm } from "@/lib/use-confirm";
+import { reportPromoClick } from "@/lib/telemetry";
+import { openExternalUrl } from "@/lib/external-links";
+import {
+  getLocalContextWarning,
+  HERMES_CONTEXT_REQUIREMENTS_URL,
+  HERMES_PROVIDER_CONTEXT_URL,
+  RECOMMENDED_LOCAL_CONTEXT_LENGTH,
+} from "@/lib/local-provider-context";
+import type { EnvVarInfo } from "@agentdeck/protocol";
+import { CopyButton } from "@/components/ui/copy-button";
+import { Alert, Button, Field, Input, LoadingState, Select, Textarea } from "@agentdeck/shared-ui";
+import { OAuthProvidersSection } from "./settings-oauth-section";
+import { MoaPanel } from "./settings-moa-panel";
+import { useMoaConfig } from "@/hooks/use-moa-config";
+import s from "./settings.module.css";
+
+const PROVIDER_GROUPS: { prefix: string; name: string; priority: number }[] = [
+  { prefix: "NOUS_", name: "Nous Portal", priority: 0 },
+  { prefix: "ANTHROPIC_", name: "Anthropic", priority: 1 },
+  { prefix: "DASHSCOPE_", name: "DashScope (Qwen)", priority: 2 },
+  { prefix: "HERMES_QWEN_", name: "DashScope (Qwen)", priority: 2 },
+  { prefix: "DEEPSEEK_", name: "DeepSeek", priority: 3 },
+  { prefix: "GOOGLE_", name: "Gemini", priority: 4 },
+  { prefix: "GEMINI_", name: "Gemini", priority: 4 },
+  { prefix: "GLM_", name: "GLM / Z.AI", priority: 5 },
+  { prefix: "ZAI_", name: "GLM / Z.AI", priority: 5 },
+  { prefix: "Z_AI_", name: "GLM / Z.AI", priority: 5 },
+  { prefix: "STEP_", name: "StepFun", priority: 6 },
+  { prefix: "HF_", name: "Hugging Face", priority: 6 },
+  { prefix: "KIMI_", name: "Kimi / Moonshot", priority: 7 },
+  { prefix: "ARK_", name: "Volcengine", priority: 8 },
+  { prefix: "MINIMAX_CN_", name: "MiniMax (China)", priority: 9 },
+  { prefix: "MINIMAX_", name: "MiniMax", priority: 8 },
+  { prefix: "OPENCODE_GO_", name: "OpenCode Go", priority: 10 },
+  { prefix: "OPENCODE_ZEN_", name: "OpenCode Zen", priority: 11 },
+  { prefix: "OPENROUTER_", name: "OpenRouter", priority: 12 },
+  { prefix: "XIAOMI_", name: "Xiaomi MiMo", priority: 13 },
+  { prefix: "MIMO_", name: "Xiaomi MiMo", priority: 13 },
+  { prefix: "COMPSHARE_", name: "优云智算 (Compshare)", priority: 14 },
+];
+
+// Minimum on-screen time for the save / set-current spinner. Purely
+// anti-flicker — keep it small. It used to be 450ms to mask a slow backend,
+// but the model save/switch round-trip is fast now (Core P-027 took the
+// blocking models.dev fetch off the critical path), so the old floor just
+// added dead wait to every action.
+const PROVIDER_ACTION_LOADING_MIN_MS = 150;
+const PROVIDER_SWITCH_LOADING_MIN_MS = 280;
+const PROVIDER_ORDER_SAVE_DEBOUNCE_MS = 320;
+const EMPTY_ENV_VARS: Record<string, EnvVarInfo> = {};
+
+type ModelSettingsTab = "main" | "auxiliary" | "moa";
+type CustomProviderMode = "custom" | "local";
+type CustomProviderApiMode = "chat_completions" | "anthropic_messages";
+
+type AuxiliaryTaskId =
+  | "vision"
+  | "compression"
+  | "web_extract"
+  | "title_generation"
+  | "approval"
+  | "mcp"
+  | "skills_hub"
+  | "triage_specifier"
+  | "kanban_decomposer"
+  | "profile_describer"
+  | "curator";
+
+interface AuxiliaryTaskDefinition {
+  id: AuxiliaryTaskId;
+  name: string;
+  shortName: string;
+  description: string;
+  defaultTimeout: number;
+  group: "common" | "advanced";
+}
+
+interface AuxiliaryTaskForm {
+  provider: string;
+  model: string;
+  timeout: string;
+  baseUrl: string;
+  apiKey: string;
+  downloadTimeout: string;
+  extraBody: string;
+}
+
+interface LocalProviderPreset {
+  name: string;
+  baseUrl: string;
+  model: string;
+  tutorial: string;
+}
+
+function initialCustomProviderForm(mode: CustomProviderMode) {
+  return {
+    name: "",
+    baseUrl: "",
+    apiKey: "",
+    model: "",
+    contextWindow: mode === "local" ? String(RECOMMENDED_LOCAL_CONTEXT_LENGTH) : "",
+    apiMode: "chat_completions" as CustomProviderApiMode,
+    // 用户手动选过格式后，Base URL 启发式不再覆盖选择。
+    apiModeTouched: false,
+  };
+}
+
+const AUXILIARY_TASKS: AuxiliaryTaskDefinition[] = [
+  {
+    id: "vision",
+    name: "视觉分析",
+    shortName: "视觉",
+    description: "图片附件和浏览器截图的分析由这个辅助模型处理；主模型不支持图片时尤其重要。",
+    defaultTimeout: 120,
+    group: "common",
+  },
+  {
+    id: "compression",
+    name: "上下文压缩",
+    shortName: "压缩",
+    description: "长会话压缩和上下文总结由这个辅助模型处理，建议使用便宜且长上下文的模型。",
+    defaultTimeout: 120,
+    group: "common",
+  },
+  {
+    id: "web_extract",
+    name: "网页抽取",
+    shortName: "抽取",
+    description: "网页、PDF 等内容抽取后的总结和合成由这个辅助模型处理，默认超时更长。",
+    defaultTimeout: 360,
+    group: "common",
+  },
+  {
+    id: "title_generation",
+    name: "标题生成",
+    shortName: "标题",
+    description: "新会话标题自动生成由这个辅助模型处理，适合很快、很便宜的小模型。",
+    defaultTimeout: 30,
+    group: "common",
+  },
+  {
+    id: "approval",
+    name: "智能审批",
+    shortName: "审批",
+    description: "智能审批判断低风险命令时由这个辅助模型处理，要求稳定但不需要大模型。",
+    defaultTimeout: 30,
+    group: "common",
+  },
+  {
+    id: "mcp",
+    name: "MCP 路由",
+    shortName: "MCP",
+    description: "MCP 工具选择和路由判断由这个辅助模型处理，适合响应快的模型。",
+    defaultTimeout: 30,
+    group: "common",
+  },
+  {
+    id: "skills_hub",
+    name: "技能中心",
+    shortName: "技能",
+    description: "技能中心的辅助调用由这个辅助模型处理。",
+    defaultTimeout: 30,
+    group: "advanced",
+  },
+  {
+    id: "triage_specifier",
+    name: "Kanban 需求扩写",
+    shortName: "扩写",
+    description: "把 Kanban 里的一句话需求扩写为可执行规格。",
+    defaultTimeout: 120,
+    group: "advanced",
+  },
+  {
+    id: "kanban_decomposer",
+    name: "Kanban 任务分解",
+    shortName: "分解",
+    description: "把 Kanban 任务拆成任务图并路由到对应档案。",
+    defaultTimeout: 180,
+    group: "advanced",
+  },
+  {
+    id: "profile_describer",
+    name: "档案描述生成",
+    shortName: "档案",
+    description: "自动生成档案的能力描述，属于短文本辅助调用。",
+    defaultTimeout: 60,
+    group: "advanced",
+  },
+  {
+    id: "curator",
+    name: "Skill 审查",
+    shortName: "审查",
+    description: "技能使用审查由这个辅助模型处理，可能持续数分钟。",
+    defaultTimeout: 600,
+    group: "advanced",
+  },
+];
+
+const LOCAL_PROVIDER_PRESETS: LocalProviderPreset[] = [
+  {
+    name: "LM Studio",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    model: "local-model",
+    tutorial: "打开 Developer / Local Server，模型设置里将 Context Length 调到 ≥65536，重新加载模型后点击 Start Server。",
+  },
+  {
+    name: "Ollama",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    model: "qwen2.5-coder:7b",
+    tutorial: "先运行 ollama pull，并用 ollama run <model> -c 65536 或 Modelfile 设置上下文；API Key 通常留空。",
+  },
+  {
+    name: "vLLM",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    model: "Qwen/Qwen2.5-Coder-7B-Instruct",
+    tutorial: "启动 OpenAI-compatible server，带上 --max-model-len 64k，并用 --served-model-name 固定模型名。",
+  },
+  {
+    name: "llama.cpp",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    model: "local-model",
+    tutorial: "启动 llama-server 的 OpenAI 兼容接口时使用 --ctx-size 65536；未启用鉴权时 API Key 留空即可。",
+  },
+];
+
+const LOCAL_PROVIDER_DOC_LINKS = [
+  { label: "Quickstart 说明", url: HERMES_CONTEXT_REQUIREMENTS_URL },
+  { label: "Providers 指引", url: HERMES_PROVIDER_CONTEXT_URL },
+] as const;
+
+function LocalProviderDocLinks() {
+  return (
+    <div className={s.localProviderDocLinks}>
+      {LOCAL_PROVIDER_DOC_LINKS.map((item) => (
+        <div key={item.url} className={s.localProviderDocLinkRow}>
+          <a
+            className={s.link}
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => {
+              event.preventDefault();
+              void openExternalUrl(item.url);
+            }}
+          >
+            {item.label} ↗
+          </a>
+          <code className={s.localProviderDocUrl}>{item.url}</code>
+          <CopyButton className={s.localProviderDocCopy} text={item.url} showStatusIcon={false}>
+            复制
+          </CopyButton>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const AUXILIARY_TASK_BY_ID = Object.fromEntries(
+  AUXILIARY_TASKS.map((task) => [task.id, task]),
+) as Record<AuxiliaryTaskId, AuxiliaryTaskDefinition>;
+
+const AUXILIARY_PROVIDER_PRESETS: { id: string; name: string; hint: string; models: string[] }[] = [
+  {
+    id: "auto",
+    name: "Auto 自动选择",
+    hint: "优先复用主模型，必要时 fallback 到可用 provider。",
+    models: [],
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    hint: "适合 vision、compression、approval 等辅助任务。",
+    models: [
+      "claude-haiku-4-5-20251001",
+      "claude-sonnet-4-5-20250929",
+      "claude-3-5-haiku-latest",
+    ],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    hint: "可路由 Gemini、Claude 等视觉或便宜快速模型。",
+    models: [
+      "google/gemini-3-flash-preview",
+      "google/gemini-2.5-flash",
+      "anthropic/claude-haiku-4.5",
+      "openrouter/auto",
+    ],
+  },
+  {
+    id: "nous",
+    name: "Nous Portal",
+    hint: "使用 Nous 登录状态或账号额度。",
+    models: [
+      "google/gemini-3-flash-preview",
+      "google/gemini-2.5-flash",
+      "anthropic/claude-haiku-4.5",
+    ],
+  },
+];
+
+const TEXT_ONLY_VISION_PROVIDERS = new Set([
+  "deepseek",
+  "minimax",
+  "minimax-cn",
+  "minimax-oauth",
+  "kimi-for-coding",
+  "kimi-coding",
+  "kimi-coding-cn",
+]);
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function getAuxiliarySlot(config: Record<string, any> | undefined, task: AuxiliaryTaskId): Record<string, any> {
+  const auxiliary = asRecord(config?.auxiliary);
+  return asRecord(auxiliary[task]);
+}
+
+function auxiliaryFormFromConfig(
+  config: Record<string, any> | undefined,
+  task: AuxiliaryTaskId,
+): AuxiliaryTaskForm {
+  const slot = getAuxiliarySlot(config, task);
+  const def = AUXILIARY_TASK_BY_ID[task];
+  const extraBody = asRecord(slot.extra_body);
+  return {
+    provider: String(slot.provider || "auto"),
+    model: String(slot.model || ""),
+    timeout: String(slot.timeout ?? def.defaultTimeout),
+    baseUrl: String(slot.base_url || ""),
+    apiKey: "",
+    downloadTimeout: String(slot.download_timeout ?? 30),
+    extraBody: Object.keys(extraBody).length > 0
+      ? JSON.stringify(extraBody, null, 2)
+      : "",
+  };
+}
+
+function getImageInputMode(config: Record<string, any> | undefined): "auto" | "native" | "text" {
+  const mode = String(asRecord(config?.agent).image_input_mode || "auto");
+  return mode === "native" || mode === "text" ? mode : "auto";
+}
+
+function parsePositiveNumber(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseExtraBody(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("extra_body 必须是 JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function buildAuxiliaryTaskUpdate(
+  config: Record<string, any>,
+  task: AuxiliaryTaskId,
+  form: AuxiliaryTaskForm,
+): Record<string, any> {
+  const def = AUXILIARY_TASK_BY_ID[task];
+  const auxiliary = asRecord(config.auxiliary);
+  const current = getAuxiliarySlot(config, task);
+  const provider = form.provider.trim() || "auto";
+  const nextSlot: Record<string, any> = {
+    ...current,
+    provider,
+    model: provider === "auto" ? "" : form.model.trim(),
+    timeout: parsePositiveNumber(form.timeout, def.defaultTimeout),
+    base_url: form.baseUrl.trim(),
+    extra_body: parseExtraBody(form.extraBody),
+  };
+
+  if (task === "vision") {
+    nextSlot.download_timeout = parsePositiveNumber(form.downloadTimeout, 30);
+  } else {
+    delete nextSlot.download_timeout;
+  }
+
+  if (provider === "auto") {
+    nextSlot.base_url = "";
+    nextSlot.model = "";
+    delete nextSlot.api_key;
+  } else if (form.apiKey.trim()) {
+    nextSlot.api_key = form.apiKey.trim();
+  }
+
+  return {
+    ...config,
+    auxiliary: {
+      ...auxiliary,
+      [task]: nextSlot,
+    },
+  };
+}
+
+function buildAuxiliaryTaskReset(config: Record<string, any>, task: AuxiliaryTaskId): Record<string, any> {
+  const auxiliary = asRecord(config.auxiliary);
+  const current = getAuxiliarySlot(config, task);
+  return {
+    ...config,
+    auxiliary: {
+      ...auxiliary,
+      [task]: {
+        ...current,
+        provider: "auto",
+        model: "",
+        base_url: "",
+        extra_body: {},
+        timeout: AUXILIARY_TASK_BY_ID[task].defaultTimeout,
+        ...(task === "vision" ? { download_timeout: 30 } : {}),
+      },
+    },
+  };
+}
+
+function buildAllAuxiliaryReset(config: Record<string, any>): Record<string, any> {
+  return AUXILIARY_TASKS.reduce(
+    (next, task) => buildAuxiliaryTaskReset(next, task.id),
+    config,
+  );
+}
+
+function buildImageInputModeUpdate(
+  config: Record<string, any>,
+  mode: "auto" | "native" | "text",
+): Record<string, any> {
+  const agent = asRecord(config.agent);
+  return {
+    ...config,
+    agent: {
+      ...agent,
+      image_input_mode: mode,
+    },
+  };
+}
+
+function describeAuxiliarySlot(config: Record<string, any> | undefined, task: AuxiliaryTaskId): string {
+  const slot = getAuxiliarySlot(config, task);
+  const provider = String(slot.provider || "auto");
+  const model = String(slot.model || "");
+  if (provider === "auto") return "Auto";
+  return model ? `${provider} · ${model}` : provider;
+}
+
+function getProviderDisplayName(providerId: string, providers: ProviderPreset[]): string {
+  if (providerId === "auto") return "Auto 自动选择";
+  const preset = AUXILIARY_PROVIDER_PRESETS.find((p) => p.id === providerId);
+  if (preset) return preset.name;
+  const provider = providers.find((p) => p.id === providerId);
+  return provider ? provider.name : providerId;
+}
+
+function getAuxiliaryModelOptions(providerId: string, providers: ProviderPreset[], currentModel: string): string[] {
+  const options = new Set<string>();
+  const auxPreset = AUXILIARY_PROVIDER_PRESETS.find((provider) => provider.id === providerId);
+  for (const model of auxPreset?.models ?? []) options.add(model);
+  const provider = providers.find((item) => item.id === providerId);
+  for (const model of provider?.models ?? []) options.add(model.id);
+  if (provider?.defaultModel) options.add(provider.defaultModel);
+  if (currentModel) options.add(currentModel);
+  return Array.from(options);
+}
+
+function isLikelyVisionCapable(providerId: string, model: string, providers: ProviderPreset[]): boolean {
+  if (!providerId || providerId === "auto") return true;
+  if (TEXT_ONLY_VISION_PROVIDERS.has(providerId)) return false;
+  if (providerId === "anthropic" || providerId === "openrouter" || providerId === "nous") return true;
+  const provider = providers.find((item) => item.id === providerId);
+  const modelEntry = provider?.models.find((item) => item.id === model);
+  if (modelEntry?.supportsVision) return true;
+  const normalized = `${providerId} ${model}`.toLowerCase();
+  return /\b(vl|vision|gemini|claude|gpt-4o|pixtral|llava|qwen-vl)\b/.test(normalized);
+}
+
+function getProviderGroup(key: string): string {
+  for (const g of PROVIDER_GROUPS) {
+    if (key.startsWith(g.prefix)) return g.name;
+  }
+  return "其他";
+}
+
+function getProviderPriority(name: string): number {
+  return PROVIDER_GROUPS.find((g) => g.name === name)?.priority ?? 99;
+}
+
+function isLocalProviderBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host === "[::1]" ||
+      host.endsWith(".local");
+  } catch {
+    return false;
+  }
+}
+
+function isValidProviderBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeProviderBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+function isWritableProviderEnvKey(key: string): boolean {
+  return /^[A-Z_][A-Z0-9_]*$/u.test(key);
+}
+
+function getStoredProviderApiKey(config: Record<string, any>, providerId: string): string {
+  const entryKey = getProviderEntry(config, providerId).api_key;
+  if (typeof entryKey === "string" && entryKey.trim()) return entryKey.trim();
+
+  const model = asRecord(config.model);
+  if (String(model.provider || "") !== providerId) return "";
+  const modelKey = model.api_key;
+  return typeof modelKey === "string" ? modelKey.trim() : "";
+}
+
+export function ModelsSection() {
+  const {
+    data: envVars,
+    isLoading: envLoading,
+    isError: envIsError,
+    error: envError,
+    refetch: refetchEnvVars,
+  } = useEnvVars();
+  const {
+    data: config,
+    isLoading: configLoading,
+    isError: configIsError,
+    error: configError,
+    refetch: refetchConfig,
+  } = useConfig();
+  const { data: modelInfo } = useModelInfo();
+  const { data: oauthProviders, isLoading: oauthProvidersLoading } = useOAuthProviders();
+  // MoA tab 徽标用。老后端没有 /api/model/moa 时保持 undefined，徽标隐藏。
+  const { data: moaConfig } = useMoaConfig();
+  const moaPresetCount = Object.keys(moaConfig?.presets ?? {}).length;
+  const saveConfig = useSaveConfig();
+  const { confirm } = useConfirm();
+  const setEnv = useSetEnv();
+  const deleteEnv = useDeleteEnv();
+  const revealEnv = useRevealEnv();
+  const { probeProvider, listProviderModels, setRuntimeModel } = useGateway();
+  const navigate = useNavigate();
+  const { catalog, message: catalogMessage, refresh: refreshCatalog } = useProviderCatalog();
+  const resolvedEnvVars = envVars ?? EMPTY_ENV_VARS;
+  const [activeModelTab, setActiveModelTab] = useState<ModelSettingsTab>("main");
+  const [probeState, setProbeState] = useState<{
+    providerId: string;
+    status: "pending" | "ok" | "error";
+    result?: ProviderProbeResult;
+    message?: string;
+  } | null>(null);
+  const initialProvider =
+    BUILTIN_PROVIDER_CATALOG.providers.find((p) => p.id === TOP5_PROVIDER_IDS[0]) ??
+    BUILTIN_PROVIDER_CATALOG.providers[0];
+  // Empty means "follow the runtime's current provider". A concrete id is
+  // stored only after the user explicitly opens a different card.
+  const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [providerPanelLoading, setProviderPanelLoading] = useState(false);
+  const selectedProviderIdRef = useRef(selectedProviderId);
+  const [providerForm, setProviderForm] = useState({
+    apiKey: "",
+    baseUrl: initialProvider?.baseUrl ?? "",
+    model: initialProvider?.defaultModel ?? "",
+    // 上下文窗口覆盖（token）。空串 = 自动。仅对「当前主模型」有效（后端单槽语义）。
+    contextWindow: "",
+  });
+  // Last saved values for the selected provider. Used to compute whether the
+  // form is dirty (vs. baseline) so the save button can show an idle "已保存"
+  // state until the user actually changes something.
+  const [savedSnapshot, setSavedSnapshot] = useState<{
+    baseUrl: string;
+    model: string;
+    contextWindow: string;
+    providerId: string;
+  } | null>(null);
+  const [savedFlashFor, setSavedFlashFor] = useState<string | null>(null);
+  const [providerSavePending, setProviderSavePending] = useState(false);
+  const [providerSetCurrentPending, setProviderSetCurrentPending] = useState(false);
+  const [providerDeletePending, setProviderDeletePending] = useState(false);
+  const [providerSaveError, setProviderSaveError] = useState("");
+  const [providerOrderOverride, setProviderOrderOverride] = useState<string[] | null>(null);
+  const providerOrderSaveTimerRef = useRef<number | null>(null);
+  const providerOrderSaveSeqRef = useRef(0);
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [editVal, setEditVal] = useState("");
+  const [revealedValues, setRevealedValues] = useState<Record<string, string>>({});
+  const [showEnvAdvanced, setShowEnvAdvanced] = useState(false);
+  // 工具密钥 / 消息平台等非供应商分区的展开态（默认全部收起，与「高级环境
+  // 变量」一致，避免模型页过长）。key 为分区 category。
+  const [expandedEnvGroups, setExpandedEnvGroups] = useState<Record<string, boolean>>({});
+  const [providerSearch, setProviderSearch] = useState("");
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customProviderMode, setCustomProviderMode] = useState<CustomProviderMode>("custom");
+  const [customForm, setCustomForm] = useState(() => initialCustomProviderForm("custom"));
+  const [selectedAuxTask, setSelectedAuxTask] = useState<AuxiliaryTaskId>("vision");
+  const [auxForm, setAuxForm] = useState<AuxiliaryTaskForm>(() =>
+    auxiliaryFormFromConfig(config, "vision"));
+  const [auxAdvancedOpen, setAuxAdvancedOpen] = useState(false);
+  const [auxSavingTask, setAuxSavingTask] = useState<AuxiliaryTaskId | "__all__" | "image_mode" | null>(null);
+  const [auxSavedTask, setAuxSavedTask] = useState<AuxiliaryTaskId | "__all__" | "image_mode" | null>(null);
+  const [auxError, setAuxError] = useState("");
+  const customDialogTitleId = useId();
+  const selectProvider = useCallback((providerId: string) => {
+    if (!providerId || selectedProviderIdRef.current === providerId) return;
+    selectedProviderIdRef.current = providerId;
+    setProviderPanelLoading(true);
+    setSelectedProviderId(providerId);
+  }, []);
+
+  useEffect(() => {
+    selectedProviderIdRef.current = selectedProviderId;
+  }, [selectedProviderId]);
+
+  useEffect(() => {
+    if (!providerPanelLoading) return;
+    const handle = window.setTimeout(
+      () => setProviderPanelLoading(false),
+      PROVIDER_SWITCH_LOADING_MIN_MS,
+    );
+    return () => window.clearTimeout(handle);
+  }, [providerPanelLoading, selectedProviderId]);
+
+  const closeCustomForm = useCallback(() => {
+    setShowCustomForm(false);
+    setCustomProviderMode("custom");
+    setCustomForm(initialCustomProviderForm("custom"));
+  }, []);
+
+  const openCustomProviderForm = useCallback((mode: CustomProviderMode) => {
+    setCustomProviderMode(mode);
+    setCustomForm(initialCustomProviderForm(mode));
+    setShowCustomForm(true);
+  }, []);
+
+  const applyLocalProviderPreset = useCallback((preset: LocalProviderPreset) => {
+    setCustomForm((prev) => ({
+      ...prev,
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      model: preset.model,
+      contextWindow: String(RECOMMENDED_LOCAL_CONTEXT_LENGTH),
+    }));
+  }, []);
+  useEffect(() => {
+    if (!showCustomForm) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeCustomForm();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [showCustomForm, closeCustomForm]);
+
+  const currentProviderId = modelInfo?.provider ||
+    (config?.model && typeof config.model === "object" && !Array.isArray(config.model)
+      ? String((config.model as Record<string, unknown>).provider ?? "")
+      : "");
+  const customProviders = useMemo(
+    () => customProviderPresetsFromConfig(config, catalog.providers, {
+      provider: currentProviderId,
+      model: modelInfo?.model,
+    }),
+    [catalog.providers, config, currentProviderId, modelInfo?.model],
+  );
+
+  const allProviders = useMemo(
+    () => [...catalog.providers, ...customProviders],
+    [catalog.providers, customProviders],
+  );
+  const auxiliaryProviderOptions = useMemo(() => {
+    const options = new Map<string, { id: string; name: string; hint: string }>();
+    for (const provider of AUXILIARY_PROVIDER_PRESETS) {
+      options.set(provider.id, { id: provider.id, name: provider.name, hint: provider.hint });
+    }
+    for (const provider of allProviders) {
+      options.set(provider.id, {
+        id: provider.id,
+        name: provider.name,
+        hint: provider.vendor,
+      });
+    }
+    const currentProvider = auxForm.provider.trim();
+    if (currentProvider && !options.has(currentProvider)) {
+      options.set(currentProvider, {
+        id: currentProvider,
+        name: currentProvider,
+        hint: "当前配置中的 provider",
+      });
+    }
+    return Array.from(options.values());
+  }, [allProviders, auxForm.provider]);
+  const selectedProvider = useMemo<ProviderPreset | undefined>(
+    () => resolveSelectedProvider(allProviders, selectedProviderId, currentProviderId),
+    [allProviders, currentProviderId, selectedProviderId],
+  );
+  const providerOrderConfig = useMemo(
+    () => providerOrderOverride && config
+      ? buildProviderOrderUpdate(config, providerOrderOverride)
+      : config,
+    [config, providerOrderOverride],
+  );
+  const orderedProviders = useMemo(
+    () => sortProvidersForModelsPage(allProviders, providerOrderConfig),
+    [allProviders, providerOrderConfig],
+  );
+  const canReorderProviders = providerSearch.trim().length === 0;
+  const filteredProviders = useMemo(() => {
+    const query = providerSearch.trim().toLowerCase();
+    if (!query) return orderedProviders;
+    return orderedProviders.filter((provider) => {
+      const searchable = [
+        provider.name,
+        provider.vendor,
+        provider.id,
+        provider.defaultModel,
+        ...provider.models.map((model) => model.label ?? model.id),
+      ].join(" ").toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [orderedProviders, providerSearch]);
+  const selectedProviderEntry = selectedProvider
+    ? getProviderEntry(config, selectedProvider.id)
+    : {};
+  const selectedHasCredentials = selectedProvider
+    ? providerHasSavedCredentials(config, selectedProvider.id, resolvedEnvVars, selectedProvider)
+    : false;
+  const selectedProviderCredentialPreview = selectedProvider
+    ? getProviderCredentialPreview(config, resolvedEnvVars, selectedProvider)
+    : undefined;
+  const selectedProviderIsLocal = selectedProvider
+    ? isLocalProviderBaseUrl(providerForm.baseUrl || selectedProvider.baseUrl)
+    : false;
+  const selectedProviderCanOmitApiKey = selectedProviderIsLocal;
+  const customBaseUrl = customForm.baseUrl.trim();
+  const customBaseUrlValid = !customBaseUrl || isValidProviderBaseUrl(customBaseUrl);
+  const duplicateBaseUrlProvider = useMemo(() => {
+    const normalized = normalizeProviderBaseUrl(customBaseUrl);
+    if (!normalized) return undefined;
+    return allProviders.find((provider) => normalizeProviderBaseUrl(provider.baseUrl) === normalized);
+  }, [allProviders, customBaseUrl]);
+  const configuredAuxiliaryCount = useMemo(
+    () => AUXILIARY_TASKS.filter((task) => {
+      const slot = getAuxiliarySlot(config, task.id);
+      return String(slot.provider || "auto") !== "auto" || Boolean(String(slot.model || ""));
+    }).length,
+    [config],
+  );
+  const configuredCount = useMemo(
+    () => allProviders.filter((provider) =>
+      providerHasSavedCredentials(config, provider.id, resolvedEnvVars, provider)).length,
+    [allProviders, config, resolvedEnvVars],
+  );
+  const currentProviderOAuthLoggedIn = useMemo(
+    () => oauthProviders?.some((provider) =>
+      provider.id === currentProviderId && provider.status.logged_in) ?? false,
+    [currentProviderId, oauthProviders],
+  );
+  const providerEnvEntries = useMemo(
+    () => Object.entries(resolvedEnvVars)
+      .filter(([, v]) => v.category === "provider")
+      .sort(([aKey], [bKey]) => getProviderPriority(getProviderGroup(aKey)) - getProviderPriority(getProviderGroup(bKey))),
+    [resolvedEnvVars],
+  );
+  const nonProviderGroups = useMemo(() => {
+    return ["tool", "messaging", "setting", "service"]
+      .map((cat) => ({
+        category: cat,
+        label: translateEnvCategory(cat),
+        entries: Object.entries(resolvedEnvVars).filter(([, v]) => v.category === cat && !v.advanced),
+      }))
+      .filter((g) => g.entries.length > 0);
+  }, [resolvedEnvVars]);
+
+  const liveApiKey = providerForm.apiKey.trim() ||
+    (typeof selectedProviderEntry.api_key === "string" ? selectedProviderEntry.api_key : "");
+  const supportsModelListing = selectedProvider?.supportsModelListing !== false;
+  const modelsQuery = useProviderModels(
+    selectedProvider?.id ?? "",
+    providerForm.baseUrl,
+    liveApiKey || undefined,
+    listProviderModels,
+    selectedProvider?.apiMode,
+  );
+  const customModelsQuery = useProviderModels(
+    "custom-draft",
+    customForm.baseUrl,
+    customForm.apiKey.trim() || undefined,
+    listProviderModels,
+    customProviderMode === "local" ? "chat_completions" : customForm.apiMode,
+  );
+  const liveModelIds = supportsModelListing ? modelsQuery.data?.models ?? [] : [];
+  const mergedModelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const id of liveModelIds) set.add(id);
+    if (selectedProvider) for (const m of selectedProvider.models) set.add(m.id);
+    if (providerForm.model) set.add(providerForm.model);
+    return Array.from(set);
+  }, [liveModelIds, selectedProvider, providerForm.model]);
+  const customModelOptions = useMemo(() => {
+    const set = new Set(customModelsQuery.data?.models ?? []);
+    if (customForm.model) set.add(customForm.model);
+    return Array.from(set);
+  }, [customModelsQuery.data?.models, customForm.model]);
+
+  const refreshLabel = modelsQuery.isError
+      ? "刷新失败 重试"
+      : modelsQuery.data
+        ? `已加载 ${modelsQuery.data.models.length} 个`
+        : "刷新模型列表";
+
+  const refreshErrorText = useMemo(() => {
+    if (!supportsModelListing || !modelsQuery.isError) return "";
+    return providerModelsErrorText(modelsQuery.error);
+  }, [supportsModelListing, modelsQuery.isError, modelsQuery.error]);
+
+  const customRefreshLabel = customModelsQuery.isError
+      ? "刷新失败 重试"
+      : customModelsQuery.data
+        ? `已加载 ${customModelsQuery.data.models.length} 个`
+        : "刷新模型列表";
+  const customRefreshErrorText = customModelsQuery.isError
+    ? providerModelsErrorText(customModelsQuery.error)
+    : "";
+
+  useEffect(() => {
+    if (!selectedProvider) return;
+    const model = typeof selectedProviderEntry.model === "string"
+      ? selectedProviderEntry.model
+      : selectedProvider.defaultModel;
+    const baseUrl = typeof selectedProviderEntry.base_url === "string"
+      ? selectedProviderEntry.base_url
+      : selectedProvider.baseUrl;
+    // The context-window override lives in a single top-level config field tied
+    // to the *current* model. Only backfill it when this provider's model is the
+    // active one; otherwise the field stays empty (it applies on set-current).
+    const overrideRaw = config?.model_context_length;
+    const isCurrentModel =
+      currentProviderId === selectedProvider.id && modelInfo?.model === model;
+    const contextWindow =
+      isCurrentModel && typeof overrideRaw === "number" && overrideRaw > 0
+        ? String(overrideRaw)
+        : "";
+    setProviderForm({ apiKey: "", baseUrl, model, contextWindow });
+    setSavedSnapshot({ baseUrl, model, contextWindow, providerId: selectedProvider.id });
+  }, [
+    selectedProvider,
+    selectedProviderEntry.base_url,
+    selectedProviderEntry.model,
+    config?.model_context_length,
+    currentProviderId,
+    modelInfo?.model,
+  ]);
+
+  useEffect(() => {
+    setAuxForm(auxiliaryFormFromConfig(config, selectedAuxTask));
+    setAuxAdvancedOpen(false);
+    setAuxError("");
+  }, [config, selectedAuxTask]);
+
+  // Switching to a different provider hides any stale "已保存" indicator.
+  useEffect(() => {
+    setSavedFlashFor(null);
+    setProbeState(null);
+    setProviderSaveError("");
+  }, [selectedProvider?.id]);
+
+  const handleProbe = useCallback(async () => {
+    if (!selectedProvider) return;
+    const apiKey = providerForm.apiKey.trim() ||
+      (typeof selectedProviderEntry.api_key === "string" ? selectedProviderEntry.api_key : "");
+    const baseUrl = providerForm.baseUrl.trim() || selectedProvider.baseUrl;
+    setProbeState({ providerId: selectedProvider.id, status: "pending" });
+    try {
+      // Map catalog id → backend canonical slug for env-var fallback. When
+      // the catalog id has no canonical equivalent (e.g. baidu-qianfan,
+      // tencent-hunyuan — not in CANONICAL_PROVIDERS), we pass the catalog
+      // id; the backend handler tolerates unknown slugs as long as api_key
+      // + base_url are supplied explicitly.
+      //
+      // 不提供 /models 端点的供应商改发一次极小的真实请求，按协议分流：
+      // Gemini 走原生 generateContent + x-goog-api-key；
+      // Anthropic 格式（Claude Code 中转基本不带 /models，且严格网关拒绝
+      // Bearer-only）POST /v1/messages；OpenAI 格式 POST /chat/completions。
+      // 其余走后端 probe，并带上 api_mode 让后端用对应协议探测。
+      const probeModel = providerForm.model.trim() || selectedProvider.defaultModel;
+      const shouldProbeAnthropicMessages =
+        selectedProvider.apiMode === "anthropic_messages" &&
+        selectedProvider.supportsModelListing !== true;
+      const shouldProbeChatCompletions =
+        selectedProvider.apiMode === "chat_completions" &&
+        selectedProvider.supportsModelListing === false;
+      const result = selectedProvider.id === "gemini"
+        ? await probeGeminiProvider({ apiKey, baseUrl, model: probeModel })
+        : shouldProbeAnthropicMessages
+          ? await probeAnthropicMessagesProvider({ apiKey, baseUrl, model: probeModel })
+          : shouldProbeChatCompletions
+            ? await probeChatCompletionsProvider({ apiKey, baseUrl, model: probeModel })
+            : await probeProvider({
+              provider: selectedProvider.id,
+              api_key: apiKey || undefined,
+              base_url: baseUrl || undefined,
+              api_mode: selectedProvider.apiMode,
+              timeout_ms: 8000,
+            });
+      setProbeState({
+        providerId: selectedProvider.id,
+        status: result.ok ? "ok" : "error",
+        result,
+      });
+    } catch (error) {
+      setProbeState({
+        providerId: selectedProvider.id,
+        status: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [probeProvider, providerForm.apiKey, providerForm.baseUrl, providerForm.model, selectedProvider, selectedProviderEntry.api_key]);
+
+  const probeForSelected = probeState && selectedProvider && probeState.providerId === selectedProvider.id
+    ? probeState
+    : null;
+
+  const isFormDirty = !!(
+    selectedProvider &&
+    (providerForm.apiKey.trim() !== "" ||
+      providerForm.baseUrl !== (savedSnapshot?.baseUrl ?? "") ||
+      providerForm.model !== (savedSnapshot?.model ?? "") ||
+      providerForm.contextWindow !== (savedSnapshot?.contextWindow ?? ""))
+  );
+  const showSavedFlash = !isFormDirty && savedFlashFor === selectedProvider?.id;
+  const selectedProviderModel = selectedProvider
+    ? (providerForm.model.trim() || selectedProvider.defaultModel)
+    : "";
+  // Base URL 的语义随接口格式变化（Anthropic 自动补 /v1/messages，OpenAI 补
+  // /chat/completions），把最终请求端点直接摆给用户看，避免手改 URL 踩坑。
+  const selectedProviderEndpointPreview = selectedProvider
+    ? chatEndpointPreviewUrl(selectedProvider.apiMode, providerForm.baseUrl.trim() || selectedProvider.baseUrl)
+    : "";
+  const selectedProviderIsCurrent = Boolean(
+    selectedProvider &&
+    selectedProviderModel &&
+    currentProviderId === selectedProvider.id &&
+    modelInfo?.model === selectedProviderModel,
+  );
+  const selectedLocalContextWarning = getLocalContextWarning({
+    isLocalProvider: selectedProviderIsLocal,
+    configuredContextWindow: providerForm.contextWindow,
+    effectiveContextLength: selectedProviderIsCurrent ? modelInfo?.effective_context_length : undefined,
+  });
+
+  // Deep-link from the picker's "去设置" CTA: /models#provider-<slug> selects
+  // and scrolls to that provider so the user lands on the right key field.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash;
+    const match = hash.match(/^#provider-(.+)$/);
+    if (!match) return;
+    const targetId = decodeURIComponent(match[1]);
+    if (!allProviders.some((p) => p.id === targetId)) return;
+    selectProvider(targetId);
+    // Wait one frame for the list item to mount with the new active state,
+    // then scroll it into view with a soft highlight pulse.
+    const handle = window.requestAnimationFrame(() => {
+      const el = document.getElementById(`provider-${targetId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.focus({ preventScroll: true });
+      }
+    });
+    return () => window.cancelAnimationFrame(handle);
+    // intentionally only on mount + when catalog finishes loading
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allProviders.length]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let rafHandle: number | null = null;
+    const openApprovalAuxiliaryTask = () => {
+      if (window.location.hash !== "#auxiliary-approval") return;
+      setActiveModelTab("auxiliary");
+      setSelectedAuxTask("approval");
+      if (rafHandle != null) window.cancelAnimationFrame(rafHandle);
+      rafHandle = window.requestAnimationFrame(() => {
+        const el = document.getElementById("auxiliary-approval");
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.focus({ preventScroll: true });
+        rafHandle = null;
+      });
+    };
+    openApprovalAuxiliaryTask();
+    const onHashChange = () => openApprovalAuxiliaryTask();
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      if (rafHandle != null) window.cancelAnimationFrame(rafHandle);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, [configLoading, envLoading]);
+
+  const handleReveal = async (key: string) => {
+    if (revealedValues[key]) {
+      setRevealedValues((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    const result = await revealEnv.mutateAsync(key);
+    setRevealedValues((prev) => ({ ...prev, [key]: result.value }));
+  };
+
+  const handleSave = (key: string) => {
+    setEnv.mutate({ key, value: editVal });
+    setEditKey(null);
+    setEditVal("");
+  };
+
+  const handleCatalogRefresh = () => {
+    void refreshCatalog();
+  };
+
+  useEffect(() => () => {
+    if (providerOrderSaveTimerRef.current != null) {
+      window.clearTimeout(providerOrderSaveTimerRef.current);
+    }
+  }, []);
+
+  const saveProviderOrder = useCallback((providerIds: string[]) => {
+    if (!config) return;
+    const saveSeq = providerOrderSaveSeqRef.current + 1;
+    providerOrderSaveSeqRef.current = saveSeq;
+    setProviderOrderOverride(providerIds);
+    setProviderSaveError("");
+
+    if (providerOrderSaveTimerRef.current != null) {
+      window.clearTimeout(providerOrderSaveTimerRef.current);
+    }
+
+    providerOrderSaveTimerRef.current = window.setTimeout(() => {
+      providerOrderSaveTimerRef.current = null;
+      void saveConfig.mutateAsync(buildProviderOrderUpdate(config, providerIds))
+        .catch((error) => {
+          if (providerOrderSaveSeqRef.current !== saveSeq) return;
+          setProviderOrderOverride(null);
+          setProviderSaveError(error instanceof Error ? error.message : String(error || "排序保存失败"));
+        });
+    }, PROVIDER_ORDER_SAVE_DEBOUNCE_MS);
+  }, [config, saveConfig]);
+
+  // 卡片整体即拖拽把手（网格布局没有独立把手的空间），指针位移超过阈值才
+  // 进入拖拽，普通点击仍走 onClick 选中。不注册 KeyboardSensor：Enter/空格
+  // 保留给键盘选中，避免和 dnd-kit 的键盘拖拽抢按键。
+  const providerDndSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 6,
+      },
+    }),
+  );
+
+  const handleProviderDragEnd = useCallback((event: DragEndEvent) => {
+    if (!canReorderProviders || !config) return;
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const ids = orderedProviders.map((provider) => provider.id);
+    const sourceIndex = ids.indexOf(String(active.id));
+    const targetIndex = ids.indexOf(String(over.id));
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    void saveProviderOrder(arrayMove(ids, sourceIndex, targetIndex));
+  }, [canReorderProviders, config, orderedProviders, saveProviderOrder]);
+
+  const handleProviderRowKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, providerId: string) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectProvider(providerId);
+  };
+
+  const syncProviderApiKeyToCanonicalEnv = async (
+    provider: ProviderPreset,
+    explicitApiKey: string,
+  ) => {
+    if (provider.id.startsWith("custom:")) return;
+
+    const canonicalKey = provider.apiKeyLabel.trim();
+    if (!isWritableProviderEnvKey(canonicalKey)) return;
+
+    const newApiKey = explicitApiKey.trim();
+    if (newApiKey) {
+      await setEnv.mutateAsync({ key: canonicalKey, value: newApiKey });
+      return;
+    }
+
+    if (resolvedEnvVars?.[canonicalKey]?.is_set) return;
+
+    const storedApiKey = config ? getStoredProviderApiKey(config, provider.id) : "";
+    if (storedApiKey) {
+      await setEnv.mutateAsync({ key: canonicalKey, value: storedApiKey });
+      return;
+    }
+
+    for (const aliasKey of providerApiKeyLabels(provider).slice(1)) {
+      if (!isWritableProviderEnvKey(aliasKey) || !resolvedEnvVars?.[aliasKey]?.is_set) continue;
+      const revealed = await revealEnv.mutateAsync(aliasKey);
+      const aliasValue = revealed.value.trim();
+      if (!aliasValue) continue;
+      await setEnv.mutateAsync({ key: canonicalKey, value: aliasValue });
+      return;
+    }
+  };
+
+  const handleProviderSave = async () => {
+    if (!config || !selectedProvider) return;
+    const pendingStartedAt = performance.now();
+    const newApiKey = providerForm.apiKey.trim();
+    // Built-in providers (alibaba, deepseek, zai, kimi, ...): hermes-agent
+    // only reads their API key from environment variables / ~/.hermes/.env,
+    // never from config.yaml's providers.<id>.api_key. Mirror the key into the
+    // canonical env var so chat requests actually find credentials. Xiaomi used
+    // to be saved as MIMO_API_KEY in the desktop catalog; keep that alias
+    // readable and migrate it to XIAOMI_API_KEY when the user saves again.
+    const savedBaseUrl = providerForm.baseUrl.trim() || selectedProvider.baseUrl;
+    const savedModel = providerForm.model.trim() || selectedProvider.defaultModel;
+    const providerId = selectedProvider.id;
+    const providerName = selectedProvider.name;
+    // 「保存配置」需要一并更新顶层默认主模型（model.*）的两种情况：
+    // 1. 选中的服务商就是当前默认主模型（provider id 相同，无论是否改了模
+    //    型 / Base URL）：编辑当前默认服务商后保存，默认主模型必须跟着更新，
+    //    否则 config.model 与 providers.<id> 脱节——UI 上「已是当前模型」会
+    //    翻回「设为当前模型」，工作台默认模型仍是旧的（甚至已失效的）。
+    // 2. 首次运行还没有默认模型：保存即把该服务商提升为默认主模型。
+    // 其余情况保持原语义：保存配置只写 providers.<id>，不切换主模型。
+    const shouldUpdateDefaultModel = shouldUpdateDefaultModelOnSave({
+      currentProviderId,
+      selectedProviderId: selectedProvider.id,
+      modelInfo,
+    });
+    setProviderSavePending(true);
+    setProviderSaveError("");
+    try {
+      await syncProviderApiKeyToCanonicalEnv(selectedProvider, newApiKey);
+      let settingsUpdate;
+      if (shouldUpdateDefaultModel) {
+        // buildProviderConfigUpdate = providers.<id> + model.*（provider +
+        // default + base_url + api_key + 上下文覆盖）。
+        settingsUpdate = buildProviderConfigUpdate(config, selectedProvider, providerForm);
+      } else {
+        // 只写 providers.<id>。上下文窗口覆盖是绑定「当前模型」的单槽字段，
+        // 非默认服务商在此保存时不得写入，避免踩掉真正当前模型的覆盖值。
+        settingsUpdate = buildProviderSettingsUpdate(config, selectedProvider, providerForm);
+      }
+      await saveConfig.mutateAsync(settingsUpdate);
+      if (shouldUpdateDefaultModel) {
+        // 工作台 composer 从 UI store 读默认模型；配置已落盘就立刻播种，
+        // 让「切换模型」/ 新任务的模型设置显示新模型。
+        rememberLastUsedModel({
+          model: savedModel,
+          provider: providerId,
+          providerName,
+        });
+        // Live hot-switch 是尽力而为（全局 config.set，不碰运行中的会话）：
+        // config.yaml 已持久化，失败也不影响下一次会话用新模型。
+        try {
+          await setRuntimeModel(savedModel, providerId);
+        } catch (error) {
+          console.warn("保存默认主模型后热切换运行模型失败（默认配置已保存）", error);
+        }
+      }
+      setProviderForm((prev) => ({ ...prev, apiKey: "" }));
+      setSavedSnapshot({
+        baseUrl: savedBaseUrl,
+        model: savedModel,
+        contextWindow: providerForm.contextWindow,
+        providerId,
+      });
+      setSavedFlashFor(providerId);
+    } catch (error) {
+      setProviderSaveError(error instanceof Error ? error.message : String(error || "保存失败"));
+    } finally {
+      const elapsed = performance.now() - pendingStartedAt;
+      if (elapsed < PROVIDER_ACTION_LOADING_MIN_MS) {
+        await wait(PROVIDER_ACTION_LOADING_MIN_MS - elapsed);
+      }
+      setProviderSavePending(false);
+    }
+  };
+
+  const handleSetCurrentModel = async () => {
+    if (!config || !selectedProvider) return;
+    const pendingStartedAt = performance.now();
+    const newApiKey = providerForm.apiKey.trim();
+    const savedBaseUrl = providerForm.baseUrl.trim() || selectedProvider.baseUrl;
+    const savedModel = providerForm.model.trim() || selectedProvider.defaultModel;
+    const providerId = selectedProvider.id;
+    const providerName = selectedProvider.name;
+    setProviderSetCurrentPending(true);
+    setProviderSaveError("");
+    try {
+      await syncProviderApiKeyToCanonicalEnv(selectedProvider, newApiKey);
+      // Persist both providers.<id> and model.* before asking the live gateway
+      // to hot-switch. First-run setups otherwise have no current provider for
+      // gateway _apply_model_switch() to resolve, so it can fail before it ever
+      // considers the explicit `--provider <id>` argument.
+      await saveConfig.mutateAsync(
+        buildProviderConfigUpdate(config, selectedProvider, providerForm),
+      );
+      setProviderForm((prev) => ({ ...prev, apiKey: "" }));
+      setSavedSnapshot({
+        baseUrl: savedBaseUrl,
+        model: savedModel,
+        contextWindow: providerForm.contextWindow,
+        providerId,
+      });
+      setSavedFlashFor(providerId);
+      // PanelComposer seeds its model picker from the UI store.
+      // This mirrors picking a model from the workbench composer, so the next
+      // new session carries this explicit choice even before /api/model/info
+      // finishes refetching. Seed it right after the config lands on disk so a
+      // failed live-switch below can never leave the workbench showing a stale
+      // last-used model while config.model already points at the new one.
+      rememberLastUsedModel({
+        model: savedModel,
+        provider: providerId,
+        providerName,
+      });
+      // Same hot-switch path as the composer model picker: update the live
+      // gateway runtime explicitly after disk config is already usable.
+      // Best-effort: config.yaml is already persisted, so a refusal (e.g. the
+      // backend rejecting an unresolvable provider, or a busy session) must
+      // not fail the whole action — the default model is already updated and
+      // the workbench will pick it up.
+      try {
+        await setRuntimeModel(savedModel, providerId);
+      } catch (error) {
+        console.warn("设为当前模型后热切换运行模型失败（默认配置已保存）", error);
+      }
+    } catch (error) {
+      setProviderSaveError(error instanceof Error ? error.message : String(error || "设置失败"));
+    } finally {
+      const elapsed = performance.now() - pendingStartedAt;
+      if (elapsed < PROVIDER_ACTION_LOADING_MIN_MS) {
+        await wait(PROVIDER_ACTION_LOADING_MIN_MS - elapsed);
+      }
+      setProviderSetCurrentPending(false);
+    }
+  };
+
+  const handleAddCustom = () => {
+    if (!config) return;
+    const name = customForm.name.trim();
+    const baseUrl = customForm.baseUrl.trim();
+    const model = customForm.model.trim();
+    const apiKey = customForm.apiKey.trim();
+    const contextWindow = customProviderMode === "local" ? customForm.contextWindow.trim() : "";
+    if (!name || !baseUrl || !model) return;
+    if (!isValidProviderBaseUrl(baseUrl)) {
+      setProviderSaveError("Base URL 必须是 http 或 https 地址");
+      return;
+    }
+    const host = new URL(baseUrl).host || "endpoint";
+    const slug = host.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/(^-|-$)/g, "");
+    const existingIds = new Set(allProviders.map((p) => p.id));
+    let candidate = `custom:${slug || "endpoint"}`;
+    let suffix = 2;
+    while (existingIds.has(candidate)) {
+      candidate = `custom:${slug || "endpoint"}-${suffix++}`;
+    }
+    // 本地部署（LM Studio / Ollama / vLLM …）只有 OpenAI 兼容接口；
+    // 自定义模式跟随用户在「接口格式」里的选择。
+    const apiMode: CustomProviderApiMode =
+      customProviderMode === "local" ? "chat_completions" : customForm.apiMode;
+    const preset: ProviderPreset = {
+      id: candidate,
+      name,
+      vendor: customProviderMode === "local" ? "本地部署" : "自定义",
+      region: "cn",
+      baseUrl,
+      apiMode,
+      transport: apiMode === "anthropic_messages" ? "anthropic_messages" : "openai_chat",
+      apiKeyLabel: "API Key",
+      defaultModel: model,
+      models: [{ id: model, supportsTools: true }],
+      isCustom: true,
+    };
+    const nextConfig = buildProviderOrderUpdate(
+      buildProviderConfigUpdate(config, preset, { apiKey, baseUrl, model, contextWindow }),
+      [candidate, ...orderedProviders.map((provider) => provider.id)],
+    );
+    saveConfig.mutate(
+      nextConfig,
+      {
+        onSuccess: () => {
+          selectProvider(candidate);
+          closeCustomForm();
+          setProviderForm({ apiKey: "", baseUrl, model, contextWindow });
+        },
+      },
+    );
+  };
+
+  const handleDeleteSelectedProvider = async () => {
+    if (!config || !selectedProvider?.isCustom) return;
+    const providerId = selectedProvider.id;
+    if (currentProviderId === providerId) {
+      setProviderSaveError("当前主模型正在使用此服务商，请先切换到其他模型后再删除。");
+      return;
+    }
+    const referencedTasks = AUXILIARY_TASKS
+      .filter((task) => String(getAuxiliarySlot(config, task.id).provider || "") === providerId)
+      .map((task) => task.name);
+    const confirmMessage = referencedTasks.length > 0
+      ? `确定删除「${selectedProvider.name}」吗？引用它的辅助模型（${referencedTasks.join("、")}）会自动恢复为 Auto。`
+      : `确定删除「${selectedProvider.name}」吗？此操作会移除该自定义服务商的 Base URL、模型和密钥配置。`;
+    const confirmed = await confirm({
+      title: "删除服务商",
+      body: confirmMessage,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const nextSelectedProviderId = orderedProviders.find((provider) => provider.id !== providerId)?.id ?? "";
+    setProviderDeletePending(true);
+    setProviderSaveError("");
+    try {
+      await saveConfig.mutateAsync(buildCustomProviderDeleteUpdate(config, providerId));
+      if (nextSelectedProviderId) selectProvider(nextSelectedProviderId);
+    } catch (error) {
+      setProviderSaveError(error instanceof Error ? error.message : String(error || "删除失败"));
+    } finally {
+      setProviderDeletePending(false);
+    }
+  };
+
+  const handleSaveAuxiliaryTask = async () => {
+    if (!config) return;
+    setAuxSavingTask(selectedAuxTask);
+    setAuxSavedTask(null);
+    setAuxError("");
+    try {
+      await saveConfig.mutateAsync(buildAuxiliaryTaskUpdate(config, selectedAuxTask, auxForm));
+      setAuxForm((prev) => ({ ...prev, apiKey: "" }));
+      setAuxSavedTask(selectedAuxTask);
+    } catch (error) {
+      setAuxError(error instanceof Error ? error.message : String(error || "保存失败"));
+    } finally {
+      setAuxSavingTask(null);
+    }
+  };
+
+  const handleResetAuxiliaryTask = async (task: AuxiliaryTaskId) => {
+    if (!config) return;
+    setAuxSavingTask(task);
+    setAuxSavedTask(null);
+    setAuxError("");
+    try {
+      await saveConfig.mutateAsync(buildAuxiliaryTaskReset(config, task));
+      setAuxSavedTask(task);
+    } catch (error) {
+      setAuxError(error instanceof Error ? error.message : String(error || "恢复失败"));
+    } finally {
+      setAuxSavingTask(null);
+    }
+  };
+
+  const handleResetAllAuxiliary = async () => {
+    if (!config) return;
+    setAuxSavingTask("__all__");
+    setAuxSavedTask(null);
+    setAuxError("");
+    try {
+      await saveConfig.mutateAsync(buildAllAuxiliaryReset(config));
+      setAuxSavedTask("__all__");
+    } catch (error) {
+      setAuxError(error instanceof Error ? error.message : String(error || "恢复失败"));
+    } finally {
+      setAuxSavingTask(null);
+    }
+  };
+
+  const handleImageInputModeChange = async (mode: "auto" | "native" | "text") => {
+    if (!config) return;
+    setAuxSavingTask("image_mode");
+    setAuxSavedTask(null);
+    setAuxError("");
+    try {
+      await saveConfig.mutateAsync(buildImageInputModeUpdate(config, mode));
+      setAuxSavedTask("image_mode");
+    } catch (error) {
+      setAuxError(error instanceof Error ? error.message : String(error || "保存失败"));
+    } finally {
+      setAuxSavingTask(null);
+    }
+  };
+
+  const envRowProps = (key: string, info: EnvVarInfo) => ({
+    envKey: key,
+    info,
+    revealedValue: revealedValues[key],
+    isEditing: editKey === key,
+    editVal,
+    onEdit: () => { setEditKey(key); setEditVal(""); },
+    onEditChange: setEditVal,
+    onSave: () => handleSave(key),
+    onCancel: () => setEditKey(null),
+    onReveal: () => handleReveal(key),
+    onDelete: () => deleteEnv.mutate(key),
+  });
+
+  if (configLoading || (envLoading && !envVars)) return <LoadingState variant="block" label="正在加载模型配置…" />;
+  if (configIsError || !config) {
+    const message = configError instanceof Error ? configError.message : "配置加载失败";
+    return (
+      <Alert
+        className={s.modelsLoadError}
+        tone="danger"
+        title="模型配置加载失败"
+        actions={<Button variant="outline" onClick={() => void refetchConfig()}>重试</Button>}
+      >
+        <p>{message}</p>
+      </Alert>
+    );
+  }
+
+  const envLoadWarning = envIsError ? (envError instanceof Error ? envError.message : "环境变量加载失败") : "";
+  const needsInitialModelSetup =
+    !modelInfo?.model?.trim() ||
+    !modelInfo?.provider?.trim() ||
+    (!currentProviderOAuthLoggedIn && configuredCount === 0 && !oauthProvidersLoading);
+  const customProviderIsLocal = customProviderMode === "local";
+  const customProviderIsAnthropic = !customProviderIsLocal && customForm.apiMode === "anthropic_messages";
+  const customProviderTitle = customProviderIsLocal ? "添加本地部署服务商" : "添加自定义服务商";
+  const customProviderHint = customProviderIsLocal
+    ? "适合 LM Studio、Ollama、vLLM、llama.cpp 等本地 OpenAI 兼容服务。先启动本地服务、加载模型并把上下文窗口设到至少 64K，再填写端点、刷新模型列表并选择默认模型。"
+    : "先填写接口格式、Base URL 和 API Key，再刷新模型列表并选择默认模型；如果服务商不提供 /models，也可以手动输入。支持 OpenAI 兼容服务与 Anthropic 格式的 Claude Code 中转站。";
+  const customProviderPlaceholders = customProviderIsLocal
+    ? {
+        name: "例如：LM Studio",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        model: "qwen2.5-coder:7b",
+        apiKey: "本地服务一般可留空，启用鉴权时再填写",
+        contextWindow: String(RECOMMENDED_LOCAL_CONTEXT_LENGTH),
+      }
+    : customProviderIsAnthropic
+      ? {
+          name: "例如：某 Claude Code 中转",
+          baseUrl: "https://api.example.com（通常无需以 /v1 结尾）",
+          model: "claude-sonnet-5",
+          apiKey: "可选，先建后填也可以",
+          contextWindow: "自动",
+        }
+      : {
+          name: "例如：Deepseek",
+          baseUrl: "https://api.example.com/v1",
+          model: "deepseek-v4-flash",
+          apiKey: "可选，先建后填也可以",
+          contextWindow: "自动",
+        };
+  const customLocalContextWarning = getLocalContextWarning({
+    isLocalProvider: customProviderIsLocal,
+    configuredContextWindow: customForm.contextWindow,
+  });
+
+  return (
+    <div className={s.modelsSettings}>
+      {needsInitialModelSetup && (
+        <div className={s.firstRunModelNotice}>
+          <div>
+            <strong>需要先完成模型初始化</strong>
+            <p>
+              当前独立 runtime 的 Hermes home 还没有可用模型。请选择一个服务商，粘贴 API Key，点击「保存配置」，再点击「设为当前模型」。
+            </p>
+          </div>
+          <span>推荐从 DeepSeek 开始 · <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer" className={s.link}>DeepSeek 开放平台 ↗</a></span>
+        </div>
+      )}
+      {envLoadWarning && (
+        <Alert
+          className={s.modelsLoadWarning}
+          tone="warning"
+          title="环境变量状态加载失败"
+          layout="inline"
+          actions={<Button variant="outline" tone="warning" onClick={() => void refetchEnvVars()}>重试</Button>}
+        >
+          <p>{envLoadWarning}。模型页已用空环境变量状态继续渲染，已配置状态可能暂时不准确。</p>
+        </Alert>
+      )}
+      <div className={s.modelTopTabs} role="tablist" aria-label="模型配置类型">
+        <button
+          type="button"
+          className={s.modelTopTab}
+          data-active={activeModelTab === "main"}
+          role="tab"
+          aria-selected={activeModelTab === "main"}
+          onClick={() => setActiveModelTab("main")}
+        >
+          主模型
+          {modelInfo?.model && <span>{modelInfo.model}</span>}
+        </button>
+        <button
+          type="button"
+          className={s.modelTopTab}
+          data-active={activeModelTab === "auxiliary"}
+          role="tab"
+          aria-selected={activeModelTab === "auxiliary"}
+          onClick={() => setActiveModelTab("auxiliary")}
+        >
+          辅助模型
+          <span>{configuredAuxiliaryCount} 项已指定</span>
+        </button>
+        <button
+          type="button"
+          className={s.modelTopTab}
+          data-active={activeModelTab === "moa"}
+          role="tab"
+          aria-selected={activeModelTab === "moa"}
+          onClick={() => setActiveModelTab("moa")}
+        >
+          MoA 混合
+          {moaPresetCount > 0 && <span>{moaPresetCount} 个预设</span>}
+        </button>
+      </div>
+
+      {activeModelTab === "main" ? (
+        <>
+          <div className={s.modelsSectionHeader}>
+            <div>
+              <p className={s.desc}>
+                管理国内模型服务商预设和 API Key。
+                {modelInfo && <> 当前模型: <b>{modelInfo.model}</b> ({modelInfo.provider})</>}
+                {" · "}已配置 {configuredCount} 个，自定义 {customProviders.length} 个
+              </p>
+            </div>
+            <div className={s.catalogMeta}>
+              <span>提供商目录 {catalog.version}</span>
+              {catalogMessage && <span className={s.catalogMessage}>{catalogMessage}</span>}
+            </div>
+          </div>
+
+          <div className={s.providerPresetLayout}>
+            <div className={s.providerGridPane}>
+              <div className={s.providerGridHeader}>
+                <div className={s.providerGridTitle}>预设供应商</div>
+                <div className={s.providerGridTools}>
+                  <Input
+                    className={s.providerSearchInput}
+                    value={providerSearch}
+                    onChange={(event) => setProviderSearch(event.target.value)}
+                    placeholder="搜索模型平台..."
+                  />
+                  <Button variant="outline" onClick={handleCatalogRefresh}>刷新预设</Button>
+                </div>
+              </div>
+              <div className={s.providerPresetGrid}>
+                <button
+                  type="button"
+                  className={`${s.presetCard} ${s.presetCardAdd}`}
+                  onClick={() => openCustomProviderForm("custom")}
+                  title="添加自定义服务商（OpenAI 兼容 / Anthropic Claude Code 中转）"
+                >
+                  <span className={s.presetCardAddIcon} aria-hidden>＋</span>
+                  <span className={s.presetCardName}>自定义配置</span>
+                </button>
+                <button
+                  type="button"
+                  className={`${s.presetCard} ${s.presetCardAdd}`}
+                  onClick={() => openCustomProviderForm("local")}
+                  title="添加本地部署 OpenAI 兼容服务商"
+                >
+                  <span className={s.presetCardAddIcon} aria-hidden>＋</span>
+                  <span className={s.presetCardName}>本地部署</span>
+                </button>
+                {filteredProviders.length > 0 ? (
+                  <DndContext
+                    sensors={providerDndSensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleProviderDragEnd}
+                  >
+                    <SortableContext
+                      items={filteredProviders.map((provider) => provider.id)}
+                      strategy={rectSortingStrategy}
+                    >
+                      {filteredProviders.map((provider) => (
+                        <SortableProviderPresetCard
+                          key={provider.id}
+                          provider={provider}
+                          active={selectedProvider?.id === provider.id}
+                          configured={providerHasSavedCredentials(config, provider.id, resolvedEnvVars, provider)}
+                          current={currentProviderId === provider.id}
+                          canReorder={canReorderProviders}
+                          onSelect={selectProvider}
+                          onKeyDown={handleProviderRowKeyDown}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
+                ) : (
+                  <div className={s.providerPresetEmpty}>没有匹配的模型平台</div>
+                )}
+              </div>
+              <div className={s.providerListHint}>
+                {providerSearch.trim()
+                  ? "正在搜索结果中浏览；清空搜索后可拖拽排序。"
+                  : "拖拽卡片可调整常用服务商顺序，排序保存到当前 Profile。"}
+              </div>
+              <div className={s.providerReviewBanner}>
+                想知道哪家中转站或者提供商性价比更好更稳定？
+                <a
+                  href="https://hermesagent.org.cn/transit"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={s.link}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openExternalUrl("https://hermesagent.org.cn/transit");
+                  }}
+                >
+                  点击此处查看测评
+                </a>
+              </div>
+            </div>
+
+            {selectedProvider && (
+              <div className={s.providerPresetPanel} data-loading={providerPanelLoading}>
+                {providerPanelLoading ? (
+                  <ProviderPanelLoading providerName={selectedProvider.name} />
+                ) : (
+                  <>
+                    <div className={s.providerPresetHeader}>
+                      <div>
+                        <div className={s.providerDetailName}>{selectedProvider.name}</div>
+                        <div className={s.providerDetailVendor}>
+                          {selectedProvider.id} · {selectedProvider.vendor} · {apiModeDisplayName(selectedProvider.apiMode)}
+                        </div>
+                      </div>
+                      <div className={s.providerHeaderActions}>
+                        <span className={s.statusBadge} data-on={selectedHasCredentials}>
+                          {selectedHasCredentials ? "已保存密钥" : "未设置"}
+                        </span>
+                        {(selectedProvider.promotion?.url || selectedProvider.websiteUrl) && (
+                          <Button
+                            variant="solid"
+                            tone="accent"
+                            className={s.providerWebsiteButton}
+                            onClick={() => {
+                              reportPromoClick(selectedProvider.id);
+                              void openExternalUrl(
+                                selectedProvider.promotion?.url ?? selectedProvider.websiteUrl!,
+                              );
+                            }}
+                            title={`打开 ${selectedProvider.name} 官网`}
+                          >
+                            前往官网 ↗
+                          </Button>
+                        )}
+                        {selectedProvider.isCustom && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            tone="danger"
+                            loading={providerDeletePending}
+                            disabled={providerSavePending || providerSetCurrentPending}
+                            onClick={() => void handleDeleteSelectedProvider()}
+                            title={
+                              currentProviderId === selectedProvider.id
+                                ? "当前主模型正在使用此服务商，请先切换后删除"
+                                : "删除此自定义服务商"
+                            }
+                          >
+                            删除服务商
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {providerSaveError && (
+                      <div className={s.modelPickerError} style={{ marginTop: 8 }}>
+                        操作失败：{providerSaveError}
+                      </div>
+                    )}
+
+                    <div className={s.providerFormGrid}>
+                      <Field label={selectedProvider.apiKeyLabel} className={s.fieldRow}>
+                        <Input
+                          aria-label={selectedProvider.apiKeyLabel}
+                          mono
+                          type="password"
+                          value={providerForm.apiKey}
+                          placeholder={
+                            selectedHasCredentials
+                              ? selectedProviderCredentialPreview ?? "已保存"
+                              : selectedProviderCanOmitApiKey
+                                ? "本地服务一般可留空"
+                                : "粘贴 API Key"
+                          }
+                          onChange={(event) => setProviderForm((prev) => ({ ...prev, apiKey: event.target.value }))}
+                        />
+                      </Field>
+                      <Field label="Base URL" className={s.fieldRow}>
+                        <Input
+                          aria-label="Base URL"
+                          mono
+                          value={providerForm.baseUrl}
+                          onChange={(event) => setProviderForm((prev) => ({ ...prev, baseUrl: event.target.value }))}
+                        />
+                      </Field>
+                      {selectedProviderEndpointPreview && (
+                        <div className={s.modelPickerHint}>
+                          请求将发送到 <code>{selectedProviderEndpointPreview}</code>
+                        </div>
+                      )}
+                      <div className={s.fieldRow}>
+                        <div className={s.fieldLabel}>模型</div>
+                        <div className={s.modelPickerRow}>
+                          <ModelCombobox
+                            label="模型"
+                            value={providerForm.model}
+                            onChange={(next) => setProviderForm((prev) => ({ ...prev, model: next }))}
+                            options={mergedModelOptions}
+                          />
+                          {supportsModelListing ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              loading={modelsQuery.isFetching}
+                              onClick={() => modelsQuery.refetch()}
+                              title={`从 ${providerForm.baseUrl}/models 拉取`}
+                            >
+                              {refreshLabel}
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                      {!supportsModelListing && (
+                        <div className={s.modelPickerHint}>此服务商不提供 /models 端点，使用预设模型或手动输入即可</div>
+                      )}
+                      {refreshErrorText && (
+                        <div className={s.modelPickerError}>{refreshErrorText}</div>
+                      )}
+                      <Field label="上下文窗口" className={s.fieldRow}>
+                        <Input
+                          aria-label="上下文窗口"
+                          mono
+                          inputMode="numeric"
+                          placeholder={
+                            selectedProviderIsCurrent && modelInfo?.effective_context_length
+                              ? `自动（约 ${modelInfo.effective_context_length.toLocaleString()}）`
+                              : "自动"
+                          }
+                          value={providerForm.contextWindow}
+                          onChange={(event) =>
+                            setProviderForm((prev) => ({ ...prev, contextWindow: event.target.value }))
+                          }
+                        />
+                      </Field>
+                      <div className={s.modelPickerHint}>
+                        留空或填 0 使用该模型自动探测到的上下文窗口；本地 / 自建模型探测不准时可手动指定（单位 token）。
+                        {!selectedProviderIsCurrent && " 该值会在「设为当前模型」时生效。"}
+                      </div>
+                      {selectedLocalContextWarning && (
+                        <div className={s.localContextWarning} role="alert">
+                          {selectedLocalContextWarning.message}
+                        </div>
+                      )}
+                      {selectedProviderIsCurrent && modelInfo && (
+                        <div className={s.modelPickerHint}>
+                          自动探测 {(modelInfo.auto_context_length ?? 0).toLocaleString()}
+                          {" · "}覆盖{" "}
+                          {modelInfo.config_context_length
+                            ? modelInfo.config_context_length.toLocaleString()
+                            : "无"}
+                          {" · "}生效 {(modelInfo.effective_context_length ?? 0).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={s.modelTags}>
+                      {mergedModelOptions.slice(0, 8).map((id) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={s.modelTag}
+                          onClick={() => setProviderForm((prev) => ({ ...prev, model: id }))}
+                          title={`填入模型 ${id}`}
+                        >
+                          {id}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className={s.providerActions}>
+                      <Button
+                        variant="solid"
+                        tone="accent"
+                        loading={providerSavePending}
+                        disabled={
+                          providerSavePending ||
+                          providerSetCurrentPending ||
+                          providerDeletePending ||
+                          !isFormDirty ||
+                          (!selectedHasCredentials && !providerForm.apiKey.trim() && !selectedProviderCanOmitApiKey)
+                        }
+                        onClick={() => void handleProviderSave()}
+                      >
+                        {showSavedFlash ? "✓ 已保存" : "保存配置"}
+                      </Button>
+                      <Button
+                        variant={isFormDirty || selectedProviderIsCurrent ? "outline" : "solid"}
+                        tone={isFormDirty || selectedProviderIsCurrent ? "neutral" : "accent"}
+                        loading={providerSetCurrentPending}
+                        disabled={
+                          selectedProviderIsCurrent ||
+                          providerSavePending ||
+                          providerSetCurrentPending ||
+                          providerDeletePending ||
+                          !selectedProviderModel ||
+                          (!selectedHasCredentials && !selectedProviderCanOmitApiKey)
+                        }
+                        onClick={() => void handleSetCurrentModel()}
+                        title={
+                          selectedProviderIsCurrent
+                            ? "当前已在使用这个模型"
+                            : selectedHasCredentials || selectedProviderCanOmitApiKey
+                              ? "切换当前运行模型；如刚修改了 Base URL / API Key，请先保存配置"
+                              : "请先保存 API Key / provider 配置"
+                        }
+                      >
+                        {selectedProviderIsCurrent ? "已是当前模型" : "设为当前模型"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        loading={probeForSelected?.status === "pending"}
+                        disabled={
+                          providerDeletePending ||
+                          (!selectedHasCredentials && !providerForm.apiKey.trim() && !selectedProviderCanOmitApiKey)
+                        }
+                        onClick={() => void handleProbe()}
+                        title={
+                          selectedProvider?.apiMode === "anthropic_messages" && selectedProvider.supportsModelListing !== true
+                            ? "向 /v1/messages 发一次极小请求（Anthropic 格式），验证 API Key + Base URL + 模型"
+                            : selectedProvider?.apiMode === "chat_completions" && selectedProvider.supportsModelListing === false
+                              ? "向 /chat/completions 发一次极小请求，验证 API Key + Base URL + 模型"
+                              : "向 /models 端点发一次 GET，验证 API Key + 网络通"
+                        }
+                      >
+                        测试连接
+                      </Button>
+                    </div>
+                    {probeForSelected && probeForSelected.status !== "pending" && (
+                      <ProbeResultRow probe={probeForSelected} />
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <OAuthProvidersSection />
+
+          <div className={s.advancedEnvBlock}>
+            <button className={s.providerCardHeader} onClick={() => setShowEnvAdvanced((prev) => !prev)}>
+              <span className={s.providerCardName}>
+                <span className={s.providerCardArrow}>{showEnvAdvanced ? "▾" : "▸"}</span>
+                高级环境变量
+              </span>
+              <span className={s.providerCardCount}>{providerEnvEntries.length} 项</span>
+            </button>
+            {showEnvAdvanced && (
+              <div className={s.providerCardBody}>
+                {providerEnvEntries.map(([key, info]) => (
+                  <EnvRow key={key} {...envRowProps(key, info)} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {nonProviderGroups.map((group) => {
+            const expanded = expandedEnvGroups[group.category] === true;
+            return (
+              <div key={group.category} className={s.advancedEnvBlock}>
+                <button
+                  className={s.providerCardHeader}
+                  onClick={() =>
+                    setExpandedEnvGroups((prev) => ({ ...prev, [group.category]: !expanded }))
+                  }
+                >
+                  <span className={s.providerCardName}>
+                    <span className={s.providerCardArrow}>{expanded ? "▾" : "▸"}</span>
+                    {group.label}
+                  </span>
+                  <span className={s.providerCardCount}>{group.entries.length} 项</span>
+                </button>
+                {expanded && (
+                  <div className={s.providerCardBody}>
+                    {group.entries.map(([key, info]) => (
+                      <EnvRow key={key} {...envRowProps(key, info)} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      ) : activeModelTab === "auxiliary" ? (
+        <AuxiliaryModelsPanel
+          config={config}
+          modelInfo={modelInfo}
+          providers={allProviders}
+          providerOptions={auxiliaryProviderOptions}
+          selectedTask={selectedAuxTask}
+          form={auxForm}
+          advancedOpen={auxAdvancedOpen}
+          savingTask={auxSavingTask}
+          savedTask={auxSavedTask}
+          error={auxError}
+          onSelectTask={setSelectedAuxTask}
+          onFormChange={setAuxForm}
+          onAdvancedOpenChange={setAuxAdvancedOpen}
+          onSaveTask={() => void handleSaveAuxiliaryTask()}
+          onResetTask={(task) => void handleResetAuxiliaryTask(task)}
+          onResetAll={() => void handleResetAllAuxiliary()}
+          onConfigureApprovalMode={() => navigate("/common#approval-mode")}
+          imageInputMode={getImageInputMode(config)}
+          onImageInputModeChange={(mode) => void handleImageInputModeChange(mode)}
+        />
+      ) : (
+        <MoaPanel />
+      )}
+
+      {showCustomForm && createPortal(
+        <div className={s.customProviderBackdrop} onClick={closeCustomForm}>
+          <div
+            className={s.customProviderModal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={customDialogTitleId}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={s.customProviderTitleBar}>
+              <h2 id={customDialogTitleId}>{customProviderTitle}</h2>
+              <button
+                type="button"
+                className={s.customProviderClose}
+                onClick={closeCustomForm}
+                aria-label="关闭"
+              >
+                ×
+              </button>
+            </div>
+            <div className={s.customProviderBody}>
+              <p className={s.customProviderHint}>
+                {customProviderHint}
+              </p>
+              {customProviderIsLocal && (
+                <>
+                  <div className={s.localProviderContextNotice}>
+                    <strong>本地模型上下文需要 ≥64K</strong>
+                    <p>
+                      Hermes Agent 会拒绝低于 64,000 tokens 的模型上下文。建议在本地运行时和下方「上下文窗口」中都设为{" "}
+                      {RECOMMENDED_LOCAL_CONTEXT_LENGTH.toLocaleString()}，并在 LM Studio / Ollama / vLLM / llama.cpp 中重新加载模型。
+                    </p>
+                    <LocalProviderDocLinks />
+                  </div>
+                  <div className={s.localProviderGuide} aria-label="常用本地部署端点">
+                    {LOCAL_PROVIDER_PRESETS.map((preset) => (
+                      <button
+                        key={preset.name}
+                        type="button"
+                        className={s.localProviderCard}
+                        onClick={() => applyLocalProviderPreset(preset)}
+                      >
+                        <strong>{preset.name}</strong>
+                        <code>{preset.baseUrl}</code>
+                        <span>{preset.tutorial}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              <Field label="名称" className={s.fieldRow}>
+                <Input
+                  aria-label="名称"
+                  value={customForm.name}
+                  placeholder={customProviderPlaceholders.name}
+                  autoFocus
+                  onChange={(e) => setCustomForm((p) => ({ ...p, name: e.target.value }))}
+                />
+              </Field>
+              {!customProviderIsLocal && (
+                <Field label="接口格式" className={s.fieldRow}>
+                  <div className={s.apiModeToggle} role="radiogroup" aria-label="接口格式">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={customForm.apiMode === "chat_completions"}
+                      data-active={customForm.apiMode === "chat_completions"}
+                      onClick={() => setCustomForm((p) => ({ ...p, apiMode: "chat_completions", apiModeTouched: true }))}
+                    >
+                      OpenAI 兼容
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={customForm.apiMode === "anthropic_messages"}
+                      data-active={customForm.apiMode === "anthropic_messages"}
+                      onClick={() => setCustomForm((p) => ({ ...p, apiMode: "anthropic_messages", apiModeTouched: true }))}
+                    >
+                      Anthropic (Claude Code)
+                    </button>
+                  </div>
+                </Field>
+              )}
+              <Field label="Base URL" className={s.fieldRow}>
+                <Input
+                  aria-label="Base URL"
+                  mono
+                  value={customForm.baseUrl}
+                  placeholder={customProviderPlaceholders.baseUrl}
+                  onChange={(e) => {
+                    const baseUrl = e.target.value;
+                    setCustomForm((p) => ({
+                      ...p,
+                      baseUrl,
+                      // 未手动选过格式时，按 URL 特征（/anthropic 后缀）自动预选，
+                      // 与 Core 端 _detect_api_mode_for_url 的中转站规则一致。
+                      ...(customProviderIsLocal || p.apiModeTouched
+                        ? {}
+                        : { apiMode: detectCustomApiModeFromUrl(baseUrl) }),
+                    }));
+                  }}
+                />
+              </Field>
+              {!customBaseUrlValid && (
+                <div className={s.modelPickerError}>Base URL 必须是 http 或 https 地址。</div>
+              )}
+              {customBaseUrlValid && !customProviderIsLocal && customBaseUrl && (
+                <div className={s.modelPickerHint}>
+                  请求将发送到 <code>{chatEndpointPreviewUrl(customForm.apiMode, customBaseUrl)}</code>
+                </div>
+              )}
+              {customBaseUrlValid && duplicateBaseUrlProvider && (
+                <div className={s.modelPickerHint}>
+                  已存在同 Base URL：{duplicateBaseUrlProvider.name}。如果只是换模型，可以直接编辑现有服务商。
+                </div>
+              )}
+              <Field label="API Key" className={s.fieldRow}>
+                <Input
+                  aria-label="API Key"
+                  mono
+                  type="password"
+                  value={customForm.apiKey}
+                  placeholder={customProviderPlaceholders.apiKey}
+                  onChange={(e) => setCustomForm((p) => ({ ...p, apiKey: e.target.value }))}
+                />
+              </Field>
+              <div className={s.modelPickerHint}>
+                部分模型服务商需要先填写有效的 API Key，才能获取模型列表。
+              </div>
+              <div className={s.fieldRow}>
+                <div className={s.fieldLabel}>默认模型</div>
+                <div className={s.modelPickerRow}>
+                  <ModelCombobox
+                    label="默认模型"
+                    value={customForm.model}
+                    options={customModelOptions}
+                    placeholder={customProviderPlaceholders.model}
+                    onChange={(model) => setCustomForm((p) => ({ ...p, model }))}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    loading={customModelsQuery.isFetching}
+                    disabled={!customBaseUrl || !customBaseUrlValid}
+                    onClick={() => void customModelsQuery.refetch()}
+                    title="从服务商读取模型列表"
+                  >
+                    {customRefreshLabel}
+                  </Button>
+                </div>
+              </div>
+              {customRefreshErrorText && (
+                <div className={s.modelPickerError}>{customRefreshErrorText}</div>
+              )}
+              {customModelsQuery.data?.models.length === 0 && (
+                <div className={s.modelPickerHint}>服务端返回了空模型列表，也可以继续手动输入模型 ID。</div>
+              )}
+              {customProviderIsLocal && (
+                <>
+                  <Field label="上下文窗口" className={s.fieldRow}>
+                    <Input
+                      aria-label="上下文窗口"
+                      mono
+                      inputMode="numeric"
+                      value={customForm.contextWindow}
+                      placeholder={customProviderPlaceholders.contextWindow}
+                      onChange={(e) => setCustomForm((p) => ({ ...p, contextWindow: e.target.value }))}
+                    />
+                  </Field>
+                  <div className={s.modelPickerHint}>
+                    保存时会写入桌面端的模型上下文覆盖；请同步确认本地服务实际加载的模型也已使用同样或更大的上下文。
+                  </div>
+                  {customLocalContextWarning && (
+                    <div className={s.localContextWarning} role="alert">
+                      {customLocalContextWarning.message}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className={s.customProviderActions}>
+              <Button type="button" variant="outline" onClick={closeCustomForm}>取消</Button>
+              <Button
+                type="button"
+                variant="solid"
+                tone="accent"
+                loading={saveConfig.isPending}
+                disabled={
+                  !customForm.name.trim() ||
+                  !customForm.baseUrl.trim() ||
+                  !customBaseUrlValid ||
+                  !customForm.model.trim()
+                }
+                onClick={handleAddCustom}
+              >
+                添加并选中
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+function SortableProviderPresetCard({
+  provider,
+  active,
+  configured,
+  current,
+  canReorder,
+  onSelect,
+  onKeyDown,
+}: {
+  provider: ProviderPreset;
+  active: boolean;
+  configured: boolean;
+  current: boolean;
+  canReorder: boolean;
+  onSelect: (providerId: string) => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>, providerId: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: provider.id,
+    disabled: !canReorder,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+  const badge = provider.promotion?.badge;
+  const protoTag = apiModeBadgeLabel(provider.apiMode);
+  const tooltip = [
+    `${provider.name} · ${provider.vendor}`,
+    provider.isCustom ? provider.vendor : "",
+    apiModeDisplayName(provider.apiMode),
+    configured ? "已保存密钥" : "未设置密钥",
+    canReorder ? "拖拽可排序" : "清空搜索后可拖拽排序",
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      id={`provider-${provider.id}`}
+      className={s.presetCard}
+      data-active={active}
+      data-current={current || undefined}
+      data-dragging={isDragging ? "true" : undefined}
+      role="button"
+      tabIndex={0}
+      title={tooltip}
+      onClick={() => onSelect(provider.id)}
+      onKeyDown={(event) => onKeyDown(event, provider.id)}
+      {...(canReorder ? listeners : {})}
+    >
+      <ProviderCardIcon provider={provider} />
+      <span className={s.presetCardName}>{provider.name}</span>
+      <span className={s.presetCardMeta}>
+        {protoTag && (
+          <span className={s.presetCardProtoTag} title={apiModeDisplayName(provider.apiMode)}>
+            {protoTag}
+          </span>
+        )}
+        {current
+          ? <span className={s.presetCardCurrent}>当前</span>
+          : configured && <span className={s.presetCardDot} aria-label="已保存密钥" />}
+      </span>
+      {badge && (
+        <span className={s.presetCardBadge} data-badge={badge} aria-hidden>
+          {badge === "prime" ? "♥" : "★"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function providerInitial(provider: ProviderPreset): string {
+  const source = provider.name.trim() || provider.id;
+  const first = Array.from(source)[0] ?? "?";
+  return /[a-z]/.test(first) ? first.toUpperCase() : first;
+}
+
+function ProviderCardIcon({ provider }: { provider: ProviderPreset }) {
+  const iconUrl = getProviderIconUrl(provider.icon);
+  if (iconUrl) {
+    return (
+      <img
+        className={s.presetCardIconImg}
+        src={iconUrl}
+        alt=""
+        aria-hidden
+        draggable={false}
+      />
+    );
+  }
+  return (
+    <span className={s.presetCardIcon} aria-hidden>
+      {providerInitial(provider)}
+    </span>
+  );
+}
+
+function AuxiliaryModelsPanel({
+  config,
+  modelInfo,
+  providers,
+  providerOptions,
+  selectedTask,
+  form,
+  advancedOpen,
+  savingTask,
+  savedTask,
+  error,
+  onSelectTask,
+  onFormChange,
+  onAdvancedOpenChange,
+  onSaveTask,
+  onResetTask,
+  onResetAll,
+  onConfigureApprovalMode,
+  imageInputMode,
+  onImageInputModeChange,
+}: {
+  config: Record<string, any>;
+  modelInfo?: ModelInfo;
+  providers: ProviderPreset[];
+  providerOptions: { id: string; name: string; hint: string }[];
+  selectedTask: AuxiliaryTaskId;
+  form: AuxiliaryTaskForm;
+  advancedOpen: boolean;
+  savingTask: AuxiliaryTaskId | "__all__" | "image_mode" | null;
+  savedTask: AuxiliaryTaskId | "__all__" | "image_mode" | null;
+  error: string;
+  onSelectTask: (task: AuxiliaryTaskId) => void;
+  onFormChange: Dispatch<SetStateAction<AuxiliaryTaskForm>>;
+  onAdvancedOpenChange: (open: boolean) => void;
+  onSaveTask: () => void;
+  onResetTask: (task: AuxiliaryTaskId) => void;
+  onResetAll: () => void;
+  onConfigureApprovalMode: () => void;
+  imageInputMode: "auto" | "native" | "text";
+  onImageInputModeChange: (mode: "auto" | "native" | "text") => void;
+}) {
+  const selectedDefinition = AUXILIARY_TASK_BY_ID[selectedTask];
+  const modelOptions = getAuxiliaryModelOptions(form.provider, providers, form.model);
+  const providerName = getProviderDisplayName(form.provider, providers);
+  const selectedSlot = getAuxiliarySlot(config, selectedTask);
+  const hasInlineApiKey = Boolean(selectedSlot.api_key);
+  const isAutoProvider = form.provider === "auto";
+  const isSavingCurrent = savingTask === selectedTask;
+  const currentSaved = savedTask === selectedTask;
+  const showVisionWarning = selectedTask === "vision" &&
+    !isAutoProvider &&
+    !isLikelyVisionCapable(form.provider, form.model, providers);
+  const showVisionAutoHint = selectedTask === "vision" && isAutoProvider;
+
+  const updateForm = (patch: Partial<AuxiliaryTaskForm>) => {
+    onFormChange((prev) => ({ ...prev, ...patch }));
+  };
+
+  return (
+    <div className={s.auxModels}>
+      <div className={s.auxIntroCard}>
+        <div>
+          <div className={s.auxIntroTitle}>辅助模型按任务生效</div>
+          <p>
+            这里配置的是 <b>auxiliary.&lt;task&gt;</b> 槽位。「自动」会优先复用主模型，再按后端策略 fallback；显式指定后，该任务会固定走选中的 provider/model。
+          </p>
+          {modelInfo?.model && (
+            <p>
+              当前主模型是 <b>{modelInfo.model}</b>（{modelInfo.provider || "未知 provider"}），辅助模型配置主要影响图片分析、上下文压缩、网页抽取、标题生成、审批和 MCP 路由。
+            </p>
+          )}
+        </div>
+        <div className={s.auxImageModeBox}>
+          <Field label="图片输入模式" className={s.fieldRow}>
+            <Select
+              value={imageInputMode}
+              disabled={savingTask === "image_mode"}
+              onChange={(event) =>
+                onImageInputModeChange(event.target.value as "auto" | "native" | "text")}
+            >
+              <option value="auto">自动 · 主模型支持图片时原生，否则走 vision</option>
+              <option value="text">文本 · 始终先用 vision 分析成文字</option>
+              <option value="native">原生 · 始终尝试原生传图</option>
+            </Select>
+          </Field>
+          {savedTask === "image_mode" && <div className={s.auxSavedHint}>✓ 图片输入模式已保存</div>}
+        </div>
+      </div>
+
+      <div className={s.auxToolbar}>
+        <div className={s.desc}>
+          常用任务默认展示，高级任务用于 Kanban、档案和 Skill 审查。session_search 已不再使用辅助 LLM，所以这里不展示。
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          loading={savingTask === "__all__"}
+          onClick={onResetAll}
+        >
+          全部恢复为自动
+        </Button>
+      </div>
+
+      <div className={s.auxLayout}>
+        <div className={s.auxTaskList} aria-label="辅助模型任务列表">
+          <AuxiliaryTaskGroup
+            title="常用辅助任务"
+            tasks={AUXILIARY_TASKS.filter((task) => task.group === "common")}
+            config={config}
+            selectedTask={selectedTask}
+            onSelectTask={onSelectTask}
+          />
+          <AuxiliaryTaskGroup
+            title="高级辅助任务"
+            tasks={AUXILIARY_TASKS.filter((task) => task.group === "advanced")}
+            config={config}
+            selectedTask={selectedTask}
+            onSelectTask={onSelectTask}
+          />
+        </div>
+
+        <div className={s.auxEditorPanel}>
+          <div className={s.auxEditorHeader}>
+            <div>
+              <div className={s.auxEditorTitle}>{selectedDefinition.name}</div>
+              <div className={s.auxEditorSubtitle}>{selectedDefinition.description}</div>
+            </div>
+            <span className={s.statusBadge} data-on={!isAutoProvider}>
+              {isAutoProvider ? "自动" : providerName}
+            </span>
+          </div>
+
+          <div className={s.providerFormGrid}>
+            <Field label="服务商" className={s.fieldRow}>
+              <Select
+                aria-label="服务商"
+                value={form.provider}
+                onChange={(event) => updateForm({
+                  provider: event.target.value,
+                  model: event.target.value === "auto" ? "" : form.model,
+                })}
+              >
+                {providerOptions.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name} · {provider.id}
+                  </option>
+                ))}
+              </Select>
+              <div className={s.modelPickerHint}>
+                {providerOptions.find((provider) => provider.id === form.provider)?.hint ||
+                  "可以直接使用当前配置里的 provider。"}
+              </div>
+            </Field>
+
+            <div className={s.fieldRow}>
+              <div className={s.fieldLabel}>模型</div>
+              <ModelCombobox
+                label="模型"
+                value={form.model}
+                onChange={(next) => updateForm({ model: next })}
+                options={modelOptions}
+                placeholder={isAutoProvider ? "自动模式下不需要填写模型" : "搜索或输入辅助模型 ID"}
+                disabled={isAutoProvider}
+              />
+            </div>
+
+            <Field label="调用超时（秒）" className={s.fieldRow}>
+              <Input
+                aria-label="调用超时（秒）"
+                mono
+                value={form.timeout}
+                inputMode="numeric"
+                onChange={(event) => updateForm({ timeout: event.target.value })}
+              />
+            </Field>
+          </div>
+
+          {showVisionAutoHint && (
+            <Alert className={s.auxNotice} tone="neutral" size="sm">
+              「自动」会尝试寻找可用视觉后端；如果没有 Anthropic、OpenRouter、Nous 或自定义视觉 endpoint 的可用凭据，主模型是 MiniMax/DeepSeek 这类文本模型时仍然无法真正读图。
+            </Alert>
+          )}
+          {showVisionWarning && (
+            <Alert className={s.auxWarning} tone="warning" size="sm">
+              当前 provider/model 看起来不像视觉模型。`auxiliary.vision` 必须指向真实支持图片输入的后端，否则附件图片仍会读取失败。
+            </Alert>
+          )}
+
+          <button
+            type="button"
+            className={s.auxAdvancedToggle}
+            onClick={() => onAdvancedOpenChange(!advancedOpen)}
+          >
+            <span>{advancedOpen ? "▾" : "▸"}</span>
+            高级设置
+          </button>
+          {advancedOpen && (
+            <div className={s.auxAdvancedGrid}>
+              <Field label="Base URL" className={s.fieldRow}>
+                <Input
+                  aria-label="Base URL"
+                  mono
+                  value={form.baseUrl}
+                  placeholder="可选，自定义 OpenAI-compatible endpoint"
+                  disabled={isAutoProvider}
+                  onChange={(event) => updateForm({ baseUrl: event.target.value })}
+                />
+              </Field>
+              <Field label="内联 API Key" className={s.fieldRow}>
+                <Input
+                  aria-label="内联 API Key"
+                  mono
+                  type="password"
+                  value={form.apiKey}
+                  placeholder={hasInlineApiKey ? "已保存，留空则保留" : "可选，优先建议使用全局环境变量"}
+                  disabled={isAutoProvider}
+                  onChange={(event) => updateForm({ apiKey: event.target.value })}
+                />
+              </Field>
+              {selectedTask === "vision" && (
+                <Field label="图片下载超时（秒）" className={s.fieldRow}>
+                  <Input
+                    aria-label="图片下载超时（秒）"
+                    mono
+                    value={form.downloadTimeout}
+                    inputMode="numeric"
+                    onChange={(event) => updateForm({ downloadTimeout: event.target.value })}
+                  />
+                </Field>
+              )}
+              <label className={`${s.fieldRow} ${s.auxExtraBodyField}`}>
+                <div className={s.fieldLabel}>extra_body JSON</div>
+                <Textarea
+                  className={s.auxJsonArea}
+                  mono
+                  value={form.extraBody}
+                  placeholder={'例如：{\\n  "provider": { "sort": "throughput" }\\n}'}
+                  onChange={(event) => updateForm({ extraBody: event.target.value })}
+                />
+              </label>
+            </div>
+          )}
+
+          {error && <div className={s.modelPickerError}>操作失败：{error}</div>}
+          {currentSaved && <div className={s.auxSavedHint}>✓ {selectedDefinition.name} 已保存</div>}
+          {savedTask === "__all__" && <div className={s.auxSavedHint}>✓ 所有辅助任务已恢复为自动</div>}
+
+          <div className={s.providerActions}>
+            <Button
+              type="button"
+              variant="solid"
+              tone="accent"
+              loading={isSavingCurrent}
+              onClick={onSaveTask}
+            >
+              保存此辅助任务
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={savingTask === selectedTask}
+              onClick={() => onResetTask(selectedTask)}
+            >
+              恢复为自动
+            </Button>
+            {selectedTask === "approval" && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onConfigureApprovalMode}
+              >
+                选择审批模式
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuxiliaryTaskGroup({
+  title,
+  tasks,
+  config,
+  selectedTask,
+  onSelectTask,
+}: {
+  title: string;
+  tasks: AuxiliaryTaskDefinition[];
+  config: Record<string, any>;
+  selectedTask: AuxiliaryTaskId;
+  onSelectTask: (task: AuxiliaryTaskId) => void;
+}) {
+  return (
+    <section className={s.auxTaskGroup}>
+      <div className={s.auxTaskGroupTitle}>{title}</div>
+      {tasks.map((task) => {
+        const summary = describeAuxiliarySlot(config, task.id);
+        const isAuto = summary === "Auto";
+        return (
+          <button
+            type="button"
+            key={task.id}
+            id={task.id === "approval" ? "auxiliary-approval" : undefined}
+            className={s.auxTaskItem}
+            data-active={selectedTask === task.id}
+            onClick={() => onSelectTask(task.id)}
+          >
+            <span className={s.auxTaskMain}>
+              <span className={s.auxTaskName}>{task.name}</span>
+              <span className={s.auxTaskDesc}>{task.shortName}</span>
+            </span>
+            <span className={s.auxTaskState} data-auto={isAuto}>
+              {isAuto ? "自动" : summary}
+            </span>
+          </button>
+        );
+      })}
+    </section>
+  );
+}
+
+function EnvRow({ envKey, info, revealedValue, isEditing, editVal, onEdit, onEditChange, onSave, onCancel, onReveal, onDelete }: {
+  envKey: string; info: EnvVarInfo; revealedValue?: string; isEditing: boolean; editVal: string;
+  onEdit: () => void; onEditChange: (v: string) => void; onSave: () => void; onCancel: () => void; onReveal: () => void; onDelete: () => void;
+}) {
+  const translated = translateEnvVar(envKey, info);
+  const showEnvKeyInSub = translated.label !== envKey;
+
+  return (
+    <div className={s.row}>
+      <div className={s.rowLeft}>
+        <div className={s.rowLabel}>{translated.label}</div>
+        <div className={s.rowSub}>
+          {showEnvKeyInSub && <>{envKey} · </>}
+          {translated.description}
+          {info.url && <> · <a href={info.url} target="_blank" rel="noreferrer" className={s.link}>获取 Key ↗</a></>}
+          {info.tools.length > 0 && ` · 用于: ${info.tools.join(", ")}`}
+        </div>
+      </div>
+      <div className={s.rowRight} style={{ gap: 8, flexWrap: "wrap", minWidth: 200 }}>
+        {isEditing ? (
+          <>
+            <Input mono type={info.is_password ? "password" : "text"} value={editVal} onChange={(e) => onEditChange(e.target.value)} placeholder="输入值…" style={{ width: 180 }} fullWidth={false} autoFocus />
+            <Button variant="solid" tone="accent" onClick={onSave}>保存</Button>
+            <Button variant="outline" onClick={onCancel}>取消</Button>
+          </>
+        ) : (
+          <>
+            <span className={`${s.statusBadge} ${s.envStatusBadge}`} data-on={info.is_set}>
+              {info.is_set ? (revealedValue ?? info.redacted_value ?? "已设置") : "未设置"}
+            </span>
+            <Button variant="outline" onClick={onEdit}>{info.is_set ? "替换" : "设置"}</Button>
+            {info.is_set && info.is_password && (
+              <Button variant="outline" onClick={onReveal}>{revealedValue ? "隐藏" : "查看"}</Button>
+            )}
+            {info.is_set && <Button variant="outline" tone="danger" onClick={onDelete}>删除</Button>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ProviderPanelLoading({ providerName }: { providerName: string }) {
+  return (
+    <LoadingState variant="block" label={`正在加载 ${providerName}…`} />
+  );
+}
+
+function ProbeResultRow({ probe }: { probe: { status: "ok" | "error" | "pending"; result?: ProviderProbeResult; message?: string } }) {
+  if (probe.status === "pending") return null;
+  const result = probe.result;
+  if (probe.status === "ok" && result?.ok) {
+    return (
+      <div className={s.desc} style={{ marginTop: 8 }}>
+        ✓ 连接成功 · 延迟 {result.latency_ms}ms · 可用 {result.model_count} 个模型
+        {result.sample_models.length > 0 && (
+          <span style={{ marginLeft: 8, opacity: 0.7 }}>
+            （示例：{result.sample_models.slice(0, 3).join("、")}）
+          </span>
+        )}
+      </div>
+    );
+  }
+  const errorText = result?.error || probe.message || "未知错误";
+  const kindLabel: Record<string, string> = {
+    auth: "API Key 被拒绝",
+    timeout: "请求超时",
+    http: "HTTP 错误",
+    network: "网络不通",
+    unknown: "未知错误",
+  };
+  const kind = result?.error_kind ? kindLabel[result.error_kind] ?? result.error_kind : "请求失败";
+  return (
+    <div className={s.desc} style={{ marginTop: 8, color: "var(--h-color-danger-fg)" }}>
+      ✗ {kind} · {errorText}
+    </div>
+  );
+}

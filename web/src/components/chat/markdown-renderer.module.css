@@ -1,0 +1,111 @@
+.markdownRoot {
+  max-width: 100%;
+}
+
+.markdownRoot :global(.katex),
+.markdownRoot :global(.katex *) {
+  overflow-wrap: normal;
+  word-break: normal;
+  line-break: auto;
+  text-autospace: no-autospace;
+  text-spacing-trim: normal;
+  text-wrap: nowrap;
+  hanging-punctuation: none;
+}
+
+.markdownRoot :global(.katex) {
+  white-space: nowrap;
+}
+
+.markdownRoot :global(.katex-display) {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  margin: 12px 0;
+  padding: 4px 0 12px;
+}
+
+.markdownRoot :global(.katex-display > .katex) {
+  padding: 4px 4px 4px;
+}
+
+.richInline {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.toneMuted {
+  color: var(--h-text-3);
+}
+
+.toneSubtle {
+  color: var(--h-text-4);
+}
+
+.toneAccent {
+  color: var(--h-accent);
+}
+
+.sizeSmall {
+  font-size: 0.86em;
+}
+
+.sizeTiny {
+  font-size: 0.78em;
+}
+
+.mark {
+  border-radius: 0;
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+  padding: 0 0.25em;
+}
+
+/* Streamdown 内置代码块控件自带的是 Tailwind 工具类，本项目不引入 Tailwind，
+   需要用 data-streamdown 钩子自行定位：按钮悬浮在代码块头部右侧。 */
+.markdownRoot :global([data-streamdown="code-block"]) {
+  position: relative;
+}
+
+.markdownRoot :global([data-streamdown="code-block-header"][data-language=""] > span:empty::before) {
+  content: "code";
+}
+
+.markdownRoot :global([data-streamdown="code-block-actions"]) {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.markdownRoot :global([data-streamdown="code-block-copy-button"]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: var(--h-button-height-xs);
+  height: var(--h-button-height-xs);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--h-text-3);
+  cursor: pointer;
+}
+
+.markdownRoot :global([data-streamdown="code-block-copy-button"] svg) {
+  width: 12px;
+  height: 12px;
+}
+
+.markdownRoot :global([data-streamdown="code-block-copy-button"]:hover) {
+  color: var(--h-text);
+}
+
+.markdownRoot :global([data-streamdown="code-block-copy-button"]:disabled) {
+  cursor: default;
+  opacity: 0.5;
+}

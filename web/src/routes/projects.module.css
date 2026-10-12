@@ -1,0 +1,340 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--h-bg-pane);
+  overflow: hidden;
+}
+
+.filters {
+  width: 100%;
+  max-width: var(--h-page-content-max-width);
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  background: var(--h-bg-pane);
+  border-bottom: 1px solid var(--h-line-soft);
+  flex-wrap: wrap;
+}
+
+.searchBox {
+  height: 32px;
+  flex: 0 1 360px;
+  min-width: 220px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  border-radius: 0;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.searchBox input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--h-text);
+  font-size: 12px;
+  font-family: var(--h-font-cn);
+}
+
+.searchBox input::placeholder {
+  color: var(--h-text-3);
+}
+
+.sortHint {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+}
+
+.scroll {
+  width: 100%;
+  max-width: var(--h-page-content-max-width);
+  margin-inline: auto;
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 24px;
+}
+
+.tableWrap {
+  margin: 16px 0;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  table-layout: fixed;
+}
+
+.dotCol {
+  width: 40px;
+}
+
+.projectCol {
+  width: auto;
+}
+
+.sessionsCol {
+  width: 88px;
+}
+
+.activityCol {
+  width: 132px;
+}
+
+.modelCol {
+  width: 180px;
+}
+
+.tokensCol {
+  width: 128px;
+}
+
+.actionsCol {
+  width: 44px;
+}
+
+.table thead th {
+  text-align: left;
+  padding: 12px 12px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--h-text-3);
+  background: var(--h-bg-soft);
+  border-bottom: 1px solid var(--h-line-soft);
+  font-weight: 500;
+}
+
+.table tbody td {
+  padding: 12px;
+  border-bottom: 1px solid var(--h-line-soft);
+  color: var(--h-text);
+  vertical-align: middle;
+  min-width: 0;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr {
+  cursor: pointer;
+  transition: background 0.08s;
+}
+
+.table tbody tr:hover,
+.table tbody tr[data-active="true"] {
+  background: var(--h-bg-soft);
+}
+
+.metricCell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--h-font-mono);
+  color: var(--h-text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+.projectCell {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.nameLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.nameCell {
+  display: block;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlePin {
+  flex-shrink: 0;
+  color: var(--h-accent);
+}
+
+.pathCell {
+  display: block;
+  margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityCell {
+  font-size: 11.5px;
+  color: var(--h-text-3);
+  white-space: nowrap;
+}
+
+.colorDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--h-accent);
+  opacity: 0.8;
+}
+
+.menuCell {
+  text-align: center;
+  color: var(--h-text-3);
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+}
+
+.menuCell:hover {
+  color: var(--h-text);
+}
+
+.menuTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.menuTrigger:hover {
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+}
+
+.rowMenu {
+  min-width: 160px;
+  padding: 4px;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rowMenu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--h-text);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 0;
+  font-family: var(--h-font-cn);
+}
+
+.rowMenu button:hover {
+  background: var(--h-bg-soft);
+}
+
+.rowMenu button[data-tone="danger"] {
+  color: var(--h-err);
+}
+
+.rowMenu button[data-tone="danger"]:hover {
+  background: color-mix(in srgb, var(--h-err) 12%, transparent);
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 80px 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--h-text-3);
+}
+
+.emptyState p {
+  margin: 0;
+}
+
+.emptySub {
+  font-size: 12px;
+}
+
+.emptySub a {
+  color: var(--h-accent);
+  cursor: pointer;
+}
+
+.emptySub a:hover {
+  text-decoration: underline;
+}
+
+.foot {
+  width: 100%;
+  max-width: var(--h-page-content-max-width);
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-top: 1px solid var(--h-line);
+  font-size: 11.5px;
+  color: var(--h-text-3);
+  background: var(--h-bg-pane);
+  flex-shrink: 0;
+}
+
+.footAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  padding: 4px 12px;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-family: var(--h-font-cn);
+}
+
+.footAction:hover {
+  background: var(--h-bg-chip);
+}

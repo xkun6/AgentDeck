@@ -1,0 +1,115 @@
+@import "@agentdeck/shared-ui/src/tokens/index.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Community UI invariants: depth comes from surfaces and 1px separators.
+   Keep these global so legacy route CSS cannot reintroduce gradients or shadows. */
+#root,
+#root *,
+#root *::before,
+#root *::after {
+  background-image: none !important;
+  box-shadow: none;
+  text-shadow: none !important;
+}
+
+/* Explicit design-system exception: the approved tokenized pinhole paper texture. */
+#root [data-page-texture="pinhole"] {
+  background-image: var(--h-texture-pinhole-grid) !important;
+}
+
+#root :focus-visible:not(input):not(textarea):not(select):not([contenteditable="true"]) {
+  outline: var(--h-focus-outline) !important;
+  outline-offset: 2px;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+html,
+body,
+#root,
+#root * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html {
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--h-font-ui);
+  font-size: var(--h-fs);
+  font-weight: 400;
+  line-height: var(--h-lh);
+  background: var(--h-bg-app);
+  color: var(--h-text);
+  text-spacing-trim: trim-start;
+  text-autospace: ideograph-alpha ideograph-numeric;
+  line-break: strict;
+  hanging-punctuation: first allow-end last;
+  font-kerning: normal;
+  /* Keep Chinese punctuation in its native full-width form. `proportional-width`
+     makes `，。；：` render like narrow Latin punctuation in WebView fonts. */
+  font-variant-east-asian: normal;
+}
+
+/* Grayscale antialiasing is a macOS preference; on Windows it disables ClearType
+   (subpixel) and makes small CJK text look thinner/softer, so scope it to mac. */
+body[data-hermes-host-os="macos"] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:where(p, li, blockquote, dd, dt) {
+  text-spacing-trim: trim-start;
+  text-autospace: ideograph-alpha ideograph-numeric;
+  line-break: strict;
+  hanging-punctuation: first allow-end last;
+}
+
+input,
+textarea,
+button,
+select {
+  font-family: inherit;
+}
+
+#root :where(input, textarea, select, [contenteditable="true"], [contenteditable="true"] *) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+body[data-hermes-window-type="electron"] [data-window-drag] {
+  -webkit-app-region: drag;
+}
+
+body[data-hermes-window-type="electron"] :where(button, input, textarea, select, a, [role="button"]) {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--h-line);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--h-text-3);
+}

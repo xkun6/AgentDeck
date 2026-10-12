@@ -1,0 +1,67 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegoodthings/tauri-schema/main/tauri.conf.schema.json",
+  "productName": "AgentDeck",
+  "version": "0.1.0",
+  "identifier": "local.agentdeck.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @agentdeck/web dev",
+    "beforeBuildCommand": "pnpm --filter @agentdeck/web build:desktop",
+    "devUrl": "http://localhost:9545",
+    "frontendDist": "./web/dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self' hermesui: http://hermesui.localhost; script-src 'self' 'unsafe-inline' hermesui: http://hermesui.localhost; style-src 'self' 'unsafe-inline' hermesui: http://hermesui.localhost; connect-src 'self' ipc://localhost http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; img-src 'self' data: blob: hermesui: http://hermesui.localhost; font-src 'self' data:; media-src 'self' data: blob:; frame-src 'self' http://localhost:* http://127.0.0.1:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis",
+      "dmg",
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "AgentDeck Contributors",
+    "copyright": "Copyright © 2026 AgentDeck Contributors",
+    "category": "DeveloperTool",
+    "shortDescription": "AgentDeck multi-agent desktop",
+    "longDescription": "AgentDeck: a desktop app for orchestrating locally installed coding agents.",
+    "licenseFile": "legal/EULA.zh-CN.rtf",
+    "resources": {
+      "static/bundled-runtime/": "bundled-runtime/",
+      "static/dashboard/": "dashboard/",
+      "static/bundled-skills/": "bundled-skills/",
+      "static/bundled-plugins/": "bundled-plugins/",
+      "legal/agency-agents.MIT.txt": "agency-agents.MIT.txt",
+      "legal/HarmonyOS_Sans_LICENSE.txt": "HarmonyOS_Sans_LICENSE.txt"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "installer/nsis/hooks.nsh",
+        "languages": [
+          "SimpChinese"
+        ],
+        "customLanguageFiles": {
+          "SimpChinese": "installer/nsis/SimpChinese.nsh"
+        },
+        "displayLanguageSelector": false
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  }
+}

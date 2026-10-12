@@ -1,0 +1,1302 @@
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+  /* Reserve gutter on BOTH sides so the messages column stays centered to
+     the same axis as the composer below — otherwise the right-side
+     scrollbar shifts the centered child left by half its width and
+     visually misaligns from the (scrollbar-less) composer container. */
+  scrollbar-gutter: stable both-edges;
+}
+
+.turnRailWrap {
+  position: sticky;
+  top: 50%;
+  z-index: 5;
+  width: 100%;
+  height: 0;
+  pointer-events: none;
+}
+
+.turnRail {
+  position: absolute;
+  /* 会话列宽被 detail 注入的 min(档位, 100% - 64px) 约束，列外两侧至少各余
+     32px；rail 自身约 20px 宽，right 下限 6px 让它落在这条出血带内、不再
+     悬浮压住右对齐的用户气泡。余量更大时仍跟随列右缘外 30px。 */
+  right: max(8px, calc((100% - var(--conversation-max-width, 780px)) / 2 - 32px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transform: translateY(-50%);
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--h-bg-pane) 72%, transparent);
+  padding: 8px 4px;
+  opacity: 0.72;
+  pointer-events: auto;
+  transition: opacity 0.14s ease, background-color 0.14s ease, border-color 0.14s ease;
+}
+
+.turnRail:hover {
+  border-color: var(--h-line-soft);
+  background: color-mix(in srgb, var(--h-bg-pane) 92%, transparent);
+  opacity: 1;
+}
+
+.turnDot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--h-text-3) 55%, transparent);
+  border-radius: 50%;
+  background: var(--h-text-3);
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.46;
+  transition: opacity 0.14s ease, background-color 0.14s ease, transform 0.14s ease;
+}
+
+.turnDot:hover {
+  background: var(--h-text-2);
+  opacity: 0.86;
+  transform: scale(1.16);
+}
+
+.turnDot[data-active="true"] {
+  border-color: var(--h-accent);
+  background: var(--h-accent);
+  opacity: 1;
+}
+
+.messages {
+  width: 100%;
+  max-width: var(--conversation-max-width, 780px);
+  margin: 0 auto;
+  padding: 20px 28px 24px;
+}
+
+.dateSeparator {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0 12px;
+  color: var(--h-text-3);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.messageRow {
+  display: flex;
+  width: 100%;
+  margin: 12px 0;
+  gap: 12px;
+  animation: fadeIn 0.18s ease-out;
+}
+
+/* IM 式头像列：头像独立在气泡左侧；无头像的行（工具行）用同宽占位
+   保持左缘对齐。 */
+.avatarCol {
+  flex: 0 0 36px;
+  width: 36px;
+}
+
+
+.avatarButton {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  background: var(--h-color-bg-avatar);
+  cursor: pointer;
+  display: block;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.avatarButton:hover .rowAvatar {
+  filter: brightness(0.96);
+}
+
+.rowAvatar {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  border-radius: 0;
+  border: 1px solid var(--h-line);
+  background: var(--h-color-bg-avatar);
+  object-fit: cover;
+  display: block;
+}
+
+/* IM 式（微信参考）：assistant 靠左（头像列在左），user 靠右——
+   row-reverse 把头像列翻到右侧，气泡按内容收缩右贴。 */
+.messageRow[data-role="user"] {
+  flex-direction: row-reverse;
+}
+
+.messageRow[data-role="user"],
+.messageRow[data-role="assistant"] {
+  justify-content: flex-start;
+}
+
+.messageRow[data-role="system"] {
+  justify-content: center;
+}
+
+.systemNotice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
+  row-gap: 0;
+  width: 100%;
+  max-width: 672px;
+  padding: 12px 16px;
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  border: 1px solid var(--h-line);
+  color: var(--h-text-2);
+  font-family: var(--h-font-cn);
+}
+
+.systemNotice[data-kind="skill-invocation"] {
+  max-width: none;
+}
+
+.systemNotice[data-error="true"] {
+  background: var(--h-err-soft);
+  border-color: var(--h-err-border);
+}
+
+.systemNoticeIcon {
+  flex-shrink: 0;
+  display: block;
+  margin-top: 4px;
+  color: var(--h-text-3);
+}
+
+.systemNotice[data-error="true"] .systemNoticeIcon {
+  color: var(--h-err);
+}
+
+.systemNoticeBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.systemNoticeTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--h-text);
+  letter-spacing: 0.005em;
+  line-height: 1.4;
+}
+
+.systemNoticeText {
+  font-size: var(--conversation-font-size, 12.5px);
+  color: var(--h-text-2);
+  line-height: var(--conversation-line-height, 1.6);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 长系统通知的「展开全文 / 收起」轻量动作。 */
+.systemNoticeToggle {
+  align-self: flex-start;
+  margin-top: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.systemNoticeToggle:hover {
+  color: var(--h-text);
+}
+
+.messageContent {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  padding-bottom: 24px;
+}
+
+.assistantName {
+  margin: 0 0 4px 4px;
+  color: var(--h-text-2);
+  font-size: 12px;
+}
+
+.assistantIdentity {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px 0;
+  color: var(--h-text-2);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.assistantAvatar {
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 0;
+  border: 1px solid var(--h-line);
+  background: var(--h-color-bg-avatar);
+  object-fit: cover;
+}
+
+.bubble {
+  min-width: 0;
+  color: var(--h-text);
+  font-size: var(--conversation-font-size, 14px);
+  line-height: var(--conversation-line-height, 1.78);
+}
+
+.bubble[data-role="user"] {
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 12px 16px;
+  border-radius: 0;
+  background: var(--h-bg-chip);
+}
+
+.messageText {
+  -webkit-user-select: text;
+  user-select: text;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  line-break: strict;
+  text-spacing-trim: trim-start;
+  text-autospace: ideograph-alpha ideograph-numeric;
+  hanging-punctuation: first allow-end last;
+  font-kerning: normal;
+  font-variant-east-asian: normal;
+}
+
+.skillInvocation {
+  width: 100%;
+  max-width: 100%;
+}
+
+.skillInvocationPreview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  color: var(--h-text-2);
+  font-size: var(--conversation-font-size, 12.5px);
+  line-height: var(--conversation-line-height, 1.6);
+}
+
+.skillInvocationBody {
+  min-width: 0;
+}
+
+.skillInvocationToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.skillInvocationToggle:hover {
+  color: var(--h-text);
+}
+
+.skillInvocationToggle:focus-visible {
+  border-radius: 0;
+  outline: 2px solid var(--h-accent);
+  outline-offset: 2px;
+}
+
+/* global.css disables selection across the app to keep desktop chrome from
+   feeling like a web page. Conversation content is the important exception:
+   users need to drag-select assistant/user text, code, reasoning, and visible
+   error output directly from the session detail timeline. Include #root so
+   this scoped exception wins over the global "#root *" rule. */
+:global(#root) .messageText,
+:global(#root) .messageText *,
+:global(#root) .systemNoticeText,
+:global(#root) .systemNoticeText *,
+:global(#root) .skillInvocationPreview,
+:global(#root) .reasoningBody,
+:global(#root) .reasoningBody *,
+:global(#root) .toolBody pre,
+:global(#root) .toolBody pre *,
+:global(#root) .toolActivityError,
+:global(#root) .toolActivityError * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.messageText h1,
+.messageText h2,
+.messageText h3,
+.messageText h4 {
+  margin: 16px 0 8px;
+  color: var(--h-text);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.messageText h1 {
+  font-size: 18px;
+}
+
+.messageText h2 {
+  font-size: 16px;
+}
+
+.messageText h3,
+.messageText h4 {
+  font-size: 14px;
+}
+
+.messageText ul,
+.messageText ol {
+  margin: 0 0 12px 1.35em;
+  padding: 0;
+}
+
+.messageText li {
+  margin: 4px 0;
+  padding-left: 4px;
+}
+
+.messageText li > p {
+  margin: 0;
+}
+
+.messageText blockquote {
+  margin: 12px 0;
+  border-left: 1px solid var(--h-line);
+  padding-left: 12px;
+  color: var(--h-text-2);
+}
+
+.messageText table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.messageText th,
+.messageText td {
+  border: 1px solid var(--h-line-soft);
+  padding: 4px 8px;
+  vertical-align: top;
+}
+
+.messageText th {
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+  font-weight: 600;
+}
+
+.messageText a {
+  color: var(--h-accent);
+  text-decoration: none;
+}
+
+.messageText a:hover {
+  text-decoration: underline;
+}
+
+.imageBlock,
+.messageImages,
+.toolImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.messageImages {
+  margin-top: 12px;
+}
+
+.imageFrame {
+  display: inline-flex;
+  max-width: min(100%, 520px);
+  max-height: 360px;
+  overflow: hidden;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  color: inherit;
+  text-decoration: none;
+}
+
+.imageFrame:hover {
+  border-color: color-mix(in srgb, var(--h-accent) 40%, var(--h-line-soft));
+  text-decoration: none;
+}
+
+.imageFrame img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.imageFallback {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  max-width: min(100%, 520px);
+  padding: 12px 16px;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  color: var(--h-text-2);
+  line-height: 1.45;
+}
+
+.imageFallback svg {
+  margin-top: 4px;
+  color: var(--h-text-3);
+}
+
+.imageFallbackBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.imageFallbackTitle {
+  color: var(--h-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.imageFallbackMeta {
+  color: var(--h-text-2);
+  font-size: 12px;
+}
+
+.imageFallback code {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--h-bg-code);
+  padding: 4px 8px;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageText :global(.task-list-item) {
+  list-style: none;
+}
+
+.messageText :global(.task-list-item input) {
+  margin: 0 8px 0 -1.25em;
+  vertical-align: -1px;
+}
+
+.messageText :global(.katex-display) {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  margin: 12px 0;
+  padding: 4px 0 12px;
+}
+
+.turnText + .turnText,
+.turnText + .reasoning,
+.turnText + .progressBlock,
+.turnText + .toolChain,
+.turnText + .imageBlock,
+.imageBlock + .turnText,
+.imageBlock + .toolChain,
+.imageBlock + .progressBlock,
+.imageBlock + .reasoning,
+.reasoning + .toolChain,
+.reasoning + .turnText,
+.toolChain + .progressBlock,
+.toolChain + .turnText,
+.toolChain + .imageBlock {
+  margin-top: 12px;
+}
+
+.messageText p {
+  margin: 0 0 12px;
+  text-wrap: pretty;
+}
+
+.messageText p:last-child {
+  margin-bottom: 0;
+}
+
+.messageText code {
+  border-radius: 0;
+  background: var(--h-bg-code);
+  padding: 4px 4px;
+  font-family: var(--h-font-mono);
+  font-size: 0.9em;
+  line-break: auto;
+  text-autospace: no-autospace;
+  text-spacing-trim: normal;
+  font-variant-east-asian: normal;
+}
+
+.messageText :global([data-streamdown="code-block"]) {
+  overflow: hidden;
+  margin: 8px 0;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-code);
+  color: var(--h-text-2);
+}
+
+.messageText :global([data-streamdown="code-block-header"]) {
+  border-bottom: 1px solid var(--h-line-soft);
+  padding: 4px 12px;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.messageText :global([data-streamdown="code-block-body"]) {
+  overflow-x: auto;
+  padding: 12px 12px;
+}
+
+.messageText :global([data-streamdown="code-block-body"] pre) {
+  margin: 0;
+  background: transparent !important;
+  color: inherit;
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  line-break: auto;
+  text-autospace: no-autospace;
+  text-spacing-trim: normal;
+  font-variant-east-asian: normal;
+}
+
+.messageText :global([data-streamdown="code-block-body"] code) {
+  display: block;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.messageText :global([data-streamdown="table-wrapper"]) {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+.messageText :global([data-streamdown="table-wrapper"] table) {
+  margin: 0;
+}
+
+.messageText :global([data-streamdown="mermaid-block"]) {
+  overflow: hidden;
+  margin: 12px 0;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-code);
+}
+
+.messageText :global([data-streamdown="mermaid-block"] > div:first-child) {
+  border-bottom: 1px solid var(--h-line-soft);
+  padding: 8px 12px;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.messageText :global([data-streamdown="mermaid-block"] > div:last-child) {
+  overflow-x: auto;
+  background: var(--h-bg-pane);
+  padding: 12px;
+}
+
+.messageText :global([data-streamdown="mermaid"]) {
+  min-width: max-content;
+}
+
+.messageText :global([data-streamdown="mermaid"] svg) {
+  max-width: 100%;
+  height: auto;
+}
+
+:global([data-theme="dark"]) .messageText :global([data-streamdown="mermaid"] svg),
+:global([data-theme="dark-modern"]) .messageText :global([data-streamdown="mermaid"] svg),
+:global([data-theme="dracula"]) .messageText :global([data-streamdown="mermaid"] svg),
+:global([data-theme="catppuccin-mocha"]) .messageText :global([data-streamdown="mermaid"] svg) {
+  color-scheme: light;
+}
+
+.codeBlock,
+.toolBody pre {
+  overflow-x: auto;
+  margin: 8px 0;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-code);
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  line-break: auto;
+  text-autospace: no-autospace;
+  text-spacing-trim: normal;
+  font-variant-east-asian: normal;
+}
+
+.reasoningBody {
+  margin: 8px 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  font-family: var(--h-font-ui);
+  font-size: var(--conversation-font-size, 13px);
+  line-height: var(--conversation-line-height, 1.72);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-variant-east-asian: normal;
+}
+
+.codeBlock {
+  padding: 12px 12px;
+}
+
+.messageText :global(.shiki) {
+  background: var(--h-bg-code) !important;
+}
+
+/* Shiki renders each line of a code block as a direct-child <span> of <code>
+   but does NOT insert "\n" text nodes between them. With white-space: pre-wrap
+   this collapses multiline ASCII art / tree diagrams into a single visual run.
+   Force each line span to its own row so the layout matches the source content. */
+.messageText :global(pre code > span) {
+  display: block;
+}
+
+:global([data-theme="dark"]) .messageText :global(.shiki),
+:global([data-theme="dark-modern"]) .messageText :global(.shiki),
+:global([data-theme="dracula"]) .messageText :global(.shiki),
+:global([data-theme="catppuccin-mocha"]) .messageText :global(.shiki) {
+  color: var(--shiki-dark) !important;
+}
+
+:global([data-theme="dark"]) .messageText :global(.shiki span),
+:global([data-theme="dark-modern"]) .messageText :global(.shiki span),
+:global([data-theme="dracula"]) .messageText :global(.shiki span),
+:global([data-theme="catppuccin-mocha"]) .messageText :global(.shiki span) {
+  color: var(--shiki-dark) !important;
+}
+
+.messageText :global(.line) {
+  min-height: 1.55em;
+}
+
+.messageActions {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--h-text-3);
+  font-size: 10px;
+}
+
+.messageRow[data-role="user"] .messageActions {
+  right: 0;
+}
+
+.messageRow[data-role="assistant"] .messageActions {
+  left: 0;
+}
+
+.messageActionsControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.messageActions button {
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0;
+}
+
+.messageActions button:hover {
+  color: var(--h-text);
+}
+
+.messageActions button[data-copy-state="copied"] {
+  color: var(--h-ok);
+}
+
+.messageActions button[data-copy-state="error"] {
+  color: var(--h-err);
+}
+
+.messageActions button[data-speech-state] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.messageActions button[data-speech-state] svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+}
+
+.messageActions button[data-speech-state="preparing"],
+.messageActions button[data-speech-state="speaking"] {
+  color: var(--h-accent);
+}
+
+.messageSpeechError {
+  max-width: min(360px, 52vw);
+  overflow: hidden;
+  color: var(--h-err);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageStats {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--h-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.messageStatsInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.messageStatsInline > span {
+  white-space: nowrap;
+}
+
+.messageStatsInline > span + span::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--h-text-3);
+  opacity: 0.6;
+}
+
+.messageStats[data-risk="warn"] {
+  color: var(--h-warn);
+}
+
+.messageStats[data-risk="err"] {
+  color: var(--h-err);
+}
+
+.messageStatsToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--h-button-height-xs);
+  height: var(--h-button-height-xs);
+  border-radius: 0;
+  color: var(--h-text-3);
+}
+
+.messageStatsToggle:hover,
+.messageStatsToggle[aria-expanded="true"] {
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+}
+
+.messageStatsPopover {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 200px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-input);
+  box-shadow: none;
+  color: var(--h-text);
+  padding: 12px 12px;
+  font-size: 11px;
+  text-align: left;
+}
+
+.messageStatsPopover dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.messageStatsPopover dt {
+  color: var(--h-text-3);
+  font-weight: 500;
+}
+
+.messageStatsPopover dd {
+  margin: 0;
+  color: var(--h-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.messageStatsPopover dd[data-risk="warn"] {
+  color: var(--h-warn);
+}
+
+.messageStatsPopover dd[data-risk="err"] {
+  color: var(--h-err);
+}
+
+.messageStatsModel {
+  font-family: var(--h-font-mono);
+  font-size: 10.5px;
+}
+
+.reasoning {
+  margin-top: 12px;
+}
+
+.disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+
+.chevron {
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.disclosure[data-open="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.reasoningBody {
+  padding: 8px 0 8px 20px;
+  border-left: 1px solid var(--h-line);
+}
+
+.progressBlock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: default;
+  font-family: var(--h-font-cn);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 0;
+  text-autospace: no-autospace;
+  text-spacing-trim: normal;
+  width: 100%;
+}
+
+.thinkingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--h-ok);
+  flex: 0 0 auto;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.thinkingLabel {
+  color: var(--h-text-2);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.thinkingMeta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--h-text-3);
+  animation: fadeIn 0.3s ease;
+}
+
+.thinkingModel {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinkingSep {
+  opacity: 0.6;
+}
+
+.thinkingTimer {
+  margin-left: auto;
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--h-text-3);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.toolChain {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 100%;
+  margin-top: 0;
+}
+
+.toolActivity {
+  max-width: 100%;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.toolActivitySummary {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 0;
+  text-align: left;
+}
+
+.toolActivitySummary:hover .toolActivityLabel,
+.toolActivitySummary:focus-visible .toolActivityLabel {
+  color: var(--h-text-2);
+}
+
+.toolActivitySummary:focus-visible {
+  border-radius: 0;
+  outline: 2px solid color-mix(in srgb, var(--h-accent), transparent 55%);
+  outline-offset: 3px;
+}
+
+.toolActivityChevron {
+  flex: 0 0 14px;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  color: var(--h-text-3);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.15s;
+}
+
+.toolActivitySummary[data-open="true"] .toolActivityChevron {
+  transform: rotate(90deg);
+}
+
+.toolActivityLabel {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--h-text-3);
+  line-height: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolActivityMeta {
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  line-height: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolActivityError {
+  max-width: 100%;
+  margin: 4px 0 0 20px;
+  overflow-wrap: anywhere;
+  color: var(--h-err);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.toolActivityDetails {
+  display: flex;
+  width: min(100%, 640px);
+  max-width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding-left: 16px;
+}
+
+.toolCard {
+  max-width: 100%;
+  width: 100%;
+}
+
+.toolHeader {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  gap: 8px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  cursor: pointer;
+  padding: 4px 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.toolHeader:disabled {
+  cursor: default;
+}
+
+.toolHeader:not(:disabled):hover,
+.toolHeader[data-open="true"] {
+  background: var(--h-bg-soft);
+}
+
+.toolStatusDot {
+  display: block;
+  width: var(--h-status-dot-size);
+  height: var(--h-status-dot-size);
+  border-radius: 50%;
+  background: var(--h-text-3);
+  align-self: center;
+  flex: 0 0 auto;
+}
+
+.toolStatusDot[data-status="running"] {
+  background: var(--h-ok);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.toolStatusDot[data-status="done"] {
+  background: var(--h-ok);
+}
+
+.toolStatusDot[data-status="error"] {
+  background: var(--h-err);
+}
+
+.toolName {
+  min-width: 0;
+  color: var(--h-text);
+  font-weight: 500;
+  line-height: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolContext {
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  line-height: inherit;
+}
+
+.toolElapsed {
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 10px;
+  line-height: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolBadge {
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 10px;
+  line-height: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  border-radius: 0;
+  background: var(--h-bg-soft);
+}
+
+.toolGroupBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px 16px;
+  padding-left: 8px;
+  border-left: 1px solid var(--h-line-soft);
+}
+
+.toolBody {
+  max-width: 100%;
+  margin: 4px 0 8px 16px;
+}
+
+.toolBody pre {
+  max-width: 100%;
+  margin: 4px 0;
+  border-radius: 0;
+  padding: 8px 8px;
+  font-size: 11px;
+}
+
+.toolBody pre[data-error="true"] {
+  border-color: color-mix(in srgb, var(--h-err), transparent 55%);
+  color: var(--h-err);
+}
+
+.statusMessage {
+  margin: 12px 0 0 4px;
+  color: var(--h-text-3);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.empty {
+  display: flex;
+  min-height: 300px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--h-text-3);
+  text-align: center;
+}
+
+.emptyTitle {
+  color: var(--h-text-2);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.emptySub {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .messages {
+    padding: 16px 16px 20px;
+  }
+
+  .messageContent {
+    max-width: 100%;
+  }
+
+  .bubble[data-role="user"] {
+    width: 100%;
+  }
+
+  .toolContext {
+    max-width: 160px;
+  }
+
+  .toolActivityMeta {
+    max-width: 180px;
+  }
+}

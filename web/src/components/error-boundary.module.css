@@ -1,0 +1,66 @@
+.container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: var(--h-bg-app);
+  color: var(--h-text);
+}
+
+.card {
+  max-width: 420px;
+  padding: 32px;
+  background: var(--h-bg-pane);
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  text-align: center;
+}
+
+.title {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.message {
+  margin: 0 0 24px;
+  color: var(--h-text-2);
+  font-size: var(--h-fs);
+  word-break: break-word;
+  font-family: var(--h-font-mono);
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.button {
+  padding: 8px 20px;
+  background: var(--h-accent);
+  color: var(--h-accent-contrast);
+  border: none;
+  border-radius: 0;
+  font-size: var(--h-fs);
+  cursor: pointer;
+}
+
+.button:hover {
+  opacity: 0.9;
+}
+
+.buttonSecondary {
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--h-text-2);
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  font-size: var(--h-fs);
+  cursor: pointer;
+}
+
+.buttonSecondary:hover {
+  background: var(--h-bg-hover);
+}

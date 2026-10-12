@@ -1,0 +1,29 @@
+.content {
+  z-index: var(--h-z-popover);
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  outline: none;
+  overflow: hidden;
+  animation: hermesPopoverIn 120ms ease-out;
+  transform-origin: var(--radix-popover-content-transform-origin);
+}
+.content[data-state="closed"] {
+  animation: hermesPopoverOut 80ms ease-in;
+}
+
+.arrow {
+  fill: var(--h-bg-pane);
+  stroke: var(--h-line);
+  stroke-width: 1px;
+}
+
+@keyframes hermesPopoverIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes hermesPopoverOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.97); }
+}

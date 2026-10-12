@@ -1,0 +1,133 @@
+/* Hermes 资料卡弹层（微信联系人卡形态）。 */
+
+.card {
+  width: 280px;
+  padding: 20px 20px 12px;
+  border-radius: 0;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  box-shadow: none;
+  z-index: 60;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.bigAvatarButton {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  background: var(--h-color-bg-avatar);
+  border-radius: 0;
+  line-height: 0;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.bigAvatar {
+  box-sizing: border-box;
+  width: 64px;
+  height: 64px;
+  border-radius: 0;
+  border: 1px solid var(--h-line);
+  background: var(--h-color-bg-avatar);
+  object-fit: cover;
+  display: block;
+}
+
+.avatarZoomOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 9, 8, 0.62);
+  cursor: zoom-out;
+}
+
+.avatarZoomImage {
+  width: min(440px, 80vw);
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 0;
+  background: var(--h-color-bg-avatar);
+  box-shadow: none;
+}
+
+.headText {
+  min-width: 0;
+}
+
+.name {
+  color: var(--h-text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub {
+  margin-top: 4px;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.divider {
+  height: 1px;
+  margin: 16px 0;
+  background: color-mix(in srgb, var(--h-line-soft) 45%, transparent);
+}
+
+.infoRow {
+  display: flex;
+  gap: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.infoLabel {
+  flex: 0 0 52px;
+  color: var(--h-text-3);
+}
+
+.infoValue {
+  min-width: 0;
+  color: var(--h-text);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  padding: 4px 0 8px;
+}
+
+.action {
+  /* flex: 1 让三个按钮等宽均分整行（文案字数不同，交给弹性布局对齐）。 */
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--h-accent);
+  font-size: 12px;
+  padding: 8px 8px;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--h-bg-soft);
+}

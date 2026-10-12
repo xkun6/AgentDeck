@@ -1,0 +1,49 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--h-color-ink-000) 36%, transparent);
+  animation: hermesDialogFadeIn 120ms ease-out;
+  z-index: var(--h-z-dialog-overlay);
+}
+.overlay[data-state="closed"] {
+  animation: hermesDialogFadeOut 100ms ease-in;
+}
+
+.content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: var(--h-z-dialog);
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  outline: none;
+  max-width: min(560px, calc(100vw - 32px));
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: hermesDialogContentIn 150ms ease-out;
+}
+.content[data-state="closed"] {
+  animation: hermesDialogContentOut 100ms ease-in;
+}
+
+@keyframes hermesDialogFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes hermesDialogFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes hermesDialogContentIn {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes hermesDialogContentOut {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -48%) scale(0.98); }
+}

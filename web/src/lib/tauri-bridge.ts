@@ -1,0 +1,1227 @@
+// Tauri v2 IPC bridge.
+//
+// Wraps @tauri-apps/api/core::invoke() calls to match the hermesDesktop API
+// surface. On initialization, populates window.hermesDesktop so that ALL
+// existing call sites (settings.tsx, projects.tsx, goose-composer.tsx, etc.)
+// work without any changes.
+
+import type {
+  ApiRequestInput,
+  ApiRequestResult,
+  ApplyConnectionResult,
+  BackupExportResult,
+  BackupImportResult,
+  ConfigMigrationImportInput,
+  ConfigMigrationImportResult,
+  ConfigMigrationScanInput,
+  ConfigMigrationScanResult,
+  ConnectionConfigInput,
+  ConnectionConfigView,
+  DesktopUpdateManifestFetchResult,
+  CodingAgentsCheckResult,
+  EnvironmentCheckResult,
+  ExportLogSnapshotInput,
+  ExportLogSnapshotResult,
+  ExportSessionJsonInput,
+  ExportSessionJsonResult,
+  FilePickerResult,
+  FileUploadInput,
+  ImOnboardingApplyInput,
+  ImOnboardingApplyResult,
+  ImOnboardingBeginInput,
+  ImOnboardingBeginResult,
+  ImOnboardingPollInput,
+  ImOnboardingPollResult,
+  ImOnboardingStateInput,
+  ImOnboardingStateResult,
+  ProbeConnectionResult,
+  OauthLoginResult,
+  RuntimeInfo,
+  RuntimeControlResult,
+  GuideState,
+  RuntimeInstallUpdateResult,
+  RuntimeUpdateCheckResult,
+  SetYoloModeInput,
+  SetYoloModeResult,
+  SwitchProfileInput,
+  SwitchProfileResult,
+  TestConnectionResult,
+  UpdateConfig,
+  UpdateConfigSnapshot,
+  AppUpdateCheckResult,
+  AppUpdateInstallResult,
+  AppUpdateProgressPayload,
+  HotUpdateBackendResult,
+  HotUpdateProgressPayload,
+  UiInstallUpdateResult,
+  UiUpdateCheckResult,
+  UiUpdateReadyPayload,
+  YoloModeStatus,
+} from "@agentdeck/protocol";
+import type {
+  DesktopNotifyInput,
+  DesktopNotifyResult,
+  DesktopFileDropPayload,
+  DownloadExternalImageInput,
+  DownloadedImageResult,
+  FilePreview,
+  PreviewFileChangedPayload,
+  ReadWorkspaceFileInput,
+  ExportDebugBundleInput,
+  ExportDebugBundleResult,
+  ExternalTerminalResult,
+  TerminalEventPayload,
+  TerminalOpenExternalInput,
+  TerminalStartInput,
+  TerminalStartResult,
+  UiEventInput,
+  UiStoreSnapshot,
+  UiTurnStats,
+  WatchPreviewFileResult,
+  WriteWorkspaceFileInput,
+  WriteWorkspaceFileResult,
+  HermesGitBridge,
+} from "./runtime";
+import { BUILD_COMMIT, DESKTOP_VERSION, versionLabel } from "./build-info";
+import {
+  assertCompatible,
+  deferBackendVersionCheckForOfflineRuntime,
+  recordRuntimeKernelVersion,
+  resetVersionCheck,
+  verifyBackendVersion,
+  type BackendRecoveryReason,
+} from "./version-check";
+import hermesLogo from "@/assets/hermes-default-avatar.png";
+
+let invoke: typeof import("@tauri-apps/api/core").invoke;
+
+export function isTauriDevMode(envDev = import.meta.env.DEV): boolean {
+  return envDev;
+}
+
+const BASE64_CHUNK_SIZE = 0x8000;
+type TauriFileDropPosition = {
+  x: number;
+  y: number;
+};
+
+type TauriFileDropEventPayload =
+  | { type: "enter"; paths?: string[]; position?: TauriFileDropPosition }
+  | { type: "over"; position?: TauriFileDropPosition }
+  | { type: "drop"; paths?: string[]; position?: TauriFileDropPosition }
+  | { type: "leave" };
+
+interface BootstrapVersionLine {
+  label: "界面";
+  version: string;
+  commit: string;
+}
+
+function shortBootstrapCommit(commit: string | undefined): string {
+  const normalized = commit?.trim() ?? "";
+  if (!normalized || normalized === "unknown") return "—";
+  return normalized.slice(0, 4);
+}
+
+function buildBootstrapVersionLine(): BootstrapVersionLine {
+  return {
+    label: "界面",
+    version: versionLabel(DESKTOP_VERSION),
+    commit: shortBootstrapCommit(BUILD_COMMIT),
+  };
+}
+
+export function arrayBufferToBase64(data: ArrayBuffer): string {
+  const bytes = new Uint8Array(data);
+  const chunks: string[] = [];
+
+  for (let offset = 0; offset < bytes.length; offset += BASE64_CHUNK_SIZE) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + BASE64_CHUNK_SIZE)));
+  }
+
+  return btoa(chunks.join(""));
+}
+
+async function ensureInvoke() {
+  if (!invoke) {
+    const mod = await import("@tauri-apps/api/core");
+    invoke = mod.invoke;
+  }
+  return invoke;
+}
+
+// Tear down a Tauri event listener without ever surfacing an unhandled rejection.
+// When a listener is unlistened before its async registration has fully landed
+// in Tauri's internal map (e.g. React StrictMode mount→unmount racing the
+// onDragDropEvent/listen promise), Tauri's injected unregisterListener throws
+// "undefined is not an object (evaluating 'listeners[eventId].handlerId')".
+// The unlisten can fail either synchronously or as a rejected promise depending
+// on the transport, so guard both. The listener is gone regardless — swallow it.
+function safeUnlisten(unlisten: (() => void) | null | undefined): void {
+  if (!unlisten) return;
+  try {
+    const result = unlisten() as unknown;
+    if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+      void (result as Promise<unknown>).catch(() => {});
+    }
+  } catch {
+    // Listener was never fully registered or was already removed.
+  }
+}
+
+// Tauri's webview onDragDropEvent wraps its unlisten so the actual teardown runs
+// in a detached promise that never reaches safeUnlisten's catch above. When that
+// teardown loses the StrictMode mount→unmount race, its
+// "listeners[eventId].handlerId" TypeError surfaces as an *unhandled* rejection
+// even though the listener is already gone and nothing is broken. Swallow exactly
+// that signature (the Tauri-internal "handlerId" field name — app code never
+// throws it) and let every other rejection propagate untouched.
+let rejectionGuardInstalled = false;
+
+function isTauriListenerTeardownRejection(reason: unknown): boolean {
+  const message =
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === "string"
+        ? reason
+        : "";
+  // WebKit: "undefined is not an object (evaluating 'listeners[eventId].handlerId')"
+  // Chromium: "Cannot read properties of undefined (reading 'handlerId')"
+  return message.includes("handlerId");
+}
+
+function installTauriRejectionGuard(): void {
+  if (rejectionGuardInstalled || typeof window === "undefined") return;
+  if (typeof window.addEventListener !== "function") return;
+  rejectionGuardInstalled = true;
+  window.addEventListener("unhandledrejection", (event) => {
+    if (isTauriListenerTeardownRejection(event.reason)) {
+      event.preventDefault();
+    }
+  });
+}
+
+export interface TauriIpcError extends Error {
+  code?: string;
+  kind?: string;
+  details?: unknown;
+  raw?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function normalizeTauriInvokeError(error: unknown): Error {
+  if (error instanceof Error) return error;
+
+  if (isRecord(error)) {
+    const message = typeof error.message === "string" && error.message.trim()
+      ? error.message
+      : JSON.stringify(error);
+    const normalized = new Error(message) as TauriIpcError;
+    if (typeof error.code === "string") normalized.code = error.code;
+    if (typeof error.kind === "string") normalized.kind = error.kind;
+    if ("details" in error) normalized.details = error.details;
+    normalized.raw = error;
+    return normalized;
+  }
+
+  return new Error(String(error));
+}
+
+async function invokeCommand<T = any>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const inv = await ensureInvoke();
+  try {
+    return await inv<T>(command, args);
+  } catch (error) {
+    throw normalizeTauriInvokeError(error);
+  }
+}
+
+function normalizeFileDropPayload(payload: TauriFileDropEventPayload): DesktopFileDropPayload {
+  return {
+    phase: payload.type,
+    paths: "paths" in payload && Array.isArray(payload.paths) ? payload.paths : [],
+    position: "position" in payload && payload.position
+      ? { x: payload.position.x, y: payload.position.y }
+      : undefined,
+  };
+}
+
+const tauriBridge = {
+  windowType: "tauri" as const,
+
+  async fatalErrorAndExit(input: { title: string; message: string }): Promise<never> {
+    return invokeCommand("fatal_error_and_exit", { input });
+  },
+
+  async request(input: ApiRequestInput): Promise<ApiRequestResult> {
+    return invokeCommand("api_request", { input });
+  },
+
+  async externalRequest(input: ApiRequestInput): Promise<ApiRequestResult> {
+    return invokeCommand("external_request", { input });
+  },
+
+  async uploadFile(input: FileUploadInput): Promise<ApiRequestResult> {
+    const base64 = arrayBufferToBase64(input.data);
+    return invokeCommand("upload_file", {
+      input: {
+        sessionId: input.sessionId,
+        name: input.name,
+        type: input.type,
+        data: base64,
+      },
+    });
+  },
+
+  async downloadExternalImage(input: DownloadExternalImageInput): Promise<DownloadedImageResult> {
+    return invokeCommand("download_external_image", { input });
+  },
+
+  async pickFiles(): Promise<FilePickerResult> {
+    return invokeCommand("pick_files");
+  },
+
+  async pickDirectory(): Promise<FilePickerResult> {
+    return invokeCommand("pick_directory");
+  },
+
+  async createWorkspaceProject(): Promise<FilePickerResult> {
+    return invokeCommand("create_workspace_project");
+  },
+
+  onFileDrop(handler: (payload: DesktopFileDropPayload) => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+
+    import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) =>
+        getCurrentWebview().onDragDropEvent((event) => {
+          handler(normalizeFileDropPayload(event.payload as TauriFileDropEventPayload));
+        }))
+      .then((fn) => {
+        if (disposed) {
+          safeUnlisten(fn);
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((error) => {
+        console.warn("Failed to register Tauri file drop handler", error);
+      });
+
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  async openWorkspacePath(input: { path: string }): Promise<ApiRequestResult> {
+    return invokeCommand("open_workspace_path", { input });
+  },
+
+  async openExternalUrl(input: { url: string }): Promise<{ ok: boolean; message?: string | null }> {
+    return invokeCommand("open_external_url", { input });
+  },
+
+  async openBrowserCompanion(): Promise<{ ok: boolean; url: string; port: number }> {
+    return invokeCommand("open_browser_companion");
+  },
+
+  async toggleDevtools(): Promise<void> {
+    return invokeCommand("toggle_devtools");
+  },
+
+  async exportLogSnapshot(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult> {
+    return invokeCommand("export_log_snapshot", { input });
+  },
+
+  async exportSessionJson(input: ExportSessionJsonInput): Promise<ExportSessionJsonResult> {
+    return invokeCommand("export_session_json", { input });
+  },
+
+  async exportDebugBundle(input?: ExportDebugBundleInput): Promise<ExportDebugBundleResult> {
+    const inv = await ensureInvoke();
+    return inv("export_debug_bundle", { input: input ?? null });
+  },
+
+  async environmentCheck(): Promise<EnvironmentCheckResult> {
+    return invokeCommand("environment_check");
+  },
+
+  async codingAgentsCheck(): Promise<CodingAgentsCheckResult> {
+    return invokeCommand("coding_agents_check");
+  },
+
+  async checkDesktopUpdate(): Promise<DesktopUpdateManifestFetchResult> {
+    return invokeCommand("desktop_check_update");
+  },
+
+  async getUpdateConfig(): Promise<UpdateConfigSnapshot> {
+    return invokeCommand("get_update_config");
+  },
+
+  async setUpdateConfig(config: UpdateConfig): Promise<UpdateConfigSnapshot> {
+    return invokeCommand("set_update_config", { input: { config } });
+  },
+
+  async appUpdateCheck(): Promise<AppUpdateCheckResult> {
+    return invokeCommand("app_update_check");
+  },
+
+  async appUpdateInstall(): Promise<AppUpdateInstallResult> {
+    return invokeCommand("app_update_install");
+  },
+
+  async hotUpdateBackend(input: {
+    sourceRoot?: string;
+    skipGit?: boolean;
+  }): Promise<HotUpdateBackendResult> {
+    return invokeCommand("hot_update_backend", { input });
+  },
+
+  // Track B UI hot update (custom `hermesui:` scheme). The kernel is never
+  // restarted — after a successful install/rollback the Rust side emits
+  // `ui-update-ready` and reloads the main window itself.
+  async uiCheckUpdate(): Promise<UiUpdateCheckResult> {
+    return invokeCommand("ui_check_update");
+  },
+
+  async uiInstallUpdate(): Promise<UiInstallUpdateResult> {
+    return invokeCommand("ui_install_update");
+  },
+
+  async uiRollback(): Promise<UiInstallUpdateResult> {
+    return invokeCommand("ui_rollback");
+  },
+
+  onUiUpdateReady(handler: (payload: UiUpdateReadyPayload) => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<UiUpdateReadyPayload>("ui-update-ready", (event) => {
+          handler(event.payload);
+        }))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  onHotUpdateProgress(handler: (payload: HotUpdateProgressPayload) => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<HotUpdateProgressPayload>("hot-update-progress", (event) => {
+          handler(event.payload);
+        }))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  onAppUpdateProgress(handler: (payload: AppUpdateProgressPayload) => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<AppUpdateProgressPayload>("app-update-progress", (event) => {
+          handler(event.payload);
+        }))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  getRuntimeConfig() {
+    return window.__HERMES_RUNTIME__;
+  },
+
+  async refreshGatewayUrl(): Promise<{ gatewayUrl: string; sessionToken?: string }> {
+    return invokeCommand("refresh_gateway_url");
+  },
+
+  async getBackendVersion(): Promise<{ version: string }> {
+    return invokeCommand("get_backend_version");
+  },
+
+  async getRuntimeInfo(): Promise<RuntimeInfo> {
+    return invokeCommand("runtime_info");
+  },
+
+  async checkRuntimeUpdate(): Promise<RuntimeUpdateCheckResult> {
+    return invokeCommand("runtime_check_update");
+  },
+
+  async installRuntimeUpdate(): Promise<RuntimeInstallUpdateResult> {
+    return invokeCommand("runtime_install_update");
+  },
+
+  async rollbackRuntime(): Promise<RuntimeInstallUpdateResult> {
+    return invokeCommand("runtime_rollback");
+  },
+
+  async exportProfileBackup(): Promise<BackupExportResult> {
+    const inv = await ensureInvoke();
+    return inv("backup_export_profile");
+  },
+
+  async importProfileBackup(): Promise<BackupImportResult> {
+    const inv = await ensureInvoke();
+    return inv("backup_import_profile");
+  },
+
+  async switchProfile(input: SwitchProfileInput): Promise<SwitchProfileResult> {
+    return invokeCommand("switch_profile", { input });
+  },
+
+  async getConnectionConfig(): Promise<ConnectionConfigView> {
+    return invokeCommand("get_connection_config");
+  },
+
+  async saveConnectionConfig(input: ConnectionConfigInput): Promise<ConnectionConfigView> {
+    return invokeCommand("save_connection_config", { input });
+  },
+
+  async applyConnectionConfig(input: ConnectionConfigInput): Promise<ApplyConnectionResult> {
+    return invokeCommand("apply_connection_config", { input });
+  },
+
+  async testConnectionConfig(input: ConnectionConfigInput): Promise<TestConnectionResult> {
+    return invokeCommand("test_connection_config", { input });
+  },
+
+  async getDesktopControlState(): Promise<RuntimeControlResult> {
+    return invokeCommand("get_desktop_control_state");
+  },
+
+  async setGuideState(guideState: GuideState): Promise<RuntimeControlResult> {
+    return invokeCommand("set_guide_state", { input: { guideState } });
+  },
+
+  async installManagedRuntime(): Promise<RuntimeControlResult> {
+    return invokeCommand("managed_runtime_install");
+  },
+
+  async startManagedRuntime(): Promise<RuntimeControlResult> {
+    return invokeCommand("managed_runtime_start");
+  },
+
+  async stopManagedRuntime(): Promise<RuntimeControlResult> {
+    return invokeCommand("managed_runtime_stop");
+  },
+
+  async uninstallManagedRuntime(): Promise<RuntimeControlResult> {
+    return invokeCommand("managed_runtime_uninstall");
+  },
+
+  async reinstallManagedRuntime(): Promise<RuntimeControlResult> {
+    return invokeCommand("managed_runtime_reinstall");
+  },
+
+  async probeConnectionConfig(remoteUrl: string): Promise<ProbeConnectionResult> {
+    return invokeCommand("probe_connection_config", { remoteUrl });
+  },
+
+  async connectionOauthLogin(remoteUrl: string): Promise<OauthLoginResult> {
+    return invokeCommand("connection_oauth_login", { input: { remoteUrl } });
+  },
+
+  async connectionPasswordLogin(input: {
+    remoteUrl: string;
+    provider: string;
+    username: string;
+    password: string;
+  }): Promise<OauthLoginResult> {
+    return invokeCommand("connection_password_login", { input });
+  },
+
+  async connectionAuthMe(remoteUrl: string): Promise<OauthLoginResult> {
+    return invokeCommand("connection_auth_me", { input: { remoteUrl } });
+  },
+
+  async connectionOauthLogout(remoteUrl: string): Promise<void> {
+    return invokeCommand("connection_oauth_logout", { input: { remoteUrl } });
+  },
+
+
+  async scanConfigMigration(input?: ConfigMigrationScanInput): Promise<ConfigMigrationScanResult> {
+    return invokeCommand("config_migration_scan", { input: input ?? null });
+  },
+
+  async importConfigMigration(input: ConfigMigrationImportInput): Promise<ConfigMigrationImportResult> {
+    return invokeCommand("config_migration_import", { input });
+  },
+
+  async getYoloMode(): Promise<YoloModeStatus> {
+    return invokeCommand("get_yolo_mode");
+  },
+
+  async setYoloMode(input: SetYoloModeInput): Promise<SetYoloModeResult> {
+    return invokeCommand("set_yolo_mode", { input });
+  },
+
+  async imOnboardingState(input: ImOnboardingStateInput): Promise<ImOnboardingStateResult> {
+    return invokeCommand("im_onboarding_state", { input });
+  },
+
+  async imOnboardingBegin(input: ImOnboardingBeginInput): Promise<ImOnboardingBeginResult> {
+    return invokeCommand("im_onboarding_begin", { input });
+  },
+
+  async imOnboardingPoll(input: ImOnboardingPollInput): Promise<ImOnboardingPollResult> {
+    return invokeCommand("im_onboarding_poll", { input });
+  },
+
+  async imOnboardingApply(input: ImOnboardingApplyInput): Promise<ImOnboardingApplyResult> {
+    return invokeCommand("im_onboarding_apply", { input });
+  },
+
+  async readMemory() {
+    return invokeCommand("read_memory");
+  },
+
+  async addMemoryEntry(content: string) {
+    return invokeCommand("add_memory_entry", { content });
+  },
+
+  async updateMemoryEntry(index: number, content: string) {
+    return invokeCommand("update_memory_entry", { index, content });
+  },
+
+  async removeMemoryEntry(index: number) {
+    return invokeCommand("remove_memory_entry", { index });
+  },
+
+  async writeUserProfile(content: string) {
+    return invokeCommand("write_user_profile", { content });
+  },
+
+  async uiStoreSnapshot(): Promise<UiStoreSnapshot> {
+    return invokeCommand("ui_store_snapshot");
+  },
+
+  async uiStoreSetKv(input: { key: string; value: unknown }): Promise<boolean> {
+    return invokeCommand("ui_store_set_kv", { input });
+  },
+
+  async uiStoreRemoveKv(input: { key: string }): Promise<boolean> {
+    return invokeCommand("ui_store_remove_kv", { input });
+  },
+
+  async uiStoreRecordTurnStats(input: UiTurnStats): Promise<boolean> {
+    return invokeCommand("ui_store_record_turn_stats", { input });
+  },
+
+  async uiStoreGetTurnStats(input: { sessionId: string }): Promise<UiTurnStats[]> {
+    return invokeCommand("ui_store_get_turn_stats", { input });
+  },
+
+  async uiStoreGetTurnStatsWindow(input: { sinceMs?: number; limit?: number }): Promise<UiTurnStats[]> {
+    return invokeCommand("ui_store_get_turn_stats_window", { input });
+  },
+
+  async uiStoreRecordEvent(input: UiEventInput): Promise<boolean> {
+    return invokeCommand("ui_store_record_event", { input });
+  },
+
+  async desktopNotify(input: DesktopNotifyInput): Promise<DesktopNotifyResult> {
+    return invokeCommand("desktop_notify", { input });
+  },
+
+  async terminalStart(input: TerminalStartInput): Promise<TerminalStartResult> {
+    return invokeCommand("terminal_start", { input });
+  },
+
+  async terminalOpenExternal(input: TerminalOpenExternalInput): Promise<ExternalTerminalResult> {
+    return invokeCommand("terminal_open_external", { input });
+  },
+
+  async terminalWrite(input: { terminalId: string; data: string }): Promise<boolean> {
+    return invokeCommand("terminal_write", { input });
+  },
+
+  async terminalResize(input: { terminalId: string; cols: number; rows: number }): Promise<boolean> {
+    return invokeCommand("terminal_resize", { input });
+  },
+
+  async terminalClose(input: { terminalId: string }): Promise<boolean> {
+    return invokeCommand("terminal_close", { input });
+  },
+
+  onTerminalOutput(handler: (event: TerminalEventPayload) => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<TerminalEventPayload>("terminal-output", (event) => {
+          handler(event.payload);
+        }))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  async readWorkspaceFile(input: ReadWorkspaceFileInput): Promise<FilePreview> {
+    return invokeCommand("read_workspace_file", { input });
+  },
+
+  async readFileDataUrl(path: string): Promise<string> {
+    return invokeCommand("read_file_data_url", { input: { path } });
+  },
+
+  async writeWorkspaceFile(input: WriteWorkspaceFileInput): Promise<WriteWorkspaceFileResult> {
+    return invokeCommand("write_workspace_file", { input });
+  },
+  // Git ops backing the review pane (issue #328). Mirrors the upstream
+  // `window.hermesDesktop.git.review.*` shape so the ported review logic reads
+  // naturally; each method forwards to a Rust command that shells `git`/`gh`.
+  git: {
+    review: {
+      list: (input) => invokeCommand("git_review_list", { input }),
+      diff: (input) => invokeCommand("git_review_diff", { input }),
+      stage: (input) => invokeCommand("git_review_stage", { input }),
+      unstage: (input) => invokeCommand("git_review_unstage", { input }),
+      revert: (input) => invokeCommand("git_review_revert", { input }),
+      revParse: (input) => invokeCommand("git_review_rev_parse", { input }),
+      commit: (input) => invokeCommand("git_review_commit", { input }),
+      commitContext: (input) => invokeCommand("git_review_commit_context", { input }),
+      push: (input) => invokeCommand("git_review_push", { input }),
+      shipInfo: (input) => invokeCommand("git_review_ship_info", { input }),
+      createPr: (input) => invokeCommand("git_review_create_pr", { input }),
+    },
+    // Worktree / branch / status ops backing the projects sidebar (issue #327).
+    worktree: {
+      list: (input) => invokeCommand("git_worktree_list", { input }),
+      add: (input) => invokeCommand("git_worktree_add", { input }),
+      remove: (input) => invokeCommand("git_worktree_remove", { input }),
+    },
+    branch: {
+      list: (input) => invokeCommand("git_branch_list", { input }),
+      switch: (input) => invokeCommand("git_branch_switch", { input }),
+    },
+    repoStatus: (input) => invokeCommand("git_repo_status", { input }),
+  } satisfies HermesGitBridge,
+
+  async watchPreviewFile(input: { path: string }): Promise<WatchPreviewFileResult> {
+    return invokeCommand("watch_preview_file", { input });
+  },
+
+  async stopPreviewFileWatch(input: { watchId: string }): Promise<boolean> {
+    return invokeCommand("stop_preview_file_watch", { input });
+  },
+
+  onPreviewFileChanged(handler: (payload: PreviewFileChangedPayload) => void): () => void {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<PreviewFileChangedPayload>("preview-file-changed", (event) => {
+          handler(event.payload);
+        }))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  onSystemResume(handler: () => void): () => void {
+    // Initial build: rely on the JS clock-skew watchdog in gateway-client.ts.
+    // The watchdog detects sleep/wake within ~5s, which is acceptable.
+    // Native power monitoring can be added later via a Tauri event.
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("system-resume", handler))
+      .then((fn) => {
+        if (disposed) safeUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      safeUnlisten(unlisten);
+    };
+  },
+
+  setUiZoom(factor: number): void {
+    // Native webview page zoom (WKWebView setPageZoom / WebView2 ZoomFactor /
+    // WebKitGTK zoom_level). Unlike CSS `zoom`, page zoom reflows the layout and
+    // scales the viewport, so `100vw`/`100vh` keep matching the window and the
+    // interface-scale setting no longer clips the right edge / bottom status bar.
+    import("@tauri-apps/api/webview")
+      .then(({ getCurrentWebview }) => getCurrentWebview().setZoom(factor))
+      .catch((error) => {
+        console.warn("Failed to apply webview zoom", error);
+      });
+  },
+};
+
+// Overlay shown while the Rust side prepares the managed runtime and
+// dashboard before React can mount. Pre-React, plain DOM — we can't mount
+// React yet because the bridge isn't ready (no apiBaseUrl => API calls
+// would throw). Phase strings match the `runtime-status` event emitted by
+// src/main.rs::emit_runtime_status.
+function showBootstrapOverlay(initialMessage: string): {
+  update(phase: string, message: string): void;
+  dismiss(): void;
+} {
+  let lastErrorMessage = "";
+
+  const root = document.createElement("div");
+  root.id = "hermes-bootstrap-overlay";
+  root.setAttribute(
+    "style",
+    "position:fixed;inset:0;background:#111111;" +
+      "color:#fbfaf6;display:flex;align-items:center;justify-content:center;" +
+      "font-family:'HarmonyOS Sans SC','HarmonyOS Sans','PingFang SC','Segoe UI',sans-serif;" +
+      "z-index:2147483647;padding:48px;box-sizing:border-box;overflow:auto;",
+  );
+
+  const panel = document.createElement("section");
+  panel.setAttribute("aria-live", "polite");
+  panel.setAttribute(
+    "style",
+    "width:min(760px,calc(100vw - 64px));display:flex;flex-direction:column;" +
+      "align-items:center;gap:20px;text-align:center;",
+  );
+
+  const mark = document.createElement("img");
+  mark.src = hermesLogo;
+  mark.alt = "Hermes Agent Logo";
+  mark.setAttribute(
+    "style",
+    "width:104px;height:104px;border:1px solid rgba(251,250,246,0.14);border-radius: 0;display:block;",
+  );
+  panel.appendChild(mark);
+
+  const title = document.createElement("div");
+  title.setAttribute(
+    "style",
+    "font-size:16px;font-weight:700;letter-spacing:0.02em;color:#fbfaf6;",
+  );
+  title.textContent = "Hermes Agent 中文社区桌面版";
+  panel.appendChild(title);
+
+  const brand = document.createElement("div");
+  brand.setAttribute(
+    "style",
+    "margin-top:-12px;font-size:12px;font-weight:600;color:rgba(251,250,246,0.54);" +
+      "letter-spacing:0.08em;text-transform:uppercase;",
+  );
+  brand.textContent = "Hermes Agent 中文社区 · hermesagent.org.cn";
+  panel.appendChild(brand);
+
+  const message = document.createElement("div");
+  message.id = "hermes-bootstrap-message";
+  message.setAttribute(
+    "style",
+    "font-size:15px;color:rgba(251,250,246,0.9);max-width:620px;line-height:1.6;",
+  );
+  message.textContent = initialMessage;
+  panel.appendChild(message);
+
+  const detail = document.createElement("div");
+  detail.id = "hermes-bootstrap-error-detail";
+  detail.setAttribute(
+    "style",
+    "display:none;width:100%;box-sizing:border-box;margin-top:4px;border:1px solid rgba(251,250,246,0.14);" +
+      "border-radius: 0;background:#181818;overflow:hidden;",
+  );
+
+  const detailHeader = document.createElement("div");
+  detailHeader.setAttribute(
+    "style",
+    "display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;" +
+      "border-bottom:1px solid rgba(251,250,246,0.1);",
+  );
+
+  const detailTitle = document.createElement("div");
+  detailTitle.setAttribute(
+    "style",
+    "font-size:12px;font-weight:700;color:rgba(251,250,246,0.72);letter-spacing:0.08em;text-transform:uppercase;",
+  );
+  detailTitle.textContent = "完整错误信息";
+  detailHeader.appendChild(detailTitle);
+
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.disabled = true;
+  copyButton.setAttribute(
+    "style",
+    "appearance:none;border:1px solid rgba(251,250,246,0.18);background:rgba(251,250,246,0.08);" +
+      "color:#fbfaf6;border-radius: 0;padding:8px 12px;font-size:12px;font-weight:700;" +
+      "font-family:inherit;cursor:pointer;",
+  );
+  copyButton.textContent = "复制错误信息";
+  detailHeader.appendChild(copyButton);
+  detail.appendChild(detailHeader);
+
+  const errorText = document.createElement("pre");
+  errorText.id = "hermes-bootstrap-error-text";
+  errorText.tabIndex = 0;
+  errorText.setAttribute(
+    "style",
+    "margin:0;max-height:min(300px,38vh);overflow:auto;padding:16px;text-align:left;" +
+      "white-space:pre-wrap;word-break:break-word;user-select:text;" +
+      "font-family:'JetBrains Mono','SFMono-Regular',Consolas,ui-monospace,monospace;" +
+      "font-size:12px;line-height:1.6;color:rgba(251,250,246,0.88);",
+  );
+  detail.appendChild(errorText);
+  panel.appendChild(detail);
+
+  const versionPanel = document.createElement("div");
+  versionPanel.setAttribute(
+    "style",
+    "display:flex;flex-direction:column;align-items:center;gap:4px;margin-top:4px;" +
+      "font-family:'JetBrains Mono','SFMono-Regular',Consolas,ui-monospace,monospace;" +
+      "font-size:10px;line-height:1.45;letter-spacing:0.06em;color:rgba(133,126,111,0.76);",
+  );
+
+  const uiVersionRow = document.createElement("div");
+
+  const applyVersionRow = (rowEl: HTMLDivElement, line: BootstrapVersionLine) => {
+    rowEl.setAttribute(
+      "style",
+      "font-variant-numeric:tabular-nums;white-space:nowrap;color:rgba(133,126,111,0.76);",
+    );
+    rowEl.textContent = `${line.label} ${line.version} · ${line.commit}`;
+  };
+
+  applyVersionRow(uiVersionRow, buildBootstrapVersionLine());
+  versionPanel.append(uiVersionRow);
+  panel.appendChild(versionPanel);
+
+  const sub = document.createElement("div");
+  sub.id = "hermes-bootstrap-sub";
+  sub.setAttribute(
+    "style",
+    "font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;" +
+      "color:rgba(255,255,255,0.45);letter-spacing:0.06em;text-transform:uppercase;",
+  );
+  sub.textContent = "Hermes Agent 中文社区桌面版 · 启动中";
+  panel.appendChild(sub);
+
+  root.appendChild(panel);
+
+  document.body.appendChild(root);
+
+  const copyErrorMessage = async () => {
+    if (!lastErrorMessage) return;
+    try {
+      await navigator.clipboard.writeText(lastErrorMessage);
+      copyButton.textContent = "已复制";
+      window.setTimeout(() => {
+        copyButton.textContent = "复制错误信息";
+      }, 1600);
+    } catch {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(errorText);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      copyButton.textContent = "已选中，可手动复制";
+      window.setTimeout(() => {
+        copyButton.textContent = "复制错误信息";
+      }, 2200);
+    }
+  };
+
+  copyButton.addEventListener("click", () => {
+    void copyErrorMessage();
+  });
+
+  return {
+    update(phase, msg) {
+      if (phase === "error") {
+        lastErrorMessage = msg || "未知启动错误";
+        root.setAttribute("role", "alert");
+        panel.setAttribute("aria-live", "assertive");
+        message.textContent = "启动 Hermes Agent 内核时遇到问题，请复制下方完整错误信息用于排查。";
+        errorText.textContent = lastErrorMessage;
+        detail.style.display = "block";
+        copyButton.disabled = false;
+        sub.textContent = "启动失败";
+      } else if (msg) {
+        message.textContent = msg;
+      }
+    },
+    dismiss() {
+      root.remove();
+    },
+  };
+}
+
+async function waitForBootstrap(
+  initialMessage: string,
+  readConfig: () => Promise<{ apiBaseUrl?: string }>,
+  readRuntimeInfo: () => Promise<{ lastError?: string }>,
+): Promise<{ failed: boolean; message: string }> {
+  const { listen } = await import("@tauri-apps/api/event");
+
+  return new Promise((resolve) => {
+    let overlay: ReturnType<typeof showBootstrapOverlay> | null = null;
+    let unlisten: (() => void) | null = null;
+    let interval: number | null = null;
+    let showTimer: number | null = null;
+    let settled = false;
+    let lastPhase = "starting";
+    let lastMessage = initialMessage;
+
+    const ensureOverlay = () => {
+      if (!overlay) {
+        overlay = showBootstrapOverlay(lastMessage || initialMessage);
+        overlay.update(lastPhase, lastMessage || initialMessage);
+      }
+      return overlay;
+    };
+
+    showTimer = window.setTimeout(() => {
+      if (!settled) ensureOverlay();
+    }, 1200);
+
+    const finish = (result: { failed: boolean; message: string }) => {
+      if (settled) return;
+      settled = true;
+      safeUnlisten(unlisten);
+      if (interval !== null) window.clearInterval(interval);
+      if (showTimer !== null) window.clearTimeout(showTimer);
+      if (!result.failed) overlay?.dismiss();
+      resolve(result);
+    };
+
+    const checkReady = () => {
+      void readConfig()
+        .then((cfg) => {
+          if (cfg.apiBaseUrl) finish({ failed: false, message: "" });
+        })
+        .catch(() => {});
+      void readRuntimeInfo()
+        .then((info) => {
+          if (info.lastError) {
+            lastPhase = "error";
+            lastMessage = info.lastError;
+            ensureOverlay().update("error", info.lastError);
+            finish({ failed: true, message: info.lastError });
+          }
+        })
+        .catch(() => {});
+    };
+
+    listen<{ phase: string; message: string }>("runtime-status", (event) => {
+      const { phase, message } = event.payload;
+      lastPhase = phase;
+      if (message) lastMessage = message;
+      overlay?.update(phase, message);
+      if (phase === "ready") {
+        finish({ failed: false, message: "" });
+      } else if (phase === "error") {
+        // Error paths should be visible immediately even if the normal slow-start
+        // threshold has not elapsed yet.
+        ensureOverlay().update("error", message);
+        finish({ failed: true, message });
+      }
+    }).then((fn) => {
+      unlisten = fn;
+      checkReady();
+      interval = window.setInterval(checkReady, 500);
+    });
+  });
+}
+
+// Developer mode ships enabled in release builds (the `devtools` Cargo feature),
+// so the WebView inspector can be opened at runtime. Bind it to the keyboard
+// shortcuts every browser already uses so users can pop devtools without a menu:
+//   - F12                        (all platforms)
+//   - Cmd + Option + I  on macOS
+//   - Ctrl + Shift + I  on Windows / Linux
+// The matching hint lives on the About page (web/src/routes/settings.tsx).
+function isDevtoolsShortcut(event: KeyboardEvent): boolean {
+  if (event.key === "F12") return true;
+  if (event.key.toLowerCase() !== "i") return false;
+  const macCombo = event.metaKey && event.altKey;
+  const winCombo = event.ctrlKey && event.shiftKey;
+  return macCombo || winCombo;
+}
+
+let devtoolsShortcutBound = false;
+
+function registerDevtoolsShortcut(): void {
+  if (devtoolsShortcutBound || typeof window === "undefined") return;
+  if (typeof window.addEventListener !== "function") return;
+  devtoolsShortcutBound = true;
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!isDevtoolsShortcut(event)) return;
+      event.preventDefault();
+      void invokeCommand("toggle_devtools").catch((error) => {
+        console.warn("Failed to toggle devtools", error);
+      });
+    },
+    // Capture phase so app-level key handlers can't swallow the shortcut first.
+    { capture: true },
+  );
+}
+
+export function shouldWaitForManagedRuntimeConfig(config: {
+  apiBaseUrl?: string;
+  backendReady?: boolean;
+  connectionMode?: "managed" | "local" | "remote";
+  managedRuntimeDesiredState?: import("@agentdeck/protocol").ManagedRuntimeDesiredState;
+}): boolean {
+  if (config.apiBaseUrl) return false;
+  const connectionMode = config.connectionMode ?? "managed";
+  const managedRuntimeShouldRun =
+    connectionMode === "managed" &&
+    (config.managedRuntimeDesiredState ?? "running") === "running";
+  return config.backendReady !== false || managedRuntimeShouldRun;
+}
+
+export async function installTauriBridge(): Promise<void> {
+  // Install before any React component mounts a Tauri event listener, so the
+  // StrictMode mount→unmount teardown race can't leak an unhandled rejection.
+  installTauriRejectionGuard();
+
+  let config = await invokeCommand<{
+    apiBaseUrl: string;
+    gatewayUrl: string;
+    sessionToken?: string;
+    kernelVersion?: string;
+    currentProfile: string;
+    connectionMode?: "managed" | "local" | "remote";
+    portable?: boolean;
+    embedded?: boolean;
+    backendReady?: boolean;
+    guideState?: GuideState;
+    managedRuntimeDesiredState?: import("@agentdeck/protocol").ManagedRuntimeDesiredState;
+    managedRuntimeLifecycleState?: import("@agentdeck/protocol").ManagedRuntimeLifecycleState;
+  }>("get_runtime_config");
+
+  // Dev mode: WebView loads from Vite dev server (http://localhost:9545).
+  // Don't set apiBaseUrl/gatewayUrl — let the browser use relative URLs that
+  // go through Vite's proxy, just like web mode. This avoids cross-origin
+  // issues with the gateway WebSocket (a browser-native API that can't
+  // go through the Tauri IPC bridge). Still inject sessionToken in dev: managed
+  // runtime builds may not have dashboard web_dist, so Vite cannot reliably
+  // scrape the token from Dashboard /; authenticated REST calls still need the
+  // token header while using the relative proxy URL.
+  // Production Tauri v2 can also load bundled assets from an
+  // `http://*.localhost` origin on Windows, so URL protocol is not a
+  // reliable dev/prod signal. Use Vite's explicit build mode instead.
+  const isDevMode = isTauriDevMode();
+
+  // First-run / managed dev: Rust spawned the install/start task and returned
+  // immediately with empty state. Show the overlay and block here until the
+  // `runtime-status` event reports `ready`, then refetch the config so we get
+  // the populated apiBaseUrl/sessionToken. In Vite dev we still avoid writing
+  // apiBaseUrl into window.__HERMES_RUNTIME__ later, but waiting here prevents
+  // the React app from racing the managed dashboard startup.
+  if (shouldWaitForManagedRuntimeConfig(config)) {
+    const result = await waitForBootstrap(
+      "正在唤醒Hermes...",
+      () => invokeCommand("get_runtime_config"),
+      () => invokeCommand("runtime_info"),
+    );
+    if (result.failed) {
+      // Leave the overlay up — the user needs to see the message
+      // and decide what to do (close and reopen, fix env vars, etc).
+      // Throwing here would surface in the React error boundary, but
+      // we never mounted React; the overlay IS the UI right now.
+      throw new Error(`runtime bootstrap failed: ${result.message}`);
+    }
+    config = await invokeCommand("get_runtime_config");
+  }
+
+  // Mount the bridge before the version gate so that a mismatch can use the
+  // native fatal-error dialog via hermesDesktop.fatalErrorAndExit. The bridge
+  // is fully functional through Tauri invoke; window.__HERMES_RUNTIME__ is set
+  // after the version check so the platform guard still sees the Tauri context.
+  (window as any).hermesDesktop = tauriBridge;
+
+  // Reset any stale version check state, then verify before we let the React
+  // app run against this backend. A mismatch or unreachable /api/version
+  // triggers a fatal dialog and force-quits. We pass the config's apiBaseUrl
+  // explicitly because window.__HERMES_RUNTIME__ is not populated yet.
+  resetVersionCheck();
+  recordRuntimeKernelVersion(config.kernelVersion);
+  const connectionMode = config.connectionMode ?? "managed";
+  const managedRuntimeIntentionallyOffline =
+    connectionMode === "managed" &&
+    config.backendReady === false &&
+    !config.apiBaseUrl &&
+    (config.managedRuntimeDesiredState ?? "running") !== "running";
+  let backendRecoveryReason: BackendRecoveryReason | undefined;
+  if (managedRuntimeIntentionallyOffline) {
+    deferBackendVersionCheckForOfflineRuntime();
+    backendRecoveryReason = "managed-runtime-offline";
+  } else {
+    const versionState = await verifyBackendVersion(config.apiBaseUrl, { connectionMode });
+    if (versionState.kind === "deferred") {
+      backendRecoveryReason = versionState.reason;
+    } else if (versionState.kind !== "ok") {
+      assertCompatible();
+      throw new Error("version check failed during bridge installation");
+    }
+  }
+
+  // Attached local/remote mode must keep the real URLs even in Vite dev: the
+  // Vite proxy targets the managed dashboard port (9120), so relative URLs
+  // would route traffic to the wrong backend. Managed dev still hides URLs and
+  // uses the proxy as before.
+  const hideUrlsForViteProxy = isDevMode && connectionMode === "managed";
+
+  window.__HERMES_RUNTIME__ = {
+    platform: "tauri" as const,
+    apiBaseUrl: hideUrlsForViteProxy ? undefined : config.apiBaseUrl,
+    dashboardApiBaseUrl: config.apiBaseUrl,
+    gatewayUrl: hideUrlsForViteProxy ? undefined : config.gatewayUrl,
+    sessionToken: config.sessionToken,
+    kernelVersion: config.kernelVersion,
+    currentProfile: config.currentProfile,
+    connectionMode,
+    portable: config.portable ?? false,
+    embedded: config.embedded ?? false,
+    backendReady: backendRecoveryReason
+      ? false
+      : config.backendReady ?? Boolean(config.apiBaseUrl),
+    backendRecoveryReason,
+    guideState: config.guideState ?? "completed",
+    managedRuntimeDesiredState: config.managedRuntimeDesiredState ?? "running",
+    managedRuntimeLifecycleState: config.managedRuntimeLifecycleState ?? "running",
+  };
+
+  registerDevtoolsShortcut();
+}
