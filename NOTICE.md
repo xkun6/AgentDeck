@@ -33,7 +33,6 @@ AgentDeck 的 Agent 适配层（`packages/sidecar` 中的 provider、会话管�
 ## 其他第三方资源
 
 - HarmonyOS Sans 字体：许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
-- agency-agents（MIT）：许可见 `legal/agency-agents.MIT.txt`。
 
 ## 随包分发的第三方组件
 
@@ -56,7 +55,7 @@ sidecar 由 esbuild 打成单文件，以下 npm 包的代码被打进其中（�
 | tree-kill | 1.2.2 | MIT |
 | which | 5.0.0 | ISC |
 | ws | 8.21.1 | MIT |
-| zod | 3.25.76、4.6.6 | MIT |
+| zod | 4.6.6 | MIT |
 
 各包的版权行与许可全文见 `legal/sidecar-third-party.txt`。
 
