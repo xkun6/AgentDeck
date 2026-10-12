@@ -70,6 +70,17 @@ sidecar 入口：
 - 命令 `restart_sidecar` → 同上结构
 - 事件 `sidecar-status`：载荷同 `get_sidecar_config` 的返回值（状态每次变化都发）
 
+### 3.5 实现补充约定（P1 落地时确定）
+
+- 3.1 中「命中」指文件存在；`AGENTDECK_NODE` / `AGENTDECK_SIDECAR_ENTRY` 指向不存在的文件时记警告并继续找下一候选。
+- 用 `AGENTDECK_SIDECAR_ENTRY` 指定入口时，cwd 为该脚本所在目录。
+- ready 行之前的非 ready 输出只记日志，继续等待；进程在 ready 前退出立即判失败。
+- 进程自行退出后仍会结束 Job / 进程组，清理可能残留的孙进程。
+- 监管：连续失败暂停后监管循环不退出，手动 `restart_sidecar` 成功后恢复监管；**首次拉起失败不自动重试**，只能手动重启。
+- sidecar 未就绪时 `wsUrl` 为空字符串；`starting` 状态已带 token。
+- 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
+- WS 中继沿用命令 `gateway_ws_open/send/close` 与事件 `gateway-ws-message` / `gateway-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
+
 ## 4. 前端 ↔ sidecar 协议（JSON-RPC 2.0 over WebSocket）
 
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
