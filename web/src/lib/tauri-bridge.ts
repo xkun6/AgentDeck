@@ -5,63 +5,14 @@
 // existing call sites (settings.tsx, projects.tsx, goose-composer.tsx, etc.)
 // work without any changes.
 //
-// AgentDeck：Rust 外壳已删除 Hermes 专属命令（见 src/main.rs 的 generate_handler!）。
-// 对应的桥方法保留类型签名，实现统一返回「AgentDeck 暂不支持该功能」的 rejected
-// Promise（事件订阅返回空的取消函数），旧调用方在 P5 统一删除。启动时不再等待
-// Hermes 的 runtime-status，而是等待 Node sidecar 就绪（sidecar-status）。
+// 只包装 Rust 外壳实际注册的命令（见 src/main.rs 的 generate_handler!）。
+// 启动时等待 Node sidecar 就绪（sidecar-status）后再挂载 React。
 
 import type {
-  ApiRequestInput,
-  ApiRequestResult,
-  ApplyConnectionResult,
-  BackupExportResult,
-  BackupImportResult,
-  ConfigMigrationImportInput,
-  ConfigMigrationImportResult,
-  ConfigMigrationScanInput,
-  ConfigMigrationScanResult,
-  ConnectionConfigInput,
-  ConnectionConfigView,
-  DesktopUpdateManifestFetchResult,
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
   ExportLogSnapshotInput,
   ExportLogSnapshotResult,
-  ExportSessionJsonInput,
-  ExportSessionJsonResult,
-  FilePickerResult,
-  FileUploadInput,
-  ImOnboardingApplyInput,
-  ImOnboardingApplyResult,
-  ImOnboardingBeginInput,
-  ImOnboardingBeginResult,
-  ImOnboardingPollInput,
-  ImOnboardingPollResult,
-  ImOnboardingStateInput,
-  ImOnboardingStateResult,
-  ProbeConnectionResult,
-  OauthLoginResult,
-  RuntimeInfo,
-  RuntimeControlResult,
-  GuideState,
-  RuntimeInstallUpdateResult,
-  RuntimeUpdateCheckResult,
-  SetYoloModeInput,
-  SetYoloModeResult,
-  SwitchProfileInput,
-  SwitchProfileResult,
-  TestConnectionResult,
-  UpdateConfig,
-  UpdateConfigSnapshot,
-  AppUpdateCheckResult,
-  AppUpdateInstallResult,
-  AppUpdateProgressPayload,
-  HotUpdateBackendResult,
-  HotUpdateProgressPayload,
-  UiInstallUpdateResult,
-  UiUpdateCheckResult,
-  UiUpdateReadyPayload,
-  YoloModeStatus,
 } from "@agentdeck/protocol";
 import type {
   DesktopNotifyInput,
@@ -69,11 +20,12 @@ import type {
   DesktopFileDropPayload,
   DownloadExternalImageInput,
   DownloadedImageResult,
+  ExternalRequestInput,
+  ExternalRequestResult,
+  FilePickerResult,
   FilePreview,
   PreviewFileChangedPayload,
   ReadWorkspaceFileInput,
-  ExportDebugBundleInput,
-  ExportDebugBundleResult,
   ExternalTerminalResult,
   TerminalEventPayload,
   TerminalOpenExternalInput,
@@ -88,10 +40,7 @@ import type {
   HermesGitBridge,
 } from "./runtime";
 import { BUILD_COMMIT, DESKTOP_VERSION, versionLabel } from "./build-info";
-import { deferBackendVersionCheckForOfflineRuntime, resetVersionCheck } from "./version-check";
-import { rejectUnsupported } from "./agentdeck-unsupported";
 import type { SidecarStatusPayload } from "./sidecar-client";
-import hermesLogo from "@/assets/hermes-default-avatar.png";
 
 let invoke: typeof import("@tauri-apps/api/core").invoke;
 
@@ -245,11 +194,6 @@ function normalizeFileDropPayload(payload: TauriFileDropEventPayload): DesktopFi
   };
 }
 
-/** 已删除事件的订阅：不再注册监听，返回空的取消函数。 */
-function noopUnsubscribe(): () => void {
-  return () => {};
-}
-
 const tauriBridge = {
   windowType: "tauri" as const,
 
@@ -257,17 +201,8 @@ const tauriBridge = {
     return invokeCommand("fatal_error_and_exit", { input });
   },
 
-  // api_request 已删除：Hermes REST 不存在。
-  async request(_input: ApiRequestInput): Promise<ApiRequestResult> {
-    return rejectUnsupported();
-  },
-
-  async externalRequest(input: ApiRequestInput): Promise<ApiRequestResult> {
+  async externalRequest(input: ExternalRequestInput): Promise<ExternalRequestResult> {
     return invokeCommand("external_request", { input });
-  },
-
-  async uploadFile(_input: FileUploadInput): Promise<ApiRequestResult> {
-    return rejectUnsupported();
   },
 
   async downloadExternalImage(input: DownloadExternalImageInput): Promise<DownloadedImageResult> {
@@ -312,16 +247,12 @@ const tauriBridge = {
     };
   },
 
-  async openWorkspacePath(input: { path: string }): Promise<ApiRequestResult> {
+  async openWorkspacePath(input: { path: string }): Promise<ExternalRequestResult> {
     return invokeCommand("open_workspace_path", { input });
   },
 
   async openExternalUrl(input: { url: string }): Promise<{ ok: boolean; message?: string | null }> {
     return invokeCommand("open_external_url", { input });
-  },
-
-  async openBrowserCompanion(): Promise<{ ok: boolean; url: string; port: number }> {
-    return rejectUnsupported();
   },
 
   async toggleDevtools(): Promise<void> {
@@ -332,232 +263,12 @@ const tauriBridge = {
     return invokeCommand("export_log_snapshot", { input });
   },
 
-  async exportSessionJson(input: ExportSessionJsonInput): Promise<ExportSessionJsonResult> {
-    return invokeCommand("export_session_json", { input });
-  },
-
-  async exportDebugBundle(_input?: ExportDebugBundleInput): Promise<ExportDebugBundleResult> {
-    return rejectUnsupported();
-  },
-
   async environmentCheck(): Promise<EnvironmentCheckResult> {
     return invokeCommand("environment_check");
   },
 
   async codingAgentsCheck(): Promise<CodingAgentsCheckResult> {
     return invokeCommand("coding_agents_check");
-  },
-
-  async checkDesktopUpdate(): Promise<DesktopUpdateManifestFetchResult> {
-    return rejectUnsupported();
-  },
-
-  async getUpdateConfig(): Promise<UpdateConfigSnapshot> {
-    return rejectUnsupported();
-  },
-
-  async setUpdateConfig(_config: UpdateConfig): Promise<UpdateConfigSnapshot> {
-    return rejectUnsupported();
-  },
-
-  async appUpdateCheck(): Promise<AppUpdateCheckResult> {
-    return rejectUnsupported();
-  },
-
-  async appUpdateInstall(): Promise<AppUpdateInstallResult> {
-    return rejectUnsupported();
-  },
-
-  async hotUpdateBackend(_input: {
-    sourceRoot?: string;
-    skipGit?: boolean;
-  }): Promise<HotUpdateBackendResult> {
-    return rejectUnsupported();
-  },
-
-  async uiCheckUpdate(): Promise<UiUpdateCheckResult> {
-    return rejectUnsupported();
-  },
-
-  async uiInstallUpdate(): Promise<UiInstallUpdateResult> {
-    return rejectUnsupported();
-  },
-
-  async uiRollback(): Promise<UiInstallUpdateResult> {
-    return rejectUnsupported();
-  },
-
-  onUiUpdateReady(_handler: (payload: UiUpdateReadyPayload) => void): () => void {
-    return noopUnsubscribe();
-  },
-
-  onHotUpdateProgress(_handler: (payload: HotUpdateProgressPayload) => void): () => void {
-    return noopUnsubscribe();
-  },
-
-  onAppUpdateProgress(_handler: (payload: AppUpdateProgressPayload) => void): () => void {
-    return noopUnsubscribe();
-  },
-
-  getRuntimeConfig() {
-    return window.__HERMES_RUNTIME__;
-  },
-
-  async refreshGatewayUrl(): Promise<{ gatewayUrl: string; sessionToken?: string }> {
-    return rejectUnsupported();
-  },
-
-  async getBackendVersion(): Promise<{ version: string }> {
-    return rejectUnsupported();
-  },
-
-  async getRuntimeInfo(): Promise<RuntimeInfo> {
-    return rejectUnsupported();
-  },
-
-  async checkRuntimeUpdate(): Promise<RuntimeUpdateCheckResult> {
-    return rejectUnsupported();
-  },
-
-  async installRuntimeUpdate(): Promise<RuntimeInstallUpdateResult> {
-    return rejectUnsupported();
-  },
-
-  async rollbackRuntime(): Promise<RuntimeInstallUpdateResult> {
-    return rejectUnsupported();
-  },
-
-  async exportProfileBackup(): Promise<BackupExportResult> {
-    return rejectUnsupported();
-  },
-
-  async importProfileBackup(): Promise<BackupImportResult> {
-    return rejectUnsupported();
-  },
-
-  async switchProfile(_input: SwitchProfileInput): Promise<SwitchProfileResult> {
-    return rejectUnsupported();
-  },
-
-  async getConnectionConfig(): Promise<ConnectionConfigView> {
-    return rejectUnsupported();
-  },
-
-  async saveConnectionConfig(_input: ConnectionConfigInput): Promise<ConnectionConfigView> {
-    return rejectUnsupported();
-  },
-
-  async applyConnectionConfig(_input: ConnectionConfigInput): Promise<ApplyConnectionResult> {
-    return rejectUnsupported();
-  },
-
-  async testConnectionConfig(_input: ConnectionConfigInput): Promise<TestConnectionResult> {
-    return rejectUnsupported();
-  },
-
-  async getDesktopControlState(): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async setGuideState(_guideState: GuideState): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async installManagedRuntime(): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async startManagedRuntime(): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async stopManagedRuntime(): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async uninstallManagedRuntime(): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async reinstallManagedRuntime(): Promise<RuntimeControlResult> {
-    return rejectUnsupported();
-  },
-
-  async probeConnectionConfig(_remoteUrl: string): Promise<ProbeConnectionResult> {
-    return rejectUnsupported();
-  },
-
-  async connectionOauthLogin(_remoteUrl: string): Promise<OauthLoginResult> {
-    return rejectUnsupported();
-  },
-
-  async connectionPasswordLogin(_input: {
-    remoteUrl: string;
-    provider: string;
-    username: string;
-    password: string;
-  }): Promise<OauthLoginResult> {
-    return rejectUnsupported();
-  },
-
-  async connectionAuthMe(_remoteUrl: string): Promise<OauthLoginResult> {
-    return rejectUnsupported();
-  },
-
-  async connectionOauthLogout(_remoteUrl: string): Promise<void> {
-    return rejectUnsupported();
-  },
-
-  async scanConfigMigration(_input?: ConfigMigrationScanInput): Promise<ConfigMigrationScanResult> {
-    return rejectUnsupported();
-  },
-
-  async importConfigMigration(_input: ConfigMigrationImportInput): Promise<ConfigMigrationImportResult> {
-    return rejectUnsupported();
-  },
-
-  async getYoloMode(): Promise<YoloModeStatus> {
-    return rejectUnsupported();
-  },
-
-  async setYoloMode(_input: SetYoloModeInput): Promise<SetYoloModeResult> {
-    return rejectUnsupported();
-  },
-
-  async imOnboardingState(_input: ImOnboardingStateInput): Promise<ImOnboardingStateResult> {
-    return rejectUnsupported();
-  },
-
-  async imOnboardingBegin(_input: ImOnboardingBeginInput): Promise<ImOnboardingBeginResult> {
-    return rejectUnsupported();
-  },
-
-  async imOnboardingPoll(_input: ImOnboardingPollInput): Promise<ImOnboardingPollResult> {
-    return rejectUnsupported();
-  },
-
-  async imOnboardingApply(_input: ImOnboardingApplyInput): Promise<ImOnboardingApplyResult> {
-    return rejectUnsupported();
-  },
-
-  async readMemory(): Promise<never> {
-    return rejectUnsupported();
-  },
-
-  async addMemoryEntry(_content: string): Promise<never> {
-    return rejectUnsupported();
-  },
-
-  async updateMemoryEntry(_index: number, _content: string): Promise<never> {
-    return rejectUnsupported();
-  },
-
-  async removeMemoryEntry(_index: number): Promise<never> {
-    return rejectUnsupported();
-  },
-
-  async writeUserProfile(_content: string): Promise<never> {
-    return rejectUnsupported();
   },
 
   async uiStoreSnapshot(): Promise<UiStoreSnapshot> {
@@ -700,7 +411,7 @@ const tauriBridge = {
   },
 
   onSystemResume(handler: () => void): () => void {
-    // Initial build: rely on the JS clock-skew watchdog in gateway-client.ts.
+    // Initial build: rely on the JS clock-skew watchdog in sidecar-client.ts.
     // The watchdog detects sleep/wake within ~5s, which is acceptable.
     // Native power monitoring can be added later via a Tauri event.
     let unlisten: (() => void) | null = null;
@@ -760,15 +471,6 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
     "width:min(760px,calc(100vw - 64px));display:flex;flex-direction:column;" +
       "align-items:center;gap:20px;text-align:center;",
   );
-
-  const mark = document.createElement("img");
-  mark.src = hermesLogo;
-  mark.alt = "AgentDeck";
-  mark.setAttribute(
-    "style",
-    "width:104px;height:104px;border:1px solid rgba(251,250,246,0.14);border-radius: 0;display:block;",
-  );
-  panel.appendChild(mark);
 
   const title = document.createElement("div");
   title.setAttribute(
@@ -1074,21 +776,7 @@ export async function installTauriBridge(): Promise<void> {
     await waitForSidecarReady(status);
   }
 
-  // 没有 Hermes 后端：版本闸门直接放行，旧 REST / 网关调用由 hermesBackendDisabled 拦截。
-  resetVersionCheck();
-  deferBackendVersionCheckForOfflineRuntime();
-
-  window.__HERMES_RUNTIME__ = {
-    platform: "tauri" as const,
-    connectionMode: "managed",
-    portable: false,
-    embedded: false,
-    backendReady: true,
-    hermesBackendDisabled: true,
-    guideState: "completed",
-    managedRuntimeDesiredState: "running",
-    managedRuntimeLifecycleState: "running",
-  };
+  window.__HERMES_RUNTIME__ = { platform: "tauri" };
 
   registerDevtoolsShortcut();
 }

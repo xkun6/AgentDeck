@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ComposerAttachment } from "./composer-types";
 import { AttachmentTray, isAttachmentBusy } from "./goose-composer-attachments";
-import { ContextIndicator } from "./goose-composer-context";
-import type { ComposerContextUsage } from "./composer-types";
 
 afterEach(() => cleanup());
 
@@ -41,25 +39,5 @@ describe("AttachmentTray", () => {
     fireEvent.click(screen.getByRole("button", { name: "移除 demo.txt" }));
     expect(onRemove).not.toHaveBeenCalled();
     expect(isAttachmentBusy({ ...attachment, status: "uploading" })).toBe(true);
-  });
-});
-
-describe("ContextIndicator", () => {
-  const usage: ComposerContextUsage = {
-    used: 90_000,
-    max: 200_000,
-    model: "fake-model",
-    estimated: false,
-  };
-
-  it("toggles the context popover and shows usage", () => {
-    render(<ContextIndicator usage={usage} />);
-    const button = screen.getByRole("button", { name: "上下文窗口" });
-    expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(button);
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(screen.getByText(/90.0k \/ 200k/)).toBeTruthy();
-    fireEvent.click(button);
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

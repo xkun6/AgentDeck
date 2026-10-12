@@ -1,6 +1,4 @@
 import { readUiValue, removeUiValue, subscribeUiStore, writeUiValue } from "@/lib/ui-store";
-import { resolveSessionIdAliases } from "@/lib/session-map";
-import { runtime } from "@/lib/runtime";
 export interface WorkspaceProject {
   path: string;
   name: string;
@@ -14,21 +12,6 @@ const WORKSPACE_PROJECTS_STORAGE_KEY = "hermes-cn-ui.workspaceProjects";
 const SESSION_WORKSPACE_STORAGE_KEY = "hermes-cn-ui.sessionWorkspaces";
 const PINNED_WORKSPACE_PROJECTS_STORAGE_KEY = "hermes-cn-ui.pinnedWorkspaceProjects";
 const WORKSPACE_CHANGED_EVENT = "hermes-cn-ui.workspaces.changed";
-
-export function workspaceStorageScope(): string {
-  if (typeof window === "undefined") return "managed";
-  const mode = runtime.getConnectionMode();
-  if (mode === "managed") return "managed";
-  const target = window.__HERMES_RUNTIME__?.dashboardApiBaseUrl
-    ?? window.__HERMES_RUNTIME__?.apiBaseUrl
-    ?? "unknown";
-  return `${mode}:${encodeURIComponent(target)}`;
-}
-
-function scopedKey(key: string): string {
-  const scope = workspaceStorageScope();
-  return scope === "managed" ? key : `${key}::${scope}`;
-}
 
 export function normalizeWorkspacePath(path: unknown): string {
   return typeof path === "string" ? path.trim().replace(/\/+$/, "") : "";
@@ -46,11 +29,11 @@ function emitWorkspaceChange(): void {
 }
 
 function readJSON<T>(key: string, fallback: T): T {
-  return readUiValue<T>(scopedKey(key), fallback);
+  return readUiValue<T>(key, fallback);
 }
 
 function writeJSON(key: string, value: unknown): void {
-  writeUiValue(scopedKey(key), value);
+  writeUiValue(key, value);
   emitWorkspaceChange();
 }
 
@@ -70,15 +53,15 @@ function normalizeWorkspacePathList(value: unknown): string[] {
 }
 
 export function readWorkspacePath(): string {
-  return normalizeWorkspacePath(readUiValue(scopedKey(WORKSPACE_STORAGE_KEY), ""));
+  return normalizeWorkspacePath(readUiValue(WORKSPACE_STORAGE_KEY, ""));
 }
 
 export function writeWorkspacePath(path: string): void {
   const normalized = normalizeWorkspacePath(path);
   if (normalized) {
-    writeUiValue(scopedKey(WORKSPACE_STORAGE_KEY), normalized);
+    writeUiValue(WORKSPACE_STORAGE_KEY, normalized);
   } else {
-    removeUiValue(scopedKey(WORKSPACE_STORAGE_KEY));
+    removeUiValue(WORKSPACE_STORAGE_KEY);
   }
   emitWorkspaceChange();
 }
@@ -181,18 +164,6 @@ function readRawSessionWorkspaceMap(): Record<string, string> {
   );
 }
 
-function withSessionIdAliases(map: Record<string, string>): Record<string, string> {
-  const expanded = { ...map };
-  for (const [sessionId, workspacePath] of Object.entries(map)) {
-    for (const alias of resolveSessionIdAliases(sessionId, { includeExpired: true })) {
-      if (!expanded[alias]) {
-        expanded[alias] = workspacePath;
-      }
-    }
-  }
-  return expanded;
-}
-
 export function removeWorkspaceProject(path: string): void {
   const normalized = normalizeWorkspacePath(path);
   if (!normalized) return;
@@ -214,7 +185,7 @@ export function removeWorkspaceProject(path: string): void {
 }
 
 export function readSessionWorkspaceMap(): Record<string, string> {
-  return withSessionIdAliases(readRawSessionWorkspaceMap());
+  return readRawSessionWorkspaceMap();
 }
 
 export function rememberSessionWorkspace(sessionId: string | null | undefined, path: string): void {
@@ -223,63 +194,9 @@ export function rememberSessionWorkspace(sessionId: string | null | undefined, p
   if (!normalizedSessionId || !normalizedPath) return;
 
   const map = readRawSessionWorkspaceMap();
-  const aliases = resolveSessionIdAliases(normalizedSessionId, { includeExpired: true });
-  for (const alias of aliases.length > 0 ? aliases : [normalizedSessionId]) {
-    map[alias] = normalizedPath;
-  }
+  map[normalizedSessionId] = normalizedPath;
   writeJSON(SESSION_WORKSPACE_STORAGE_KEY, map);
   rememberWorkspaceProject(normalizedPath);
-}
-
-/**
- * Resolve the workspace that should be shown for a session.
- *
- * Precedence:
- *   1. The backend's stored `cwd` for the session (source of truth — survives
- *      across devices, storage clears, and sessions created before this build).
- *   2. The client-side session→workspace map, keyed by any of the session's ids
- *      (gateway / persistent), for sessions the backend has no explicit cwd for
- *      (legacy sessions, or ones where the user never picked a folder).
- *
- * Returns "" when no workspace is known for the session, so the caller can fall
- * back to its own default (e.g. the last-used global workspace).
- */
-export function resolveSessionWorkspace(
-  backendCwd: string | null | undefined,
-  sessionIds: Array<string | null | undefined>,
-): string {
-  const fromBackend = normalizeWorkspacePath(backendCwd);
-  if (fromBackend) return fromBackend;
-
-  const map = readSessionWorkspaceMap();
-  for (const sessionId of sessionIds) {
-    const key = sessionId?.trim();
-    if (!key) continue;
-    const fromMap = normalizeWorkspacePath(map[key]);
-    if (fromMap) return fromMap;
-  }
-  return "";
-}
-
-export function mirrorSessionWorkspaceMapping(
-  gatewaySessionId: string | null | undefined,
-  persistentSessionId: string | null | undefined,
-): void {
-  const gatewayId = gatewaySessionId?.trim();
-  const persistentId = persistentSessionId?.trim();
-  if (!gatewayId || !persistentId || gatewayId === persistentId) return;
-
-  const map = readRawSessionWorkspaceMap();
-  const workspacePath = normalizeWorkspacePath(map[gatewayId] ?? map[persistentId]);
-  if (!workspacePath) return;
-
-  if (map[gatewayId] === workspacePath && map[persistentId] === workspacePath) {
-    return;
-  }
-  map[gatewayId] = workspacePath;
-  map[persistentId] = workspacePath;
-  writeJSON(SESSION_WORKSPACE_STORAGE_KEY, map);
-  rememberWorkspaceProject(workspacePath);
 }
 
 export function subscribeWorkspaceChanges(listener: () => void): () => void {

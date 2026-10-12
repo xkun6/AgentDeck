@@ -1,10 +1,10 @@
-// WebSocket-compatible shim over the Rust /api/ws relay (src/commands/ws_proxy.rs).
+// WebSocket-compatible shim over the Rust WebSocket relay (src/commands/ws_proxy.rs).
 //
 // Packaged webviews (WKWebView / WebView2) may refuse to open ws://127.0.0.1
 // from the tauri:// origin. The Rust process has no such origin restriction, so
-// it opens the runtime's OFFICIAL /api/ws JSON-RPC socket and relays text
+// it opens the sidecar JSON-RPC socket and relays text
 // frames to/from the webview via Tauri commands + events. This class adapts
-// that relay to the subset of the WebSocket interface GatewayClient consumes
+// that relay to the subset of the WebSocket interface SidecarClient consumes
 // (on* handler properties, readyState, send, close), so the protocol layer is
 // byte-identical between the native and relay paths.
 //
@@ -66,7 +66,7 @@ export class GatewayRelaySocket {
   private closedByUs = false;
 
   // The factory signature is synchronous (`(url) => WebSocket`), so the async
-  // open handshake runs detached; GatewayClient assigns its on* handlers right
+  // open handshake runs detached; SidecarClient assigns its on* handlers right
   // after construction, well before the first dynamic import resolves.
   constructor(url: string) {
     // The Rust side builds the real URL from AppState (and refreshes the token
@@ -121,7 +121,7 @@ export class GatewayRelaySocket {
 
   send(data: string): void {
     if (this.readyState !== GatewayRelaySocket.OPEN) {
-      // Native WebSocket throws on send-before-open; GatewayClient catches it.
+      // Native WebSocket throws on send-before-open; SidecarClient catches it.
       throw new Error("Relay socket is not open");
     }
     void import("@tauri-apps/api/core")
@@ -130,7 +130,7 @@ export class GatewayRelaySocket {
       )
       .catch((error) => {
         // An async send failure means the relay died under us — surface it as
-        // a connection loss so GatewayClient's reconnect path takes over.
+        // a connection loss so SidecarClient's reconnect path takes over.
         this.onerror?.(error);
         this.settleClosed(error instanceof Error ? error.message : String(error));
       });

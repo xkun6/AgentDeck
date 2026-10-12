@@ -156,53 +156,6 @@ export function __resetUiStoreForTests(seed: Record<string, unknown> = {}): void
   notify();
 }
 
-export async function recordUiTurnStats(stats: UiTurnStats): Promise<void> {
-  await bridge()?.uiStoreRecordTurnStats?.(stats).catch(() => {});
-}
-
-export async function getUiTurnStats(sessionId: string | undefined): Promise<UiTurnStats[]> {
-  if (!sessionId) return [];
-  try {
-    return await bridge()?.uiStoreGetTurnStats?.({ sessionId }) ?? [];
-  } catch {
-    return [];
-  }
-}
-
-export async function getUiTurnStatsWindow(input: { sinceMs?: number; limit?: number } = {}): Promise<UiTurnStats[]> {
-  try {
-    return await bridge()?.uiStoreGetTurnStatsWindow?.(input) ?? [];
-  } catch {
-    return [];
-  }
-}
-
-export function recordUiEvent(
-  input: Omit<UiEventInput, "id" | "ts"> & Partial<Pick<UiEventInput, "id" | "ts">>,
-): void {
-  const event: UiEventInput = {
-    id: input.id ?? `evt-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    ts: input.ts ?? Date.now(),
-    eventName: input.eventName,
-    sessionId: input.sessionId,
-    source: input.source,
-    props: input.props,
-    appVersion: input.appVersion,
-  };
-  void bridge()?.uiStoreRecordEvent?.(event).catch(() => {});
-}
-
-export function stableTextHash(value: string | undefined): string | undefined {
-  const text = (value ?? "").replace(/\s+/g, "").trim();
-  if (!text) return undefined;
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
-}
-
 function installGlobalUiStoreBridge(): void {
   (globalThis as any).__HERMES_UI_STORE__ = {
     get: readUiValue,

@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { Check, Copy, PanelRight } from "lucide-react";
 import type { AgentPermissionResponse, ProviderInfo } from "@agentdeck/protocol";
 import {
+  ASSISTANT_FALLBACK_NAME,
   activeSessionIdAtom,
   assistantDisplayNameAtom,
   conversationFontSizeAtom,
@@ -18,6 +19,7 @@ import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session
 import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useComposerTimer } from "@/hooks/use-composer-timer";
 import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
+import { agentProviderLabel } from "@/lib/agent-session-display";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
 import type { AgentSelection } from "@/lib/agent-selection";
@@ -281,11 +283,13 @@ export function DetailRoute() {
     if (!snapshot) return null;
     const list = providersQuery.data ?? [];
     if (list.some((provider) => provider.id === snapshot.provider)) return list;
-    return [...list, { id: snapshot.provider, kind: "acp", label: snapshot.provider, available: true }];
+    return [...list, { id: snapshot.provider, kind: "acp", label: agentProviderLabel(snapshot.provider), available: true }];
   }, [providersQuery.data, snapshot]);
   const providerLabel = providers?.find((provider) => provider.id === snapshot?.provider)?.label
     ?? snapshot?.provider
     ?? "";
+  // 助手显示名：用户自定义名称 → 当前会话的 Agent 名称 → 「Agent」。
+  const assistantName = assistantDisplayName || providerLabel || ASSISTANT_FALLBACK_NAME;
   const catalog = useMemo(() => {
     if (!snapshot) return null;
     const modes = snapshot.availableModes?.length ? snapshot.availableModes : catalogQuery.data?.modes ?? [];
@@ -321,7 +325,7 @@ export function DetailRoute() {
   const composerTick = useComposerTimer(runtimeIsBusy, runtime.turnStartedAt);
   const stall = useStallWatchdog(runtime);
   const composerLoadingPlaceholder = runtimeIsBusy && runtime.turnStartedAt
-    ? `${assistantDisplayName} 思考中 · ${formatElapsedTimer(composerTick)}`
+    ? `${assistantName} 思考中 · ${formatElapsedTimer(composerTick)}`
     : undefined;
   const timelineStatus =
     runtime.statusMessage ||
@@ -407,6 +411,7 @@ export function DetailRoute() {
             }
             turnStartedAt={runtimeIsBusy ? runtime.turnStartedAt : undefined}
             progressModel={runtimeIsBusy ? model || undefined : undefined}
+            assistantName={assistantName}
           />
           <div className={s.composerArea}>
             {runtimeIsBusy && stall.isStalled ? (
@@ -430,7 +435,6 @@ export function DetailRoute() {
               onSend={onSend}
               loadingPlaceholder={composerLoadingPlaceholder}
               showMeta={false}
-              showCompressCommand={false}
               loading={runtimeIsBusy}
               disabled={closed || notFound || missing}
               onStop={onStop}

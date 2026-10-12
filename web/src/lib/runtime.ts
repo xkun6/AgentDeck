@@ -1,72 +1,32 @@
-import {
-  deferBackendVersionCheckForOfflineRuntime,
-  resetVersionCheck,
-  type BackendRecoveryReason,
-} from "./version-check";
 import type {
-  ApplyConnectionResult,
-  BackupExportResult,
-  BackupImportResult,
-  ConfigMigrationImportInput,
-  ConfigMigrationImportResult,
-  ConfigMigrationScanInput,
-  ConfigMigrationScanResult,
-  ConnectionConfigInput,
-  ConnectionConfigView,
-  ConnectionMode,
-  DesktopUpdateManifestFetchResult,
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
   ExportLogSnapshotInput,
   ExportLogSnapshotResult,
-  ExportSessionJsonInput,
-  ExportSessionJsonResult,
-  FileUploadInput,
-  HermesMessageMetadata,
-  ImOnboardingApplyInput,
-  ImOnboardingApplyResult,
-  ImOnboardingBeginInput,
-  ImOnboardingBeginResult,
-  ImOnboardingPollInput,
-  ImOnboardingPollResult,
-  ImOnboardingStateInput,
-  ImOnboardingStateResult,
-  ProbeConnectionResult,
-  OauthLoginResult,
-  RuntimeInfo,
-  RuntimeControlResult,
-  RuntimeInstallUpdateResult,
-  RuntimeUpdateCheckResult,
-  SetYoloModeInput,
-  SetYoloModeResult,
-  SwitchProfileInput,
-  SwitchProfileResult,
-  TestConnectionResult,
-  UiInstallUpdateResult,
-  UiUpdateCheckResult,
-  UiUpdateReadyPayload,
-  YoloModeStatus,
 } from "@agentdeck/protocol";
+import type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
+
+export type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
 
 export type RuntimePlatform = "web" | "electron" | "tauri";
 export type HostOS = "macos" | "windows" | "linux" | "unknown";
 
-export interface ElectronApiRequestInput {
+export interface ExternalRequestInput {
   path: string;
   method?: string;
   headers?: Record<string, string>;
   body?: string | null;
 }
 
-export interface ElectronApiRequestResult {
+export interface ExternalRequestResult {
   ok: boolean;
   status: number;
-  statusText: string;
-  headers: Record<string, string>;
+  statusText?: string;
+  headers?: Record<string, string>;
   body: string;
 }
 
-export interface ElectronFilePickerResult {
+export interface FilePickerResult {
   canceled: boolean;
   paths: string[];
 }
@@ -83,98 +43,9 @@ export interface DownloadedImageResult {
   size: number;
 }
 
-export interface ElectronSimpleResult {
+export interface SimpleResult {
   ok: boolean;
   message?: string | null;
-}
-
-export interface MemoryEntry {
-  index: number;
-  content: string;
-}
-
-export interface MemoryInfo {
-  memory: {
-    content: string;
-    exists: boolean;
-    lastModified: number | null;
-    entries: MemoryEntry[];
-    charCount: number;
-    charLimit: number;
-  };
-  user: {
-    content: string;
-    exists: boolean;
-    lastModified: number | null;
-    charCount: number;
-    charLimit: number;
-  };
-  stats: { totalSessions: number; totalMessages: number };
-}
-
-export interface MemoryMutationResult {
-  success: boolean;
-  error?: string | null;
-}
-
-export interface UiStoreSnapshot {
-  kv: Record<string, unknown>;
-}
-
-export interface UiTurnStats {
-  id: string;
-  sessionId: string;
-  gatewaySessionId?: string;
-  clientMessageId?: string;
-  backendMessageId?: number;
-  turnIndex?: number;
-  contentHash?: string;
-  metadata?: HermesMessageMetadata;
-  model?: string;
-  provider?: string;
-  startedAt?: number;
-  firstTokenAt?: number;
-  completedAt?: number;
-  ttftMs?: number;
-  durationMs?: number;
-  tokensInput?: number;
-  tokensOutput?: number;
-  tokensTotal?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  reasoningTokens?: number;
-  contextUsed?: number;
-  contextMax?: number;
-  apiCalls?: number;
-  costUsd?: number;
-  costStatus?: string;
-  finishReason?: string;
-  status?: string;
-  createdAt?: number;
-}
-
-export interface UiEventInput {
-  id: string;
-  ts: number;
-  eventName: string;
-  sessionId?: string;
-  source?: string;
-  props?: Record<string, unknown>;
-  appVersion?: string;
-}
-
-export interface ExportDebugBundleInput {
-  frontendDebug?: unknown;
-  rendererDiagnostics?: Record<string, unknown>;
-}
-
-export interface ExportDebugBundleResult {
-  ok: boolean;
-  zipPath: string;
-  directoryPath: string;
-  sizeBytes: number;
-  includedFiles: number;
-  warnings: string[];
 }
 
 export interface DesktopNotifyInput {
@@ -201,7 +72,6 @@ export interface DesktopNotifyResult {
 }
 
 export interface TerminalStartInput {
-  purpose?: "shell" | "gatewaySetup" | "gatewayStatus";
   cwd?: string;
   cols?: number;
   rows?: number;
@@ -209,7 +79,6 @@ export interface TerminalStartInput {
 }
 
 export interface TerminalOpenExternalInput {
-  purpose?: "shell" | "gatewaySetup" | "gatewayStatus";
   cwd?: string;
 }
 
@@ -217,13 +86,6 @@ export interface TerminalStartResult {
   terminalId: string;
   cwd: string;
   shell: string;
-  profile: string;
-  hermesHome: string;
-  managedRuntime?: {
-    runtimeVersion: string;
-    executablePath: string;
-    shimDir: string;
-  } | null;
 }
 
 export interface ExternalTerminalResult {
@@ -428,117 +290,27 @@ export interface HermesGitBridge {
 
 declare global {
   interface Window {
-    __HERMES_SESSION_TOKEN__?: string;
     __TAURI_INTERNALS__?: unknown;
+    /** 启动时由 main.tsx / tauri-bridge 写入的运行环境信息。 */
     __HERMES_RUNTIME__?: {
       platform?: RuntimePlatform;
-      apiBaseUrl?: string;
-      /** Actual dashboard API origin even in Vite dev, where apiBaseUrl is intentionally hidden. */
-      dashboardApiBaseUrl?: string;
-      gatewayUrl?: string;
-      sessionToken?: string;
-      /** Kernel version from the active managed runtime install record. */
-      kernelVersion?: string;
-      currentProfile?: string;
-      /** "managed" for desktop-owned runtime, "local"/"remote" for attached backends. */
-      connectionMode?: ConnectionMode;
-      backendReady?: boolean;
-      /** Why only the offline repair shell is mounted instead of the backend UI. */
-      backendRecoveryReason?: BackendRecoveryReason;
-      guideState?: import("@agentdeck/protocol").GuideState;
-      managedRuntimeDesiredState?: import("@agentdeck/protocol").ManagedRuntimeDesiredState;
-      managedRuntimeLifecycleState?: import("@agentdeck/protocol").ManagedRuntimeLifecycleState;
-      /** Running as the portable (unzip-and-run) desktop distribution. */
-      portable?: boolean;
-      /** True when the managed runtime runs in-process (embedded CPython).
-       *  apiBaseUrl is the `embedded://local` placeholder; REST goes through
-       *  native IPC and the gateway rides the in-memory relay (zero HTTP). */
-      embedded?: boolean;
-      /** UI is running in a system browser through the desktop loopback relay. */
-      browserCompanion?: boolean;
-      /** AgentDeck：没有 Hermes 后端，旧的 Hermes REST / 网关调用直接返回「暂不支持」。 */
-      hermesBackendDisabled?: boolean;
     };
+    /** Tauri 下由 lib/tauri-bridge.ts 挂载的本地能力桥（字段名沿用历史命名）。 */
     hermesDesktop?: {
       windowType: "electron" | "tauri";
       /** Fatal compatibility/error dialog + force-quit the app. */
       fatalErrorAndExit?(input: { title: string; message: string }): Promise<never>;
-      request(input: ElectronApiRequestInput): Promise<ElectronApiRequestResult>;
-      externalRequest?(input: ElectronApiRequestInput): Promise<ElectronApiRequestResult>;
-      uploadFile?(input: FileUploadInput): Promise<ElectronApiRequestResult>;
+      externalRequest?(input: ExternalRequestInput): Promise<ExternalRequestResult>;
       downloadExternalImage?(input: DownloadExternalImageInput): Promise<DownloadedImageResult>;
-      pickFiles?(): Promise<ElectronFilePickerResult>;
-      pickDirectory?(): Promise<ElectronFilePickerResult>;
-      requestMicrophoneAccess?(): Promise<boolean>;
-      createWorkspaceProject?(): Promise<ElectronFilePickerResult>;
-      openWorkspacePath?(input: { path: string }): Promise<ElectronApiRequestResult>;
-      openExternalUrl?(input: { url: string }): Promise<ElectronSimpleResult>;
-      openBrowserCompanion?(): Promise<{ ok: boolean; url: string; port: number }>;
+      pickFiles?(): Promise<FilePickerResult>;
+      pickDirectory?(): Promise<FilePickerResult>;
+      createWorkspaceProject?(): Promise<FilePickerResult>;
+      openWorkspacePath?(input: { path: string }): Promise<ExternalRequestResult>;
+      openExternalUrl?(input: { url: string }): Promise<SimpleResult>;
+      toggleDevtools?(): Promise<void>;
       exportLogSnapshot?(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult>;
-      exportSessionJson?(input: ExportSessionJsonInput): Promise<ExportSessionJsonResult>;
-      exportDebugBundle?(input?: ExportDebugBundleInput): Promise<ExportDebugBundleResult>;
       environmentCheck?(): Promise<EnvironmentCheckResult>;
       codingAgentsCheck?(): Promise<CodingAgentsCheckResult>;
-      checkDesktopUpdate?(): Promise<DesktopUpdateManifestFetchResult>;
-      getUpdateConfig?(): Promise<import("@agentdeck/protocol").UpdateConfigSnapshot>;
-      setUpdateConfig?(config: import("@agentdeck/protocol").UpdateConfig): Promise<import("@agentdeck/protocol").UpdateConfigSnapshot>;
-      appUpdateCheck?(): Promise<import("@agentdeck/protocol").AppUpdateCheckResult>;
-      appUpdateInstall?(): Promise<import("@agentdeck/protocol").AppUpdateInstallResult>;
-      onAppUpdateProgress?(handler: (payload: import("@agentdeck/protocol").AppUpdateProgressPayload) => void): () => void;
-      /** Track B UI hot update: signed web-dist zip swap without restarting the
-       *  kernel. The Rust side reloads the window after a successful install;
-       *  the `ui-update-ready` listener is the renderer-side fallback. */
-      uiCheckUpdate?(): Promise<UiUpdateCheckResult>;
-      uiInstallUpdate?(): Promise<UiInstallUpdateResult>;
-      uiRollback?(): Promise<UiInstallUpdateResult>;
-      onUiUpdateReady?(handler: (payload: UiUpdateReadyPayload) => void): () => void;
-      hotUpdateBackend?(input: { sourceRoot?: string; skipGit?: boolean }): Promise<import("@agentdeck/protocol").HotUpdateBackendResult>;
-      onHotUpdateProgress?(handler: (payload: import("@agentdeck/protocol").HotUpdateProgressPayload) => void): () => void;
-      getRuntimeConfig?(): Window["__HERMES_RUNTIME__"];
-      refreshGatewayUrl?(): Promise<{ gatewayUrl: string; sessionToken?: string }>;
-      /** Embedded mode only: Core version read from Python via IPC (no HTTP). */
-      getBackendVersion?(): Promise<{ version: string }>;
-      getRuntimeInfo?(): Promise<RuntimeInfo>;
-      checkRuntimeUpdate?(): Promise<RuntimeUpdateCheckResult>;
-      installRuntimeUpdate?(): Promise<RuntimeInstallUpdateResult>;
-      rollbackRuntime?(): Promise<RuntimeInstallUpdateResult>;
-      exportProfileBackup?(): Promise<BackupExportResult>;
-      importProfileBackup?(): Promise<BackupImportResult>;
-      switchProfile?(input: SwitchProfileInput): Promise<SwitchProfileResult>;
-      getConnectionConfig?(): Promise<ConnectionConfigView>;
-      saveConnectionConfig?(input: ConnectionConfigInput): Promise<ConnectionConfigView>;
-      applyConnectionConfig?(input: ConnectionConfigInput): Promise<ApplyConnectionResult>;
-      testConnectionConfig?(input: ConnectionConfigInput): Promise<TestConnectionResult>;
-      getDesktopControlState?(): Promise<RuntimeControlResult>;
-      setGuideState?(guideState: import("@agentdeck/protocol").GuideState): Promise<RuntimeControlResult>;
-      installManagedRuntime?(): Promise<RuntimeControlResult>;
-      startManagedRuntime?(): Promise<RuntimeControlResult>;
-      stopManagedRuntime?(): Promise<RuntimeControlResult>;
-      uninstallManagedRuntime?(): Promise<RuntimeControlResult>;
-      reinstallManagedRuntime?(): Promise<RuntimeControlResult>;
-      probeConnectionConfig?(remoteUrl: string): Promise<ProbeConnectionResult>;
-      connectionOauthLogin?(remoteUrl: string): Promise<OauthLoginResult>;
-      connectionPasswordLogin?(input: {
-        remoteUrl: string;
-        provider: string;
-        username: string;
-        password: string;
-      }): Promise<OauthLoginResult>;
-      connectionAuthMe?(remoteUrl: string): Promise<OauthLoginResult>;
-      connectionOauthLogout?(remoteUrl: string): Promise<void>;
-      scanConfigMigration?(input?: ConfigMigrationScanInput): Promise<ConfigMigrationScanResult>;
-      importConfigMigration?(input: ConfigMigrationImportInput): Promise<ConfigMigrationImportResult>;
-      getYoloMode?(): Promise<YoloModeStatus>;
-      setYoloMode?(input: SetYoloModeInput): Promise<SetYoloModeResult>;
-      imOnboardingState?(input: ImOnboardingStateInput): Promise<ImOnboardingStateResult>;
-      imOnboardingBegin?(input: ImOnboardingBeginInput): Promise<ImOnboardingBeginResult>;
-      imOnboardingPoll?(input: ImOnboardingPollInput): Promise<ImOnboardingPollResult>;
-      imOnboardingApply?(input: ImOnboardingApplyInput): Promise<ImOnboardingApplyResult>;
-      readMemory?(): Promise<MemoryInfo>;
-      addMemoryEntry?(content: string): Promise<MemoryMutationResult>;
-      updateMemoryEntry?(index: number, content: string): Promise<MemoryMutationResult>;
-      removeMemoryEntry?(index: number): Promise<boolean>;
-      writeUserProfile?(content: string): Promise<MemoryMutationResult>;
       uiStoreSnapshot?(): Promise<UiStoreSnapshot>;
       uiStoreSetKv?(input: { key: string; value: unknown }): Promise<boolean>;
       uiStoreRemoveKv?(input: { key: string }): Promise<boolean>;
@@ -571,10 +343,6 @@ declare global {
   }
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value.slice(0, -1) : value;
-}
-
 export function detectHostOS(): HostOS {
   if (typeof navigator === "undefined") return "unknown";
   const platform = navigator.platform || "";
@@ -597,182 +365,5 @@ export const runtime = {
     if (window.__HERMES_RUNTIME__?.platform) return window.__HERMES_RUNTIME__.platform;
     if (window.__TAURI_INTERNALS__) return "tauri";
     return "web";
-  },
-
-  getSessionToken(): string | undefined {
-    return window.__HERMES_RUNTIME__?.sessionToken ?? window.__HERMES_SESSION_TOKEN__;
-  },
-
-  getConnectionMode(): ConnectionMode {
-    return window.__HERMES_RUNTIME__?.connectionMode ?? "managed";
-  },
-
-  /** True when the desktop owns and can restart the bundled Hermes runtime. */
-  isManaged(): boolean {
-    return this.getConnectionMode() === "managed";
-  },
-
-  /** True when the desktop is attached to a loopback Hermes Agent CLI dashboard. */
-  isLocalConnection(): boolean {
-    return this.getConnectionMode() === "local";
-  },
-
-  /** True when the desktop is attached to a remote Hermes Agent (shell mode). */
-  isRemote(): boolean {
-    return this.getConnectionMode() === "remote";
-  },
-
-  /** True for either attached backend where process/profile lifecycle is external. */
-  isAttached(): boolean {
-    return this.getConnectionMode() !== "managed";
-  },
-
-  isBackendReady(): boolean {
-    return window.__HERMES_RUNTIME__?.backendReady ?? true;
-  },
-
-  /** AgentDeck 下旧 Hermes 后端不存在：REST 与网关调用应立即失败而不是发请求。 */
-  isHermesBackendDisabled(): boolean {
-    if (typeof window === "undefined") return false;
-    return window.__HERMES_RUNTIME__?.hermesBackendDisabled ?? false;
-  },
-
-  getGuideState(): import("@agentdeck/protocol").GuideState {
-    return window.__HERMES_RUNTIME__?.guideState ?? "completed";
-  },
-
-  applyRuntimeControlResult(result: RuntimeControlResult): void {
-    if (!window.__HERMES_RUNTIME__) return;
-    // Managed-runtime control snapshots are also shown while attached to an
-    // external backend. In that mode they must not overwrite the external
-    // backend's readiness/recovery gate. For managed mode, preserve the
-    // intentional-offline exemption after stop/uninstall refreshes.
-    if (window.__HERMES_RUNTIME__.connectionMode !== "local"
-      && window.__HERMES_RUNTIME__.connectionMode !== "remote") {
-      resetVersionCheck();
-      window.__HERMES_RUNTIME__.backendReady = result.backendReady;
-      if (!result.backendReady && result.desiredState !== "running") {
-        deferBackendVersionCheckForOfflineRuntime();
-        window.__HERMES_RUNTIME__.backendRecoveryReason = "managed-runtime-offline";
-      } else {
-        window.__HERMES_RUNTIME__.backendRecoveryReason = undefined;
-      }
-    }
-    window.__HERMES_RUNTIME__.guideState = result.guideState;
-    window.__HERMES_RUNTIME__.managedRuntimeDesiredState = result.desiredState;
-    window.__HERMES_RUNTIME__.managedRuntimeLifecycleState = result.lifecycleState;
-  },
-
-    /** True when running as the portable (unzip-and-run) desktop distribution. */
-    isPortable(): boolean {
-      return window.__HERMES_RUNTIME__?.portable ?? false;
-    },
-    /** True when the managed runtime runs in-process (embedded CPython).
-     *  In this mode REST must go through native IPC and the gateway must ride
-     *  the Rust relay — there is no loopback HTTP/WebSocket at all. */
-    isEmbedded(): boolean {
-      return window.__HERMES_RUNTIME__?.embedded ?? false;
-    },
-
-  getApiUrl(path: string): string {
-    const baseUrl = window.__HERMES_RUNTIME__?.apiBaseUrl;
-    if (!baseUrl) return path;
-    return `${trimTrailingSlash(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`;
-  },
-
-  getGatewayUrl(): string {
-    if (window.__HERMES_RUNTIME__?.gatewayUrl) {
-      return window.__HERMES_RUNTIME__.gatewayUrl;
-    }
-
-    const url = new URL("/api/ws", window.location.href);
-    url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = this.getSessionToken();
-    if (token) url.searchParams.set("token", token);
-    return url.toString();
-  },
-
-  async refreshGatewayUrl(): Promise<string> {
-    if (window.hermesDesktop?.refreshGatewayUrl) {
-      try {
-        const result = await window.hermesDesktop.refreshGatewayUrl();
-        if (window.__HERMES_RUNTIME__) {
-          window.__HERMES_RUNTIME__.gatewayUrl = result.gatewayUrl;
-          if (result.sessionToken) {
-            window.__HERMES_RUNTIME__.sessionToken = result.sessionToken;
-          }
-        }
-        return result.gatewayUrl;
-      } catch {}
-    }
-    return this.getGatewayUrl();
-  },
-
-  // 桌面端启动时由主进程把 sticky default 通过 --hermes-current-profile arg
-  // 推过来；web 模式下没有这个值，调用方可以走 GET /api/profiles/active
-  // 来 fallback。
-  getCurrentProfile(): string | undefined {
-    return window.__HERMES_RUNTIME__?.currentProfile;
-  },
-
-  // 桌面端 switchProfile IPC 成功后调用——把新 token / gateway URL / profile
-  // 名同步进 __HERMES_RUNTIME__，让后续 transport 调用看到新值。apiBaseUrl
-  // 通常不变（dashboard 重启时端口固定），但偶尔被 fallback 端口顶到旁边
-  // 所以也一起更新。
-  applySwitchProfileResult(result: SwitchProfileResult): void {
-    if (!result.ok || !window.__HERMES_RUNTIME__) return;
-    // New profile may point to a different backend installation/version.
-    resetVersionCheck();
-    if (result.apiBaseUrl) window.__HERMES_RUNTIME__.apiBaseUrl = result.apiBaseUrl;
-    if (result.gatewayUrl) window.__HERMES_RUNTIME__.gatewayUrl = result.gatewayUrl;
-    if (result.sessionToken) window.__HERMES_RUNTIME__.sessionToken = result.sessionToken;
-    if (result.profileName) window.__HERMES_RUNTIME__.currentProfile = result.profileName;
-  },
-
-  // After set_yolo_mode restarts the managed runtime, the session token rotated
-  // and the gateway URL/port may have shifted. Adopt the new values so the next
-  // transport call and WebSocket reconnect use the live dashboard.
-  applyYoloRestartResult(result: SetYoloModeResult): void {
-    if (!result.ok || !result.restarted || !window.__HERMES_RUNTIME__) return;
-    // Managed runtime was restarted; re-verify its version on next contact.
-    resetVersionCheck();
-    if (result.apiBaseUrl) {
-      // In Vite dev `apiBaseUrl` is intentionally undefined (relative paths go
-      // through the proxy); only refresh it when production already set it.
-      if (window.__HERMES_RUNTIME__.apiBaseUrl) {
-        window.__HERMES_RUNTIME__.apiBaseUrl = result.apiBaseUrl;
-      }
-      window.__HERMES_RUNTIME__.dashboardApiBaseUrl = result.apiBaseUrl;
-    }
-    if (result.gatewayUrl) window.__HERMES_RUNTIME__.gatewayUrl = result.gatewayUrl;
-    if (result.sessionToken) window.__HERMES_RUNTIME__.sessionToken = result.sessionToken;
-  },
-  applyConfigMigrationResult(result: ConfigMigrationImportResult): void {
-    if (!result.ok || !window.__HERMES_RUNTIME__) return;
-    // Migration may have swapped the backend/profile under us.
-    resetVersionCheck();
-    if (result.apiBaseUrl) {
-      if (window.__HERMES_RUNTIME__.apiBaseUrl) {
-        window.__HERMES_RUNTIME__.apiBaseUrl = result.apiBaseUrl;
-      }
-      window.__HERMES_RUNTIME__.dashboardApiBaseUrl = result.apiBaseUrl;
-    }
-    if (result.gatewayUrl) window.__HERMES_RUNTIME__.gatewayUrl = result.gatewayUrl;
-    if (result.sessionToken) window.__HERMES_RUNTIME__.sessionToken = result.sessionToken;
-    if (result.targetProfileName) window.__HERMES_RUNTIME__.currentProfile = result.targetProfileName;
-  },
-  applyBackupImportResult(result: BackupImportResult): void {
-    if ((!result.ok && !result.recoveredPreviousProfile) || !window.__HERMES_RUNTIME__) return;
-    // Backup restore may have switched backend/profile; re-verify.
-    resetVersionCheck();
-    if (result.apiBaseUrl) {
-      if (window.__HERMES_RUNTIME__.apiBaseUrl) {
-        window.__HERMES_RUNTIME__.apiBaseUrl = result.apiBaseUrl;
-      }
-      window.__HERMES_RUNTIME__.dashboardApiBaseUrl = result.apiBaseUrl;
-    }
-    if (result.gatewayUrl) window.__HERMES_RUNTIME__.gatewayUrl = result.gatewayUrl;
-    if (result.sessionToken) window.__HERMES_RUNTIME__.sessionToken = result.sessionToken;
-    if (result.ok && result.targetProfileName) window.__HERMES_RUNTIME__.currentProfile = result.targetProfileName;
   },
 };

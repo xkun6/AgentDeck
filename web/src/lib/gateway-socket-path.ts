@@ -1,7 +1,7 @@
-// Native-vs-relay socket path selection for the gateway WebSocket.
+// Native-vs-relay socket path selection for the sidecar WebSocket.
 //
-// Both paths speak the IDENTICAL official /api/ws JSON-RPC protocol through
-// the same GatewayClient — only the byte carrier differs:
+// Both paths speak the IDENTICAL JSON-RPC protocol through the same
+// SidecarClient — only the byte carrier differs:
 //   - "native": the webview opens ws://127.0.0.1 itself (official desktop
 //     architecture; zero proxy hops)
 //   - "relay":  Rust opens the socket and forwards frames over Tauri IPC
@@ -17,12 +17,12 @@
 // ways. A synchronous SecurityError from `new WebSocket(...)` flips to relay
 // IMMEDIATELY (same connect attempt, zero added latency). An async pre-open
 // failure increments a streak; the flip happens on the 2nd consecutive one —
-// the retry in between goes through GatewayClient.scheduleReconnect, which
-// refreshes the gateway URL first, ruling out token rotation masquerading as
+// the retry in between goes through SidecarClient.scheduleReconnect, which
+// re-resolves the sidecar URL first, ruling out token rotation masquerading as
 // a blocked socket. Post-open closes never count: an established-then-dropped
 // connection is a reconnect concern, not a path concern. If the relay itself
 // then fails pre-open repeatedly, the learned value is cleared and the path
-// reverts to native so the next attempts/launches re-probe (a down dashboard
+// reverts to native so the next attempts/launches re-probe (a down sidecar
 // fails both paths alike; whichever works first sticks).
 import { GatewayRelaySocket } from "./gateway-relay-socket";
 import { runtime } from "./runtime";
@@ -92,7 +92,7 @@ function resetToNative(): void {
 }
 
 // Observe one native connection attempt. Uses addEventListener so it coexists
-// with the on* handlers GatewayClient assigns after the factory returns.
+// with the on* handlers SidecarClient assigns after the factory returns.
 function watchNativeAttempt(ws: WebSocket): void {
   let opened = false;
   let counted = false;
@@ -115,7 +115,7 @@ function watchNativeAttempt(ws: WebSocket): void {
 }
 
 function watchRelayAttempt(socket: GatewayRelaySocket): void {
-  // GatewayClient owns socket.on* — observe via a chained wrapper instead.
+  // SidecarClient owns socket.on* — observe via a chained wrapper instead.
   let opened = false;
   const prevOnOpen = socket.onopen;
   const prevOnClose = socket.onclose;
@@ -133,28 +133,12 @@ function watchRelayAttempt(socket: GatewayRelaySocket): void {
   };
 }
 
-// GatewaySocketFactory passed to the GatewayClient singleton. Non-Tauri
+// Socket factory passed to the SidecarClient singleton. Non-Tauri
 // platforms always use the native WebSocket (the relay commands only exist in
 // the Tauri shell).
 export function createGatewaySocket(url: string): WebSocket {
   if (runtime.platform !== "tauri") {
     return new WebSocket(url);
-  }
-
-  // Embedded mode: the gateway runs inside the Rust process — there is no
-  // ws:// socket at all, so the webview always rides the Rust relay, which
-  // dispatches frames into the in-memory transport.
-  if (runtime.isEmbedded()) {
-    return new GatewayRelaySocket(url) as unknown as WebSocket;
-  }
-
-  // Remote mode (attached to a remote Hermes Agent) always rides the Rust
-  // relay: the webview CSP only allows connect-src 127.0.0.1, so a native
-  // ws(s):// to a remote host is blocked — and the relay keeps the session
-  // token on the Rust side. Deliberately NOT learned (like the QA override):
-  // switching back to local must re-probe the native path.
-  if (runtime.isRemote()) {
-    return new GatewayRelaySocket(url) as unknown as WebSocket;
   }
 
   if (getActiveSocketPath() === "relay") {

@@ -308,61 +308,6 @@
   text-decoration: underline;
 }
 
-/* source chip — same tones as history page */
-.sourceChip {
-  font-size: 10.5px;
-  color: var(--h-text-2);
-  padding: 4px 8px;
-  background: var(--h-bg-chip);
-  border-radius: 0;
-  text-align: center;
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-  display: inline-block;
-}
-
-.sourceChip[data-tone="cli"] {
-  font-family: var(--h-font-mono);
-}
-
-.sourceChip[data-tone="tui"] {
-  color: #4f6e44;
-  background: color-mix(in srgb, #22c55e 16%, transparent);
-  font-family: var(--h-font-mono);
-}
-
-.sourceChip[data-tone="web"] {
-  color: #3a4f6e;
-  background: color-mix(in srgb, #5a89ff 14%, transparent);
-}
-
-.sourceChip[data-tone="dashboard"] {
-  color: #6e4f3a;
-  background: color-mix(in srgb, #f0a040 16%, transparent);
-}
-
-.sourceChip[data-tone="wechat"] {
-  color: #2f6e3c;
-  background: color-mix(in srgb, #07c160 16%, transparent);
-}
-
-.sourceChip[data-tone="feishu"] {
-  color: #2f5a8c;
-  background: color-mix(in srgb, #3370ff 14%, transparent);
-}
-
-.sourceChip[data-tone="tg"] {
-  color: #2f6e8a;
-  background: color-mix(in srgb, #229ed9 16%, transparent);
-}
-
-.sourceChip[data-tone="custom"] {
-  color: var(--h-text-2);
-  background: var(--h-bg-soft);
-  border: 1px dashed var(--h-line);
-  padding: 4px 4px;
-}
-
 /* empty / error */
 .emptyHint {
   padding: 32px;

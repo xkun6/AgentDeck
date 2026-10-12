@@ -1,21 +1,12 @@
 import { useMemo, useState } from "react";
-import { sessionDisplayTitle } from "@/lib/session-title";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { Dot } from "@/components/ui/pill";
-import type { SessionSummary } from "@agentdeck/protocol";
+import { AGENT_STATUS_LABELS } from "@/lib/agent-session-display";
+import { sessionTokens, shortId, type PanelSession } from "./panel-session";
 import s from "./recent-table.module.css";
 
 const COLLAPSED_ROWS = 5;
 const PAGE_SIZE = 20;
-
-function shortId(id: string): string {
-  return id.slice(-6);
-}
-
-function formatEndedAt(unixSec: number | null): string {
-  if (!unixSec) return "—";
-  return relativeTime(unixSec);
-}
 
 // Compact page list with ellipsis: always show first + last + 1-page neighbors of current.
 // Examples (current/total): 1/10 → [1,2,…,10] · 5/10 → [1,…,4,5,6,…,10] · 10/10 → [1,…,9,10]
@@ -34,8 +25,8 @@ function buildPageItems(current: number, total: number): Array<number | "..."> {
 }
 
 interface RecentTableProps {
-  sessions: SessionSummary[];
-  onOpen: (session: SessionSummary) => void;
+  sessions: PanelSession[];
+  onOpen: (session: PanelSession) => void;
 }
 
 export function RecentTable({ sessions, onOpen }: RecentTableProps) {
@@ -71,37 +62,35 @@ export function RecentTable({ sessions, onOpen }: RecentTableProps) {
             <tr>
               <th style={{ width: 80 }}>ID</th>
               <th>标题</th>
+              <th style={{ width: 112 }}>Agent</th>
               <th style={{ width: 132 }}>模型</th>
-              <th style={{ width: 92 }}>来源</th>
-              <th style={{ width: 112 }}>完成</th>
+              <th style={{ width: 112 }}>更新</th>
               <th style={{ width: 92 }} className={s.numeric}>Tokens</th>
             </tr>
           </thead>
           <tbody>
             {sliced.map((sess) => {
-              const isError = sess.end_reason === "error";
-              const isInterrupted = sess.end_reason === "interrupted";
+              const { agent } = sess;
+              const isError = agent.status === "error";
               return (
-                <tr key={sess.id} onClick={() => onOpen(sess)}>
-                  <td className={s.mono}>{shortId(sess.id)}</td>
+                <tr key={agent.id} onClick={() => onOpen(sess)}>
+                  <td className={s.mono}>{shortId(agent.id)}</td>
                   <td>
                     <span className={s.titleCell} data-error={isError ? "true" : undefined}>
-                      {sessionDisplayTitle(sess)}
-                      {isError && " — 已中止"}
+                      {sess.title}
+                      {isError && " — 出错"}
                     </span>
                   </td>
-                  <td className={s.mono}>{sess.model || "—"}</td>
-                  <td className={s.mono}>{sess.source ?? "tui"}</td>
+                  <td className={s.mono}>{sess.provider}</td>
+                  <td className={s.mono}>{agent.model || "—"}</td>
                   <td>
-                    <span className={s.statusCell}>
-                      {(isError || isInterrupted) && (
-                        <Dot tone={isError ? "err" : "warn"} />
-                      )}
-                      {formatEndedAt(sess.ended_at)}
+                    <span className={s.statusCell} title={AGENT_STATUS_LABELS[agent.status]}>
+                      {isError && <Dot tone="err" />}
+                      {relativeTime(agent.updatedAt / 1000)}
                     </span>
                   </td>
                   <td className={s.numeric}>
-                    {formatTokens((sess.input_tokens ?? 0) + (sess.output_tokens ?? 0))}
+                    {formatTokens(sessionTokens(agent))}
                   </td>
                 </tr>
               );

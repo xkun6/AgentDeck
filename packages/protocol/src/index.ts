@@ -1,6 +1,5 @@
-export * from "./hermes-api";
+export * from "./ui-message";
 export * from "./channels";
-export * from "./session-log";
 export * from "./agent-api";
 
 export type WindowType = "electron" | "tauri" | "web";

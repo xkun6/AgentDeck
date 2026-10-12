@@ -1,34 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { useQueries } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import { Dialog } from "@agentdeck/shared-ui";
 import {
-  Archive,
-  BarChart3,
-  Boxes,
-  Brain,
-  Bug,
-  Clock,
-  Cpu,
-  Database,
+  Bell,
+  Bot,
   FileText,
   Folder,
-  HeartPulse,
   History,
-  MonitorCog,
+  Info,
+  Palette,
   Plus,
-  Puzzle,
   Search,
   Settings,
-  Sparkles,
   TerminalSquare,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { FsListResponse } from "@agentdeck/protocol";
-import { useSessions } from "@/hooks/use-sessions";
-import { useSkills } from "@/hooks/use-skills";
+import { listDirectory } from "@/hooks/use-fs-list";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { agentDisplayTitle, agentProviderLabel } from "@/lib/agent-session-display";
+import { agentListAtom } from "@/stores/agents";
+import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import {
   buildCommandPaletteItems,
   filterCommandPaletteGroups,
@@ -36,9 +31,9 @@ import {
   type CommandPaletteFileCandidate,
   type CommandPaletteIconKey,
   type CommandPaletteItem,
+  type CommandPaletteSession,
 } from "@/lib/command-palette";
 import { isCommandPaletteShortcut } from "@/lib/command-palette-shortcut";
-import { fetchJSON } from "@/lib/transport";
 import {
   readWorkspaceProjects,
   subscribeWorkspaceChanges,
@@ -52,26 +47,18 @@ const FILE_ENTRY_LIMIT = 60;
 const GROUP_ITEM_LIMIT = 8;
 
 const ICONS: Record<CommandPaletteIconKey, LucideIcon> = {
-  analytics: BarChart3,
-  backup: Archive,
-  config: MonitorCog,
+  agents: Bot,
   console: TerminalSquare,
-  cron: Clock,
-  debug: Bug,
+  env: Wrench,
   file: FileText,
   folder: Folder,
-  health: HeartPulse,
   history: History,
-  mcp: Puzzle,
-  memory: Brain,
-  models: Cpu,
+  info: Info,
   new: Plus,
-  profiles: Boxes,
+  notifications: Bell,
   project: Folder,
   settings: Settings,
-  skill: Sparkles,
-  soul: Sparkles,
-  wanderMemory: Database,
+  theme: Palette,
 };
 
 function sortProjectsForFileSearch(projects: readonly WorkspaceProject[]): WorkspaceProject[] {
@@ -101,9 +88,10 @@ function useCommandPaletteFileCandidates(
   const fileQueries = useQueries({
     queries: roots.map((project) => ({
       queryKey: ["command-palette", "files", project.path],
-      queryFn: ({ signal }: { signal?: AbortSignal }) =>
-        fetchJSON(`/api/fs/list?path=${encodeURIComponent(project.path)}`, { signal }, FsListResponse),
+      // 目录列表接入点与工作区选择弹窗共用 hooks/use-fs-list.ts。
+      queryFn: () => listDirectory(project.path),
       enabled: shouldLoadFiles,
+      retry: false,
       staleTime: 30_000,
       gcTime: 90_000,
     })),
@@ -137,8 +125,19 @@ export function CommandPalette() {
   const [search, setSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  const sessionsQuery = useSessions(200, 0);
-  const skillsQuery = useSkills();
+  const agents = useAtomValue(agentListAtom);
+  const runtimes = useAtomValue(chatRuntimeBySessionAtom);
+  const providersQuery = useAgentProviders();
+  const sessions = useMemo<CommandPaletteSession[]>(
+    () => agents.map((agent) => ({
+      id: agent.id,
+      title: agentDisplayTitle(agent, runtimes[agent.id], providersQuery.data),
+      subtitle: [agentProviderLabel(agent.provider, providersQuery.data), agent.cwd].filter(Boolean).join(" · "),
+      preview: agent.preview,
+      updatedAt: agent.updatedAt,
+    })),
+    [agents, providersQuery.data, runtimes],
+  );
   const projects = useWorkspaceProjects();
   const { files, fetching: filesFetching } = useCommandPaletteFileCandidates(open, search, projects);
 
@@ -168,13 +167,8 @@ export function CommandPalette() {
   }, [open]);
 
   const items = useMemo(
-    () => buildCommandPaletteItems({
-      sessions: sessionsQuery.data?.sessions,
-      projects,
-      skills: skillsQuery.data,
-      files,
-    }),
-    [files, projects, sessionsQuery.data?.sessions, skillsQuery.data],
+    () => buildCommandPaletteItems({ sessions, projects, files }),
+    [files, projects, sessions],
   );
 
   const groups = useMemo(
@@ -206,11 +200,7 @@ export function CommandPalette() {
     }
   };
 
-  const loadingLabel = [
-    sessionsQuery.isFetching ? "会话" : "",
-    skillsQuery.isFetching ? "Skills" : "",
-    filesFetching ? "文件" : "",
-  ].filter(Boolean).join(" / ");
+  const loadingLabel = filesFetching ? "文件" : "";
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -249,7 +239,7 @@ export function CommandPalette() {
                   event.preventDefault();
                   close();
                 }}
-                placeholder="搜索命令、会话、项目、文件或 Skill…"
+                placeholder="搜索命令、会话、项目或文件…"
                 autoComplete="off"
                 spellCheck={false}
               />

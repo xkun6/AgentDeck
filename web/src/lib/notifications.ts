@@ -1,19 +1,18 @@
 // 桌面通知触发链路（issue #194）。
 //
-// 在 applyGatewayEventAtom 消费 Gateway 事件时旁路调用（见 stores/chat.ts），
-// 把「任务完成 / 需要权限确认」翻译成 desktop_notify IPC：Rust 侧负责前台
-// 判定、系统通知（自带原生提示音）和 dock 弹跳 / 任务栏闪烁；本模块负责
+// 在 applyAgentEventAtom 消费 sidecar 事件时旁路调用（见 stores/chat.ts），
+// 把「任务完成 / 任务出错 / 需要权限确认」翻译成 desktop_notify IPC：Rust 侧负责
+// 前台判定、系统通知（自带原生提示音）和 dock 弹跳 / 任务栏闪烁；本模块负责
 // 决策（设置开关、防重放去重、文案）和系统通知不可用时的 WebAudio 兜底音。
 //
 // decideNotification / shouldPlayFallbackSound 是纯函数，便于 vitest 全矩阵
 // 覆盖；所有副作用都 fire-and-forget 且错误吞掉，绝不影响聊天主流程。
 
-import type { GatewayEvent, SessionsResponse } from "@agentdeck/protocol";
+import type { AgentStreamEnvelope } from "@agentdeck/protocol";
 import type { ChatSessionRuntime } from "@/stores/chat";
 import { readNotificationSettings, type NotificationSettings } from "@/stores/ui";
 import type { DesktopNotifyResult } from "@/lib/runtime";
-import { resolvePersistentSessionId } from "@/lib/session-map";
-import { queryClient } from "@/lib/query-client";
+import { describePermissionCommand } from "@/lib/agent-tool-detail";
 
 export interface NotificationAction {
   dedupeKey: string;
@@ -36,19 +35,6 @@ function truncate(text: string, max: number): string {
   return `${chars.slice(0, Math.max(0, max - 1)).join("")}…`;
 }
 
-function payloadOf(event: GatewayEvent): Record<string, any> {
-  return event.payload && typeof event.payload === "object"
-    ? (event.payload as Record<string, any>)
-    : {};
-}
-
-function firstNonEmptyString(values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim().length > 0) return value;
-  }
-  return undefined;
-}
-
 function lastUserPromptSummary(
   runtime: ChatSessionRuntime | undefined,
   max: number,
@@ -67,60 +53,49 @@ function lastUserPromptSummary(
 }
 
 export function decideNotification(input: {
-  event: GatewayEvent;
+  envelope: AgentStreamEnvelope;
   prevRuntime: ChatSessionRuntime | undefined;
   settings: NotificationSettings;
   alreadyNotified: (key: string) => boolean;
 }): NotificationAction | null {
-  const { event, prevRuntime, settings, alreadyNotified } = input;
+  const { envelope, prevRuntime, settings, alreadyNotified } = input;
   // 总闸：系统通知和提示音都关 = 用户不要任何打扰（注意力请求也不发）。
   if (!settings.system && !settings.sound) return null;
-  const sessionId = event.session_id;
-  if (!sessionId) return null;
-  const payload = payloadOf(event);
+  const { agentId, event } = envelope;
+  if (!agentId) return null;
 
-  if (event.type === "approval.request") {
+  if (event.type === "permission_requested") {
     if (!settings.onApproval) return null;
-    const rawId = payload.request_id;
-    const requestId =
-      typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : "";
-    // 没有可靠 request_id 就无法去重，宁可不通知也不在重放时轰炸。
+    const requestId = event.request.id;
     if (!requestId) return null;
+    // 已在待审批列表里（回放 / 重复推送）就不再通知。
     if (prevRuntime?.pendingApprovals.some((item) => item.requestId === requestId)) {
       return null;
     }
-    const dedupeKey = `approval:${sessionId}:${requestId}`;
+    const dedupeKey = `approval:${agentId}:${requestId}`;
     if (alreadyNotified(dedupeKey)) return null;
-    const detail = firstNonEmptyString([payload.command, payload.reason, payload.description]);
+    const detail = describePermissionCommand(event.request).trim();
     return {
       dedupeKey,
       kind: "approval",
       title: "需要权限确认",
-      body: truncate(detail ?? "任务等待你的确认后才能继续", MAX_BODY_CHARS),
+      body: truncate(detail || "任务等待你的确认后才能继续", MAX_BODY_CHARS),
     };
   }
 
-  if (event.type === "message.complete") {
+  if (event.type === "turn_completed" || event.type === "turn_failed") {
     if (!settings.onComplete) return null;
-    // 重放防护：本地没有活跃回合（SSE 重连重放、历史 resume）或用户已手动
-    // 中断时不通知。reducer 收尾后会清空 activeAssistantId，因此同一回合
-    // 只有一次「在场」的 complete。
-    const activeId = prevRuntime?.activeAssistantId;
-    if (!activeId || prevRuntime?.interrupted) return null;
-    const dedupeKey = `complete:${sessionId}:${activeId}`;
+    // 重放防护：本地没有活跃回合（timeline 回放、重连）或用户已手动中断时
+    // 不通知。回合收尾后会清空 activeAssistantId，同一回合只有一次「在场」的结束事件。
+    if (!prevRuntime?.activeAssistantId || prevRuntime.interrupted) return null;
+    const dedupeKey = `complete:${agentId}:${event.turnId}`;
     if (alreadyNotified(dedupeKey)) return null;
-    if (payload.status === "error") {
-      const detail = firstNonEmptyString([
-        payload.error,
-        payload.message,
-        payload.warning,
-        payload.detail,
-      ]);
+    if (event.type === "turn_failed") {
       return {
         dedupeKey,
         kind: "error",
         title: "任务出错",
-        body: truncate(detail ?? "任务执行失败，请回来查看详情", MAX_BODY_CHARS),
+        body: truncate(event.error || "任务执行失败，请回来查看详情", MAX_BODY_CHARS),
       };
     }
     return {
@@ -158,25 +133,8 @@ export function __resetNotificationsForTests(): void {
   notifiedOrder.length = 0;
 }
 
-// ── 会话标题（通知正文前缀）────────────────────────────────────────────
-
-function sessionTitleFor(sessionId: string): string | undefined {
-  try {
-    const persistentId = resolvePersistentSessionId(sessionId) ?? sessionId;
-    for (const [, data] of queryClient.getQueriesData<SessionsResponse>({
-      queryKey: ["sessions"],
-    })) {
-      const match = data?.sessions.find((item) => item.id === persistentId);
-      if (match?.title) return match.title;
-    }
-  } catch {
-    // 标题只是锦上添花，任何失败都退回裸正文。
-  }
-  return undefined;
-}
-
-function bodyWithSessionTitle(body: string, sessionId: string): string {
-  const title = sessionTitleFor(sessionId);
+function bodyWithSessionTitle(body: string, sessionTitle: string | undefined): string {
+  const title = sessionTitle?.trim();
   if (!title) return body;
   return `「${truncate(title, SESSION_TITLE_CHARS)}」${body ? ` · ${body}` : ""}`;
 }
@@ -240,27 +198,28 @@ export function playChime(): void {
 
 // ── 触发器（副作用入口，错误全吞）──────────────────────────────────────
 
-export function notifyFromGatewayEvent(
-  event: GatewayEvent,
+export function notifyFromAgentEvent(
+  envelope: AgentStreamEnvelope,
   prevRuntime: ChatSessionRuntime | undefined,
+  sessionTitle?: string,
 ): void {
   try {
     const bridge = window.hermesDesktop;
     if (typeof bridge?.desktopNotify !== "function") return;
     const settings = readNotificationSettings();
     const action = decideNotification({
-      event,
+      envelope,
       prevRuntime,
       settings,
       alreadyNotified: hasNotified,
     });
-    if (!action || !event.session_id) return;
+    if (!action) return;
     markNotified(action.dedupeKey);
     void bridge
       .desktopNotify({
         kind: action.kind,
         title: action.title,
-        body: bodyWithSessionTitle(action.body, event.session_id),
+        body: bodyWithSessionTitle(action.body, sessionTitle),
         showSystemNotification: settings.system,
         withSound: settings.sound,
         respectFocus: settings.onlyBackground,

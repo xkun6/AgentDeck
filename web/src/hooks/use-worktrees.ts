@@ -16,7 +16,7 @@ export interface UseWorktrees {
   busy: boolean;
   error: string | null;
   refresh: () => void;
-  /** Create a new branch + worktree (`hermes/<slug-of-name>`). */
+  /** Create a new branch + worktree (`agentdeck/<slug-of-name>`). */
   addWorktree: (name: string, base?: string | null) => Promise<boolean>;
   /** Check an existing branch out into a worktree (or switch in place if it's the trunk). */
   checkoutBranch: (branch: string) => Promise<boolean>;

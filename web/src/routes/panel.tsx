@@ -1,28 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useNavigate } from "react-router-dom";
 import { LoadingState } from "@agentdeck/shared-ui";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
+import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { activeSessionIdAtom } from "@/stores/ui";
-import { useSessions } from "@/hooks/use-sessions";
-import { isSessionRunning, mergeLiveRuntimeSessions } from "@/lib/session-activity";
-import {
-  readSessionTitleOverrides,
-  subscribeSessionUiStateChanges,
-} from "@/lib/session-ui-state";
-import { HealthGrid } from "@/components/panel/health-grid";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { agentDisplayTitle, agentProviderLabel, isAgentRunning } from "@/lib/agent-session-display";
 import { PanelComposer } from "@/components/panel/panel-composer";
 import { PanelHero } from "@/components/panel/panel-hero";
 import { QuickStart } from "@/components/panel/quick-start";
 import { RecentTable } from "@/components/panel/recent-table";
 import { TaskCard } from "@/components/panel/task-card";
-import type { SessionSummary } from "@agentdeck/protocol";
+import type { PanelSession } from "@/components/panel/panel-session";
 import s from "./panel.module.css";
 
-const TODAY_START_SEC = () => {
+const TODAY_START_MS = () => {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
-  return d.getTime() / 1000;
+  return d.getTime();
 };
 
 interface SectionProps {
@@ -54,53 +50,44 @@ function Section({ num, tag, title, meta, children }: SectionProps) {
 export function PanelRoute() {
   const [, setActiveId] = useAtom(activeSessionIdAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
-  const { data, isLoading } = useSessions();
+  const agents = useAtomValue(agentListAtom);
+  const loaded = useAtomValue(agentListLoadedAtom);
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const { data: providers } = useAgentProviders();
   const navigate = useNavigate();
-  const [sessionTitleOverrides, setSessionTitleOverrides] = useState(readSessionTitleOverrides);
 
-  useEffect(() => {
-    return subscribeSessionUiStateChanges(() => {
-      setSessionTitleOverrides(readSessionTitleOverrides());
-    });
-  }, []);
-
-  const sessions = useMemo(
+  const sessions = useMemo<PanelSession[]>(
     () =>
-      mergeLiveRuntimeSessions(
-        (data?.sessions ?? []).flatMap((session) => {
-          const title = sessionTitleOverrides[session.id];
-          return title ? [{ ...session, title }] : [session];
-        }),
-        runtimeBySession,
-      ),
-    [data?.sessions, runtimeBySession, sessionTitleOverrides],
+      agents.map((agent) => ({
+        agent,
+        title: agentDisplayTitle(agent, runtimeBySession[agent.id], providers),
+        provider: agentProviderLabel(agent.provider, providers),
+      })),
+    [agents, providers, runtimeBySession],
   );
 
   const { active, recent } = useMemo(() => {
-    const active = sessions.filter((session) => isSessionRunning(session, runtimeBySession));
-    const recent = sessions.filter((session) => !isSessionRunning(session, runtimeBySession));
+    const active = sessions.filter((session) => isAgentRunning(session.agent, runtimeBySession[session.agent.id]));
+    const recent = sessions.filter((session) => !isAgentRunning(session.agent, runtimeBySession[session.agent.id]));
     return { active, recent };
   }, [runtimeBySession, sessions]);
 
+  // sidecar 不记录回合结束原因：今日更新且出错的会话计入「需要关注」，其余今日活跃会话计入「已完成」。
   const todayStats = useMemo(() => {
-    const start = TODAY_START_SEC();
+    const start = TODAY_START_MS();
     let completed = 0;
     let needsAttention = 0;
-    for (const sess of sessions) {
-      if (sess.ended_at != null && sess.ended_at >= start) {
-        if (sess.end_reason === "error" || sess.end_reason === "interrupted") {
-          needsAttention += 1;
-        } else {
-          completed += 1;
-        }
-      }
+    for (const { agent } of recent) {
+      if (agent.updatedAt < start) continue;
+      if (agent.status === "error") needsAttention += 1;
+      else completed += 1;
     }
     return { completed, needsAttention };
-  }, [sessions]);
+  }, [recent]);
 
-  const goSession = (sess: SessionSummary) => {
-    setActiveId(sess.id);
-    navigate(`/tasks/${sess.id}`);
+  const goSession = (sess: PanelSession) => {
+    setActiveId(sess.agent.id);
+    navigate(`/tasks/${encodeURIComponent(sess.agent.id)}`);
   };
 
   return (
@@ -116,34 +103,27 @@ export function PanelRoute() {
           <PanelComposer />
         </Section>
 
-        <Section
-          num="02"
-          tag="健康"
-          title="当前状态"
-          meta={<>实时刷新</>}
-        >
-          <HealthGrid />
-        </Section>
-
-        {isLoading && <LoadingState variant="block" label="正在加载会话…" />}
+        {!loaded && connection !== "error" && connection !== "closed" ? (
+          <LoadingState variant="block" label="正在连接 Agent 服务…" />
+        ) : null}
 
         {active.length > 0 && (
           <Section
-            num="03"
+            num="02"
             tag="运行中"
             title="正在执行"
             meta={`${active.length} 个任务 · 自动刷新`}
           >
             <div className={s.taskGrid}>
               {active.map((sess) => (
-                <TaskCard key={sess.id} session={sess} onClick={() => goSession(sess)} />
+                <TaskCard key={sess.agent.id} session={sess} onClick={() => goSession(sess)} />
               ))}
             </div>
           </Section>
         )}
 
         <Section
-          num={active.length > 0 ? "04" : "03"}
+          num={active.length > 0 ? "03" : "02"}
           tag="近况"
           title="最近会话"
           meta={`共 ${recent.length} 个`}
@@ -152,7 +132,7 @@ export function PanelRoute() {
         </Section>
 
         <Section
-          num={active.length > 0 ? "05" : "04"}
+          num={active.length > 0 ? "04" : "03"}
           tag="模板"
           title="快速起手"
           meta="点击预填到 Composer"

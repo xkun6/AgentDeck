@@ -1,37 +1,41 @@
 import { useAtomValue } from "jotai";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
-import { sessionDisplayTitle } from "@/lib/session-title";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { Dot, Pill } from "@/components/ui/pill";
-import type { SessionSummary } from "@agentdeck/protocol";
+import { sessionTokens, shortId, type PanelSession } from "./panel-session";
 import s from "./task-card.module.css";
 
-function shortId(id: string): string {
-  return id.slice(-6);
-}
-
 interface TaskCardProps {
-  session: SessionSummary;
+  session: PanelSession;
   onClick: () => void;
 }
 
 export function TaskCard({ session, onClick }: TaskCardProps) {
+  const { agent, title, provider } = session;
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
-  const runtime = runtimeBySession[session.id];
-  const pendingCount = runtime?.pendingApprovals.length ?? 0;
-
-  const toolCount = session.tool_call_count ?? 0;
-  const tokens = (session.input_tokens ?? 0) + (session.output_tokens ?? 0);
-  const desc = session.preview?.trim() || "尚未输出内容…";
+  const runtime = runtimeBySession[agent.id];
+  const pendingCount = runtime?.pendingApprovals.length ?? agent.pendingPermissions.length;
+  const toolCount = runtime?.messages.reduce(
+    (count, message) => count + message.parts.filter((part) => part.type === "tool").length,
+    0,
+  ) ?? 0;
+  const tokens = sessionTokens(agent);
+  const desc = agent.preview?.trim() || "尚未输出内容…";
 
   return (
     <button className={s.card} type="button" onClick={onClick}>
       <div className={s.head}>
-        <span className={s.headId}>{shortId(session.id)}</span>
+        <span className={s.headId}>{shortId(agent.id)}</span>
         <span className={s.headSep}>·</span>
-        <span>{session.model || "—"}</span>
+        <span>{provider}</span>
+        {agent.model ? (
+          <>
+            <span className={s.headSep}>·</span>
+            <span>{agent.model}</span>
+          </>
+        ) : null}
         <span className={s.headSep}>·</span>
-        <span>{relativeTime(session.started_at)} 启动</span>
+        <span>{relativeTime(agent.createdAt / 1000)} 启动</span>
         <span className={s.headSpacer} />
         <Pill tone="ok">
           <Dot tone="live" />
@@ -39,7 +43,7 @@ export function TaskCard({ session, onClick }: TaskCardProps) {
         </Pill>
       </div>
 
-      <div className={s.title}>{sessionDisplayTitle(session)}</div>
+      <div className={s.title}>{title}</div>
       <div className={s.desc}>{desc}</div>
 
       <div className={s.foot}>

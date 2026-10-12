@@ -28,7 +28,7 @@ describe("normalizePreviewPanel", () => {
     expect(normalizePreviewPanel("web")).toBe("web");
     expect(normalizePreviewPanel("files")).toBe("files");
     expect(normalizePreviewPanel("terminal")).toBe("terminal");
-    expect(normalizePreviewPanel("logs")).toBe("logs");
+    expect(normalizePreviewPanel("review")).toBe("review");
   });
 
   it("falls back to the default for unknown/empty values", () => {

@@ -161,10 +161,6 @@
   color: var(--moss);
 }
 
-.iconBox[data-kind="skills"] {
-  color: var(--plum);
-}
-
 .itemMain {
   min-width: 0;
   flex: 1;

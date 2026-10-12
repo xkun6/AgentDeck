@@ -6,7 +6,6 @@ import {
   GitPullRequest,
   Globe,
   Package,
-  ScrollText,
   TerminalSquare,
   X,
 } from "lucide-react";
@@ -28,9 +27,7 @@ import { WebPreviewTab } from "./web-preview-tab";
 import { FilePreviewTab } from "./file-preview-tab";
 import { ReviewTab } from "./review-tab";
 import { TerminalTab } from "./terminal-tab";
-import { LogsTab } from "./logs-tab";
 import { PanelResizeHandle, usePanelWidth } from "../panel-resize";
-import { runtime } from "@/lib/runtime";
 import s from "./preview-rail.module.css";
 
 interface PreviewRailProps {
@@ -47,7 +44,6 @@ const TABS: Array<{ key: PreviewPanel; label: string; icon: typeof Globe; hidden
   { key: "files", label: "文件", icon: FileText },
   { key: "review", label: "改动", icon: GitPullRequest },
   { key: "terminal", label: "终端", icon: TerminalSquare },
-  { key: "logs", label: "日志", icon: ScrollText },
 ];
 
 // Tabs planned but blocked on backend (PRD §5 P0: artifact manifest). Shown
@@ -60,8 +56,6 @@ export function PreviewRail({ sessionId, workspaceRoot, onClose }: PreviewRailPr
   const [searchParams, setSearchParams] = useSearchParams();
   const active = normalizePreviewPanel(searchParams.get(PREVIEW_PANEL_QUERY_KEY));
   const editorDirty = useAtomValue(previewEditorDirtyAtom);
-  const remote = runtime.isRemote();
-  const localOnlyPanel = active === "files" || active === "review" || active === "terminal";
   const didInitPanel = useRef(false);
   const { confirm } = useConfirm();
 
@@ -121,8 +115,6 @@ export function PreviewRail({ sessionId, workspaceRoot, onClose }: PreviewRailPr
               aria-selected={active === key}
               className={s.tab}
               data-active={active === key ? "true" : undefined}
-              disabled={remote && (key === "files" || key === "review" || key === "terminal")}
-              title={remote && (key === "files" || key === "review" || key === "terminal") ? "远端模式下禁用桌面端本机文件与进程能力" : undefined}
               onClick={() => void setActive(key)}
             >
               <Icon size={12} aria-hidden />
@@ -151,22 +143,20 @@ export function PreviewRail({ sessionId, workspaceRoot, onClose }: PreviewRailPr
       </header>
 
       <div className={s.body}>
-        {remote && localOnlyPanel ? <div className={s.notice}>远端 Hermes 模式下不会读取或操作桌面端本机的文件、Git 仓库与终端进程。</div> : null}
-        {!localOnlyPanel && active === "web" ? (
+        {active === "web" ? (
           <WebPreviewTab url={selection.webUrl} onUrlChange={(url) => patchSelection({ webUrl: url })} />
         ) : null}
-        {!remote && active === "files" ? (
+        {active === "files" ? (
           <FilePreviewTab
             workspaceRoot={workspaceRoot}
             filePath={selection.filePath}
             onSelectFile={(path) => patchSelection({ filePath: path })}
           />
         ) : null}
-        {!remote && active === "review" ? (
+        {active === "review" ? (
           <ReviewTab workspaceRoot={workspaceRoot} active={active === "review"} />
         ) : null}
-        {!remote && active === "terminal" ? <TerminalTab /> : null}
-        {active === "logs" ? <LogsTab /> : null}
+        {active === "terminal" ? <TerminalTab /> : null}
       </div>
     </aside>
   );

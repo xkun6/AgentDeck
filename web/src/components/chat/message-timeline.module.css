@@ -102,7 +102,6 @@
   width: 36px;
 }
 
-
 .avatarButton {
   box-sizing: border-box;
   width: 36px;
@@ -129,6 +128,26 @@
   background: var(--h-color-bg-avatar);
   object-fit: cover;
   display: block;
+}
+
+.rowAvatarInitial {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--h-line);
+  background: var(--h-color-bg-avatar);
+  color: var(--h-text-2);
+  font-family: var(--h-font-ui);
+  font-size: var(--h-font-size-md);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.avatarButton:hover .rowAvatarInitial {
+  filter: brightness(0.96);
 }
 
 /* IM 式（微信参考）：assistant 靠左（头像列在左），user 靠右——
@@ -160,10 +179,6 @@
   border: 1px solid var(--h-line);
   color: var(--h-text-2);
   font-family: var(--h-font-cn);
-}
-
-.systemNotice[data-kind="skill-invocation"] {
-  max-width: none;
 }
 
 .systemNotice[data-error="true"] {
@@ -285,53 +300,6 @@
   font-variant-east-asian: normal;
 }
 
-.skillInvocation {
-  width: 100%;
-  max-width: 100%;
-}
-
-.skillInvocationPreview {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow-wrap: anywhere;
-  white-space: normal;
-  color: var(--h-text-2);
-  font-size: var(--conversation-font-size, 12.5px);
-  line-height: var(--conversation-line-height, 1.6);
-}
-
-.skillInvocationBody {
-  min-width: 0;
-}
-
-.skillInvocationToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--h-text-2);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.skillInvocationToggle:hover {
-  color: var(--h-text);
-}
-
-.skillInvocationToggle:focus-visible {
-  border-radius: 0;
-  outline: 2px solid var(--h-accent);
-  outline-offset: 2px;
-}
-
 /* global.css disables selection across the app to keep desktop chrome from
    feeling like a web page. Conversation content is the important exception:
    users need to drag-select assistant/user text, code, reasoning, and visible
@@ -341,7 +309,6 @@
 :global(#root) .messageText *,
 :global(#root) .systemNoticeText,
 :global(#root) .systemNoticeText *,
-:global(#root) .skillInvocationPreview,
 :global(#root) .reasoningBody,
 :global(#root) .reasoningBody *,
 :global(#root) .toolBody pre,
@@ -777,31 +744,6 @@
 
 .messageActions button[data-copy-state="error"] {
   color: var(--h-err);
-}
-
-.messageActions button[data-speech-state] {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.messageActions button[data-speech-state] svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 2;
-}
-
-.messageActions button[data-speech-state="preparing"],
-.messageActions button[data-speech-state="speaking"] {
-  color: var(--h-accent);
-}
-
-.messageSpeechError {
-  max-width: min(360px, 52vw);
-  overflow: hidden;
-  color: var(--h-err);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .messageStats {

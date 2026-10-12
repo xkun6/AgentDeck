@@ -42,6 +42,7 @@ export const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
   running: "运行中",
   error: "出错",
   closed: "已关闭",
+  dormant: "未加载",
 };
 
 export function isAgentRunning(agent: AgentSnapshot, runtime: ChatSessionRuntime | undefined): boolean {

@@ -84,7 +84,6 @@ export function PanelComposer() {
         placeholder={`描述你想完成的任务，${submitShortcutHint}…`}
         variant="big"
         headerLabel="新任务"
-        showCompressCommand={false}
         showMeta={false}
         loading={sending}
         toolbarExtra={

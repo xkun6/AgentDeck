@@ -1,13 +1,12 @@
-// 「编程Agent」设置分区（P-047 委派可视化的检测与指引面）。
+// 「编程 Agent」检测页。
 //
 // 检测 Claude Code / Codex CLI 的安装、版本与登录态（Rust coding_agents.rs，
-// 不读任何 token 密文），联动 hermes 侧委派技能的启停（/api/skills）。
+// 不读任何 token 密文）。
 // 边界：本页只做检测 + 指引，不代写 ~/.claude / ~/.codex 配置文件——
 // 多账号与中转切换请使用 cc-switch。
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
-  Bot,
   CheckCircle2,
   CircleHelp,
   Copy,
@@ -17,12 +16,11 @@ import {
   SquareTerminal,
   XCircle,
 } from "lucide-react";
-import type { CodingAgentStatus, SkillInfo } from "@agentdeck/protocol";
+import type { CodingAgentStatus } from "@agentdeck/protocol";
 import { Button, LoadingState } from "@agentdeck/shared-ui";
 import { CopyButton } from "@/components/ui/copy-button";
 import { DiagnosticCopyButton } from "@/components/ui/diagnostic-copy-button";
 import { useCodingAgentsCheck } from "@/hooks/use-coding-agents";
-import { useSkills, useToggleSkill } from "@/hooks/use-skills";
 import s from "./settings.module.css";
 
 type CardStatus = "ok" | "warning" | "error" | "unknown";
@@ -43,10 +41,10 @@ function agentCardStatus(agent: CodingAgentStatus): CardStatus {
 
 function agentStatusLine(agent: CodingAgentStatus): string {
   if (!agent.installed) {
-    return `${agent.label} 未安装；hermes 无法把编码任务委派给它`;
+    return `${agent.label} 未安装；安装后才能在 AgentDeck 中新建 ${agent.label} 会话`;
   }
   if (agent.loginState === "logged_in") {
-    return `${agent.label} 可用，hermes 可通过「${agent.skillName}」技能委派编码任务`;
+    return `${agent.label} 可用，可在 AgentDeck 中新建 ${agent.label} 会话`;
   }
   if (agent.loginState === "expired") {
     return `${agent.label} 已安装，但登录凭据已过期`;
@@ -74,75 +72,6 @@ function RuntimeField({ label, value, mono, wide }: {
     <div className={s.runtimeField} data-wide={wide ? "true" : undefined}>
       <span>{label}</span>
       <b data-mono={mono ? "true" : undefined}>{value ?? "—"}</b>
-    </div>
-  );
-}
-
-export function DelegationSkillControl({ agent, skill, onToggle, pending }: {
-  agent: CodingAgentStatus;
-  skill: SkillInfo | undefined;
-  onToggle: (name: string, enabled: boolean) => void;
-  pending: boolean;
-}) {
-  if (!skill) {
-    return (
-      <div
-        className={s.delegationSkillControl}
-        data-delegation-skill="true"
-        data-state="missing"
-        role="status"
-      >
-        <span className={s.delegationSkillIcon} aria-hidden>
-          <AlertTriangle size={16} />
-        </span>
-        <div className={s.delegationSkillBody}>
-          <div className={s.delegationSkillMeta}>
-            <span className={s.delegationSkillEyebrow}>委派技能</span>
-            <span className={s.envStatusTag} data-status="warning">未找到</span>
-          </div>
-          <code className={s.delegationSkillName}>{agent.skillName}</code>
-          <p className={s.delegationSkillDescription}>
-            当前内核未提供此技能。请升级或重新同步内核技能后再试。
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const state = skill.enabled ? "enabled" : "disabled";
-  return (
-    <div
-      className={s.delegationSkillControl}
-      data-delegation-skill="true"
-      data-state={state}
-      role="group"
-      aria-label={`${agent.label} 委派技能`}
-    >
-      <span className={s.delegationSkillIcon} aria-hidden>
-        <Bot size={16} />
-      </span>
-      <div className={s.delegationSkillBody}>
-        <div className={s.delegationSkillMeta}>
-          <span className={s.delegationSkillEyebrow}>委派技能</span>
-          <span className={s.envStatusTag} data-status={skill.enabled ? "ok" : "warning"}>
-            {skill.enabled ? "已启用" : "已停用"}
-          </span>
-        </div>
-        <code className={s.delegationSkillName}>{skill.name}</code>
-        <p className={s.delegationSkillDescription}>
-          {skill.enabled
-            ? `Hermes 会通过此技能把编码任务交给 ${agent.label}。`
-            : `启用后，Hermes 才能把编码任务交给 ${agent.label}。`}
-        </p>
-      </div>
-      <button
-        className={[s.btn, s.delegationSkillAction].join(" ")}
-        type="button"
-        disabled={pending}
-        onClick={() => onToggle(skill.name, !skill.enabled)}
-      >
-        {pending ? "处理中…" : skill.enabled ? "停用技能" : "启用技能"}
-      </button>
     </div>
   );
 }
@@ -177,11 +106,8 @@ export function CodingAgentToolbar({ isFetching, hasBridge, onRefresh, diagnosti
   );
 }
 
-function AgentCard({ agent, skill, onToggle, togglePending, onOpenPath }: {
+function AgentCard({ agent, onOpenPath }: {
   agent: CodingAgentStatus;
-  skill: SkillInfo | undefined;
-  onToggle: (name: string, enabled: boolean) => void;
-  togglePending: boolean;
   onOpenPath: (path: string | undefined) => Promise<void>;
 }) {
   const status = agentCardStatus(agent);
@@ -249,13 +175,6 @@ function AgentCard({ agent, skill, onToggle, togglePending, onOpenPath }: {
           </button>
         ) : null}
       </div>
-
-      <DelegationSkillControl
-        agent={agent}
-        skill={skill}
-        onToggle={onToggle}
-        pending={togglePending}
-      />
     </section>
   );
 }
@@ -263,15 +182,7 @@ function AgentCard({ agent, skill, onToggle, togglePending, onOpenPath }: {
 export function CodingAgentsSection({ showHeading = true }: { showHeading?: boolean }) {
   const query = useCodingAgentsCheck();
   const data = query.data;
-  const skillsQuery = useSkills();
-  const toggleSkill = useToggleSkill();
   const hasBridge = typeof window !== "undefined" && Boolean(window.hermesDesktop?.codingAgentsCheck);
-
-  const skillByName = useMemo(() => {
-    const map = new Map<string, SkillInfo>();
-    for (const skill of skillsQuery.data ?? []) map.set(skill.name, skill);
-    return map;
-  }, [skillsQuery.data]);
 
   const readyCount = (data?.agents ?? []).filter(
     (agent) => agent.installed && agent.loginState !== "expired" && agent.loginState !== "not_logged_in",
@@ -289,7 +200,7 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
 
   return (
     <div className={s.codingAgentsPage}>
-      {showHeading && <h2 className={s.heading}>编程Agent</h2>}
+      {showHeading && <h2 className={s.heading}>编程 Agent</h2>}
       <div
         className={[s.aboutHero, s.codingAgentsHero].join(" ")}
         data-ok={allReady && data ? "true" : undefined}
@@ -298,17 +209,16 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
           <SquareTerminal size={24} />
         </div>
         <div className={s.aboutHeroBody}>
-          <div className={s.aboutEyebrow}>多 Agent 协作 · CLI 委派</div>
+          <div className={s.aboutEyebrow}>多 Agent 编排 · 本机 CLI</div>
           <h3>
             {data
               ? allReady
-                ? "编程Agent 就绪，Hermes 可以调度它们干活"
-                : "部分编程Agent 未就绪"
-              : "正在检测编程Agent"}
+                ? "编程 Agent 已就绪"
+                : "部分编程 Agent 未就绪"
+              : "正在检测编程 Agent"}
           </h3>
           <p>
-            Hermes 可以通过内置技能把编码任务委派给本机的 Claude Code 与 Codex CLI，
-            聊天中会以「委派卡片」实时展示它们的执行过程；侧栏「子Agent」面板可总览全部委派。
+            AgentDeck 直接驱动本机的 Claude Code 与 Codex CLI 执行编码任务，会话中实时展示它们的输出、工具调用与权限请求。
             本页只做检测与指引，不会改写 CLI 自身的配置文件（多账号/中转切换请使用 cc-switch）。
           </p>
         </div>
@@ -329,7 +239,7 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
 
       {!hasBridge && (
         <div className={s.runtimeMessage} data-tone="error">
-          当前运行环境不支持编程Agent 检测（需要桌面端）。
+          当前运行环境不支持编程 Agent 检测（需要桌面端）。
         </div>
       )}
       {query.isError && (
@@ -344,9 +254,6 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
             <AgentCard
               key={agent.id}
               agent={agent}
-              skill={skillByName.get(agent.skillName)}
-              onToggle={(name, enabled) => toggleSkill.mutate({ name, enabled })}
-              togglePending={toggleSkill.isPending}
               onOpenPath={openPath}
             />
           ))}

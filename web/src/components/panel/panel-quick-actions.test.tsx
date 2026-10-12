@@ -2,26 +2,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Provider, useAtomValue } from "jotai";
-import type { SessionSummary } from "@agentdeck/protocol";
 import { QuickStart, RECIPES_PANEL } from "./quick-start";
 import { RecentTable } from "./recent-table";
+import type { PanelSession } from "./panel-session";
 import { composerPrefillAtom } from "@/stores/panel";
 
 afterEach(() => cleanup());
 
-function makeSession(id: string): SessionSummary {
+function makeSession(id: string): PanelSession {
   return {
-    id,
+    agent: {
+      id,
+      provider: "mock",
+      cwd: "/repo",
+      model: "fake-model",
+      status: "idle",
+      pendingPermissions: [],
+      lastUsage: { inputTokens: 10, outputTokens: 5 },
+      lastSeq: 1,
+      resumable: false,
+      createdAt: 1700000000000,
+      updatedAt: 1700000060000,
+    },
     title: `会话 ${id}`,
-    model: "fake-model",
-    source: "web",
-    started_at: 1700000000,
-    ended_at: 1700000060,
-    end_reason: "done",
-    message_count: 1,
-    input_tokens: 10,
-    output_tokens: 5,
-    estimated_cost_usd: null,
+    provider: "Mock",
   };
 }
 

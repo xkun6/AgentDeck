@@ -6,14 +6,9 @@ import {
 } from "./composer-drafts";
 import { __resetUiStoreForTests } from "./ui-store";
 
-function setRuntime(input: Partial<NonNullable<Window["__HERMES_RUNTIME__"]>> = {}) {
+function setRuntime() {
   (globalThis as any).window = (globalThis as any).window ?? {};
-  window.__HERMES_RUNTIME__ = {
-    connectionMode: "managed",
-    apiBaseUrl: "http://127.0.0.1:9120",
-    currentProfile: "default",
-    ...input,
-  };
+  window.__HERMES_RUNTIME__ = { platform: "tauri" };
 }
 
 beforeEach(() => {
@@ -35,20 +30,12 @@ describe("composer draft storage", () => {
     expect(readComposerDraft({ kind: "session", sessionId: "s2", profile: "default" })).toBe("");
   });
 
-  it("isolates drafts by profile and runtime target", () => {
+  it("isolates drafts by profile", () => {
     writeComposerDraft({ kind: "session", sessionId: "s1", profile: "default" }, "managed default");
     writeComposerDraft({ kind: "session", sessionId: "s1", profile: "work" }, "managed work");
 
     expect(readComposerDraft({ kind: "session", sessionId: "s1", profile: "default" })).toBe("managed default");
     expect(readComposerDraft({ kind: "session", sessionId: "s1", profile: "work" })).toBe("managed work");
-
-    setRuntime({ connectionMode: "remote", apiBaseUrl: "https://remote.example/hermes" });
-    expect(readComposerDraft({ kind: "session", sessionId: "s1", profile: "default" })).toBe("");
-    writeComposerDraft({ kind: "session", sessionId: "s1", profile: "default" }, "remote default");
-    expect(readComposerDraft({ kind: "session", sessionId: "s1", profile: "default" })).toBe("remote default");
-
-    setRuntime();
-    expect(readComposerDraft({ kind: "session", sessionId: "s1", profile: "default" })).toBe("managed default");
   });
 
   it("removes a draft when the text is blank", () => {

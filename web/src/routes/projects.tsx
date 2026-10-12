@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAtomValue } from "jotai";
 import { LoadingState, Popover } from "@agentdeck/shared-ui";
 import {
   ExternalLink,
@@ -11,8 +12,8 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import type { SessionSummary } from "@agentdeck/protocol";
-import { useSessions } from "@/hooks/use-sessions";
+import type { AgentSnapshot } from "@agentdeck/protocol";
+import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { shortenPath } from "@/lib/paths";
 import {
@@ -27,13 +28,12 @@ import {
   type WorkspaceProject,
 } from "@/lib/workspaces";
 import { useConfirm } from "@/lib/use-confirm";
-import { runtime } from "@/lib/runtime";
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
 import s from "./projects.module.css";
 
 interface ProjectAggregate {
   project: WorkspaceProject;
-  sessions: SessionSummary[];
+  sessions: AgentSnapshot[];
   weekSessions: number;
   totalTokens: number;
   lastActivity: number; // unix sec
@@ -42,11 +42,7 @@ interface ProjectAggregate {
 
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
-function lastActivitySec(session: SessionSummary): number {
-  return session.ended_at ?? session.started_at;
-}
-
-function pickTopModel(sessions: SessionSummary[]): string | null {
+function pickTopModel(sessions: AgentSnapshot[]): string | null {
   if (sessions.length === 0) return null;
   const counts = new Map<string, number>();
   for (const session of sessions) {
@@ -110,7 +106,10 @@ function RowMenu({ pinned, desktopAvailable, onTogglePin, onOpenInFinder, onDele
 
 export function ProjectsRoute() {
   const navigate = useNavigate();
-  const { data, isLoading } = useSessions(200, 0);
+  const agents = useAtomValue(agentListAtom);
+  const loaded = useAtomValue(agentListLoadedAtom);
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const isLoading = !loaded && connection !== "error" && connection !== "closed";
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [sessionWorkspaceMap, setSessionWorkspaceMap] = useState(readSessionWorkspaceMap);
   const [pinnedProjectPaths, setPinnedProjectPaths] = useState(readPinnedWorkspaceProjectPaths);
@@ -129,13 +128,12 @@ export function ProjectsRoute() {
   const desktopAvailable = typeof window !== "undefined" && !!window.hermesDesktop;
 
   const aggregates = useMemo<ProjectAggregate[]>(() => {
-    const sessions = data?.sessions ?? [];
-    const byPath = new Map<string, SessionSummary[]>();
+    const byPath = new Map<string, AgentSnapshot[]>();
     for (const project of projects) {
       byPath.set(project.path, []);
     }
-    for (const session of sessions) {
-      const workspace = normalizeWorkspacePath(sessionWorkspaceMap[session.id]);
+    for (const session of agents) {
+      const workspace = normalizeWorkspacePath(session.cwd || sessionWorkspaceMap[session.id]);
       if (!workspace) continue;
       const list = byPath.get(workspace);
       if (list) {
@@ -149,10 +147,10 @@ export function ProjectsRoute() {
       let totalTokens = 0;
       let lastActivity = project.updatedAt / 1000;
       for (const session of projectSessions) {
-        const activity = lastActivitySec(session);
+        const activity = session.updatedAt / 1000;
         if (activity > lastActivity) lastActivity = activity;
-        if (session.started_at >= nowSec - WEEK_SECONDS) weekSessions += 1;
-        totalTokens += (session.input_tokens ?? 0) + (session.output_tokens ?? 0);
+        if (session.createdAt / 1000 >= nowSec - WEEK_SECONDS) weekSessions += 1;
+        totalTokens += (session.lastUsage?.inputTokens ?? 0) + (session.lastUsage?.outputTokens ?? 0);
       }
       return {
         project,
@@ -163,7 +161,7 @@ export function ProjectsRoute() {
         topModel: pickTopModel(projectSessions),
       };
     });
-  }, [data?.sessions, projects, sessionWorkspaceMap]);
+  }, [agents, projects, sessionWorkspaceMap]);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -183,14 +181,7 @@ export function ProjectsRoute() {
   const handleAddProject = useCallback(async () => {
     try {
       let nextPath = "";
-      if (runtime.isRemote()) {
-        nextPath = (await prompt({
-          title: "添加远端项目",
-          body: "输入远端服务器上的项目绝对路径",
-          confirmLabel: "添加",
-          input: { placeholder: "/path/to/project" },
-        })) ?? "";
-      } else if (desktopAvailable && window.hermesDesktop?.pickDirectory) {
+      if (desktopAvailable && window.hermesDesktop?.pickDirectory) {
         const result = await window.hermesDesktop.pickDirectory();
         if (!result.canceled) nextPath = result.paths[0] ?? "";
       } else {
@@ -213,7 +204,7 @@ export function ProjectsRoute() {
   const handleOpenInFinder = useCallback(async (project: WorkspaceProject) => {
     setOpenMenuPath(null);
     try {
-      if (!runtime.isRemote() && window.hermesDesktop?.openWorkspacePath) {
+      if (window.hermesDesktop?.openWorkspacePath) {
         const result = await window.hermesDesktop.openWorkspacePath({ path: project.path });
         if (!result.ok) console.error("Failed to open project:", result.body);
       }

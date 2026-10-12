@@ -116,21 +116,6 @@ describe("appSidebarVisibleAtom (persisted)", () => {
   });
 });
 
-describe("activeProfileAtom (persisted)", () => {
-  it("defaults to 'default' when nothing is stored", async () => {
-    const { activeProfileAtom } = await loadUi();
-    const store = createStore();
-    expect(store.get(activeProfileAtom)).toBe("default");
-  });
-
-  it("persists writes to the UI store under hermes.active-profile", async () => {
-    const { activeProfileAtom, uiStore } = await loadUi();
-    const store = createStore();
-    store.set(activeProfileAtom, "work");
-    expect(uiStore.readUiValue("hermes.active-profile", "")).toBe("work");
-  });
-});
-
 describe("showReasoningAtom (persisted)", () => {
   it("defaults to false", async () => {
     const { showReasoningAtom } = await loadUi();
@@ -321,59 +306,11 @@ describe("rightRailVisibleAtom (persisted)", () => {
   });
 });
 
-describe("profileSwitchingAtom", () => {
-  it("defaults to { active: false }", async () => {
-    const { profileSwitchingAtom } = await loadUi();
-    const store = createStore();
-    expect(store.get(profileSwitchingAtom)).toEqual({ active: false });
-  });
-
-  it("carries the targetName when activating", async () => {
-    const { profileSwitchingAtom } = await loadUi();
-    const store = createStore();
-    store.set(profileSwitchingAtom, { active: true, targetName: "work" });
-    expect(store.get(profileSwitchingAtom)).toEqual({
-      active: true,
-      targetName: "work",
-    });
-  });
-
-  it("notifies subscribers on each change", async () => {
-    const { profileSwitchingAtom } = await loadUi();
-    const store = createStore();
-    let calls = 0;
-    const unsubscribe = store.sub(profileSwitchingAtom, () => {
-      calls += 1;
-    });
-    store.set(profileSwitchingAtom, { active: true, targetName: "a" });
-    store.set(profileSwitchingAtom, { active: false });
-    unsubscribe();
-    expect(calls).toBe(2);
-  });
-});
-
-describe("runtimeUpdatingAtom", () => {
-  it("defaults to { active: false }", async () => {
-    const { runtimeUpdatingAtom } = await loadUi();
-    const store = createStore();
-    expect(store.get(runtimeUpdatingAtom)).toEqual({ active: false });
-  });
-
-  it("carries the mode when activating", async () => {
-    const { runtimeUpdatingAtom } = await loadUi();
-    const store = createStore();
-    store.set(runtimeUpdatingAtom, { active: true, mode: "install" });
-    expect(store.get(runtimeUpdatingAtom)).toEqual({ active: true, mode: "install" });
-    store.set(runtimeUpdatingAtom, { active: true, mode: "rollback" });
-    expect(store.get(runtimeUpdatingAtom)).toEqual({ active: true, mode: "rollback" });
-  });
-});
-
 describe("assistant display profile atoms (persisted)", () => {
-  it("defaults to Hermes and restores a saved custom name", async () => {
+  it("defaults to empty (follow the agent) and restores a saved custom name", async () => {
     const { assistantDisplayNameAtom } = await loadUi();
     const store = createStore();
-    expect(store.get(assistantDisplayNameAtom)).toBe("Hermes");
+    expect(store.get(assistantDisplayNameAtom)).toBe("");
 
     const restored = await loadUi({ "hermes.assistant-display-name": "Claudia" });
     const restoredStore = createStore();
@@ -388,7 +325,7 @@ describe("assistant display profile atoms (persisted)", () => {
     expect(uiStore.readUiValue("hermes.assistant-display-name", "")).toBe("Claudia Agent");
 
     store.set(assistantDisplayNameAtom, "");
-    expect(store.get(assistantDisplayNameAtom)).toBe("Hermes");
+    expect(store.get(assistantDisplayNameAtom)).toBe("");
     expect(uiStore.readUiValue("hermes.assistant-display-name", "fallback")).toBe("");
   });
 
@@ -426,7 +363,7 @@ describe("persisted atoms follow late ui-store hydration (#480)", () => {
 
     expect(store.get(showReasoningAtom)).toBe(false);
     expect(store.get(composerSubmitShortcutAtom)).toBe("ctrl-enter");
-    expect(store.get(assistantDisplayNameAtom)).toBe("Hermes");
+    expect(store.get(assistantDisplayNameAtom)).toBe("");
     expect(store.get(assistantAvatarDataUrlAtom)).toBe("");
 
     const avatar = "data:image/png;base64,AAAA";

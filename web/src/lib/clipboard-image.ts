@@ -1,4 +1,13 @@
-import { isLikelyImageUrl } from "@/lib/composer-url";
+const IMAGE_URL_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg|avif)(?:$|[?#])/i;
+
+function isLikelyImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return IMAGE_URL_RE.test(parsed.pathname);
+  } catch {
+    return IMAGE_URL_RE.test(url);
+  }
+}
 
 export interface NativeClipboardImage {
   rgba(): Promise<Uint8Array>;

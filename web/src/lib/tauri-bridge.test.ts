@@ -5,7 +5,6 @@ import {
   isSidecarReady,
   normalizeTauriInvokeError,
 } from "./tauri-bridge";
-import { AGENTDECK_UNSUPPORTED_MESSAGE } from "./agentdeck-unsupported";
 
 const mockInvoke = vi.fn();
 const mockListen = vi.fn();
@@ -74,7 +73,7 @@ describe("tauri bridge", () => {
     expect(decoded).toEqual(bytes);
   });
 
-  it("sidecar 就绪时直接挂载，运行时标记为无 Hermes 后端", async () => {
+  it("sidecar 就绪时直接挂载并写入运行环境", async () => {
     await installTauriBridge();
 
     expect(mockInvoke).toHaveBeenCalledWith("get_sidecar_config", undefined);
@@ -83,11 +82,7 @@ describe("tauri bridge", () => {
     expect(mockInvoke).not.toHaveBeenCalledWith("runtime_info", undefined);
     expect(mockInvoke).not.toHaveBeenCalledWith("api_request", expect.anything());
     expect(mockListen).not.toHaveBeenCalledWith("runtime-status", expect.anything());
-    expect(window.__HERMES_RUNTIME__).toMatchObject({
-      platform: "tauri",
-      backendReady: true,
-      hermesBackendDisabled: true,
-    });
+    expect(window.__HERMES_RUNTIME__).toEqual({ platform: "tauri" });
     expect(window.hermesDesktop?.windowType).toBe("tauri");
   });
 
@@ -98,38 +93,12 @@ describe("tauri bridge", () => {
     expect(isSidecarReady(null)).toBe(false);
   });
 
-  it("已删除的 Hermes 命令统一返回「暂不支持」", async () => {
+  it("桥上只暴露 Rust 已注册的命令", async () => {
     await installTauriBridge();
-    const bridge = window.hermesDesktop!;
-    const calls: Array<Promise<unknown> | undefined> = [
-      bridge.request({ path: "/api/version" }),
-      bridge.scanConfigMigration?.({ manualPath: "/Users/alice/.hermes" }),
-      bridge.exportDebugBundle?.({ frontendDebug: [] }),
-      bridge.checkDesktopUpdate?.(),
-      bridge.exportProfileBackup?.(),
-      bridge.getRuntimeInfo?.(),
-      bridge.refreshGatewayUrl?.(),
-      bridge.getDesktopControlState?.(),
-      bridge.installManagedRuntime?.(),
-      bridge.readMemory?.(),
-      bridge.getYoloMode?.(),
-    ];
-    for (const call of calls) {
-      await expect(call).rejects.toThrow(AGENTDECK_UNSUPPORTED_MESSAGE);
+    const bridge = window.hermesDesktop as Record<string, unknown>;
+    for (const removed of ["request", "uploadFile", "getRuntimeInfo", "switchProfile", "readMemory", "getYoloMode"]) {
+      expect(bridge[removed]).toBeUndefined();
     }
-    const invokedCommands = mockInvoke.mock.calls.map(([command]) => command);
-    expect(invokedCommands).toEqual(["get_sidecar_config"]);
-  });
-
-  it("已删除事件的订阅不注册监听", async () => {
-    await installTauriBridge();
-    const unsubscribe = window.hermesDesktop?.onUiUpdateReady?.(() => {});
-    const unsubscribeProgress = window.hermesDesktop?.onAppUpdateProgress?.(() => {});
-    expect(typeof unsubscribe).toBe("function");
-    expect(typeof unsubscribeProgress).toBe("function");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mockListen).not.toHaveBeenCalledWith("ui-update-ready", expect.anything());
-    expect(mockListen).not.toHaveBeenCalledWith("app-update-progress", expect.anything());
   });
 
   it("exposes log snapshot export through Tauri IPC", async () => {
@@ -150,22 +119,6 @@ describe("tauri bridge", () => {
     });
   });
 
-  it("exposes session JSON export through Tauri IPC", async () => {
-    await installTauriBridge();
-
-    await window.hermesDesktop?.exportSessionJson?.({
-      fileName: "session-abc.json",
-      content: "{\n  \"id\": \"abc\"\n}\n",
-    });
-
-    expect(mockInvoke).toHaveBeenCalledWith("export_session_json", {
-      input: {
-        fileName: "session-abc.json",
-        content: "{\n  \"id\": \"abc\"\n}\n",
-      },
-    });
-  });
-
   it("exposes external URL opening through Tauri IPC", async () => {
     await installTauriBridge();
 
@@ -179,10 +132,10 @@ describe("tauri bridge", () => {
   it("exposes external terminal opening through Tauri IPC", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.terminalOpenExternal?.({ purpose: "shell" });
+    await window.hermesDesktop?.terminalOpenExternal?.({ cwd: "C:/repo" });
 
     expect(mockInvoke).toHaveBeenCalledWith("terminal_open_external", {
-      input: { purpose: "shell" },
+      input: { cwd: "C:/repo" },
     });
   });
 

@@ -1,7 +1,6 @@
 import { atom } from "jotai";
 import type { ComposerSubmitShortcut } from "@/lib/composer-submit-shortcut";
 import { readUiValue, removeUiValue, subscribeUiStore, writeUiValue } from "@/lib/ui-store";
-import hermesDefaultAvatar from "@/assets/hermes-default-avatar.png";
 
 function persistedUiBaseAtom<T>(read: () => T) {
   const baseAtom = atom<T>(read());
@@ -43,14 +42,6 @@ export const activeSessionIdAtom = atom(
     }
   },
 );
-
-// Maps a pre-compression persistent session id to the live continuation "tip"
-// that the backend redirected a `session.resume` to. The detail route watches
-// this so the URL/active id follows the backend's new tip after compression
-// instead of stranding the user on a session whose messages have moved — the
-// "conversation vanished + #2/#3 duplicate" symptom (issue #305). Populated by
-// resumeSession via recordTipRedirect; consumed by the detail route effect.
-export const sessionTipRedirectAtom = atom<Record<string, string>>({});
 
 const SIDEBAR_SEARCH_KEY = "hermes.sidebar-search";
 
@@ -117,7 +108,9 @@ export const CONVERSATION_FONT_SIZE_OPTIONS = [
 
 export type ConversationFontSizeMode = typeof CONVERSATION_FONT_SIZE_OPTIONS[number]["value"];
 
-export const DEFAULT_ASSISTANT_DISPLAY_NAME = "Hermes";
+/** 未自定义助手名称时存空串：展示时按会话所用 Agent 的名称显示，取不到时显示 ASSISTANT_FALLBACK_NAME。 */
+export const DEFAULT_ASSISTANT_DISPLAY_NAME = "";
+export const ASSISTANT_FALLBACK_NAME = "Agent";
 export const ASSISTANT_DISPLAY_NAME_KEY = "hermes.assistant-display-name";
 export const ASSISTANT_AVATAR_KEY = "hermes.assistant-avatar-data-url";
 const MAX_ASSISTANT_DISPLAY_NAME_LENGTH = 40;
@@ -187,33 +180,6 @@ export const conversationFontSizeAtom = atom(
   },
 );
 
-// Active profile name. Persisted in the UI SQLite store so refresh keeps
-// the user's choice. "default" is the upstream's reserved name for the root
-// HERMES_HOME (~/.hermes), so we use it both as the literal default profile
-// label and as the bootstrap value before the backend has been queried.
-//
-// Web 模式（v2 dev / 公网部署）下 dashboard 仍绑启动时的 HERMES_HOME，切换
-// profile 只更新 sticky 默认值——生效需要用户重启 dashboard（direction A）。
-// Desktop 模式 (Electron) 下主进程 own dashboard 子进程，切换走 IPC →
-// stop + spawn，真正即时生效（direction B）。X-Hermes-Profile header 是给
-// 未来 fork 改造支持 per-request 路由用的占位（direction C）。
-const activeProfileBaseAtom = persistedUiBaseAtom<string>(
-  () => readUiValue("hermes.active-profile", "default"),
-);
-export const activeProfileAtom = atom(
-  (get) => get(activeProfileBaseAtom),
-  (_get, set, next: string) => {
-    set(activeProfileBaseAtom, next);
-    writeUiValue("hermes.active-profile", next);
-  },
-);
-
-// 「管理范围」：UI 当前正在查看/编辑*哪个*档案的 settings（如技能），不切换、不重启
-// 运行中的 dashboard——区别于上面会重启 dashboard 的「活跃档案」。会话级、不持久化
-// （默认 null = 跟随活跃档案），由 /skills?profile= 深链或档案页「管理技能」动作设置，
-// 切换活跃档案时清空。对齐官方 dashboard 的 management-profile scope。
-export const managementProfileAtom = atom<string | null>(null);
-
 const assistantDisplayNameBaseAtom = persistedUiBaseAtom<string>(
   () => normalizeAssistantDisplayName(readUiValue(ASSISTANT_DISPLAY_NAME_KEY, DEFAULT_ASSISTANT_DISPLAY_NAME)),
 );
@@ -242,12 +208,6 @@ export const assistantAvatarDataUrlAtom = atom(
   },
 );
 
-/** 展示用头像：用户未自定义（存储为空）时回退到内置默认头像。
- *  设置页请继续用 assistantAvatarDataUrlAtom（空=未设置 的原语义）。 */
-export const assistantAvatarEffectiveAtom = atom(
-  (get) => get(assistantAvatarDataUrlBaseAtom) || hermesDefaultAvatar,
-);
-
 const showReasoningBaseAtom = persistedUiBaseAtom<boolean>(
   () => readUiValue("hermes.show-reasoning", false),
 );
@@ -256,20 +216,6 @@ export const showReasoningAtom = atom(
   (_get, set, next: boolean) => {
     set(showReasoningBaseAtom, next);
     writeUiValue("hermes.show-reasoning", next);
-  },
-);
-
-// 匿名使用统计开关（默认开启）。发送端在 lib/telemetry.ts 直接读 ui-store，
-// 这个 atom 只服务设置页 UI。key 与 lib/telemetry.ts 的 TELEMETRY_ENABLED_KEY 一致。
-const TELEMETRY_ENABLED_UI_KEY = "hermes.telemetry-enabled";
-const telemetryEnabledBaseAtom = persistedUiBaseAtom<boolean>(
-  () => readUiValue<unknown>(TELEMETRY_ENABLED_UI_KEY, true) !== false,
-);
-export const telemetryEnabledAtom = atom(
-  (get) => get(telemetryEnabledBaseAtom),
-  (_get, set, next: boolean) => {
-    set(telemetryEnabledBaseAtom, next);
-    writeUiValue(TELEMETRY_ENABLED_UI_KEY, next);
   },
 );
 
@@ -379,14 +325,6 @@ export function hydratePersistedUiAtoms(store: ReturnType<typeof import("jotai/v
     }
   }
 
-  // 3. Active profile
-  const profile = readUiValue<string | undefined>("hermes.active-profile", undefined);
-  if (profile !== undefined && typeof profile === "string") {
-    if (store.get(activeProfileBaseAtom) !== profile) {
-      store.set(activeProfileBaseAtom as any, profile);
-    }
-  }
-
   // 4. Assistant display name
   const displayName = readUiValue<string | undefined>(ASSISTANT_DISPLAY_NAME_KEY, undefined);
   if (displayName !== undefined) {
@@ -411,15 +349,6 @@ export function hydratePersistedUiAtoms(store: ReturnType<typeof import("jotai/v
     const enabled = showReasoning === true;
     if (store.get(showReasoningBaseAtom) !== enabled) {
       store.set(showReasoningBaseAtom as any, enabled);
-    }
-  }
-
-  // 7. Telemetry enabled
-  const telemetry = readUiValue<unknown>(TELEMETRY_ENABLED_UI_KEY, undefined);
-  if (telemetry !== undefined) {
-    const enabled = telemetry !== false;
-    if (store.get(telemetryEnabledBaseAtom) !== enabled) {
-      store.set(telemetryEnabledBaseAtom as any, enabled);
     }
   }
 
@@ -482,40 +411,3 @@ export function readNotificationSettings(): NotificationSettings {
   };
 }
 
-// Set to true while the desktop main process is restarting the dashboard
-// subprocess for a profile switch. The window-level overlay in ProfileSwitcherOverlay
-// reads this and blocks UI interaction until the new dashboard is ready.
-// Stays false in web mode (sticky-only switch is instant).
-// `title`/`body` override the default profile-switch copy so the same overlay
-// can mask any dashboard restart (e.g. toggling YOLO mode), since the user-
-// facing concern ("don't panic at the transient errors") is identical.
-export const profileSwitchingAtom = atom<{
-  active: boolean;
-  targetName?: string;
-  title?: string;
-  body?: string;
-}>({
-  active: false,
-});
-
-// Set to true while the desktop main process is installing a runtime update,
-// rolling back, hot-updating the dev-source backend, or running the unified
-// app update (frontend + backend at one version). Like a profile switch, these
-// stop + respawn the dashboard subprocess, during which every REST/WS call
-// would otherwise hit a stale session token and surface a 401. The window-level
-// RuntimeUpdateOverlay reads this and blocks UI interaction (and the polling
-// queries behind it) until the new dashboard is ready and the token has been
-// refreshed.
-export type RuntimeUpdatingMode = "install" | "rollback" | "hot-update" | "app-update" | "ui-update";
-
-export interface RuntimeUpdatingState {
-  active: boolean;
-  mode?: RuntimeUpdatingMode;
-  /** Progress lines streamed by `app-update-progress` / `hot-update-progress`
-   * events. `percent` is present for app-update (0-100), absent for hot-update. */
-  progress?: Array<{ phase: string; percent?: number; message: string }>;
-}
-
-export const runtimeUpdatingAtom = atom<RuntimeUpdatingState>({
-  active: false,
-});

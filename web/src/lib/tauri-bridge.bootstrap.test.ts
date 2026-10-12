@@ -69,7 +69,7 @@ describe("installTauriBridge 启动遮罩", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("restart_sidecar", undefined);
     expect(document.getElementById("hermes-bootstrap-overlay")).toBeNull();
-    expect(window.__HERMES_RUNTIME__).toMatchObject({ platform: "tauri", hermesBackendDisabled: true });
+    expect(window.__HERMES_RUNTIME__).toMatchObject({ platform: "tauri" });
   });
 
   it("starting 状态等待 sidecar-status 的 ready 事件", async () => {

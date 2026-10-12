@@ -73,6 +73,8 @@ function snapshot(id: string): AgentSnapshot {
     cwd: "/tmp",
     status: "idle",
     pendingPermissions: [],
+    lastSeq: 0,
+    resumable: false,
     createdAt: 1,
     updatedAt: 2,
   };

@@ -161,7 +161,7 @@ export function WorktreePanel({ repoPath }: WorktreePanelProps) {
               submitCreate();
             }
           }}
-          placeholder="新建工作树（输入名称，将创建 hermes/<名称> 分支）"
+          placeholder="新建工作树（输入名称，将创建 agentdeck/<名称> 分支）"
           disabled={wt.busy}
         />
         <button

@@ -6,8 +6,6 @@ import { appSidebarVisibleAtom } from "@/stores/ui";
 import { AppTopBar } from "./app-top-bar";
 import { AppSidebar } from "./app-sidebar";
 import { AppStatusBar } from "./app-status-bar";
-import { ConnectionTargetNotice } from "./connection-target-notice";
-import { ModelOnboardingDialog } from "./model-onboarding-dialog";
 import s from "./app-shell.module.css";
 
 interface AppShellProps {
@@ -46,9 +44,7 @@ export function AppShell({ children }: AppShellProps) {
         ) : null}
       </div>
       <div className={s.mainSlot}>
-        <ConnectionTargetNotice />
         {children}
-        <ModelOnboardingDialog />
       </div>
       <div className={s.statusbarSlot}>
         <AppStatusBar />

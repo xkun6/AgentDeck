@@ -3,14 +3,10 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { Moon, Search, Sun } from "lucide-react";
 import { useTheme } from "@agentdeck/shared-ui";
 import { useCommandPalette } from "@/components/command-palette";
-import { ProfileSelector } from "@/components/sidebar/profile-selector";
 import { DESKTOP_VERSION, versionLabel } from "@/lib/build-info";
-import { openExternalUrl } from "@/lib/external-links";
 import { TOP_TABS } from "./use-active-top-tab";
 import s from "./app-top-bar.module.css";
 
-const DESKTOP_VERSION_PARAM = versionLabel(DESKTOP_VERSION);
-const BRAND_URL = `https://hermesagent.org.cn?source=cn_desktop&version=${encodeURIComponent(DESKTOP_VERSION_PARAM)}`;
 export function AppTopBar() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,29 +17,27 @@ export function AppTopBar() {
   const ThemeIcon =
     isDarkTheme ? Sun : Moon;
   const themeToggleLabel = `切换到${isDarkTheme ? "浅色" : "深色"}模式`;
-  const openBrandSite = (event: MouseEvent<HTMLAnchorElement>) => {
+  const goHome = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
-    void openExternalUrl(BRAND_URL);
+    navigate("/");
   };
 
   return (
     <header className={s.topbar} data-window-drag data-tauri-drag-region="deep">
       <a
         className={s.brand}
-        aria-label="打开 Hermes Agent 中文社区官网"
-        href={BRAND_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="打开 Hermes Agent 中文社区官网"
-        onClick={openBrandSite}
+        aria-label="AgentDeck 首页"
+        href="/"
+        title="回到新任务首页"
+        onClick={goHome}
         data-no-drag
       >
         <span className={s.brandText}>
-          <span className={s.wordmark}>Hermes Agent</span>
+          <span className={s.wordmark}>AgentDeck</span>
           <span className={s.brandMeta}>
-            <span className={s.edition}>中文社区桌面版</span>
+            <span className={s.edition}>多 Agent 编排桌面端</span>
             <span className={s.metaDot} aria-hidden="true">·</span>
-            <span className={s.site}>hermesagent.org.cn</span>
+            <span className={s.site}>{versionLabel(DESKTOP_VERSION)}</span>
           </span>
         </span>
       </a>
@@ -79,7 +73,6 @@ export function AppTopBar() {
       </button>
 
       <div className={s.actions}>
-        <ProfileSelector variant="topbar" />
         <button
           type="button"
           className={s.iconBtn}

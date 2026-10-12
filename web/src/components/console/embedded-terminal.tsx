@@ -13,7 +13,6 @@ import type { TerminalEventPayload, TerminalStartResult } from "@/lib/runtime";
 import { openExternalUrl } from "@/lib/external-links";
 
 export type TerminalStatus = "starting" | "ready" | "error" | "closed" | "unsupported";
-export type TerminalPurpose = "shell" | "gatewaySetup" | "gatewayStatus";
 
 export interface EmbeddedTerminalHandle {
   /** Type a command into the live terminal (no-op until ready). */
@@ -25,7 +24,8 @@ export interface EmbeddedTerminalHandle {
 }
 
 interface EmbeddedTerminalProps {
-  purpose?: TerminalPurpose;
+  /** 终端起始目录；缺省由桌面端决定。 */
+  cwd?: string;
   /** Applied to the terminal surface element. */
   className?: string;
   /** Write the intro banner on open (default true). */
@@ -42,7 +42,7 @@ interface EmbeddedTerminalProps {
  */
 export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTerminalProps>(
   function EmbeddedTerminal(
-    { purpose = "shell", className, showBanner = true, onStatusChange, onSession, onError },
+    { cwd, className, showBanner = true, onStatusChange, onSession, onError },
     ref,
   ) {
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -86,7 +86,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
 
       if (!window.hermesDesktop?.terminalStart) {
         setStatus("unsupported");
-        onError?.("Hermes 终端需要在桌面端中打开。");
+        onError?.("终端需要在桌面端中打开。");
         return;
       }
 
@@ -136,17 +136,8 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
       terminalRef.current = term;
 
       if (showBanner) {
-        term.writeln("\x1b[38;5;214mHermes\x1b[0m \x1b[38;5;81mConsole\x1b[0m");
-        term.writeln(
-          "这里是真实终端。你可以直接输入 Hermes 命令，也可以点常用操作自动填入。推荐先运行 hermes。",
-        );
-        if (purpose === "gatewaySetup") {
-          term.writeln("正在为你打开消息平台接入向导\r\n");
-        } else if (purpose === "gatewayStatus") {
-          term.writeln("正在为你查看消息平台接入状态\r\n");
-        } else {
-          term.writeln("");
-        }
+        term.writeln("\x1b[38;5;214mAgentDeck\x1b[0m \x1b[38;5;81m终端\x1b[0m");
+        term.writeln("这里是真实终端，输入的命令会在本机执行。\r\n");
       }
 
       const writeEvent = (event: TerminalEventPayload) => {
@@ -203,7 +194,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
       scheduleResize();
 
       window.hermesDesktop
-        ?.terminalStart?.({ purpose, cols: term.cols, rows: term.rows })
+        ?.terminalStart?.({ cwd: cwd || undefined, cols: term.cols, rows: term.rows })
         .then((result) => {
           if (disposed) return;
           terminalIdRef.current = result.terminalId;
@@ -235,7 +226,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
       // onStatusChange/onError/onSession are intentionally excluded — they would
       // re-create the whole terminal on every parent render.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [armed, purpose, showBanner]);
+    }, [armed, cwd, showBanner]);
 
     return <div ref={containerRef} className={className} />;
   },

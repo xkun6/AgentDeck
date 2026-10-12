@@ -1,4 +1,4 @@
-/* Hermes 资料卡弹层（微信联系人卡形态）。 */
+/* 助手资料卡弹层（微信联系人卡形态）。 */
 
 .card {
   width: 280px;
@@ -39,6 +39,23 @@
   background: var(--h-color-bg-avatar);
   object-fit: cover;
   display: block;
+}
+
+.bigAvatarInitial {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border: 1px solid var(--h-line);
+  background: var(--h-color-bg-avatar);
+  color: var(--h-text-2);
+  font-family: var(--h-font-ui);
+  font-size: var(--h-font-size-2xl);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
 }
 
 .avatarZoomOverlay {
@@ -113,7 +130,7 @@
 }
 
 .action {
-  /* flex: 1 让三个按钮等宽均分整行（文案字数不同，交给弹性布局对齐）。 */
+  /* flex: 1 让按钮等宽均分整行（文案字数不同，交给弹性布局对齐）。 */
   flex: 1 1 0;
   display: flex;
   flex-direction: column;

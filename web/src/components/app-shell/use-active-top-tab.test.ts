@@ -1,84 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { BACKUP_ITEMS, CONFIG_ITEMS } from "./capability-sidebar";
 import { TOP_TABS } from "./use-active-top-tab";
+import { SETTINGS_ITEMS } from "./settings-sidebar";
 
 function tabFor(path: string) {
   return TOP_TABS.find((tab) => tab.matches(path))?.id;
 }
 
 describe("TOP_TABS", () => {
-  it("keeps config migration under the 02 config tab", () => {
-    expect(tabFor("/config-migration")).toBe("skills");
-    expect(tabFor("/config-migration/details")).toBe("skills");
+  it("把会话、历史、工作空间与终端归到 01 工作台", () => {
+    expect(tabFor("/")).toBe("workbench");
+    expect(tabFor("/tasks/abc")).toBe("workbench");
+    expect(tabFor("/history")).toBe("workbench");
+    expect(tabFor("/projects")).toBe("workbench");
+    expect(tabFor("/projects/C%3A%5Crepo")).toBe("workbench");
+    expect(tabFor("/console")).toBe("workbench");
   });
 
-  it("keeps IM routes under the 03 message gateway tab", () => {
-    expect(tabFor("/im/feishu")).toBe("gateway");
-    expect(tabFor("/im/weixin")).toBe("gateway");
+  it("把设置页归到 02 设置", () => {
+    for (const path of ["/common", "/notifications", "/theme", "/coding-agents", "/env", "/about"]) {
+      expect(tabFor(path)).toBe("settings");
+    }
   });
 
-  it("keeps kanban under the 01 workbench tab", () => {
-    expect(tabFor("/kanban")).toBe("workbench");
+  it("设置侧栏的每个入口都落在设置标签下", () => {
+    for (const item of SETTINGS_ITEMS) {
+      expect(tabFor(item.path)).toBe("settings");
+    }
   });
 
-  it("keeps canonical advanced pages under the 06 advanced tab", () => {
-    expect(tabFor("/common")).toBe("advanced");
-    expect(tabFor("/notifications")).toBe("advanced");
-    expect(tabFor("/config")).toBe("advanced");
-    expect(tabFor("/connection")).toBe("advanced");
-    expect(tabFor("/kernel")).toBe("advanced");
-    expect(tabFor("/env")).toBe("advanced");
-    expect(tabFor("/about")).toBe("advanced");
-  });
-
-  it("shows config migration in the 023 backup and restore sidebar section", () => {
-    expect(BACKUP_ITEMS.some((item) => item.label === "配置迁移" && item.path === "/config-migration")).toBe(true);
-  });
-
-  it("keeps backup restore under the 02 config tab and backup sidebar section", () => {
-    expect(tabFor("/backup")).toBe("skills");
-    expect(BACKUP_ITEMS.some((item) => item.label === "备份恢复" && item.path === "/backup")).toBe(true);
-  });
-
-  it("keeps voice setup under the 02 config tab and sidebar section", () => {
-    expect(tabFor("/voice")).toBe("skills");
-    expect(CONFIG_ITEMS.some((item) => item.label === "语音" && item.path === "/voice")).toBe(true);
-  });
-
-  it("keeps soul under the 02 config tab and sidebar section", () => {
-    expect(tabFor("/soul")).toBe("skills");
-    expect(tabFor("/soul/edit")).toBe("skills");
-    expect(CONFIG_ITEMS.some((item) => item.label === "人格" && item.path === "/soul")).toBe(true);
-  });
-
-  it("keeps built-in and external memory together under 05 hermes memory", () => {
-    expect(tabFor("/memory")).toBe("hermesMemory");
-    expect(tabFor("/memconfig")).toBe("hermesMemory");
-    expect(tabFor("/openviking")).toBe("hermesMemory");
-    expect(tabFor("/hindsight")).toBe("hermesMemory");
-    expect(CONFIG_ITEMS.some((item) => item.path === "/memory")).toBe(false);
-    expect(CONFIG_ITEMS.some((item) => item.label === "外置记忆")).toBe(false);
-  });
-
-  it("keeps the Wander memory workbench under the 04 tab", () => {
-    expect(tabFor("/wander-memory")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/memories")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/files")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/dialogue")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/chat")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/context")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/status")).toBe("wanderMemory");
-    expect(tabFor("/wander-memory/api")).toBe("wanderMemory");
-  });
-
-  it("keeps memory tab ordering with the Wander memory entry", () => {
+  it("只有工作台与设置两个顶部标签", () => {
     expect(TOP_TABS.map((tab) => [tab.num, tab.label])).toEqual([
       ["01", "工作台"],
-      ["02", "配置"],
-      ["03", "消息接入"],
-      ["04", "Wander 记忆"],
-      ["05", "Hermes 记忆"],
-      ["06", "高级"],
+      ["02", "设置"],
     ]);
   });
 });

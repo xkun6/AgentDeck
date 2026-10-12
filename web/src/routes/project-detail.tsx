@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useAtomValue } from "jotai";
 import { LoadingState, Popover } from "@agentdeck/shared-ui";
 import {
   ChevronLeft,
@@ -9,12 +10,13 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { SessionSummary } from "@agentdeck/protocol";
-import { useSessions } from "@/hooks/use-sessions";
-import { sessionDisplayTitle } from "@/lib/session-title";
+import type { AgentSnapshot } from "@agentdeck/protocol";
+import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
+import { chatRuntimeBySessionAtom } from "@/stores/chat";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { agentDisplayTitle, agentProviderLabel } from "@/lib/agent-session-display";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { shortenPath } from "@/lib/paths";
-import { getSourceMeta } from "@/lib/source-meta";
 import {
   normalizeWorkspacePath,
   readSessionWorkspaceMap,
@@ -26,13 +28,16 @@ import {
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
 import { WorktreePanel } from "@/components/projects/worktree-panel";
 import { useConfirm } from "@/lib/use-confirm";
-import { runtime } from "@/lib/runtime";
 import s from "./project-detail.module.css";
 
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
-function lastActivitySec(session: SessionSummary): number {
-  return session.ended_at ?? session.started_at;
+function lastActivitySec(session: AgentSnapshot): number {
+  return session.updatedAt / 1000;
+}
+
+function sessionTokens(session: AgentSnapshot): number {
+  return (session.lastUsage?.inputTokens ?? 0) + (session.lastUsage?.outputTokens ?? 0);
 }
 
 function shortId(id: string): string {
@@ -88,7 +93,12 @@ export function ProjectDetailRoute() {
     () => normalizeWorkspacePath(decodeURIComponent(params.workspacePath ?? "")),
     [params.workspacePath],
   );
-  const { data, isLoading } = useSessions(200, 0);
+  const agents = useAtomValue(agentListAtom);
+  const loaded = useAtomValue(agentListLoadedAtom);
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
+  const { data: providers } = useAgentProviders();
+  const isLoading = !loaded && connection !== "error" && connection !== "closed";
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [sessionWorkspaceMap, setSessionWorkspaceMap] = useState(readSessionWorkspaceMap);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -106,17 +116,16 @@ export function ProjectDetailRoute() {
     [projects, workspacePath],
   );
 
-  const projectSessions = useMemo<SessionSummary[]>(() => {
+  const projectSessions = useMemo<AgentSnapshot[]>(() => {
     if (!workspacePath) return [];
-    const all = data?.sessions ?? [];
-    const matched: SessionSummary[] = [];
-    for (const session of all) {
-      if (normalizeWorkspacePath(sessionWorkspaceMap[session.id]) === workspacePath) {
+    const matched: AgentSnapshot[] = [];
+    for (const session of agents) {
+      if (normalizeWorkspacePath(session.cwd || sessionWorkspaceMap[session.id]) === workspacePath) {
         matched.push(session);
       }
     }
     return matched.sort((a, b) => lastActivitySec(b) - lastActivitySec(a));
-  }, [data?.sessions, sessionWorkspaceMap, workspacePath]);
+  }, [agents, sessionWorkspaceMap, workspacePath]);
 
   const stats = useMemo(() => {
     const nowSec = Date.now() / 1000;
@@ -124,11 +133,11 @@ export function ProjectDetailRoute() {
     let weekTokens = 0;
     let totalTokens = 0;
     for (const session of projectSessions) {
-      const sessionTokens = (session.input_tokens ?? 0) + (session.output_tokens ?? 0);
-      totalTokens += sessionTokens;
-      if (session.started_at >= nowSec - WEEK_SECONDS) {
+      const tokens = sessionTokens(session);
+      totalTokens += tokens;
+      if (session.createdAt / 1000 >= nowSec - WEEK_SECONDS) {
         weekSessions += 1;
-        weekTokens += sessionTokens;
+        weekTokens += tokens;
       }
     }
     return {
@@ -139,7 +148,7 @@ export function ProjectDetailRoute() {
     };
   }, [projectSessions]);
 
-  const desktopAvailable = typeof window !== "undefined" && !!window.hermesDesktop && !runtime.isRemote();
+  const desktopAvailable = typeof window !== "undefined" && !!window.hermesDesktop;
 
   const goNewTask = useCallback(() => {
     if (!workspacePath) return;
@@ -295,18 +304,14 @@ export function ProjectDetailRoute() {
             </div>
             <div className={s.statSub}>
               {projectSessions.length > 0
-                ? sessionDisplayTitle(projectSessions[0])
+                ? agentDisplayTitle(projectSessions[0], runtimeBySession[projectSessions[0].id], providers)
                 : "暂无会话"}
             </div>
           </div>
         </section>
 
         <section className={s.sec}>
-          {runtime.isRemote() ? (
-            <div className={s.emptyHint}>远端模式下已禁用依赖桌面端本机 Git 和文件系统的 Worktree 面板。</div>
-          ) : (
-            <WorktreePanel repoPath={project.path} />
-          )}
+          <WorktreePanel repoPath={project.path} />
         </section>
 
         <section className={s.sec}>
@@ -327,7 +332,7 @@ export function ProjectDetailRoute() {
                   <tr>
                     <th style={{ width: 64 }}>ID</th>
                     <th>标题</th>
-                    <th style={{ width: 80 }}>来源</th>
+                    <th style={{ width: 112 }}>Agent</th>
                     <th style={{ width: 140 }}>模型</th>
                     <th style={{ width: 112 }}>更新</th>
                     <th style={{ width: 92 }} className={s.numeric}>Tokens</th>
@@ -335,25 +340,22 @@ export function ProjectDetailRoute() {
                 </thead>
                 <tbody>
                   {projectSessions.slice(0, 50).map((session) => {
-                    const meta = getSourceMeta(session.source);
                     return (
                       <tr
                         key={session.id}
-                        onClick={() => navigate(`/tasks/${session.id}`)}
+                        onClick={() => navigate(`/tasks/${encodeURIComponent(session.id)}`)}
                       >
                         <td className={s.cellId}>{shortId(session.id)}</td>
-                        <td className={s.titleCell}>{sessionDisplayTitle(session)}</td>
-                        <td>
-                          <span className={s.sourceChip} data-tone={meta.tone}>
-                            {meta.label}
-                          </span>
+                        <td className={s.titleCell}>
+                          {agentDisplayTitle(session, runtimeBySession[session.id], providers)}
                         </td>
+                        <td className={s.mono}>{agentProviderLabel(session.provider, providers)}</td>
                         <td className={s.mono}>{session.model || "—"}</td>
                         <td className={s.cellTimestamp}>
                           {relativeTime(lastActivitySec(session))}
                         </td>
                         <td className={`${s.mono} ${s.numeric}`}>
-                          {formatTokens((session.input_tokens ?? 0) + (session.output_tokens ?? 0))}
+                          {formatTokens(sessionTokens(session))}
                         </td>
                       </tr>
                     );

@@ -1,24 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
-import { AlertTriangle, ChevronRight, Info, Volume2, VolumeX } from "lucide-react";
-import { LoadingIndicator } from "@agentdeck/shared-ui";
-import { assistantAvatarEffectiveAtom, assistantDisplayNameAtom, showReasoningAtom } from "@/stores/ui";
+import { AlertTriangle, ChevronRight, Info } from "lucide-react";
+import { ASSISTANT_FALLBACK_NAME, assistantAvatarDataUrlAtom, showReasoningAtom } from "@/stores/ui";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
 import { AssistantProfileCard } from "./assistant-profile-card";
-import { CliDelegationCard, entryFromChatTool } from "./cli-delegation-card";
-import { cliDelegationsByToolIdAtom } from "@/stores/cli-delegations";
 import { MessageImage } from "./message-image";
 import { MessageSkeleton } from "./message-skeleton";
 import { MessageText } from "./message-text";
-import { SkillInvocationMessage } from "./skill-invocation-message";
 import { CopyButton } from "@/components/ui/copy-button";
 import s from "./message-timeline.module.css";
 import { summarizeToolActivity } from "./tool-activity";
 import { groupConsecutiveTools, groupElapsedMs } from "./group-tools";
 import { truncateMiddle } from "@/lib/truncate-middle";
-import { sanitizeTextForSpeech, speakText, voiceErrorMessage } from "@/lib/voice";
-import { isSkillInvocationText } from "@/lib/skill-invocation";
 import {
   formatDurationMs,
   formatElapsedTimer,
@@ -39,7 +33,8 @@ interface MessageTimelineProps {
   turnStartedAt?: number;
   sessionUsage?: SessionUsageResult | null;
   progressModel?: string;
-  autoTts?: boolean;
+  /** 助手显示名（宿主按自定义名称 → 会话 Agent 名称解析），缺省为「Agent」。 */
+  assistantName?: string;
 }
 
 interface TurnAnchor {
@@ -48,23 +43,10 @@ interface TurnAnchor {
   title: string;
 }
 
-type SpeechPlaybackStatus = "idle" | "preparing" | "speaking";
-
-interface SpeechPlaybackState {
-  messageId: string | null;
-  status: SpeechPlaybackStatus;
-}
-
-interface SpeechPlaybackError {
-  message: string;
-  messageId: string;
-}
-
-interface SpeechPlaybackControls {
-  error: SpeechPlaybackError | null;
-  onSpeak: (messageId: string, text: string) => void;
-  onStop: () => void;
-  state: SpeechPlaybackState;
+/** 未设置头像时显示的名称首字（拉丁字母转大写）。 */
+export function avatarInitial(name: string): string {
+  const first = Array.from(name.trim())[0] ?? "A";
+  return first.toUpperCase();
 }
 
 export function resolveBottomFollowState(
@@ -505,7 +487,6 @@ interface MessageBlocksProps {
 
 function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progressModel }: MessageBlocksProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
-  const cliDelegations = useAtomValue(cliDelegationsByToolIdAtom);
   const blocks = message.blocks ?? [];
   const items: ReactNode[] = [];
   let pendingTools: ChatToolItem[] = [];
@@ -518,16 +499,6 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
 
   blocks.forEach((block, index) => {
     if (block.type === "tool") {
-      // CLI 委派（Claude Code / Codex）升级为品牌化卡片：live store 命中
-      // 优先（P-047 事件或旧内核回退），历史重载走渲染时按需重建。委派卡
-      // 不进 ToolChain 聚合——它是多 Agent 协作的一等公民，不该被折叠进
-      // "运行了 N 个工具"。
-      const delegation = cliDelegations.get(block.tool.tool_id) ?? entryFromChatTool(block.tool);
-      if (delegation) {
-        flushTools(`tools-${index}`);
-        items.push(<CliDelegationCard key={`cli-delegation-${index}`} entry={delegation} />);
-        return;
-      }
       pendingTools.push(block.tool);
       return;
     }
@@ -610,18 +581,6 @@ function getCopyableText(message: ChatMessage): string | undefined {
     return text || undefined;
   }
   return message.text || message.reasoning;
-}
-
-function getReadableText(message: ChatMessage): string | undefined {
-  if (message.blocks?.length) {
-    const text = message.blocks
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n\n")
-      .trim();
-    return text || undefined;
-  }
-  return message.text?.trim() || undefined;
 }
 
 const FINISH_REASON_LABEL: Record<string, string> = {
@@ -778,49 +737,19 @@ interface MessageBubbleProps {
   turnStartedAt?: number;
   sessionUsage?: SessionUsageResult | null;
   progressModel?: string;
-  speech?: SpeechPlaybackControls;
+  assistantName: string;
 }
 
-function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, speech }: MessageBubbleProps) {
+function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, assistantName }: MessageBubbleProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
-  const assistantDisplayName = useAtomValue(assistantDisplayNameAtom);
-  const assistantAvatarDataUrl = useAtomValue(assistantAvatarEffectiveAtom);
+  const assistantAvatarDataUrl = useAtomValue(assistantAvatarDataUrlAtom);
   const isUser = message.role === "user";
   const isToolOnly = message.role === "tool";
   const isSystem = message.role === "system";
   const streaming = message.status === "streaming";
   const copyable = getCopyableText(message);
-  const readable = !isUser && !isSystem && !isToolOnly && !streaming && message.status !== "error"
-    ? getReadableText(message)
-    : undefined;
-  const speechStatus = speech?.state.messageId === message.id ? speech.state.status : "idle";
-  const speechBusy = speechStatus === "preparing" || speechStatus === "speaking";
   const hasBlocks = !isUser && Boolean(message.blocks?.length);
-  const hasSkillInvocation = isSkillInvocationText(message.text);
   const messageStats = message.stats ?? sessionUsageFallbackStats(message, sessionUsage);
-
-  if (hasSkillInvocation) {
-    return (
-      <div className={s.messageRow} data-role="system" data-system-kind="skill-invocation">
-        <div
-          className={s.systemNotice}
-          data-kind="skill-invocation"
-          role="status"
-        >
-          <Info
-            className={s.systemNoticeIcon}
-            size={16}
-            strokeWidth={1.75}
-            aria-hidden="true"
-          />
-          <div className={s.systemNoticeBody}>
-            <div className={s.systemNoticeTitle}>Skill 指令已加载</div>
-            <SkillInvocationMessage text={message.text ?? ""} />
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (isToolOnly) {
     return (
@@ -864,19 +793,26 @@ function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, sp
 
   return (
     <div className={s.messageRow} data-role={isUser ? "user" : "assistant"}>
-      {/* IM 式布局：Hermes 头像独立于气泡左侧一列（点击弹资料卡）；用户侧
+      {/* IM 式布局：助手头像独立于气泡左侧一列（点击弹资料卡）；用户侧
           不显示头像与昵称，气泡右贴。 */}
       {!isUser ? (
         <div className={s.avatarCol}>
           <AssistantProfileCard
+            name={assistantName}
             model={progressModel || sessionUsage?.model}
             trigger={
-              <button type="button" className={s.avatarButton} title={`查看 ${assistantDisplayName} 资料`}>
-                <img
-                  className={s.rowAvatar}
-                  src={assistantAvatarDataUrl}
-                  alt={`${assistantDisplayName} 头像`}
-                />
+              <button type="button" className={s.avatarButton} title={`查看 ${assistantName} 资料`}>
+                {assistantAvatarDataUrl ? (
+                  <img
+                    className={s.rowAvatar}
+                    src={assistantAvatarDataUrl}
+                    alt={`${assistantName} 头像`}
+                  />
+                ) : (
+                  <span className={s.rowAvatarInitial} aria-label={`${assistantName} 头像`}>
+                    {avatarInitial(assistantName)}
+                  </span>
+                )}
               </button>
             }
           />
@@ -885,7 +821,7 @@ function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, sp
       <div className={s.messageContent}>
         {!isUser ? (
           <div className={s.assistantName}>
-            <span>{assistantDisplayName}</span>
+            <span>{assistantName}</span>
           </div>
         ) : null}
         <div className={s.bubble} data-role={isUser ? "user" : "assistant"}>
@@ -926,33 +862,6 @@ function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, sp
                 复制
               </CopyButton>
             ) : null}
-            {readable && speech ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (speechBusy) {
-                    speech.onStop();
-                  } else {
-                    speech.onSpeak(message.id, readable);
-                  }
-                }}
-                data-speech-state={speechStatus}
-                aria-pressed={speechBusy}
-                title={speechBusy ? "停止朗读" : "朗读回复"}
-              >
-                {speechStatus === "preparing" ? (
-                  <LoadingIndicator size="xs" />
-                ) : speechStatus === "speaking" ? (
-                  <VolumeX aria-hidden="true" />
-                ) : (
-                  <Volume2 aria-hidden="true" />
-                )}
-                <span>{speechBusy ? "停止" : "朗读"}</span>
-              </button>
-            ) : null}
-            {speech?.error?.messageId === message.id ? (
-              <span className={s.messageSpeechError}>{speech.error.message}</span>
-            ) : null}
           </span>
           {messageStats ? <MessageStatsFooter stats={messageStats} /> : null}
         </div>
@@ -969,7 +878,7 @@ export function MessageTimeline({
   turnStartedAt,
   sessionUsage,
   progressModel,
-  autoTts = false,
+  assistantName = ASSISTANT_FALLBACK_NAME,
 }: MessageTimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -987,17 +896,7 @@ export function MessageTimeline({
   const messageCountRef = useRef(0);
   const firstMessageIdRef = useRef<string | undefined>(undefined);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
-  const speechAudioRef = useRef<HTMLAudioElement | null>(null);
-  const speechStopRef = useRef<(() => void) | null>(null);
-  const speechSequenceRef = useRef(0);
-  const autoTtsSeenRef = useRef<Set<string>>(new Set());
-  const autoTtsSessionKeyRef = useRef<string | undefined>(undefined);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
-  const [speechState, setSpeechState] = useState<SpeechPlaybackState>({
-    messageId: null,
-    status: "idle",
-  });
-  const [speechError, setSpeechError] = useState<SpeechPlaybackError | null>(null);
   const visibleMessages = useMemo(
     () =>
       messages.filter(
@@ -1013,7 +912,7 @@ export function MessageTimeline({
   const turnAnchors = useMemo<TurnAnchor[]>(() => {
     const anchors: TurnAnchor[] = [];
     for (const message of visibleMessages) {
-      if (message.role !== "user" || isSkillInvocationText(message.text)) continue;
+      if (message.role !== "user") continue;
       const index = anchors.length;
       anchors.push({
         id: message.id,
@@ -1024,116 +923,6 @@ export function MessageTimeline({
     return anchors;
   }, [visibleMessages]);
   const showTurnRail = turnAnchors.length > 1;
-
-  const stopSpeech = useCallback(() => {
-    speechSequenceRef.current += 1;
-    speechStopRef.current?.();
-    speechStopRef.current = null;
-    if (speechAudioRef.current) {
-      speechAudioRef.current.pause();
-      speechAudioRef.current.src = "";
-      speechAudioRef.current.load();
-      speechAudioRef.current = null;
-    }
-    setSpeechState({ messageId: null, status: "idle" });
-  }, []);
-
-  const playSpeech = useCallback(async (messageId: string, text: string) => {
-    const speakableText = sanitizeTextForSpeech(text);
-    if (!speakableText) {
-      setSpeechError({ messageId, message: "没有可朗读的文本。" });
-      return;
-    }
-
-    stopSpeech();
-    const ownSequence = speechSequenceRef.current;
-    setSpeechError(null);
-    setSpeechState({ messageId, status: "preparing" });
-
-    try {
-      const response = await speakText(speakableText);
-      if (speechSequenceRef.current !== ownSequence) return;
-
-      const audio = new Audio(response.data_url);
-      speechAudioRef.current = audio;
-      setSpeechState({ messageId, status: "speaking" });
-
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          audio.removeEventListener("ended", onEnded);
-          audio.removeEventListener("error", onError);
-          if (speechStopRef.current === onStop) speechStopRef.current = null;
-        };
-        const onEnded = () => {
-          cleanup();
-          resolve();
-        };
-        const onError = () => {
-          cleanup();
-          reject(new Error("音频播放失败"));
-        };
-        const onStop = () => {
-          cleanup();
-          resolve();
-        };
-        speechStopRef.current = onStop;
-        audio.addEventListener("ended", onEnded, { once: true });
-        audio.addEventListener("error", onError, { once: true });
-        void audio.play().catch(reject);
-      });
-
-      if (speechSequenceRef.current !== ownSequence) return;
-      speechAudioRef.current = null;
-      setSpeechState({ messageId: null, status: "idle" });
-    } catch (error) {
-      if (speechSequenceRef.current !== ownSequence) return;
-      speechAudioRef.current = null;
-      speechStopRef.current = null;
-      setSpeechState({ messageId: null, status: "idle" });
-      setSpeechError({ messageId, message: voiceErrorMessage(error, "朗读失败") });
-    }
-  }, [stopSpeech]);
-
-  useEffect(() => () => {
-    speechSequenceRef.current += 1;
-    speechStopRef.current?.();
-    speechStopRef.current = null;
-    if (speechAudioRef.current) {
-      speechAudioRef.current.pause();
-      speechAudioRef.current.src = "";
-      speechAudioRef.current.load();
-      speechAudioRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    const completed = messages.filter((message) =>
-      message.role === "assistant" &&
-      message.status === "complete" &&
-      Boolean(getReadableText(message)),
-    );
-    const sessionKey = messages[0]?.id;
-    if (autoTtsSessionKeyRef.current !== sessionKey) {
-      autoTtsSessionKeyRef.current = sessionKey;
-      autoTtsSeenRef.current = new Set(completed.map((message) => message.id));
-      return;
-    }
-
-    const fresh = completed.filter((message) => !autoTtsSeenRef.current.has(message.id));
-    for (const message of completed) autoTtsSeenRef.current.add(message.id);
-    if (!autoTts || fresh.length === 0) return;
-
-    const target = fresh[fresh.length - 1];
-    const text = target ? getReadableText(target) : undefined;
-    if (target && text) void playSpeech(target.id, text);
-  }, [autoTts, messages, playSpeech]);
-
-  const speechControls = useMemo<SpeechPlaybackControls>(() => ({
-    error: speechError,
-    onSpeak: (messageId, text) => void playSpeech(messageId, text),
-    onStop: stopSpeech,
-    state: speechState,
-  }), [playSpeech, speechError, speechState, stopSpeech]);
 
   const setTurnAnchorNode = useCallback((id: string, node: HTMLDivElement | null) => {
     if (node) {
@@ -1470,7 +1259,7 @@ export function MessageTimeline({
           const previous = visibleMessages[index - 1];
           const showDate = !previous || formatDay(previous.createdAt) !== formatDay(message.createdAt);
           const isLast = index === visibleMessages.length - 1;
-          const isUserTurn = message.role === "user" && !isSkillInvocationText(message.text);
+          const isUserTurn = message.role === "user";
           return (
             <div
               key={message.id}
@@ -1483,7 +1272,7 @@ export function MessageTimeline({
                 turnStartedAt={isLast ? turnStartedAt : undefined}
                 sessionUsage={isLast ? sessionUsage : undefined}
                 progressModel={isLast ? progressModel : undefined}
-                speech={speechControls}
+                assistantName={assistantName}
               />
             </div>
           );

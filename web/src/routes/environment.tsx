@@ -19,7 +19,7 @@ import s from "./settings.module.css";
 
 const CATEGORY_LABELS: Record<EnvironmentCheckCategory, string> = {
   core: "核心环境",
-  runtime: "本机内核",
+  runtime: "Agent 服务",
   tools: "本机工具",
   browser: "浏览器能力",
   paths: "路径",
@@ -89,7 +89,7 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
           <div className={s.aboutEyebrow}>本机环境与依赖检查</div>
           <h3>{data ? (healthy ? "核心环境正常" : "发现需要关注的环境项") : "正在读取环境状态"}</h3>
           <p>
-            此页展示本机内核所需的环境，以及 Git、Node、ripgrep、ffmpeg、浏览器工具等可选能力。
+            此页展示 AgentDeck 的数据目录、Agent 服务（Node sidecar）状态，以及 Git、npm、ripgrep、Claude Code / Codex CLI 等本机工具。
             可选项缺失不会影响启动，但会影响对应工具的能力。
           </p>
         </div>
@@ -115,21 +115,21 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
           variant="outline"
           size="md"
           type="button"
-          onClick={() => void openPath(data?.runtimeRoot)}
-          disabled={!data?.runtimeRoot || !window.hermesDesktop?.openWorkspacePath}
+          onClick={() => void openPath(data?.dataDir)}
+          disabled={!data?.dataDir || !window.hermesDesktop?.openWorkspacePath}
           leadingIcon={<FolderOpen size={12} />}
         >
-          打开内核目录
+          打开数据目录
         </Button>
         <Button
           variant="outline"
           size="md"
           type="button"
-          onClick={() => void openPath(data?.hermesHome)}
-          disabled={!data?.hermesHome || !window.hermesDesktop?.openWorkspacePath}
+          onClick={() => void openPath(data?.logDir)}
+          disabled={!data?.logDir || !window.hermesDesktop?.openWorkspacePath}
           leadingIcon={<FolderOpen size={12} />}
         >
-          打开 HERMES_HOME
+          打开日志目录
         </Button>
       </div>
 
@@ -141,13 +141,12 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
           <DebugCard icon={<MonitorCog size={16} />} title="环境摘要" sub="核心错误会影响启动；可选 warning 只影响对应能力" wide>
             <div className={s.runtimeGrid}>
               <RuntimeField label="平台" value={`${data.platform}-${data.arch}`} />
-              <RuntimeField label="档案" value={data.currentProfile} />
               <RuntimeField label="生成时间" value={formatGeneratedAt(data.generatedAtMs)} />
               <RuntimeField label="核心错误" value={summary.requiredErrors} />
               <RuntimeField label="全部异常" value={summary.errors} />
               <RuntimeField label="注意项" value={summary.warnings} />
-              <RuntimeField label="runtimeRoot" value={data.runtimeRoot} mono wide />
-              <RuntimeField label="HERMES_HOME" value={data.hermesHome} mono wide />
+              <RuntimeField label="数据目录" value={data.dataDir} mono wide />
+              <RuntimeField label="日志目录" value={data.logDir} mono wide />
             </div>
           </DebugCard>
 

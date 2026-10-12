@@ -1,12 +1,11 @@
 import { useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
 import { ExternalLink, Play, Power, RotateCcw, TerminalSquare } from "lucide-react";
 import { StatusDot } from "@agentdeck/shared-ui";
 import type { TerminalStartResult } from "@/lib/runtime";
+import { readWorkspacePath } from "@/lib/workspaces";
 import {
   EmbeddedTerminal,
   type EmbeddedTerminalHandle,
-  type TerminalPurpose,
   type TerminalStatus,
 } from "@/components/console/embedded-terminal";
 import { SectionShell } from "./section-shell";
@@ -20,24 +19,19 @@ interface CommandAction {
 
 const QUICK_COMMANDS: CommandAction[] = [
   {
-    label: "打开 Hermes",
-    command: "hermes",
-    desc: "进入 Hermes 命令入口，直接按提示完成对话、配置和接入操作。",
+    label: "Claude Code 版本",
+    command: "claude --version",
+    desc: "确认 Claude Code CLI 已安装并可在终端中调用。",
   },
   {
-    label: "查看接入状态",
-    command: "hermes gateway status",
-    desc: "确认当前消息接入是否在线，以及正在使用哪个配置。",
+    label: "Codex 版本",
+    command: "codex --version",
+    desc: "确认 Codex CLI 已安装并可在终端中调用。",
   },
   {
-    label: "检查 Hermes 配置",
-    command: "hermes setup",
-    desc: "重新进入 Hermes 基础配置向导，补齐模型、密钥和本地目录。",
-  },
-  {
-    label: "查看可用命令",
-    command: "hermes --help",
-    desc: "打开命令帮助，了解当前版本支持的操作。",
+    label: "Git 状态",
+    command: "git status",
+    desc: "查看当前目录的分支与未提交改动。",
   },
 ];
 
@@ -48,8 +42,8 @@ function normalizePath(path?: string | null) {
 }
 
 export function ConsoleRoute() {
-  const location = useLocation();
   const terminalRef = useRef<EmbeddedTerminalHandle | null>(null);
+  const [cwd] = useState(() => readWorkspacePath());
   const [status, setStatus] = useState<TerminalStatus>("starting");
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<TerminalStartResult | null>(null);
@@ -58,13 +52,6 @@ export function ConsoleRoute() {
   const [externalOpened, setExternalOpened] = useState<string | null>(null);
 
   const isExternalTerminalAvailable = Boolean(window.hermesDesktop?.terminalOpenExternal);
-  const autoPurpose = useMemo<TerminalPurpose>(() => {
-    const params = new URLSearchParams(location.search);
-    const run = params.get("run") ?? params.get("command") ?? "";
-    if (["gateway-setup", "gatewaySetup", "gateway_setup"].includes(run)) return "gatewaySetup";
-    if (["gateway-status", "gatewayStatus", "gateway_status"].includes(run)) return "gatewayStatus";
-    return "shell";
-  }, [location.search]);
 
   const statusText = useMemo(() => {
     if (status === "ready") return "已连接";
@@ -94,7 +81,7 @@ export function ConsoleRoute() {
     setExternalOpened(null);
     setError(null);
     window.hermesDesktop
-      .terminalOpenExternal({ purpose: autoPurpose })
+      .terminalOpenExternal({ cwd: session?.cwd || cwd || undefined })
       .then((result) => {
         setExternalOpened(`已在 ${result.terminal} 打开：${result.command}`);
       })
@@ -106,7 +93,7 @@ export function ConsoleRoute() {
 
   return (
     <SectionShell
-      title="Hermes Console"
+      title="终端"
       sub={statusText}
       right={
         <div className={s.topActions}>
@@ -135,15 +122,15 @@ export function ConsoleRoute() {
           <div className={s.summaryCard}>
             <div>
               <div className={s.eyebrow}>本地命令环境</div>
-              <h2>直接操作 Hermes，不需要离开桌面端。</h2>
+              <h2>在当前工作区直接运行命令。</h2>
               <p>
-                这里会使用桌面端已经准备好的 Hermes 运行环境。你输入的命令会真实执行，适合配置接入、排查状态，或按文档执行高级操作。
+                终端在本机执行你输入的命令，适合安装或登录 Agent CLI、查看仓库状态等操作。
               </p>
             </div>
             <div className={s.summaryStats}>
               <div>
-                <span>Hermes 命令</span>
-                <strong>{session?.managedRuntime ? "已就绪" : "等待运行时"}</strong>
+                <span>Shell</span>
+                <strong title={session?.shell}>{session?.shell || "—"}</strong>
               </div>
               <div>
                 <span>工作目录</span>
@@ -167,7 +154,7 @@ export function ConsoleRoute() {
             </div>
             <EmbeddedTerminal
               ref={terminalRef}
-              purpose={autoPurpose}
+              cwd={cwd}
               className={s.terminalSurface}
               onStatusChange={setStatus}
               onSession={setSession}
@@ -204,12 +191,9 @@ export function ConsoleRoute() {
           </div>
 
           <div className={s.panel}>
-            <div className={s.panelTitle}>接入提示</div>
+            <div className={s.panelTitle}>提示</div>
             <p className={s.helpText}>
-              推荐先点击“打开 Hermes”。进入 Hermes 命令入口后，你可以按提示完成对话、配置和飞书、微信等消息入口接入。
-            </p>
-            <p className={s.helpText}>
-              这个终端默认使用当前档案的 <code>HERMES_HOME</code>，不会切到其它档案，也不会读浏览器里的临时状态。
+              终端默认在输入框最近选择的工作区中打开；未选择工作区时由系统决定起始目录。
             </p>
           </div>
         </aside>

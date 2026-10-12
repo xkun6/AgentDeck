@@ -1,140 +1,79 @@
 import { useMemo } from "react";
 import { useAtomValue } from "jotai";
-import { RotateCcw } from "lucide-react";
-import { LoadingIndicator, StatusDot } from "@agentdeck/shared-ui";
-import { useStatus } from "@/hooks/use-status";
-import { useModelInfo } from "@/hooks/use-config";
-import { useSessions } from "@/hooks/use-sessions";
-import { useAnalytics } from "@/hooks/use-analytics";
-import { useGatewayRestartAction } from "@/hooks/use-gateway-restart";
-import { useRuntimeInfo } from "@/hooks/use-runtime-update";
+import { useLocation } from "react-router-dom";
+import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
-import { dashboardPortFromUrl, dashboardUrlFromInputs } from "@/lib/dashboard-url";
-import { openExternalUrl } from "@/lib/external-links";
-import { isSessionRunning, mergeLiveRuntimeSessions } from "@/lib/session-activity";
-import { formatTokens } from "@/lib/format";
-import {
-  gatewayRestartAntivirusHint,
-  gatewayRestartButtonLabel,
-  gatewayRestartTitle,
-} from "@/lib/gateway-restart";
-import { detectHostOS, runtime } from "@/lib/runtime";
-import { buildSidebarVersionRows } from "./sidebar-version-tag";
+import { agentListAtom, agentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { agentProviderLabel, isAgentRunning } from "@/lib/agent-session-display";
+import { BUILD_COMMIT, DESKTOP_VERSION, UNKNOWN_VALUE, versionLabel } from "@/lib/build-info";
+import type { SidecarConnectionState } from "@/lib/sidecar-client";
 import s from "./app-status-bar.module.css";
 
-function formatModelShort(model: string | null | undefined): string {
-  if (!model) return "—";
-  return model.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+const CONNECTION_LABELS: Record<SidecarConnectionState, string> = {
+  idle: "未连接",
+  connecting: "连接中",
+  open: "已连接",
+  closed: "已断开",
+  error: "连接失败",
+};
+
+const CONNECTION_TONES: Record<SidecarConnectionState, StatusDotTone> = {
+  idle: "warning",
+  connecting: "warning",
+  open: "success",
+  closed: "danger",
+  error: "danger",
+};
+
+function shortCommit(commit: string | undefined): string {
+  const normalized = commit?.trim() ?? "";
+  if (!normalized || normalized === "unknown") return UNKNOWN_VALUE;
+  return normalized.slice(0, 4);
 }
 
-function formatContext(ctx: number | null | undefined): string {
-  if (!ctx || ctx <= 0) return "—";
-  if (ctx >= 1_000_000) return `${(ctx / 1_000_000).toFixed(0)}M`;
-  if (ctx >= 1_000) return `${(ctx / 1_000).toFixed(0)}k`;
-  return `${ctx}`;
+function activeTaskId(pathname: string): string | null {
+  if (!pathname.startsWith("/tasks/")) return null;
+  try {
+    return decodeURIComponent(pathname.slice("/tasks/".length));
+  } catch {
+    return null;
+  }
 }
 
 export function AppStatusBar() {
-  const { data: status, isError: statusError } = useStatus();
-  const { data: modelInfo } = useModelInfo();
-  const { data: sessions } = useSessions(20);
-  const { data: analytics } = useAnalytics(1);
-  const { data: runtimeInfo } = useRuntimeInfo();
+  const { pathname } = useLocation();
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const agents = useAtomValue(agentListAtom);
+  const snapshots = useAtomValue(agentSnapshotsAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
-  const gatewayRestart = useGatewayRestartAction();
+  const { data: providers } = useAgentProviders();
 
-  const dashboardUrl = dashboardUrlFromInputs({
-    healthUrl: status?.gateway_health_url,
-    runtimeConfig: typeof window === "undefined" ? null : window.__HERMES_RUNTIME__,
-    envOrigin: import.meta.env.VITE_HERMES_DASHBOARD_ORIGIN,
-  });
-  const port = dashboardPortFromUrl(dashboardUrl);
-  const gatewayOnline = !!status && !statusError;
-  const modeLabel = runtime.isRemote()
-    ? "远端 Hermes"
-    : runtime.isLocalConnection()
-      ? "本机外部 Hermes"
-      : "内置内核";
+  const taskId = activeTaskId(pathname);
+  const activeAgent = taskId ? snapshots[taskId] : undefined;
+  const agentLabel = activeAgent ? agentProviderLabel(activeAgent.provider, providers) : "—";
+  const modelLabel = activeAgent?.model ?? "—";
 
-  const modelLabel = formatModelShort(modelInfo?.model);
-  const contextLabel = formatContext(
-    modelInfo?.effective_context_length ?? modelInfo?.auto_context_length,
+  const runningCount = useMemo(
+    () => agents.filter((agent) => isAgentRunning(agent, runtimeBySession[agent.id])).length,
+    [agents, runtimeBySession],
   );
-  const versionRows = buildSidebarVersionRows({ status, runtimeInfo });
+  const errorCount = useMemo(() => agents.filter((agent) => agent.status === "error").length, [agents]);
 
-  const runningCount = useMemo(() => {
-    const merged = mergeLiveRuntimeSessions(sessions?.sessions ?? [], runtimeBySession);
-    const localCount = merged.filter((sess) => isSessionRunning(sess, runtimeBySession)).length;
-    if (sessions?.sessions) return localCount;
-    return Math.max(localCount, status?.active_sessions ?? 0);
-  }, [sessions, runtimeBySession, status?.active_sessions]);
-
-  const errorsLast24h = useMemo(() => {
-    if (!sessions?.sessions) return 0;
-    const cutoff = Date.now() / 1000 - 24 * 3600;
-    return sessions.sessions.filter(
-      (sess) =>
-        sess.ended_at != null &&
-        sess.ended_at >= cutoff &&
-        (sess.end_reason === "error" || sess.end_reason === "interrupted"),
-    ).length;
-  }, [sessions]);
-
-  const todayTokens =
-    (analytics?.daily?.[0]?.input_tokens ?? 0) + (analytics?.daily?.[0]?.output_tokens ?? 0);
-  const restartTitle = gatewayOnline || gatewayRestart.phase !== "idle"
-    ? gatewayRestartTitle(gatewayRestart.phase, gatewayRestart.message)
-    : "当前连接状态未知，仍会尝试重启网关";
+  const uiVersion = versionLabel(DESKTOP_VERSION);
+  const uiCommit = shortCommit(BUILD_COMMIT);
 
   return (
     <footer className={s.statusbar} aria-label="运行状态">
-      <span className={s.gatewayGroup}>
-        <button
-          type="button"
-          className={`${s.stat} ${s.gatewayButton}`}
-          onClick={() => void openExternalUrl(dashboardUrl)}
-          title={`打开 ${dashboardUrl}`}
-          aria-label={`在浏览器打开 ${dashboardUrl}`}
-        >
-          <StatusDot tone={gatewayOnline ? "success" : "danger"} />
-          <span className={s.lbl}>{modeLabel}</span>
-          <span className={s.val}>{port}</span>
-        </button>
-        <button
-          type="button"
-          className={s.restartButton}
-          data-state={gatewayRestart.phase}
-          onClick={() => void gatewayRestart.restart()}
-          disabled={gatewayRestart.locked || runtime.isAttached()}
-          title={runtime.isAttached() ? "外部 Hermes 的 Gateway 由目标端管理" : restartTitle}
-          aria-label={runtime.isAttached() ? "外部 Hermes 的 Gateway 由目标端管理" : restartTitle}
-          aria-busy={gatewayRestart.busy}
-        >
-          {gatewayRestart.busy ? <LoadingIndicator size="xs" /> : <RotateCcw size={12} aria-hidden="true" />}
-          <span>{gatewayRestartButtonLabel(gatewayRestart.phase)}</span>
-        </button>
-        <span className={s.srOnly} aria-live="polite">
-          {gatewayRestart.message ?? ""}
-        </span>
-        {gatewayRestart.phase === "error" && (
-          <span className={s.gatewayError} role="alert">
-            <span className={s.gatewayErrorMsg}>
-              <strong>{gatewayRestart.message ?? "网关重启失败"}</strong>
-              {(() => {
-                const hint = gatewayRestartAntivirusHint(detectHostOS());
-                return hint ? <span className={s.gatewayErrorHint}>{hint}</span> : null;
-              })()}
-            </span>
-            <button
-              type="button"
-              className={s.gatewayRetry}
-              onClick={() => void gatewayRestart.restart()}
-            >
-              <RotateCcw size={12} aria-hidden="true" />
-              <span>重试</span>
-            </button>
-          </span>
-        )}
+      <span className={`${s.stat} ${s.serviceStat}`} title="本机 Agent 服务（Node sidecar）连接状态">
+        <StatusDot tone={CONNECTION_TONES[connection]} />
+        <span className={s.lbl}>Agent 服务</span>
+        <span className={s.val}>{CONNECTION_LABELS[connection]}</span>
+      </span>
+      <span className={s.sep} />
+      <span className={s.stat}>
+        <span className={s.lbl}>Agent</span>
+        <span className={s.val}>{agentLabel}</span>
       </span>
       <span className={s.sep} />
       <span className={s.stat}>
@@ -142,21 +81,10 @@ export function AppStatusBar() {
         <span className={s.val}>{modelLabel}</span>
       </span>
       <span className={s.sep} />
-      <span className={s.stat}>
-        <span className={s.lbl}>上下文</span>
-        <span className={s.val}>{contextLabel}</span>
-      </span>
-      <span className={s.sep} />
-      <span className={s.stat} title={versionRows.kernel}>
-        <span className={s.lbl}>内核</span>
-        <span className={s.val}>{versionRows.kernelLine.version}</span>
-        <span className={s.val}>{versionRows.kernelLine.commit}</span>
-      </span>
-      <span className={s.sep} />
-      <span className={s.stat} title={versionRows.ui}>
-        <span className={s.lbl}>界面</span>
-        <span className={s.val}>{versionRows.uiLine.version}</span>
-        <span className={s.val}>{versionRows.uiLine.commit}</span>
+      <span className={s.stat} title={`界面 ${uiVersion} · ${uiCommit}`}>
+        <span className={s.lbl}>版本</span>
+        <span className={s.val}>{uiVersion}</span>
+        <span className={s.val}>{uiCommit}</span>
       </span>
 
       <div className={s.right}>
@@ -165,14 +93,14 @@ export function AppStatusBar() {
           <span className={s.val}>{runningCount}</span>
         </span>
         <span className={s.sep} />
-        <span className={s.stat} data-tone={errorsLast24h > 0 ? "warn" : undefined}>
-          <span className={s.lbl}>24H 错误</span>
-          <span className={s.val}>{errorsLast24h}</span>
+        <span className={s.stat} data-tone={errorCount > 0 ? "warn" : undefined}>
+          <span className={s.lbl}>出错</span>
+          <span className={s.val}>{errorCount}</span>
         </span>
         <span className={s.sep} />
         <span className={s.stat}>
-          <span className={s.lbl}>今日 Tokens</span>
-          <span className={s.val}>{formatTokens(todayTokens)}</span>
+          <span className={s.lbl}>会话</span>
+          <span className={s.val}>{agents.length}</span>
         </span>
       </div>
     </footer>

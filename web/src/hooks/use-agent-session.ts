@@ -23,7 +23,6 @@ import {
   applyAgentEventAtom,
   ensureChatSessionAtom,
   failAgentPromptAtom,
-  gwConnectionAtom,
   markStreamsReconnectingAtom,
   reconcileAgentRuntimesAtom,
   removeApprovalAtom,
@@ -106,7 +105,6 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
   const unsubscribers = [
     client.onState((state) => {
       store.set(sidecarConnectionAtom, state);
-      store.set(gwConnectionAtom, state);
       if (state === "open") {
         wasOpen = true;
       } else if (wasOpen && (state === "closed" || state === "error")) {
