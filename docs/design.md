@@ -36,8 +36,10 @@ node 可执行文件：
 
 sidecar 入口：
 1. 环境变量 `AGENTDECK_SIDECAR_ENTRY`（指向 .mjs/.js 时直接 `node <entry>`；指向 .ts 时 `node --import tsx <entry>`）
-2. 资源目录 `<resource_dir>/sidecar/bundle.mjs`（打包态，P7 提供）
-3. 开发态：`<CARGO_MANIFEST_DIR>/packages/sidecar/src/main.ts`，命令 `node --import tsx src/main.ts`，**cwd 设为 `<CARGO_MANIFEST_DIR>/packages/sidecar`**（tsx 是该包的 devDependency）
+2. 开发态（仅 debug 构建，且源码存在）：`<CARGO_MANIFEST_DIR>/packages/sidecar/src/main.ts`，命令 `node --import tsx src/main.ts`，**cwd 设为 `<CARGO_MANIFEST_DIR>/packages/sidecar`**（tsx 是该包的 devDependency）
+3. 资源目录 `<resource_dir>/sidecar/bundle.mjs`（打包态，P7 提供；release 构建只走这一项）
+
+> 顺序说明（P7 调整）：tauri-build 每次编译都会把 externalBin 与 resources 复制到 `target/<profile>/`，若资源 bundle 排在开发态源码之前，`tauri dev` 会误用旧 bundle，所以开发态源码优先。
 
 ### 3.2 传给 sidecar 的环境变量
 
