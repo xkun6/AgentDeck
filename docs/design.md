@@ -1,6 +1,6 @@
 # AgentDeck 设计文档
 
-> 状态：P0–P4 已完成（2026-10-12），已在真实 Tauri 窗口中联调通过 mock 与 Claude Code；P5（裁剪 Hermes 页面）、P6（持久化）、P7（打包）待做。本文件是 Rust 外壳、Node sidecar、React 前端三方之间的**契约来源**，改契约必须先改本文件。
+> 状态：P0–P7 已完成（2026-10-12）。P5 裁剪 Hermes 页面与换品牌、P6 会话持久化与恢复、P7 NSIS 打包均已落地；release 版 `agentdeck.exe` 已实测 mock 会话、重开恢复、删除与退出无残留。Claude provider 已改为直连本机 claude CLI（stream-json），安装包不含 Anthropic / OpenAI 代码。干净机器安装测试待用户执行。本文件是 Rust 外壳、Node sidecar、React 前端三方之间的**契约来源**，改契约必须先改本文件。
 
 ## 1. 定位
 
@@ -80,7 +80,7 @@ sidecar 入口：
 - 进程自行退出后仍会结束 Job / 进程组，清理可能残留的孙进程。
 - 监管：连续失败暂停后监管循环不退出，手动 `restart_sidecar` 成功后恢复监管；**首次拉起失败不自动重试**，只能手动重启。
 - sidecar 未就绪时 `wsUrl` 为空字符串；`starting` 状态已带 token。
-- 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
+- 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`（Windows 为 `%APPDATA%local.agentdeck.desktop`）；WebView2 数据在设置了 `AGENTDECK_HOME` 时为 `<home>webview2`，否则为 `%LOCALAPPDATA%local.agentdeck.desktopEBWebView`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
 - WS 中继沿用命令 `gateway_ws_open/send/close` 与事件 `gateway-ws-message` / `gateway-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
 
 ## 4. 前端 ↔ sidecar 协议（JSON-RPC 2.0 over WebSocket）
@@ -323,6 +323,7 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 - 所有 spawn 设 `windowsHide: true`。
 - 能解析到真实 `.exe` 就 `shell:false` 直接 spawn；`.cmd` shim 优先解析出背后的 exe 或 js（js 用 `process.execPath` 执行）；万不得已才 `shell:true` 并按 paseo `windows-command.ts` 做 cmd 转义。**内联 JSON 参数绝不能经过 cmd.exe。**
 - 关闭会话时 tree-kill 整棵子进程树。
+- `CREATE_NO_WINDOW` 下每个 sidecar 仍伴随一个无窗口的 `conhost.exe`，随 sidecar 退出，属正常现象。
 
 ### 5.3 provider 实现约定（P3 落地时确定，前端需知）
 
@@ -379,7 +380,8 @@ ACP：
 - **sidecar 代码**：`scripts/build-sidecar.mjs` 用 esbuild 把 `packages/sidecar/src/main.ts` 打成单文件 `dist-sidecar/bundle.mjs`（`--format=esm --platform=node --target=node24`，banner 注入 `createRequire`，`bufferutil` / `utf-8-validate` 设为 external），`tauri.conf.json` 的 `bundle.resources` 把它映射为资源目录下的 `sidecar/bundle.mjs`，对应 3.1 的第 2 个入口候选。bundle 中不含任何 Anthropic / OpenAI 代码，Claude Code 与 Codex 均运行用户本机安装的 CLI。
 - **构建命令**：`pnpm tauri:build` 的 `beforeBuildCommand` 依次执行 fetch-node、build-sidecar、web build。`pnpm tauri:dev` 仍以 `node --import tsx` 运行源码，但 externalBin 在 dev 时也必须存在，所以 dev 前也执行 fetch-node。
 - **安装包**：NSIS（per-user 安装）；`installer/nsis/hooks.nsh` 卸载时询问是否删除数据目录（`%APPDATA%\local.agentdeck.desktop`）。
-- **验收**：release 构建后直接运行 `target/release/agentdeck.exe`（旁边有 node.exe 与资源），确认 sidecar 以 bundle 方式启动、mock 会话可跑通、退出无残留；NSIS 安装包能生成。在干净机器上的安装测试由用户执行。
+- **验收**：release 构建后直接运行 `target/release/agentdeck.exe`（旁边有 node.exe 与资源），确认 sidecar 以 bundle 方式启动（命令行为 `<资源目录>
+ode.exe \?<资源目录>sidecarundle.mjs`，`\?` 前缀来自 Tauri resource_dir，node 可正常处理）、mock 会话可跑通、退出无残留（关闭主窗口只隐藏到托盘，真正退出走托盘「退出 AgentDeck」，sidecar 收到 stdin EOF 后以 code 0 退出）；NSIS 安装包能生成。在干净机器上的安装测试由用户执行。
 
 ## 8. 许可
 
@@ -387,5 +389,5 @@ ACP：
 - Agent 适配层移植自 paseo：Apache-2.0，见 `legal/paseo.Apache-2.0.txt`；被移植/修改的文件头注明 `Derived from paseo <原路径> (Apache-2.0); modified for AgentDeck`。
 - 部分前端代码源自 Hermes Agent 上游（Nous Research，MIT），见 `legal/hermes-agent-upstream.MIT.txt`。
 - HarmonyOS Sans 字体许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
-- 随包分发的第三方组件（P7）：Node.js 运行时 → `legal/nodejs.LICENSE.txt`；sidecar bundle 内的 npm 包（以 `dist-sidecar/meta.json` 为准）→ `legal/sidecar-third-party.txt`；前端生产依赖 → `legal/web-third-party.txt`；汇总见 `NOTICE.md`。依赖或 Node 版本变化时需重新生成这些文件。
+- 随包分发的第三方组件（P7）：Node.js 运行时 → `legal/nodejs.LICENSE.txt`；sidecar bundle 内的 npm 包（以 `dist-sidecar/meta.json` 为准）→ `legal/sidecar-third-party.txt`；前端生产依赖 → `legal/web-third-party.txt`；汇总见 `NOTICE.md`。依赖或 Node 版本变化时需重新生成：先 `pnpm sidecar:build`，再 `pnpm legal:gen`（`scripts/gen-legal.mjs`，结果稳定可重复）；Node 版本变化还需重取 `legal/nodejs.LICENSE.txt`。
 - 不包含也不分发 Anthropic / OpenAI 的代码或可执行文件：Claude provider 自行实现 Claude Code CLI 的 stream-json 协议（未使用 claude-agent-sdk），Codex 走本机 `codex app-server`。
