@@ -1,0 +1,6 @@
+# tauri dev 只需监视 Rust 外壳；前端由 Vite 热更新，sidecar 由 Rust 重启拉起。
+web/
+packages/
+docs/
+tmp/
+node_modules/

@@ -1,6 +1,6 @@
 # AgentDeck 设计文档
 
-> 状态：P0–P4 实施中（2026-10-12 立项）。本文件是 Rust 外壳、Node sidecar、React 前端三方之间的**契约来源**，改契约必须先改本文件。
+> 状态：P0–P4 已完成（2026-10-12），已在真实 Tauri 窗口中联调通过 mock 与 Claude Code；P5（裁剪 Hermes 页面）、P6（持久化）、P7（打包）待做。本文件是 Rust 外壳、Node sidecar、React 前端三方之间的**契约来源**，改契约必须先改本文件。
 
 ## 1. 定位
 
