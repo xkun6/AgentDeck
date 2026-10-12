@@ -364,3 +364,89 @@ describe("AgentManager", () => {
     expect(() => manager.timeline("missing")).toThrow(AgentRpcError);
   });
 });
+
+describe("AgentManager 建会话后补取模式目录", () => {
+  const modes = [{ id: "plan", label: "计划" }];
+
+  function createLazyCatalogManager(
+    secondFetch: () => Promise<{ models: []; modes: typeof modes }>,
+  ) {
+    let sessionCreated = false;
+    const fetchCatalog = vi.fn(async () => {
+      if (!sessionCreated) {
+        return { models: [], modes: [] };
+      }
+      return secondFetch();
+    });
+    const client: AgentClient = {
+      provider: "lazy",
+      kind: "acp",
+      label: "Lazy",
+      isAvailable: async () => ({ available: true }),
+      fetchCatalog,
+      createSession: async () => {
+        sessionCreated = true;
+        return new ScriptedSession();
+      },
+    };
+    const manager = new AgentManager({
+      registry: { get: (id) => (id === client.provider ? client : undefined) },
+    });
+    const states: AgentSnapshot[] = [];
+    manager.subscribe({ onState: (snapshot) => states.push(snapshot) });
+    return { manager, states, fetchCatalog };
+  }
+
+  test("建会话前目录为空：建会话后重取并推送 availableModes", async () => {
+    const { manager, states, fetchCatalog } = createLazyCatalogManager(async () => ({
+      models: [],
+      modes,
+    }));
+    try {
+      const agent = await manager.createAgent({ provider: "lazy", cwd: "/work" });
+      expect(fetchCatalog).toHaveBeenCalledTimes(2);
+      expect(fetchCatalog).toHaveBeenLastCalledWith({ cwd: "/work" });
+      expect(agent.availableModes).toEqual(modes);
+      expect(agent.modeId).toBeNull();
+      expect(manager.getAgent(agent.id).availableModes).toEqual(modes);
+      expect(states.at(-1)).toMatchObject({ id: agent.id, availableModes: modes, modeId: null });
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  test("第二次取目录失败：agent.create 仍成功", async () => {
+    const { manager, states, fetchCatalog } = createLazyCatalogManager(async () => {
+      throw new Error("boom");
+    });
+    try {
+      const agent = await manager.createAgent({ provider: "lazy", cwd: "/work" });
+      expect(fetchCatalog).toHaveBeenCalledTimes(2);
+      expect(agent.status).toBe("idle");
+      expect(agent.availableModes).toEqual([]);
+      expect(states.at(-1)).toMatchObject({ id: agent.id, status: "idle" });
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  test("建会话前目录非空：不重复请求", async () => {
+    const fetchCatalog = vi.fn(async () => ({ models: [], modes }));
+    const client: AgentClient = {
+      provider: "eager",
+      kind: "mock",
+      label: "Eager",
+      isAvailable: async () => ({ available: true }),
+      fetchCatalog,
+      createSession: async () => new ScriptedSession(),
+    };
+    const manager = new AgentManager({ registry: { get: () => client } });
+    try {
+      const agent = await manager.createAgent({ provider: "eager", cwd: "/work" });
+      expect(fetchCatalog).toHaveBeenCalledTimes(1);
+      expect(agent.availableModes).toEqual(modes);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+});

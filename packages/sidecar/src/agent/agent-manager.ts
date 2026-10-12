@@ -119,16 +119,25 @@ export class AgentManager {
       );
     }
 
-    const catalog = await client.fetchCatalog({ cwd: params.cwd }).catch((error: unknown) => {
-      this.logger.warn("获取 %s 模型目录失败：%s", params.provider, String(error));
-      return null;
-    });
+    const fetchCatalog = () =>
+      client.fetchCatalog({ cwd: params.cwd }).catch((error: unknown) => {
+        this.logger.warn("获取 %s 模型目录失败：%s", params.provider, String(error));
+        return null;
+      });
+
+    let catalog = await fetchCatalog();
 
     const session = await client.createSession({
       cwd: params.cwd,
       ...(params.model !== undefined ? { model: params.model } : {}),
       ...(params.modeId !== undefined ? { modeId: params.modeId } : {}),
     });
+
+    // ACP 等 provider 的模式要建会话后才可得：建会话前为空时再取一次（失败只记日志）。
+    // modeId 不随目录变化，保持 null 表示使用 provider 默认值。
+    if (!catalog || catalog.modes.length === 0) {
+      catalog = (await fetchCatalog()) ?? catalog;
+    }
 
     const now = this.now();
     const id = randomUUID();
