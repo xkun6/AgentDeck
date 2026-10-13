@@ -49,6 +49,16 @@ const STATUSES: ReadonlySet<AgentStatus> = new Set([
   "dormant",
 ]);
 
+/** AgentSnapshot.origin 的合法取值（design.md 4.26） */
+const ORIGINS: ReadonlySet<string> = new Set([
+  "user",
+  "delegate",
+  "group",
+  "schedule",
+  "judge",
+  "kanban",
+]);
+
 export interface AgentStoreOptions {
   /** AGENTDECK_DATA_DIR */
   dataDir: string;
@@ -463,6 +473,18 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   }
   if (typeof value.archived !== "boolean") {
     delete meta.archived;
+  }
+  if (typeof value.parentAgentId !== "string") {
+    delete meta.parentAgentId;
+  }
+  if (typeof value.groupId !== "string") {
+    delete meta.groupId;
+  }
+  if (typeof value.interopTarget !== "boolean") {
+    delete meta.interopTarget;
+  }
+  if (!ORIGINS.has(value.origin as string)) {
+    delete meta.origin;
   }
   if (typeof value.pendingForkContext !== "string") {
     delete meta.pendingForkContext;

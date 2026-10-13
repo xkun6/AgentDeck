@@ -501,7 +501,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
      */
     async updateSession(
       agentId: string,
-      patch: { title?: string | null; pinned?: boolean; archived?: boolean },
+      patch: { title?: string | null; pinned?: boolean; archived?: boolean; interopTarget?: boolean },
     ): Promise<AgentSnapshot> {
       const { agent } = await client.request("agent.update", { agentId, ...patch });
       store.set(upsertAgentSnapshotAtom, agent);

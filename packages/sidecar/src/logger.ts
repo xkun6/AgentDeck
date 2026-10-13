@@ -2,6 +2,8 @@ import { closeSync, mkdirSync, openSync, renameSync, statSync, writeSync } from 
 import path from "node:path";
 import { format } from "node:util";
 
+import { redactInteropTokens } from "./utils/redact-interop.js";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface Logger {
@@ -52,7 +54,7 @@ export function createLogger(options: CreateLoggerOptions = {}): Logger {
   }
 
   const write = (level: LogLevel, message: string, args: unknown[]) => {
-    const line = `${new Date().toISOString()} [${level}] ${format(message, ...args)}\n`;
+    const line = `${new Date().toISOString()} [${level}] ${redactInteropTokens(format(message, ...args))}\n`;
     if (toStderr) {
       process.stderr.write(line);
     }

@@ -41,6 +41,7 @@ import type {
   AgentSession,
   AgentSessionConfig,
   AgentSessionEvent,
+  InteropEndpoint,
   ProviderSubagentInputEvent,
 } from "./types.js";
 
@@ -82,9 +83,16 @@ export interface AgentManagerOptions {
   usage?: UsageLedger;
   /** 按回合文件快照（design.md 4.24）；不传则不拍快照 */
   snapshots?: SnapshotService;
+  /** 会话互通（design.md 4.26）：返回该会话当前应注入的 MCP 端点，互通关闭时返回 undefined */
+  interop?: { endpointFor(agentId: string): InteropEndpoint | undefined };
 }
 
 export interface CreateAgentParams {
+  /** 预先指定 agentId（委派时需要先用 id 建 worktree 分支）；缺省随机生成 */
+  id?: string;
+  /** 父会话与来源（design.md 4.26 / 4.27 / 4.28）；缺省为用户直接创建 */
+  parentAgentId?: string;
+  origin?: NonNullable<AgentSnapshot["origin"]>;
   provider: AgentProviderId;
   cwd: string;
   model?: string;
@@ -159,6 +167,7 @@ export class AgentManager {
   private readonly store: AgentStore | undefined;
   private readonly usage: UsageLedger | undefined;
   private readonly snapshots: SnapshotService | undefined;
+  private readonly interop: AgentManagerOptions["interop"];
   /** 每个会话的回合账本折叠器（只在内存） */
   private readonly usageTrackers = new Map<string, UsageTurnTracker>();
   /** provider 子代理（只在内存，会话关闭 / 删除时清空） */
@@ -169,6 +178,7 @@ export class AgentManager {
     this.store = options.store;
     this.usage = options.usage;
     this.snapshots = options.snapshots;
+    this.interop = options.interop;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
@@ -223,11 +233,14 @@ export class AgentManager {
     let catalog = await fetchCatalog();
 
     const thinkingOptionId = params.thinkingOptionId ?? null;
+    const id = params.id ?? randomUUID();
+    const interop = this.interop?.endpointFor(id);
     const session = await client.createSession({
       cwd: params.cwd,
       ...(params.model !== undefined ? { model: params.model } : {}),
       ...(params.modeId !== undefined ? { modeId: params.modeId } : {}),
       ...(thinkingOptionId !== null ? { thinkingOptionId } : {}),
+      ...(interop ? { interop } : {}),
     });
 
     // ACP 等 provider 的模式要建会话后才可得：建会话前为空时再取一次（失败只记日志）。
@@ -237,12 +250,13 @@ export class AgentManager {
     }
 
     const now = this.now();
-    const id = randomUUID();
     const snapshot: AgentSnapshot = {
       id,
       provider: params.provider,
       cwd: params.cwd,
       ...(params.title !== undefined ? { title: params.title } : {}),
+      ...(params.parentAgentId !== undefined ? { parentAgentId: params.parentAgentId } : {}),
+      ...(params.origin !== undefined ? { origin: params.origin } : {}),
       model: params.model ?? null,
       modeId: params.modeId ?? null,
       thinkingOptionId,
@@ -657,8 +671,11 @@ export class AgentManager {
     }
 
     const originSnapshot = origin.snapshot;
+    const id = randomUUID();
+    const forkInterop = this.interop?.endpointFor(id);
     const cfg: AgentSessionConfig = {
       cwd: originSnapshot.cwd,
+      ...(forkInterop ? { interop: forkInterop } : {}),
       ...(originSnapshot.model != null ? { model: originSnapshot.model } : {}),
       ...(originSnapshot.modeId != null ? { modeId: originSnapshot.modeId } : {}),
       ...(originSnapshot.thinkingOptionId != null
@@ -690,7 +707,6 @@ export class AgentManager {
 
     const retained = entries.filter((entry) => entry.seq <= plan.endSeq);
     const originTitle = forkSourceTitle(originSnapshot);
-    const id = randomUUID();
     const now = this.now();
     const copied: AgentStreamEnvelope[] = retained.map((entry, index) =>
       copyForkEntry(entry, id, index + 1, this.epoch),
@@ -835,7 +851,7 @@ export class AgentManager {
    */
   async updateAgent(
     agentId: string,
-    patch: { title?: string | null; pinned?: boolean; archived?: boolean },
+    patch: { title?: string | null; pinned?: boolean; archived?: boolean; interopTarget?: boolean },
   ): Promise<AgentSnapshot> {
     const agent = this.requireAgent(agentId);
     const snapshot = agent.snapshot;
@@ -853,9 +869,52 @@ export class AgentManager {
     if (patch.archived !== undefined) {
       snapshot.archived = patch.archived;
     }
+    if (patch.interopTarget !== undefined) {
+      snapshot.interopTarget = patch.interopTarget;
+    }
     await this.persistNow(agent);
     this.emitState(agent);
     return cloneSnapshot(snapshot);
+  }
+
+  /**
+   * 等会话当前回合结束（design.md 4.26 的 wait）：已经不在运行 / 启动 / 发送中则立即返回 true；
+   * 超时返回 false。signal 触发（调用方断开）时返回 false 并停止监听。
+   */
+  waitForIdle(agentId: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+    const agent = this.requireAgent(agentId);
+    const isIdle = () =>
+      !agent.sending &&
+      agent.snapshot.status !== "running" &&
+      agent.snapshot.status !== "starting" &&
+      !agent.snapshot.activeTurnId;
+    if (isIdle()) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (idle: boolean) => {
+        clearTimeout(timer);
+        unsubscribe();
+        signal?.removeEventListener("abort", onAbort);
+        resolve(idle);
+      };
+      const onAbort = () => finish(false);
+      const unsubscribe = this.subscribe({
+        onState: (snapshot) => {
+          if (snapshot.id === agentId && isIdle()) {
+            finish(true);
+          }
+        },
+        onRemoved: (removedId) => {
+          if (removedId === agentId) {
+            finish(true);
+          }
+        },
+      });
+      timer = setTimeout(() => finish(false), timeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /** agent.delete：若在运行先关闭，然后从磁盘与注册表删除，广播 agent.removed */
@@ -1133,11 +1192,14 @@ export class AgentManager {
       if (!availability.available) {
         throw new Error(availability.reason ?? `provider ${agent.snapshot.provider} 当前不可用`);
       }
+      // 会话进程每次拉起都重新注入当前端口与 token（design.md 4.26）
+      const interop = this.interop?.endpointFor(agent.id);
       if (pendingFork && !persistence?.sessionId) {
         // 分叉会话在拿到自己的原生 id 前被关闭 / 重启：按原分叉参数重新派生（design.md 4.23）
         const { model, modeId, thinkingOptionId } = agent.snapshot;
         session = await client.forkSession!(structuredClone(pendingFork.handle), {
           cwd: agent.snapshot.cwd,
+          ...(interop ? { interop } : {}),
           ...(model != null ? { model } : {}),
           ...(modeId != null ? { modeId } : {}),
           ...(thinkingOptionId != null ? { thinkingOptionId } : {}),
@@ -1146,6 +1208,7 @@ export class AgentManager {
       } else {
         session = await client.resumeSession!(structuredClone(persistence!), {
           cwd: agent.snapshot.cwd,
+          ...(interop ? { interop } : {}),
         });
       }
     } catch (error) {

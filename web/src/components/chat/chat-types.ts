@@ -1,4 +1,5 @@
 import type { AssistantTurnBlock, ImageEntry, ToolEntry } from "@/stores/chat";
+import type { InteropCallInfo } from "@/lib/interop-tools";
 
 export type ChatRole = "user" | "assistant" | "system" | "tool";
 
@@ -13,6 +14,8 @@ export interface ChatToolItem extends ToolEntry {
   arguments?: Record<string, unknown>;
   images?: ChatImageItem[];
   subAgent?: ChatSubAgentInfo;
+  /** agentdeck 互通工具调用（design.md 4.26）：渲染为委派卡片 */
+  delegate?: InteropCallInfo;
 }
 
 export type ChatImageItem = ImageEntry;

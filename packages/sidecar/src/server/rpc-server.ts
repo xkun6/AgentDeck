@@ -34,6 +34,8 @@ import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
 import { UsageLedger } from "../usage/ledger.js";
 import { summarizeUsage } from "../usage/summary.js";
+import { MCP_PATH } from "./interop-service.js";
+import type { McpInteropEndpoint } from "./mcp-interop.js";
 
 export const RPC_PATH = "/rpc";
 
@@ -60,6 +62,8 @@ export interface RpcServerOptions {
   settings?: SettingsStore;
   /** 按回合文件快照（design.md 4.24）；不传时 snapshot.* 返回 NOT_SUPPORTED（list / storage 返回空） */
   snapshots?: SnapshotService;
+  /** 会话互通 MCP 端点（design.md 4.26）；不传时 /mcp 返回 404 */
+  mcp?: McpInteropEndpoint;
   logger?: Logger;
 }
 
@@ -392,17 +396,22 @@ export class RpcServer {
               .optional(),
             pinned: z.boolean().optional(),
             archived: z.boolean().optional(),
+            interopTarget: z.boolean().optional(),
           })
           .refine(
             (value) =>
-              value.title !== undefined || value.pinned !== undefined || value.archived !== undefined,
-            { message: "title / pinned / archived 至少需要提供一个" },
+              value.title !== undefined ||
+              value.pinned !== undefined ||
+              value.archived !== undefined ||
+              value.interopTarget !== undefined,
+            { message: "title / pinned / archived / interopTarget 至少需要提供一个" },
           ),
         async (params) => ({
           agent: await manager.updateAgent(params.agentId, {
             ...(params.title !== undefined ? { title: params.title } : {}),
             ...(params.pinned !== undefined ? { pinned: params.pinned } : {}),
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
+            ...(params.interopTarget !== undefined ? { interopTarget: params.interopTarget } : {}),
           }),
         }),
       ),
@@ -588,6 +597,15 @@ export class RpcServer {
 
   private handleHttp(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (this.options.mcp && url.pathname === MCP_PATH) {
+      this.options.mcp.handle(req, res).catch((error: unknown) => {
+        this.logger.error("MCP 端点异常：%s", error instanceof Error ? error.message : String(error));
+        if (!res.headersSent) {
+          this.sendJson(res, 500, { ok: false, error: "internal error" });
+        }
+      });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/health") {
       this.sendJson(res, 200, { ok: true, version: this.options.version });
       return;

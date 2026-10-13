@@ -1,12 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useAtomValue } from "jotai";
 import { useNavigate, useLocation } from "react-router-dom";
 import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
 import type { AgentSnapshot } from "@agentdeck/protocol";
-import { BarChart3, Folder, MessageSquare, Plus, TerminalSquare, Trash2 } from "lucide-react";
+import {
+  BarChart3,
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  MessageSquare,
+  Plus,
+  TerminalSquare,
+  Trash2,
+} from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom } from "@/stores/agents";
-import { sidebarSessions } from "@/lib/session-list";
+import {
+  buildSessionTree,
+  flattenSessionTree,
+  sidebarSessions,
+  treeSome,
+  type SessionTreeRow,
+} from "@/lib/session-list";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
@@ -46,17 +61,39 @@ interface SessionRowProps {
   meta: string;
   projectName?: string;
   tooltip: string;
+  /** 子会话缩进层级（design.md 4.26），0 = 顶层 */
+  depth?: number;
+  /** 有子会话时显示折叠按钮 */
+  childCount?: number;
+  collapsed?: boolean;
+  onToggle?: () => void;
   onClick: () => void;
   onDelete: () => void;
   menuItems: () => ContextMenuEntry[];
 }
 
-function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick, onDelete, menuItems }: SessionRowProps) {
+function SessionRow({
+  title,
+  tone,
+  active,
+  meta,
+  projectName,
+  tooltip,
+  depth = 0,
+  childCount = 0,
+  collapsed = false,
+  onToggle,
+  onClick,
+  onDelete,
+  menuItems,
+}: SessionRowProps) {
   return (
     <EntityContextMenu items={menuItems}>
     <div
       className={s.sessionRow}
       data-active={active ? "true" : undefined}
+      data-depth={depth > 0 ? depth : undefined}
+      style={depth > 0 ? ({ "--session-depth": depth } as CSSProperties) : undefined}
       role="button"
       tabIndex={0}
       onClick={onClick}
@@ -70,8 +107,24 @@ function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick, 
     >
       <div className={s.rowMain}>
         <div className={s.ttl}>
+          {childCount > 0 ? (
+            <button
+              type="button"
+              className={s.rowToggle}
+              aria-label={collapsed ? `展开子会话：${title}` : `折叠子会话：${title}`}
+              aria-expanded={!collapsed}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggle?.();
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              {collapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+            </button>
+          ) : null}
           {tone ? <StatusDot tone={tone} size="xs" /> : <span className={s.dotPlaceholder} />}
           <span className={s.ttlText}>{title}</span>
+          {childCount > 0 && collapsed ? <span className={s.rowChildCount}>+{childCount}</span> : null}
         </div>
         <div className={s.meta}>
           <span className={s.metaText}>{meta}</span>
@@ -125,15 +178,24 @@ export function WorkbenchSidebar() {
 
   // agent.list 已按 updatedAt 倒序；不显示已归档的，置顶的排在各组最前（design.md 4.17）。
   // 进行中 = sidecar 报 running/starting 或本地仍在流式输出。
+  // 子会话（design.md 4.26）缩进显示在父会话下，整组按「自身或任一子孙在运行」归入进行中。
+  const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleCollapsed = useCallback((id: string) => {
+    setCollapsedIds((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
   const { active, recent } = useMemo(() => {
-    const activeList: AgentSnapshot[] = [];
-    const recentList: AgentSnapshot[] = [];
-    for (const agent of sidebarSessions(agents)) {
-      if (isAgentRunning(agent, runtimeBySession[agent.id])) activeList.push(agent);
-      else recentList.push(agent);
+    const activeRows: SessionTreeRow<AgentSnapshot>[] = [];
+    const recentRows: SessionTreeRow<AgentSnapshot>[] = [];
+    for (const root of buildSessionTree(sidebarSessions(agents))) {
+      const running = treeSome(root, (agent) => isAgentRunning(agent, runtimeBySession[agent.id]));
+      (running ? activeRows : recentRows).push(...flattenSessionTree(root, (agent) => agent.id, collapsedIds));
     }
-    return { active: activeList, recent: recentList };
-  }, [agents, runtimeBySession]);
+    return { active: activeRows, recent: recentRows };
+  }, [agents, collapsedIds, runtimeBySession]);
 
   const pinnedProjects = useMemo(
     () => {
@@ -164,7 +226,8 @@ export function WorkbenchSidebar() {
     ? decodeURIComponent(location.pathname.slice("/tasks/".length))
     : null;
 
-  const renderRow = (agent: AgentSnapshot, running: boolean) => {
+  const renderRow = ({ agent, depth, childCount, collapsed }: SessionTreeRow<AgentSnapshot>) => {
+    const running = isAgentRunning(agent, runtimeBySession[agent.id]);
     const title = agentDisplayTitle(agent, runtimeBySession[agent.id], providers);
     const provider = agentProviderLabel(agent.provider, providers);
     const status = running ? AGENT_STATUS_LABELS.running : AGENT_STATUS_LABELS[agent.status];
@@ -177,6 +240,10 @@ export function WorkbenchSidebar() {
         meta={`${provider} · ${status} · ${formatAgentTime(agent.updatedAt, now)}`}
         projectName={projectNameByPath.get(agent.cwd) ?? workspaceNameFromPath(agent.cwd)}
         tooltip={`${title}\n${provider} · ${status}\n${agent.cwd}`}
+        depth={depth}
+        childCount={childCount}
+        collapsed={collapsed}
+        onToggle={() => toggleCollapsed(agent.id)}
         onClick={() => goSession(agent)}
         onDelete={() => void deleteSession(agent, title)}
         menuItems={() => sessionActions.buildMenu(agent, title)}
@@ -255,7 +322,7 @@ export function WorkbenchSidebar() {
           {active.length === 0 ? (
             <div className={s.empty}>暂无运行任务</div>
           ) : (
-            active.map((agent) => renderRow(agent, true))
+            active.map(renderRow)
           )}
         </section>
 
@@ -306,7 +373,7 @@ export function WorkbenchSidebar() {
           {recent.length === 0 ? (
             <div className={s.empty}>暂无最近会话</div>
           ) : (
-            recent.map((agent) => renderRow(agent, false))
+            recent.map(renderRow)
           )}
         </section>
       </div>

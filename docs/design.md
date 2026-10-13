@@ -877,6 +877,18 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 
 **前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关。
 
+**实测结论（claude 2.1.296、codex-cli 0.162.1，探针见 `tmp/mcp-probe.mjs`、`run-claude.mjs`、`run-codex.mjs`、`e2e.mjs`）**：
+- Claude `--mcp-config '<内联 JSON>'`（`type: "http"` + `headers`，shell:false 传参）：**可用**。stream-json 模式下 `system init` 的 `mcp_servers` 里 `agentdeck` 为 `connected`（source `dynamic`），工具名 `mcp__agentdeck__<tool>`，调用结果正常返回。CLI 握手顺序为 `POST server/discover`（探测，返回 method-not-found 即可）→ `initialize` → `notifications/initialized` → `GET /mcp`（想开 SSE 通道，无状态端点返回 405 即可）→ `tools/list` → `tools/call`，均带 Authorization 头；与官方 SDK 的无状态 + `enableJsonResponse` 服务端兼容。用户 settings 允许时不弹权限；默认模式下每次工具调用走现有审批流。
+- Codex `thread/start` 的 `config.mcp_servers.agentdeck`：`{ url, http_headers: { Authorization } }` 与 `{ url, bearer_token_env_var }` **两种都可用**（`mcpServerStatus/list` 为 `connected`，错误 token → `failed`），采用前者（不依赖子进程环境变量）。两个坑：① **URL 主机必须写 `localhost`**：本机系统代理开启时，codex 对 `127.0.0.1` 字面量的 MCP 请求会被送去代理（`HTTP 502`，连接根本没到 sidecar），`localhost` 直连正常，因此 Codex 注入时把 `127.0.0.1` 换成 `localhost`；② **`approvalPolicy: never`（full-access 模式）下 codex 直接拒绝需要审批的 MCP 工具调用**（`MCP tool call requires approval, but approval policy is never`），加 `default_tools_approval_mode: "approve"` 后可用。on-request 模式（read-only / auto）不加该项，工具调用走 codex 自身的 `mcpServer/elicitation/request`，在 AgentDeck 里表现为一条 `mcp:agentdeck` 工具审批，由用户批准。另加 `tool_timeout_sec: 3700`（默认 60 秒会打断 delegate / wait 的长等待）。时间线里 Codex 的工具名为 `agentdeck.<tool>`（Claude 为 `mcp__agentdeck__<tool>`），输出为 `{ content: [{ type: "text", text }] }`。
+
+**实现补充（落地时确定）**：
+- 模块：`server/interop-service.ts`（token ↔ agentId、端点）、`server/mcp-interop.ts`（`POST /mcp` 与工具）、`providers/shared/interop.ts`（三类 provider 的注入形态）、`git/worktree.ts`（共用 worktree 工具）。鉴权顺序：路径 `/mcp` → 互通关闭 404 → token 缺失 / 错误 401 → 非 POST 405。token 形如 `adi_<48 位 hex>`，sidecar 日志写入前统一把 `adi_[0-9a-f]{16,}` 替换为 `adi_***`（因此诊断包里的 `sidecar.log` 与 MCP 状态错误文本都不含 token）。
+- 注入点：`AgentSessionConfig.interop` / `resumeSession` 的 `AgentResumeConfig.interop`（`{ url, token }`），由 AgentManager 在创建、恢复、分叉（含 Claude 懒启动的 pendingFork 恢复）时填入；token 每会话稳定、仅内存，sidecar 重启后重新生成并随恢复重新注入。互通关闭或端口未知时不注入。创建会话改为先生成 agentId 再建 provider 会话（`CreateAgentParams.id` 供委派预先建 worktree 分支）。
+- `delegate`：`cwd` 相对路径按调用方 cwd 解析，目录必须存在；`worktree: true` 时 worktree 放 `<AGENTDECK_DATA_DIR>/worktrees/delegate-<agentId 前 8 位>`（要求设置了数据目录），失败 / 创建会话失败时回滚；`modeId` 除 `AgentMode.dangerous` 外，id 含 `bypass` / `full-access` / `dangerous` / `yolo` 或目录里查无此模式也拒绝；结果 JSON 为 `{ agentId, status: "completed" | "failed" | "canceled" | "running", reply?, error?, note?, worktree? }`，`reply` 超过 40k 字截断；`timeoutSec` 超过上限按上限处理。
+- `wait_agent` 额外拒绝等待自己的上级会话（会互相等待）；`cancel_agent` 与 `send_to_agent` 同样只允许子孙或 `interopTarget` 会话；`read_agent` 不限制目标。
+- `agent.update` 增加 `interopTarget?: boolean`（与 title / pinned / archived 至少给一个）。meta.json 持久化 `parentAgentId` / `origin` / `groupId` / `interopTarget`，加载时校验类型。
+- 前端：委派卡片按工具名（`mcp__agentdeck__` 或 `agentdeck.` 前缀的 delegate / send_to_agent / wait_agent / cancel_agent / read_agent）识别，信息在 reducer 中从 `detail.unknown` 的入参与输出解析；侧栏子会话按 `parentAgentId` 嵌套（父会话缺失或成环时退化为顶层，整组在任一成员运行时归入「进行中」）；「会话互通」设置页路径 `/interop`。
+
 ### 4.27 界面发起的并行协作（扇出 + 汇总）
 
 **共用 worktree 工具**：`packages/sidecar/src/git/worktree.ts`（4.26 先实现，4.27 / 4.28 复用）：`addWorktree({ repoCwd, path, branch })`（基于当前 HEAD，`git worktree add <path> -b <branch>`，要求 repoCwd 在 git 仓库内）、`removeWorktree({ repoCwd, path, branch, deleteBranch })`、`diffStat({ cwd })`；git 定位与 spawn 规则复用 4.24 的 `snapshots/git.ts`。worktree 统一放在 `<AGENTDECK_DATA_DIR>/worktrees/` 下。

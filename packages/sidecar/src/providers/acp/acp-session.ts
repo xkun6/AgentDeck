@@ -35,8 +35,9 @@ import type {
 import packageJson from "../../../package.json" with { type: "json" };
 import { AgentRpcError } from "../../agent/errors.js";
 import { dedupeSlashCommands } from "../../agent/slash-commands.js";
-import type { AgentSession } from "../../agent/types.js";
+import type { AgentSession, InteropEndpoint } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
+import { acpInteropServers } from "../shared/interop.js";
 import { spawnProcess } from "../../utils/spawn.js";
 import { terminateWithTreeKill } from "../../utils/tree-kill.js";
 import {
@@ -88,6 +89,8 @@ export interface AcpSessionStartOptions {
   logger: Logger;
   env: NodeJS.ProcessEnv;
   init: AcpSessionInit;
+  /** 会话互通 MCP 端点（design.md 4.26）：agent 声明 mcpCapabilities.http 时才经 mcpServers 传入 */
+  interop?: InteropEndpoint;
 }
 
 interface ActiveTurn {
@@ -445,6 +448,7 @@ export class AcpAgentSession implements AgentSession {
       "initialize",
     );
     this.agentCapabilities = initialized.agentCapabilities ?? null;
+    const mcpServers = acpInteropServers(options.interop, this.agentCapabilities);
 
     if (init.type === "load") {
       if (!this.agentCapabilities?.loadSession) {
@@ -454,7 +458,7 @@ export class AcpAgentSession implements AgentSession {
       this.loadingHistory = true;
       try {
         const loaded = await step(
-          connection.loadSession({ sessionId: init.sessionId, cwd, mcpServers: [] }),
+          connection.loadSession({ sessionId: init.sessionId, cwd, mcpServers }),
           "session/load",
         );
         this.applySessionState(loaded.modes, loaded.models, loaded.configOptions);
@@ -464,7 +468,7 @@ export class AcpAgentSession implements AgentSession {
       return;
     }
 
-    const created = await step(connection.newSession({ cwd, mcpServers: [] }), "session/new");
+    const created = await step(connection.newSession({ cwd, mcpServers }), "session/new");
     this.sessionId = created.sessionId;
     this.applySessionState(created.modes, created.models, created.configOptions);
 

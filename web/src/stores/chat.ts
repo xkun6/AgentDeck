@@ -11,6 +11,7 @@ import type {
 } from "@agentdeck/protocol";
 import { describePermissionCommand, describeToolCall } from "@/lib/agent-tool-detail";
 import { formatTokens } from "@/lib/format";
+import { describeInteropCall } from "@/lib/interop-tools";
 import { imagePartFromSource } from "@/lib/message-images";
 import { notifyFromAgentEvent } from "@/lib/notifications";
 import { agentSnapshotsAtom, lastRemovedAgentAtom } from "@/stores/agents";
@@ -447,6 +448,8 @@ function upsertAgentToolPart(
         log: item.detail.log,
       }
     : undefined;
+  // agentdeck MCP 互通工具（design.md 4.26）：时间线渲染为委派卡片
+  const delegate = describeInteropCall(item);
   const tool: AgentToolPart = {
     type: "tool",
     toolCallId: item.callId,
@@ -460,6 +463,7 @@ function upsertAgentToolPart(
     startedAt: existing?.startedAt ?? timestamp,
     completedAt: state === "running" ? undefined : existing?.completedAt ?? timestamp,
     ...(subAgent ? { subAgent } : {}),
+    ...(delegate ? { delegate } : {}),
   };
   if (!existing) return appendToolPart(withoutProgressParts(parts), tool);
   const next = [...parts];

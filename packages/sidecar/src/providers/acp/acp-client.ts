@@ -9,8 +9,10 @@ import { AgentRpcError } from "../../agent/errors.js";
 import type {
   AgentAvailability,
   AgentClient,
+  AgentResumeConfig,
   AgentSession,
   AgentSessionConfig,
+  InteropEndpoint,
 } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { findExecutable } from "../../utils/executable-resolution/executable-resolution.js";
@@ -71,19 +73,27 @@ export class AcpAgentClient implements AgentClient {
   }
 
   async createSession(cfg: AgentSessionConfig): Promise<AgentSession> {
-    return this.startSession(cfg.cwd, {
-      type: "new",
-      ...(cfg.model !== undefined ? { model: cfg.model } : {}),
-      ...(cfg.modeId !== undefined ? { modeId: cfg.modeId } : {}),
-      ...(cfg.thinkingOptionId != null ? { thinkingOptionId: cfg.thinkingOptionId } : {}),
-    });
+    return this.startSession(
+      cfg.cwd,
+      {
+        type: "new",
+        ...(cfg.model !== undefined ? { model: cfg.model } : {}),
+        ...(cfg.modeId !== undefined ? { modeId: cfg.modeId } : {}),
+        ...(cfg.thinkingOptionId != null ? { thinkingOptionId: cfg.thinkingOptionId } : {}),
+      },
+      cfg.interop,
+    );
   }
 
-  async resumeSession(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession> {
-    return this.startSession(cfg.cwd, { type: "load", sessionId: handle.sessionId });
+  async resumeSession(handle: AgentPersistenceHandle, cfg: AgentResumeConfig): Promise<AgentSession> {
+    return this.startSession(cfg.cwd, { type: "load", sessionId: handle.sessionId }, cfg.interop);
   }
 
-  private async startSession(cwd: string, init: AcpSessionInit): Promise<AcpAgentSession> {
+  private async startSession(
+    cwd: string,
+    init: AcpSessionInit,
+    interop?: InteropEndpoint,
+  ): Promise<AcpAgentSession> {
     const executable = await this.find(this.entry.command[0]!);
     if (!executable) {
       throw new AgentRpcError(
@@ -103,6 +113,7 @@ export class AcpAgentClient implements AgentClient {
       logger: this.logger,
       env: this.env,
       init,
+      ...(interop ? { interop } : {}),
     });
     this.lastCatalog = session.catalog();
     return session;

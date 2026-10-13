@@ -7,6 +7,7 @@ import {
   Archive,
   ArchiveRestore,
   Camera,
+  Check,
   Copy,
   ExternalLink,
   FileJson,
@@ -18,6 +19,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plug,
   Trash2,
 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
@@ -174,7 +176,7 @@ export function useSessionActions() {
   const updateSession = useCallback(
     async (
       agentId: string,
-      patch: { title?: string | null; pinned?: boolean; archived?: boolean },
+      patch: { title?: string | null; pinned?: boolean; archived?: boolean; interopTarget?: boolean },
       failureTitle: string,
     ): Promise<void> => {
       try {
@@ -259,6 +261,18 @@ export function useSessionActions() {
           // 整会话分叉要求原会话没有进行中的回合（design.md 4.23）
           disabled: running,
           onSelect: () => void forkSession(agent.id),
+        },
+        {
+          // 会话互通（design.md 4.26）：开启后其它会话可经 send_to_agent 向它发消息；勾选表示已开启
+          key: "interop-target",
+          label: "允许被其它会话调用",
+          icon: agent.interopTarget ? <Check size={ICON} /> : <Plug size={ICON} />,
+          onSelect: () =>
+            void updateSession(
+              agent.id,
+              { interopTarget: !agent.interopTarget },
+              agent.interopTarget ? "取消允许被其它会话调用失败" : "设置允许被其它会话调用失败",
+            ),
         },
         { key: "snapshots", label: "快照历史", icon: <Camera size={ICON} />, onSelect: () => openSnapshotHistory(agent) },
         { key: "copy-title", label: "复制会话标题", icon: <Copy size={ICON} />, onSelect: () => void copyText(title) },

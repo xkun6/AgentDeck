@@ -404,6 +404,14 @@ export interface AgentSnapshot {
   pinned?: boolean;
   /** 归档（design.md 4.17）；缺省视为 false */
   archived?: boolean;
+  /** 父会话（由其它会话经 agentdeck MCP `delegate` 委派创建，design.md 4.26） */
+  parentAgentId?: string;
+  /** 会话来源（design.md 4.26）：缺省视为 "user" */
+  origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban";
+  /** 并行协作组 id（design.md 4.27） */
+  groupId?: string;
+  /** 允许被其它会话经 send_to_agent 调用（design.md 4.26），经 agent.update 设置 */
+  interopTarget?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -689,7 +697,14 @@ export interface AgentRpcMethods {
   };
   /** 只改元数据（design.md 4.17）：title 为 null / 空串 = 清除自定义标题；不改 updatedAt、不恢复会话 */
   "agent.update": {
-    params: { agentId: string; title?: string | null; pinned?: boolean; archived?: boolean };
+    params: {
+      agentId: string;
+      title?: string | null;
+      pinned?: boolean;
+      archived?: boolean;
+      /** 允许被其它会话经 send_to_agent 调用（design.md 4.26） */
+      interopTarget?: boolean;
+    };
     result: { agent: AgentSnapshot };
   };
   /** 会话全文搜索（design.md 4.19）：query 去首尾空白后 1–200 字；limit 缺省 100、上限 500 */

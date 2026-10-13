@@ -1,0 +1,129 @@
+.card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid var(--h-line);
+  border-left-width: 2px;
+  background: var(--h-bg-soft);
+}
+
+.card[data-tone="running"],
+.card[data-tone="ok"] {
+  border-left-color: var(--h-ok);
+}
+
+.card[data-tone="error"] {
+  border-left-color: var(--h-err);
+}
+
+.card[data-tone="idle"] {
+  border-left-color: var(--h-line);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--h-text-2);
+}
+
+.icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+}
+
+.label {
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+}
+
+.target {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--h-text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  background: var(--h-bg-chip);
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: 10px;
+}
+
+.status[data-tone="running"],
+.status[data-tone="ok"] {
+  color: var(--h-ok);
+}
+
+.status[data-tone="error"] {
+  color: var(--h-err);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.action {
+  appearance: none;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  height: var(--h-button-height-xs);
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+}
+
+.action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--h-accent) 45%, transparent);
+  outline-offset: -2px;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--h-line-soft);
+}
+
+.request,
+.reply {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.request {
+  color: var(--h-text-3);
+}
+
+.reply[data-error="true"] {
+  color: var(--h-err);
+}

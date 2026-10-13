@@ -7,8 +7,11 @@
 //   FAKE_ACP_NOISE=1          启动时往 stdout 打一行非 JSON（验证容错）
 //   FAKE_ACP_FAIL_SET_MODEL=1 unstable_setSessionModel 返回 method not found
 //   FAKE_ACP_NO_MODES=1       newSession 不返回 modes / models
+//   FAKE_ACP_MCP_HTTP=1       声明 mcpCapabilities.http
+//   FAKE_ACP_MCP_LOG=<file>   newSession / loadSession 收到的 mcpServers 追加写入该文件（每行一个 JSON）
 //   FAKE_ACP_THOUGHT=1        返回 thought_level 配置项（同 DeepSeek Harness：reasoning_effort，默认 high），
 //                             支持 session/set_config_option，echo 回显当前档位
+import { appendFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 
 import {
@@ -50,11 +53,18 @@ class FakeAgent {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: env.FAKE_ACP_LOAD_SESSION === "1",
+        mcpCapabilities: { http: env.FAKE_ACP_MCP_HTTP === "1", sse: false },
         promptCapabilities: { image: env.FAKE_ACP_IMAGE === "1" },
       },
       agentInfo: { name: "fake-acp-agent", version: "0.0.1" },
       authMethods: [],
     };
+  }
+
+  logMcp(method, params) {
+    if (env.FAKE_ACP_MCP_LOG) {
+      appendFileSync(env.FAKE_ACP_MCP_LOG, JSON.stringify({ method, mcpServers: params.mcpServers }) + "\n");
+    }
   }
 
   async authenticate() {
@@ -100,6 +110,7 @@ class FakeAgent {
   }
 
   async newSession(params) {
+    this.logMcp("session/new", params);
     this.counter += 1;
     const sessionId = `fake-session-${this.counter}`;
     this.sessions.set(sessionId, { mode: "default", model: "fake-small", thought: "high", cwd: params.cwd, cancel: null });
@@ -107,6 +118,7 @@ class FakeAgent {
   }
 
   async loadSession(params) {
+    this.logMcp("session/load", params);
     if (env.FAKE_ACP_LOAD_SESSION !== "1") {
       throw RequestError.methodNotFound("session/load");
     }

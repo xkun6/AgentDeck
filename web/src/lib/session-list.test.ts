@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { AgentSnapshot } from "@agentdeck/protocol";
-import { batchSummary, inHistoryView, runBatch, sidebarSessions, splitPinned } from "./session-list";
+import {
+  batchSummary,
+  buildSessionTree,
+  flattenSessionTree,
+  inHistoryView,
+  runBatch,
+  sidebarSessions,
+  splitPinned,
+  treeSome,
+} from "./session-list";
 
 type Flags = Pick<AgentSnapshot, "pinned" | "archived"> & { id: string };
 
@@ -43,5 +52,47 @@ describe("批量操作", () => {
     expect(result).toEqual({ succeeded: ["a", "c"], failed: ["b"] });
     expect(batchSummary("归档", result)).toBe("归档：成功 2 个，失败 1 个");
     expect(batchSummary("删除", { succeeded: ["a"], failed: [] })).toBe("删除：成功 1 个");
+  });
+});
+
+describe("buildSessionTree / flattenSessionTree（子会话嵌套，4.26）", () => {
+  type Node = Pick<AgentSnapshot, "id" | "parentAgentId">;
+  const idOf = (agent: Node) => agent.id;
+
+  it("子会话挂在父会话下，根与兄弟保持传入顺序；父会话缺失的子会话当作根", () => {
+    const agents: Node[] = [
+      { id: "c1", parentAgentId: "p" },
+      { id: "x" },
+      { id: "p" },
+      { id: "c2", parentAgentId: "p" },
+      { id: "g", parentAgentId: "c1" },
+      { id: "orphan", parentAgentId: "missing" },
+    ];
+    const roots = buildSessionTree(agents);
+    expect(roots.map((root) => root.agent.id)).toEqual(["x", "p", "orphan"]);
+    const rows = flattenSessionTree(roots[1]!, idOf, new Set());
+    expect(rows.map((row) => [row.agent.id, row.depth, row.childCount])).toEqual([
+      ["p", 0, 2],
+      ["c1", 1, 1],
+      ["g", 2, 0],
+      ["c2", 1, 0],
+    ]);
+  });
+
+  it("collapsed 的会话不展开子会话；treeSome 检查整棵树", () => {
+    const [root] = buildSessionTree<Node>([{ id: "p" }, { id: "c", parentAgentId: "p" }]);
+    const rows = flattenSessionTree(root!, idOf, new Set(["p"]));
+    expect(rows.map((row) => row.agent.id)).toEqual(["p"]);
+    expect(rows[0]).toMatchObject({ childCount: 1, collapsed: true });
+    expect(treeSome(root!, (agent) => agent.id === "c")).toBe(true);
+    expect(treeSome(root!, (agent) => agent.id === "zzz")).toBe(false);
+  });
+
+  it("父子成环时断开成根，不会丢会话也不会死循环", () => {
+    const roots = buildSessionTree<Node>([
+      { id: "a", parentAgentId: "b" },
+      { id: "b", parentAgentId: "a" },
+    ]);
+    expect(roots.map((root) => root.agent.id).sort()).toEqual(["a", "b"]);
   });
 });
