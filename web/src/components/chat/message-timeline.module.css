@@ -165,6 +165,34 @@
   justify-content: center;
 }
 
+/* 上下文压缩提示：居中细线分隔（design.md 4.13）。 */
+.dividerNotice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 672px;
+  color: var(--h-text-3);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-xs);
+  line-height: 1.6;
+}
+
+.dividerNotice::before,
+.dividerNotice::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--h-line);
+}
+
+.dividerNoticeText {
+  flex-shrink: 1;
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
 .systemNotice {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

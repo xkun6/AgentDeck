@@ -91,6 +91,8 @@ interface GooseComposerProps {
   /** 工具栏里工作区按钮之后的额外控件（AgentDeck 的 Agent / 模型 / 模式选择器）；
    * 与左侧工具以细分隔线隔开，窄宽度时整体换到第二行。 */
   toolbarExtra?: ReactNode;
+  /** 右侧工具区发送 / 中止按钮之前的控件（AgentDeck 的上下文用量指示器）。 */
+  toolbarTrailing?: ReactNode;
   /** 工作区变化时回调（宿主据此按 cwd 拉取模型列表等）。 */
   onWorkspaceChange?: (path: string) => void;
 }
@@ -127,6 +129,7 @@ export function GooseComposer({
   onDraftChange,
   initialWorkspacePath = "",
   toolbarExtra,
+  toolbarTrailing,
   onWorkspaceChange,
 }: GooseComposerProps) {
   const configuredSubmitShortcut = useAtomValue(composerSubmitShortcutAtom);
@@ -651,6 +654,7 @@ export function GooseComposer({
           ) : null}
 
           <div className={s.rightTools}>
+            {toolbarTrailing}
             {loading ? <span className={s.liveDot} aria-hidden="true" /> : null}
             {loading && onStop ? (
               <button

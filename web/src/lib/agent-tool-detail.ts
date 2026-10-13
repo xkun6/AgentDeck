@@ -5,6 +5,7 @@
 import type {
   AgentPermissionRequest,
   ToolCallDetail,
+  ToolCallStatus,
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 
@@ -52,7 +53,30 @@ function editDiff(detail: Extract<ToolCallDetail, { type: "edit" }>): string | u
   return [...(detail.oldString ? removed : []), ...(detail.newString ? added : [])].join("\n");
 }
 
-export function describeToolDetail(detail: ToolCallDetail | undefined): AgentToolDisplay {
+/** Agent 提问（design.md 4.13）：每题一行「问题 → 回答」；运行中尚未作答显示「等待回答」。 */
+function describeQuestion(
+  detail: Extract<ToolCallDetail, { type: "question" }>,
+  status: ToolCallStatus | undefined,
+): AgentToolDisplay {
+  const first = detail.questions[0];
+  if (!first) return {};
+  const missing = status === undefined || status === "running" ? "等待回答" : "未回答";
+  const lines = detail.questions.map(
+    (question) => `${question.question} → ${detail.answers?.[question.question] ?? missing}`,
+  );
+  return {
+    context: detail.questions.length > 1
+      ? `${first.question}（共 ${detail.questions.length} 题）`
+      : first.question,
+    preview: first.header ?? first.question,
+    output: clip(lines.join("\n")),
+  };
+}
+
+export function describeToolDetail(
+  detail: ToolCallDetail | undefined,
+  status?: ToolCallStatus,
+): AgentToolDisplay {
   if (!detail) return {};
   switch (detail.type) {
     case "shell": {
@@ -98,6 +122,8 @@ export function describeToolDetail(detail: ToolCallDetail | undefined): AgentToo
       return { context: detail.description, output: clip(detail.log || undefined) };
     case "plain_text":
       return { context: detail.label, output: clip(detail.text) };
+    case "question":
+      return describeQuestion(detail, status);
     case "unknown": {
       const input = stringify(detail.input);
       const output = stringify(detail.output);
@@ -133,7 +159,7 @@ function metadataFiles(metadata: Record<string, unknown> | undefined): string[] 
  * - Codex 多文件 fileChange 的 detail 只含第一个文件，完整列表在 metadata.files。
  */
 export function describeToolCall(item: ToolCallTimelineItem): AgentToolDisplay {
-  const display = describeToolDetail(item.detail);
+  const display = describeToolDetail(item.detail, item.status);
   const title = typeof item.metadata?.title === "string" ? item.metadata.title : undefined;
   if (!display.context && title) display.context = title;
   const files = metadataFiles(item.metadata);

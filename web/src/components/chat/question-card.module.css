@@ -1,0 +1,140 @@
+.questions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.question {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-md);
+  line-height: 1.6;
+}
+
+.chip {
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-chip);
+  color: var(--h-text-2);
+  font-size: var(--h-font-size-xs);
+  line-height: 1.6;
+  padding: 0 4px;
+}
+
+.questionText {
+  font-weight: 600;
+}
+
+.hint {
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  cursor: pointer;
+  padding: 8px 12px;
+}
+
+.option:hover {
+  border-color: var(--h-line);
+}
+
+.option[data-checked="true"] {
+  border-color: var(--h-ok);
+  background: var(--h-ok-soft);
+}
+
+.option:focus-within {
+  outline: var(--h-focus-outline);
+}
+
+.control {
+  flex-shrink: 0;
+  margin: 4px 0 0;
+  accent-color: var(--h-ok);
+}
+
+.control:focus-visible {
+  outline: none;
+}
+
+.optionBody {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.optionLabel {
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.optionDescription {
+  color: var(--h-text-2);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  line-height: 1.5;
+}
+
+.preview {
+  max-height: 240px;
+  margin: 4px 0 0;
+  overflow: auto;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-code);
+  color: var(--h-text);
+  font-family: var(--h-font-mono);
+  font-size: var(--h-font-size-xs);
+  line-height: 1.6;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.otherInput {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  padding: 8px 12px;
+}
+
+.otherInput:focus-visible {
+  outline: var(--h-focus-outline);
+}

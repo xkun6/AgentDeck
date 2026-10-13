@@ -365,3 +365,17 @@ describe("MessageTimeline", () => {
     expect(normal).toContain("对话轮次定位");
   });
 });
+
+describe("MessageTimeline：上下文压缩提示（design.md 4.13）", () => {
+  it("agent-compaction-* 系统消息渲染为居中分隔线，不用告警框", () => {
+    const messages: ChatMessage[] = [
+      { id: "agent-compaction-c1", role: "system", createdAt: 1, text: "上下文已自动压缩", status: "complete" },
+      { id: "agent-notice-2", role: "system", createdAt: 2, text: "已中断本轮", status: "complete" },
+    ];
+    const html = renderTimeline(<MessageTimeline messages={messages} />);
+    expect(html).toMatch(/class="[^"]*dividerNotice[^"]*" role="status"><span[^>]*>上下文已自动压缩<\/span>/);
+    // 普通系统提示仍是告警框
+    expect(html).toContain("已中断本轮");
+    expect(html.match(/systemNotice(?!Icon|Body|Text|Title|Toggle)/g) ?? []).toHaveLength(1);
+  });
+});

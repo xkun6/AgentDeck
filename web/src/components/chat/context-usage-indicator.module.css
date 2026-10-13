@@ -1,0 +1,78 @@
+.root {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 0;
+  color: var(--h-text-3);
+  cursor: default;
+}
+
+.root[data-level="warning"] {
+  color: var(--h-color-warning-fg);
+}
+
+.root[data-level="danger"] {
+  color: var(--h-color-danger-fg);
+}
+
+.root:focus-visible {
+  outline: var(--h-focus-outline);
+}
+
+.ring {
+  display: block;
+}
+
+.track,
+.value {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.track {
+  stroke: var(--h-line);
+}
+
+.value {
+  stroke: currentColor;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+.tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: var(--h-z-popover);
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  width: max-content;
+  max-width: 240px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  color: var(--h-text-2);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-xs);
+  line-height: 1.5;
+  padding: 8px 12px;
+  pointer-events: none;
+}
+
+.root:hover .tooltip,
+.root:focus-visible .tooltip {
+  display: flex;
+}
+
+.tooltipTitle {
+  color: var(--h-text);
+  font-weight: 600;
+}
+
+.tooltipHint {
+  color: var(--h-text-3);
+}

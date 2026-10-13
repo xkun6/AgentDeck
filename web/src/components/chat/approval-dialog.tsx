@@ -9,6 +9,7 @@ import type {
 } from "@agentdeck/protocol";
 import { describeToolDetail } from "@/lib/agent-tool-detail";
 import type { PendingApproval } from "@/stores/chat";
+import { QuestionCard } from "./question-card";
 import s from "./approval-dialog.module.css";
 
 export interface ApprovalDialogProps {
@@ -75,6 +76,22 @@ function ApprovalDetail({ request, fallback }: { request?: AgentPermissionReques
 }
 
 export function ApprovalDialog({ approval, onRespond }: ApprovalDialogProps) {
+  const request = approval.permission;
+  // Agent 提问（design.md 4.13）：逐题作答，不走通用的允许 / 拒绝
+  if (request?.kind === "question" && request.detail?.type === "question") {
+    return (
+      <QuestionCard
+        approval={approval}
+        request={request}
+        questions={request.detail.questions}
+        onRespond={onRespond}
+      />
+    );
+  }
+  return <PermissionCard approval={approval} onRespond={onRespond} />;
+}
+
+function PermissionCard({ approval, onRespond }: ApprovalDialogProps) {
   const request = approval.permission;
   const [responding, setResponding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

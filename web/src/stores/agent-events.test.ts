@@ -295,3 +295,78 @@ describe("reduceAgentEvent：子代理父卡片（design.md 4.11）", () => {
     expect(assistants.slice(1).every((message) => !message.parts.some((part) => part.type === "tool"))).toBe(true);
   });
 });
+
+describe("reduceAgentEvent：上下文压缩与提问卡片（design.md 4.13）", () => {
+  const compaction = (
+    status: "running" | "completed" | "failed",
+    extra: Record<string, unknown> = {},
+  ): AgentStreamEvent => ({
+    type: "timeline",
+    turnId: "t1",
+    item: { type: "compaction", compactionId: "c1", status, ...extra },
+  });
+  const notices = (runtime: ChatSessionRuntime) =>
+    runtime.messages.filter((message) => message.id === "agent-compaction-c1");
+
+  it("running → completed 原地更新同一条提示，并清掉运行时的上下文已用量", () => {
+    const running = replay([
+      { type: "turn_started", turnId: "t1" },
+      { type: "usage_updated", usage: { inputTokens: 10, contextWindowUsedTokens: 150_000, contextWindowMaxTokens: 200_000 } },
+      compaction("running"),
+    ]);
+    expect(notices(running)).toHaveLength(1);
+    expect(notices(running)[0]!.parts).toEqual([{ type: "notice", level: "system", text: "正在压缩上下文…" }]);
+    // 本轮助手消息还没有内容：提示插在它前面
+    expect(running.messages.map((message) => message.role)).toEqual(["system", "assistant"]);
+    expect(running.agentUsage?.contextWindowUsedTokens).toBe(150_000);
+
+    const completed = reduceAgentEvent(
+      running,
+      env(4, compaction("completed", { trigger: "auto", preTokens: 84_100 })),
+      1,
+    );
+    expect(notices(completed)).toHaveLength(1);
+    expect(notices(completed)[0]!.parts).toEqual([
+      { type: "notice", level: "system", text: "上下文已自动压缩（压缩前 约 84.1k tokens）" },
+    ]);
+    expect(completed.agentUsage).toEqual({ inputTokens: 10, contextWindowMaxTokens: 200_000 });
+  });
+
+  it("助手消息已有内容时追加在末尾；手动压缩、失败文案", () => {
+    const runtime = replay([
+      { type: "turn_started", turnId: "t1" },
+      { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "先说一句" } },
+      compaction("completed", { trigger: "manual" }),
+    ]);
+    expect(runtime.messages.map((message) => message.role)).toEqual(["assistant", "system"]);
+    expect(notices(runtime)[0]!.parts).toEqual([{ type: "notice", level: "system", text: "上下文已手动压缩" }]);
+
+    const failed = replay([compaction("running"), compaction("failed", { error: "摘要失败" })]);
+    expect(notices(failed)[0]!.parts).toEqual([
+      { type: "notice", level: "warning", text: "上下文压缩失败：摘要失败" },
+    ]);
+  });
+
+  it("question 工具卡片显示为「提问」，输出为「问题 → 回答」", () => {
+    const runtime = replay([
+      { type: "turn_started", turnId: "t1" },
+      {
+        type: "timeline",
+        turnId: "t1",
+        item: {
+          type: "tool_call",
+          callId: "q1",
+          name: "AskUserQuestion",
+          status: "completed",
+          detail: {
+            type: "question",
+            questions: [{ question: "用哪个库？", header: "库", multiSelect: false, options: [{ label: "dayjs" }] }],
+            answers: { "用哪个库？": "dayjs" },
+          },
+        },
+      },
+    ]);
+    const tool = assistant(runtime)[0]!.parts.find((part) => part.type === "tool");
+    expect(tool).toMatchObject({ name: "提问", input: "用哪个库？", output: "用哪个库？ → dayjs" });
+  });
+});

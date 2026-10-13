@@ -48,6 +48,7 @@ import { formatElapsedTimer } from "@/lib/format";
 import { TopBar, TopBarActionButton, TopBarActions } from "@/components/top-bar/top-bar";
 import { GooseComposer } from "@/components/chat/goose-composer";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
+import { ContextUsageIndicator } from "@/components/chat/context-usage-indicator";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
 import { QueuePanel } from "@/components/composer/queue-panel";
 import {
@@ -577,6 +578,8 @@ export function DetailRoute() {
               disabled={unrecoverable || notFound || missing}
               placeholder={unrecoverable ? unrecoverableMessage : undefined}
               onStop={onStop}
+              // 运行时 usage 比快照新（压缩后会清掉已用量，见 stores/chat.ts）；没有时退回快照
+              toolbarTrailing={<ContextUsageIndicator usage={runtime.agentUsage ?? snapshot?.lastUsage} />}
               toolbarExtra={
                 snapshot ? (
                   <AgentSessionPicker

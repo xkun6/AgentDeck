@@ -3,6 +3,7 @@ import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
 import { AlertTriangle, ChevronRight, Info } from "lucide-react";
 import { ASSISTANT_FALLBACK_NAME, assistantAvatarDataUrlAtom, showReasoningAtom } from "@/stores/ui";
+import { AGENT_COMPACTION_NOTICE_PREFIX } from "@/stores/chat";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
 import { AssistantProfileCard } from "./assistant-profile-card";
 import { MessageImage } from "./message-image";
@@ -776,6 +777,17 @@ function MessageBubble({
         {compact ? null : <div className={s.avatarCol} aria-hidden />}
         <div className={s.messageContent}>
           <ToolChain tools={message.tools ?? []} />
+        </div>
+      </div>
+    );
+  }
+
+  if (isSystem && message.id.startsWith(AGENT_COMPACTION_NOTICE_PREFIX)) {
+    // 上下文压缩（design.md 4.13）：居中细线分隔，不用告警框
+    return (
+      <div className={s.messageRow} data-role="system">
+        <div className={s.dividerNotice} role="status">
+          <span className={s.dividerNoticeText}>{message.text}</span>
         </div>
       </div>
     );

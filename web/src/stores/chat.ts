@@ -10,6 +10,7 @@ import type {
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 import { describePermissionCommand, describeToolCall } from "@/lib/agent-tool-detail";
+import { formatTokens } from "@/lib/format";
 import { imagePartFromSource } from "@/lib/message-images";
 import { notifyFromAgentEvent } from "@/lib/notifications";
 import { agentSnapshotsAtom, lastRemovedAgentAtom } from "@/stores/agents";
@@ -294,30 +295,91 @@ export function agentPendingAssistantId(clientMessageId: string): string {
   return `agent-pending-${clientMessageId}`;
 }
 
+type AgentNoticeLevel = "info" | "warning" | "error" | "system";
+
+function agentNoticeMessage(
+  agentId: string,
+  id: string,
+  createdAt: number,
+  text: string,
+  level: AgentNoticeLevel,
+): HermesUIMessage {
+  return {
+    id,
+    sessionId: agentId,
+    role: "system",
+    createdAt,
+    status: level === "error" ? "error" : "complete",
+    parts: [{ type: "notice", level, text }],
+  };
+}
+
 function appendAgentNotice(
   runtime: ChatSessionRuntime,
   agentId: string,
   id: string,
   createdAt: number,
   text: string,
-  level: "info" | "warning" | "error" | "system",
+  level: AgentNoticeLevel,
 ): ChatSessionRuntime {
   const trimmed = text.trim();
   if (!trimmed || runtime.messages.some((message) => message.id === id)) return runtime;
   return {
     ...runtime,
-    messages: [
-      ...runtime.messages,
-      {
-        id,
-        sessionId: agentId,
-        role: "system",
-        createdAt,
-        status: level === "error" ? "error" : "complete",
-        parts: [{ type: "notice", level, text: trimmed }],
-      },
-    ],
+    messages: [...runtime.messages, agentNoticeMessage(agentId, id, createdAt, trimmed, level)],
   };
+}
+
+/** 上下文压缩提示的消息 id 前缀（design.md 4.13）；时间线据此渲染成居中分隔线。 */
+export const AGENT_COMPACTION_NOTICE_PREFIX = "agent-compaction-";
+
+type CompactionTimelineItem = Extract<AgentTimelineItem, { type: "compaction" }>;
+
+export function compactionNoticeText(item: CompactionTimelineItem): string {
+  if (item.status === "running") return "正在压缩上下文…";
+  if (item.status === "failed") return item.error ? `上下文压缩失败：${item.error}` : "上下文压缩失败";
+  const base = item.trigger === "manual"
+    ? "上下文已手动压缩"
+    : item.trigger === "auto"
+      ? "上下文已自动压缩"
+      : "上下文已压缩";
+  return typeof item.preTokens === "number" && item.preTokens > 0
+    ? `${base}（压缩前 约 ${formatTokens(item.preTokens)} tokens）`
+    : base;
+}
+
+/**
+ * 同 compactionId 的提示原地更新；新提示插在本轮还没有内容的助手消息之前
+ * （压缩通常发生在回答之前，回答随后显示在提示之下），否则追加在末尾。
+ */
+function upsertCompactionNotice(
+  runtime: ChatSessionRuntime,
+  agentId: string,
+  item: CompactionTimelineItem,
+  createdAt: number,
+): ChatSessionRuntime {
+  const id = `${AGENT_COMPACTION_NOTICE_PREFIX}${item.compactionId}`;
+  const level: AgentNoticeLevel = item.status === "failed" ? "warning" : "system";
+  const text = compactionNoticeText(item);
+  if (runtime.messages.some((message) => message.id === id)) {
+    return updateMessage(runtime, id, (message) => ({
+      ...message,
+      status: "complete",
+      parts: [{ type: "notice", level, text }],
+    }));
+  }
+  const notice = agentNoticeMessage(agentId, id, createdAt, text, level);
+  const activeIndex = runtime.activeAssistantId
+    ? runtime.messages.findIndex((message) => message.id === runtime.activeAssistantId)
+    : -1;
+  const active = activeIndex === -1 ? undefined : runtime.messages[activeIndex];
+  if (active && withoutProgressParts(active.parts).length === 0) {
+    return {
+      ...runtime,
+      messages: [...runtime.messages.slice(0, activeIndex), notice, ...runtime.messages.slice(activeIndex)],
+    };
+  }
+  return { ...runtime, messages: [...runtime.messages, notice] };
 }
 
 function withActiveAgentAssistant(
@@ -373,8 +435,8 @@ function upsertAgentToolPart(
   const tool: HermesToolPart = {
     type: "tool",
     toolCallId: item.callId,
-    // 子代理卡片显示子代理类型（design.md 4.11），缺省 Task
-    name: subAgent ? subAgent.subAgentType ?? "Task" : item.name,
+    // 子代理卡片显示子代理类型（design.md 4.11），缺省 Task；Agent 提问显示为「提问」（4.13）
+    name: subAgent ? subAgent.subAgentType ?? "Task" : item.detail.type === "question" ? "提问" : item.name,
     state,
     input: display.context,
     preview: display.preview,
@@ -578,6 +640,14 @@ function reduceAgentTimelineItem(
 
     case "error":
       return appendAgentNotice(runtime, agentId, `agent-notice-${seq}`, timestamp, item.message, "error");
+
+    case "compaction": {
+      const next = upsertCompactionNotice(runtime, agentId, item, timestamp);
+      // 压缩后不再显示压缩前的已用量，等下一次 usage 刷新
+      if (item.status !== "completed" || next.agentUsage?.contextWindowUsedTokens === undefined) return next;
+      const { contextWindowUsedTokens: _used, ...usage } = next.agentUsage;
+      return { ...next, agentUsage: usage };
+    }
 
     default:
       return runtime;
