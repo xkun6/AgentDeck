@@ -700,6 +700,38 @@ describe("ClaudeAgentSession", () => {
     ]);
   });
 
+  test("model 为 <synthetic> 的 assistant 文本标记 source:command，普通消息不带", async () => {
+    const h = createHarness();
+    h.setup(
+      (q) =>
+        (q.onUser = (user) => {
+          q.emit(
+            msg.init(),
+            {
+              ...msg.assistant("m-syn", [{ type: "text", text: "第一行\n第二行" }]),
+              message: {
+                id: "m-syn",
+                role: "assistant",
+                model: "<synthetic>",
+                content: [{ type: "text", text: "第一行\n第二行" }],
+              },
+            },
+            msg.assistant("m-real", [{ type: "text", text: "普通回复" }]),
+            msg.result(user.uuid),
+          );
+        }),
+    );
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/usage");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    const items = events.flatMap((e) => (e.type === "timeline" ? [e.item] : []));
+    expect(items).toEqual([
+      { type: "assistant_message", text: "第一行\n第二行", messageId: "m-syn", source: "command" },
+      { type: "assistant_message", text: "普通回复", messageId: "m-real" },
+    ]);
+  });
+
   test("多轮复用同一 claude 进程，thread_started 只发一次", async () => {
     const h = createHarness();
     h.setup((q) => (q.onUser = replyText("OK")));

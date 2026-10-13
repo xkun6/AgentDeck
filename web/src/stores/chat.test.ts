@@ -46,6 +46,29 @@ describe("markStreamsReconnectingAtom", () => {
     expect(assistant?.parts).toEqual([{ type: "text", text: "world" }]);
   });
 
+  it("命令输出（source:command）单独成 part，不与普通文本合并", () => {
+    const store = createStore();
+    store.set(startAgentPromptAtom, { agentId: "a1", clientMessageId: "m1", text: "/usage", now: 5 });
+    const emit = (seq: number, item: object) =>
+      store.set(applyAgentEventAtom, {
+        agentId: "a1",
+        seq,
+        epoch: "e1",
+        timestamp: 10 + seq,
+        event: { type: "timeline", turnId: "t1", item },
+      } as never);
+    emit(1, { type: "assistant_message", text: "a\nb", messageId: "m-syn", source: "command" });
+    emit(2, { type: "assistant_message", text: "c", messageId: "m-syn", source: "command" });
+    emit(3, { type: "assistant_message", text: "普通", messageId: "m-real" });
+    const assistant = store
+      .get(chatRuntimeBySessionAtom)
+      .a1.messages.find((message) => message.role === "assistant");
+    expect(assistant?.parts).toEqual([
+      { type: "text", text: "a\nbc", source: "command" },
+      { type: "text", text: "普通" },
+    ]);
+  });
+
   it("不改动未在流式输出的会话", () => {
     const store = createStore();
     store.set(chatRuntimeBySessionAtom, (state) => ({

@@ -63,6 +63,8 @@ export interface HermesMessageMetadata {
 interface HermesTextMessagePart {
   type: "text";
   text: string;
+  /** "command"：CLI 本地命令输出（/usage 等），原样显示，不走 Markdown。 */
+  source?: "command";
 }
 
 interface HermesReasoningMessagePart {

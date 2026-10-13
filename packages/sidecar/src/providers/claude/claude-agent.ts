@@ -1172,6 +1172,8 @@ export class ClaudeAgentSession implements AgentSession {
       return;
     }
     const messageId = typeof message.id === "string" ? message.id : null;
+    // model 为 <synthetic> 的 assistant 文本是 CLI 本地命令输出（/usage 等），前端原样显示（design.md 4.14）
+    const isCommandOutput = message.model === "<synthetic>";
     for (const block of message.content) {
       switch (block.type) {
         case "text":
@@ -1180,6 +1182,7 @@ export class ClaudeAgentSession implements AgentSession {
               type: "assistant_message",
               text: block.text,
               ...(messageId ? { messageId } : {}),
+              ...(isCommandOutput ? { source: "command" as const } : {}),
             });
           }
           break;

@@ -236,7 +236,7 @@ export interface ToolCallTimelineItem {
 
 export type AgentTimelineItem =
   | { type: "user_message"; text: string; messageId?: string; clientMessageId?: string }
-  | { type: "assistant_message"; text: string; messageId?: string } // 增量 chunk，前端按 messageId/顺序拼接
+  | { type: "assistant_message"; text: string; messageId?: string; source?: "command" } // 增量 chunk，前端按 messageId/顺序拼接
   | { type: "reasoning"; text: string } // 增量 chunk
   | ToolCallTimelineItem // 同 callId 多次推送，后者覆盖前者
   | { type: "todo"; items: { text: string; completed: boolean }[] }

@@ -112,6 +112,23 @@ describe("MessageTimeline", () => {
   });
 
 
+  it("命令输出消息原样显示：保留换行、不走 Markdown，带「命令输出」标签", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-cmd",
+        role: "assistant",
+        createdAt: 1,
+        status: "complete",
+        blocks: [{ type: "text", text: "**用量**\n第二行", source: "command" }],
+      },
+    ];
+    const html = renderTimeline(<MessageTimeline messages={messages} />);
+    expect(html).toContain("命令输出");
+    expect(html).toContain("<pre");
+    expect(html).toContain("**用量**\n第二行");
+    expect(html).not.toContain("<strong>");
+  });
+
   it("renders Obsidian deep links without the blocked indicator", () => {
     const html = ReactDOMServer.renderToStaticMarkup(
       <MarkdownText text="[Twitter 时间线](obsidian://open?vault=Hermes&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF)" />,

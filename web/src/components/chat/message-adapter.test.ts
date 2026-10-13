@@ -35,6 +35,13 @@ describe("message adapter", () => {
     expect(message?.blocks).toEqual([{ type: "progress", text: "ಠ_ಠ deliberating..." }]);
   });
 
+  it("保留文本 part 的 source:command 到 text block", () => {
+    const message = hermesUIMessageToChatMessage(uiMessage({
+      parts: [{ type: "text", text: "a\nb", source: "command" }],
+    }));
+    expect(message?.blocks).toEqual([{ type: "text", text: "a\nb", source: "command" }]);
+  });
+
   it("preserves structured image parts as renderable chat images", () => {
     const message = hermesUIMessageToChatMessage(uiMessage({
       id: "assistant-image",

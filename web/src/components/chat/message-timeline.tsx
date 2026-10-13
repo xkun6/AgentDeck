@@ -522,9 +522,16 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
 
     if (block.type === "text") {
       items.push(
-        <div key={`text-${index}`} className={s.turnText}>
-          <MessageText text={block.text} streaming={streaming && index === blocks.length - 1} />
-        </div>,
+        block.source === "command" ? (
+          <div key={`text-${index}`} className={s.turnText}>
+            <div className={s.commandOutputLabel}>命令输出</div>
+            <pre className={s.commandOutput}>{block.text}</pre>
+          </div>
+        ) : (
+          <div key={`text-${index}`} className={s.turnText}>
+            <MessageText text={block.text} streaming={streaming && index === blocks.length - 1} />
+          </div>
+        ),
       );
       return;
     }

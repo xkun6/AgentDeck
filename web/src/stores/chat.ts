@@ -37,7 +37,7 @@ export interface ImageEntry {
 }
 
 export type AssistantTurnBlock =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; source?: "command" }
   | { type: "reasoning"; text: string }
   | { type: "progress"; text: string }
   | { type: "image"; image: ImageEntry }
@@ -138,14 +138,18 @@ function terminateRunningTools(parts: HermesMessagePart[]): HermesMessagePart[] 
   return changed ? next : parts;
 }
 
-function appendTextPart(parts: HermesMessagePart[], text: string): HermesMessagePart[] {
+function appendTextPart(
+  parts: HermesMessagePart[],
+  text: string,
+  source?: "command",
+): HermesMessagePart[] {
   if (!text) return parts;
   const next = withoutProgressParts(parts);
   const last = next[next.length - 1];
-  if (last?.type === "text") {
+  if (last?.type === "text" && last.source === source) {
     next[next.length - 1] = { ...last, text: last.text + text };
   } else {
-    next.push({ type: "text", text });
+    next.push({ type: "text", text, ...(source ? { source } : {}) });
   }
   return next;
 }
@@ -597,8 +601,11 @@ function reduceAgentTimelineItem(
           ...message,
           status: "streaming",
           parts: newSegment
-            ? [...withoutProgressParts(message.parts), { type: "text", text: item.text }]
-            : appendTextPart(message.parts, item.text),
+            ? [
+                ...withoutProgressParts(message.parts),
+                { type: "text", text: item.text, ...(item.source ? { source: item.source } : {}) },
+              ]
+            : appendTextPart(message.parts, item.text, item.source),
         }),
       );
     }

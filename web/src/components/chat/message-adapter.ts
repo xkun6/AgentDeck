@@ -157,7 +157,7 @@ function partsToBlocks(
   for (const part of message.parts) {
     if (part.type === "text") {
       const text = normalizeContent(part.text);
-      if (text) blocks.push({ type: "text", text });
+      if (text) blocks.push({ type: "text", text, ...(part.source ? { source: part.source } : {}) });
       continue;
     }
     if (part.type === "reasoning") {

@@ -184,7 +184,7 @@ export interface ToolCallTimelineItem {
 
 export type AgentTimelineItem =
   | { type: "user_message"; text: string; messageId?: string; clientMessageId?: string }
-  | { type: "assistant_message"; text: string; messageId?: string }   // 增量 chunk，前端按 messageId/顺序拼接
+  | { type: "assistant_message"; text: string; messageId?: string; source?: "command" }   // 增量 chunk，前端按 messageId/顺序拼接；source=command 见 4.14
   | { type: "reasoning"; text: string }                              // 增量 chunk
   | ToolCallTimelineItem                                              // 同 callId 多次推送，后者覆盖前者
   | { type: "todo"; items: { text: string; completed: boolean }[] }
@@ -517,6 +517,7 @@ export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: Ag
 - `listCommands`：最近一次 `commands_changed` 的列表，否则会话进程 initialize 应答里的（进程重启后以新进程的应答为准）。claude 进程是懒启动的（首轮才拉起），尚未启动时**不为此启动**，退回 provider 目录的 commands。
 - `fetchCatalog`：模型探测的临时进程（只发 initialize）顺带读出 commands。commands 与 cwd 相关（项目级 skill / 命令），而模型缓存不分 cwd，所以 commands **按 cwd 单独缓存** 10 分钟（最多 32 个目录）：模型与该 cwd 的命令都命中缓存才不起探测进程，否则按该 cwd 探测一次（同一 cwd 的并发探测共用）；未传 cwd 时只要模型命中就不为命令单独探测。代价：换一个新目录的第一次 `provider.listModels` 会多起一次探测进程（不对话、不计费）。
 - MCP：控制请求 `{ subtype: "mcp_status" }` → `{ mcpServers: Array<{ name; status; error?; scope?; tools?: { name }[]; … }> }`，映射为 `AgentMcpServer`（status 不在五个合法值内归为 `pending`，toolCount = tools 数组长度），`reconnect: "server"`；`{ subtype: "mcp_reconnect", serverName }` 重连单个服务器，超时 60 秒，失败时控制应答为 error（以中文前缀转成 `INTERNAL_ERROR`）。MCP 需要运行中的 claude 进程：未启动时先拉起（不发用户消息，之后的回合复用该进程）。**Claude 的 reconnect 必须带 serverName**，缺省返回 `NOT_SUPPORTED`（「Claude 需要指定要重连的 MCP 服务器（serverName）」）。
+- CLI 本地命令输出：`/usage` 等本地命令的结果由 CLI 以 `message.model === "<synthetic>"` 的完整 assistant 消息返回（0 tokens，无 stream_event 增量），其 text 块产出的 `assistant_message` 带 `source: "command"`（普通消息不带）。coalescer 只合并 messageId 与 source 都相同的相邻块。前端对 command 消息原样显示：不走 Markdown，`white-space: pre-wrap` 等宽字体、细边框块，上方弱化小标签「命令输出」，复制按钮照常。
 - `/compact` 不需要专门代码：作为普通 user 消息发送即触发压缩，result 照常回显 user_message_uuid，压缩事件见 4.13。
 
 **Codex**：
