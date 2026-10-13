@@ -54,6 +54,22 @@ export interface DesktopNotifyResult {
   error?: string;
 }
 
+export type SessionExportFormat = "json" | "markdown";
+
+export interface ExportSessionFileInput {
+  fileName: string;
+  content: string;
+  format: SessionExportFormat;
+}
+
+export interface ExportSessionFileResult {
+  ok: boolean;
+  canceled: boolean;
+  path?: string;
+  bytes: number;
+  error?: string;
+}
+
 export interface TerminalStartInput {
   cwd?: string;
   cols?: number;
@@ -310,6 +326,8 @@ declare global {
       openExternalUrl?(input: { url: string }): Promise<SimpleResult>;
       toggleDevtools?(): Promise<void>;
       exportLogSnapshot?(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult>;
+      /** 弹出保存对话框并写入会话导出文件（Rust export_session_file；内容由前端生成） */
+      exportSessionFile?(input: ExportSessionFileInput): Promise<ExportSessionFileResult>;
       environmentCheck?(): Promise<EnvironmentCheckResult>;
       /** 一键安装缺失工具（Rust environment_install；只传检测项 id，命令由 Rust 白名单决定） */
       environmentInstall?(id: string): Promise<EnvironmentInstallResult>;

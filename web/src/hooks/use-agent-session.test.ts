@@ -189,6 +189,51 @@ describe("思考强度（design.md 4.10）", () => {
   });
 });
 
+describe("agent.update（design.md 4.17）", () => {
+  it("updateSession 调 agent.update 并把结果写入快照；title 为 null 时清除自定义标题", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ title: "旧" }));
+    const client = fakeClient(async () => ({ agent: snapshot({ pinned: true }) }));
+    const agent = await createAgentSessionActions(client, store).updateSession(AGENT, { title: null, pinned: true });
+    expect(client.request).toHaveBeenCalledWith("agent.update", { agentId: AGENT, title: null, pinned: true });
+    expect(agent.pinned).toBe(true);
+    const stored = store.get(agentSnapshotsAtom)[AGENT];
+    expect(stored?.pinned).toBe(true);
+    expect(stored?.title).toBeUndefined();
+  });
+
+  it("agent.state 推送（updatedAt 不变）会刷新快照", () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot());
+    let onState: (agent: AgentSnapshot) => void = () => {};
+    const noop = () => () => {};
+    const client = {
+      onState: noop,
+      onStream: noop,
+      onAgentState: (listener: (agent: AgentSnapshot) => void) => {
+        onState = listener;
+        return () => {};
+      },
+      onAgentRemoved: noop,
+      onSubagentUpdate: noop,
+      onTasksUpdate: noop,
+      onAgents: noop,
+      onEpochChange: noop,
+    } as unknown as SidecarClient;
+    bindSidecarToStore(client, store);
+    onState(snapshot({ archived: true, title: "新名字" }));
+    expect(store.get(agentSnapshotsAtom)[AGENT]).toMatchObject({ archived: true, title: "新名字" });
+  });
+
+  it("fetchAllTimelineEntries 取全部条目", async () => {
+    const store = createStore();
+    const entries = [{ agentId: AGENT, seq: 1, epoch: "e", timestamp: 1, event: { type: "turn_started", turnId: "t" } }];
+    const client = fakeClient(async () => ({ epoch: "e", entries }));
+    await expect(createAgentSessionActions(client, store).fetchAllTimelineEntries(AGENT)).resolves.toEqual(entries);
+    expect(client.request.mock.calls[0]?.slice(0, 2)).toEqual(["agent.timeline", { agentId: AGENT }]);
+  });
+});
+
 describe("后台任务（design.md 4.15）", () => {
   const task: AgentBackgroundTask = {
     taskId: "t1",

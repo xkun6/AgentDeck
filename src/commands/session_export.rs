@@ -4,16 +4,40 @@ use std::path::PathBuf;
 
 use crate::error::{AppError, AppResult};
 
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportFormat {
+    Json,
+    Markdown,
+}
+
+impl ExportFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            ExportFormat::Json => "json",
+            ExportFormat::Markdown => "md",
+        }
+    }
+
+    fn filter_name(self) -> &'static str {
+        match self {
+            ExportFormat::Json => "JSON 会话文件",
+            ExportFormat::Markdown => "Markdown 会话文件",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExportSessionJsonInput {
+pub struct ExportSessionFileInput {
     pub file_name: String,
     pub content: String,
+    pub format: ExportFormat,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExportSessionJsonResult {
+pub struct ExportSessionFileResult {
     pub ok: bool,
     pub canceled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -24,12 +48,18 @@ pub struct ExportSessionJsonResult {
 }
 
 #[tauri::command]
-pub async fn export_session_json(
+pub async fn export_session_file(
     app: tauri::AppHandle,
-    input: ExportSessionJsonInput,
-) -> AppResult<ExportSessionJsonResult> {
-    let Some(path) = choose_session_save_path(app, safe_file_name(&input.file_name)).await? else {
-        return Ok(ExportSessionJsonResult {
+    input: ExportSessionFileInput,
+) -> AppResult<ExportSessionFileResult> {
+    let Some(path) = choose_session_save_path(
+        app,
+        safe_file_name(&input.file_name, input.format),
+        input.format,
+    )
+    .await?
+    else {
+        return Ok(ExportSessionFileResult {
             ok: false,
             canceled: true,
             path: None,
@@ -38,7 +68,7 @@ pub async fn export_session_json(
         });
     };
 
-    let path = ensure_json_extension(path);
+    let path = ensure_extension(path, input.format);
     let bytes = input.content.len() as u64;
     let write_path = path.clone();
     let content = input.content;
@@ -48,14 +78,14 @@ pub async fn export_session_json(
             .map_err(|error| AppError::Internal(error.to_string()))?;
 
     match write_result {
-        Ok(()) => Ok(ExportSessionJsonResult {
+        Ok(()) => Ok(ExportSessionFileResult {
             ok: true,
             canceled: false,
             path: Some(path.to_string_lossy().to_string()),
             bytes,
             error: None,
         }),
-        Err(error) => Ok(ExportSessionJsonResult {
+        Err(error) => Ok(ExportSessionFileResult {
             ok: false,
             canceled: false,
             path: Some(path.to_string_lossy().to_string()),
@@ -68,6 +98,7 @@ pub async fn export_session_json(
 async fn choose_session_save_path(
     app: tauri::AppHandle,
     file_name: String,
+    format: ExportFormat,
 ) -> AppResult<Option<PathBuf>> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -76,7 +107,7 @@ async fn choose_session_save_path(
         .file()
         .set_title("导出 AgentDeck 会话")
         .set_file_name(file_name)
-        .add_filter("JSON 会话文件", &["json"])
+        .add_filter(format.filter_name(), &[format.extension()])
         .save_file(move |path| {
             let result = path.and_then(|value| value.as_path().map(|path| path.to_path_buf()));
             let _ = tx.send(result);
@@ -85,7 +116,7 @@ async fn choose_session_save_path(
         .map_err(|error| AppError::Internal(error.to_string()))
 }
 
-fn safe_file_name(file_name: &str) -> String {
+fn safe_file_name(file_name: &str, format: ExportFormat) -> String {
     let mut cleaned = file_name
         .trim()
         .chars()
@@ -99,19 +130,20 @@ fn safe_file_name(file_name: &str) -> String {
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         cleaned = "session-export".to_string();
     }
-    if !cleaned.to_lowercase().ends_with(".json") {
-        cleaned.push_str(".json");
+    let suffix = format!(".{}", format.extension());
+    if !cleaned.to_lowercase().ends_with(&suffix) {
+        cleaned.push_str(&suffix);
     }
     cleaned
 }
 
-fn ensure_json_extension(mut path: PathBuf) -> PathBuf {
-    let has_json_extension = path
+fn ensure_extension(mut path: PathBuf, format: ExportFormat) -> PathBuf {
+    let has_extension = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
-    if !has_json_extension {
-        path.set_extension("json");
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(format.extension()));
+    if !has_extension {
+        path.set_extension(format.extension());
     }
     path
 }
@@ -123,22 +155,53 @@ mod tests {
     #[test]
     fn safe_file_name_removes_path_characters_and_adds_extension() {
         assert_eq!(
-            safe_file_name("session-bad/name:1"),
+            safe_file_name("session-bad/name:1", ExportFormat::Json),
             "session-bad_name_1.json"
         );
-        assert_eq!(safe_file_name("session-ok.JSON"), "session-ok.JSON");
-        assert_eq!(safe_file_name(".."), "session-export.json");
+        assert_eq!(
+            safe_file_name("session-ok.JSON", ExportFormat::Json),
+            "session-ok.JSON"
+        );
+        assert_eq!(
+            safe_file_name("..", ExportFormat::Json),
+            "session-export.json"
+        );
+        assert_eq!(
+            safe_file_name("会话-20260101-0900", ExportFormat::Markdown),
+            "会话-20260101-0900.md"
+        );
+        assert_eq!(
+            safe_file_name("notes.MD", ExportFormat::Markdown),
+            "notes.MD"
+        );
     }
 
     #[test]
-    fn ensure_json_extension_replaces_other_extension() {
+    fn ensure_extension_replaces_other_extension() {
         assert_eq!(
-            ensure_json_extension(PathBuf::from("/tmp/session.txt")),
+            ensure_extension(PathBuf::from("/tmp/session.txt"), ExportFormat::Json),
             PathBuf::from("/tmp/session.json")
         );
         assert_eq!(
-            ensure_json_extension(PathBuf::from("/tmp/session.JSON")),
+            ensure_extension(PathBuf::from("/tmp/session.JSON"), ExportFormat::Json),
             PathBuf::from("/tmp/session.JSON")
         );
+        assert_eq!(
+            ensure_extension(PathBuf::from("/tmp/session.json"), ExportFormat::Markdown),
+            PathBuf::from("/tmp/session.md")
+        );
+        assert_eq!(
+            ensure_extension(PathBuf::from("/tmp/session"), ExportFormat::Markdown),
+            PathBuf::from("/tmp/session.md")
+        );
+    }
+
+    #[test]
+    fn export_format_deserializes_lowercase() {
+        let input: ExportSessionFileInput =
+            serde_json::from_str(r#"{"fileName":"a","content":"b","format":"markdown"}"#).unwrap();
+        assert_eq!(input.format, ExportFormat::Markdown);
+        assert!(serde_json::from_str::<ExportFormat>(r#""json""#).is_ok());
+        assert!(serde_json::from_str::<ExportFormat>(r#""pdf""#).is_err());
     }
 }

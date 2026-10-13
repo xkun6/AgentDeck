@@ -3,7 +3,7 @@
 // - bindSidecarToStore：把连续去重后的事件流 / 快照 / 连接状态写进 jotai store；
 // - useSidecarBridge：在应用根部挂一次，负责绑定与首次连接；
 // - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式/思考强度、列表、历史、删除、
-//   斜杠命令、MCP 状态与重连）。
+//   斜杠命令、MCP 状态与重连、重命名 / 置顶 / 归档）。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useStore } from "jotai";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
@@ -12,6 +12,7 @@ import type {
   AgentPermissionResponse,
   AgentPromptInput,
   AgentSnapshot,
+  AgentStreamEnvelope,
   AgentBackgroundTask,
   AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
@@ -469,6 +470,25 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         "agent.tasks.output",
         maxBytes === undefined ? { agentId, taskId } : { agentId, taskId, maxBytes },
       );
+    },
+
+    /**
+     * agent.update：重命名 / 置顶 / 归档（design.md 4.17）。只改元数据、不改 updatedAt、不恢复会话；
+     * title 为 null 或空串 = 恢复自动标题。结果写入快照，agent.state 推送同样会刷新列表。
+     */
+    async updateSession(
+      agentId: string,
+      patch: { title?: string | null; pinned?: boolean; archived?: boolean },
+    ): Promise<AgentSnapshot> {
+      const { agent } = await client.request("agent.update", { agentId, ...patch });
+      store.set(upsertAgentSnapshotAtom, agent);
+      return agent;
+    },
+
+    /** agent.timeline：取会话全部时间线条目（dormant / closed 也可取，不恢复会话），供导出使用。 */
+    async fetchAllTimelineEntries(agentId: string): Promise<AgentStreamEnvelope[]> {
+      const { entries } = await client.request("agent.timeline", { agentId }, { timeoutMs: 60_000 });
+      return entries;
     },
 
     /** agent.delete：sidecar 关闭并删除会话（含磁盘目录），随后本地移除（agent.removed 也会触发同样处理）。 */

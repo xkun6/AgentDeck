@@ -13,6 +13,8 @@ export interface ConfirmInputSpec {
   label?: string;
   placeholder?: string;
   initialValue?: string;
+  /** 设置后在底部左侧多一个按钮：点击以空字符串 resolve（如重命名里的「恢复自动标题」）。 */
+  clearLabel?: string;
 }
 
 export interface ConfirmDialogSpec {
@@ -94,6 +96,11 @@ export function ConfirmDialog({ spec, onResolve }: ConfirmDialogProps) {
             )}
           </div>
           <div className={s.dialogFoot}>
+            {spec?.input?.clearLabel ? (
+              <Button variant="ghost" className={s.footLead} onClick={() => onResolve("")}>
+                {spec.input.clearLabel}
+              </Button>
+            ) : null}
             <Button variant="outline" onClick={() => onResolve(cancelValue)}>
               {spec?.cancelLabel ?? "取消"}
             </Button>

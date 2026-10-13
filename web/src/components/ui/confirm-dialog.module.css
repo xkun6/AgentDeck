@@ -68,6 +68,10 @@
   border-color: var(--h-accent);
 }
 
+.footLead {
+  margin-right: auto;
+}
+
 .dialogFoot {
   display: flex;
   justify-content: flex-end;

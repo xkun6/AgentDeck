@@ -341,6 +341,32 @@ describe("mock 会话", () => {
     expect(unknown.error.data?.code).toBe("AGENT_NOT_FOUND");
   });
 
+  test("agent.update：改标题 / 置顶 / 归档并推 agent.state，参数校验", async () => {
+    const agent = await createAgent();
+    const { agent: renamed } = await client.call("agent.update", { agentId: agent.id, title: " 新名字 " });
+    expect(renamed.title).toBe("新名字");
+    const { agent: flagged } = await client.call("agent.update", {
+      agentId: agent.id,
+      pinned: true,
+      archived: true,
+    });
+    expect(flagged).toMatchObject({ title: "新名字", pinned: true, archived: true });
+    await client.waitFor(() => client.states.some((s) => s.id === agent.id && s.archived === true));
+    const { agent: cleared } = await client.call("agent.update", { agentId: agent.id, title: null });
+    expect(cleared.title).toBeUndefined();
+
+    const none = await expectRpcError(client.call("agent.update", { agentId: agent.id }));
+    expect(none.error.code).toBe(-32602);
+    const tooLong = await expectRpcError(
+      client.call("agent.update", { agentId: agent.id, title: "字".repeat(201) }),
+    );
+    expect(tooLong.error.code).toBe(-32602);
+    const ok = await client.call("agent.update", { agentId: agent.id, title: "字".repeat(200) });
+    expect(ok.agent.title).toHaveLength(200);
+    const missing = await expectRpcError(client.call("agent.update", { agentId: "nope", pinned: true }));
+    expect(missing.error.data?.code).toBe("AGENT_NOT_FOUND");
+  });
+
   test("agent.close 置 closed，之后 send 返回 AGENT_CLOSED", async () => {
     const agent = await createAgent();
     await client.call("agent.close", { agentId: agent.id });

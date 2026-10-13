@@ -20,6 +20,8 @@ import type {
   DesktopNotifyInput,
   DesktopNotifyResult,
   DesktopFileDropPayload,
+  ExportSessionFileInput,
+  ExportSessionFileResult,
   ExternalRequestResult,
   FilePickerResult,
   FilePreview,
@@ -264,6 +266,10 @@ const tauriBridge = {
 
   async exportLogSnapshot(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult> {
     return invokeCommand("export_log_snapshot", { input });
+  },
+
+  async exportSessionFile(input: ExportSessionFileInput): Promise<ExportSessionFileResult> {
+    return invokeCommand("export_session_file", { input });
   },
 
   async environmentCheck(): Promise<EnvironmentCheckResult> {

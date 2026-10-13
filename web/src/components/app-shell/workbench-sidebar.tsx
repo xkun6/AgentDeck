@@ -6,6 +6,7 @@ import type { AgentSnapshot } from "@agentdeck/protocol";
 import { Folder, MessageSquare, Plus, TerminalSquare, Trash2 } from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom } from "@/stores/agents";
+import { sidebarSessions } from "@/lib/session-list";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
@@ -122,11 +123,12 @@ export function WorkbenchSidebar() {
 
   const now = new Date();
 
-  // agent.list 已按 updatedAt 倒序；进行中 = sidecar 报 running/starting 或本地仍在流式输出。
+  // agent.list 已按 updatedAt 倒序；不显示已归档的，置顶的排在各组最前（design.md 4.17）。
+  // 进行中 = sidecar 报 running/starting 或本地仍在流式输出。
   const { active, recent } = useMemo(() => {
     const activeList: AgentSnapshot[] = [];
     const recentList: AgentSnapshot[] = [];
-    for (const agent of agents) {
+    for (const agent of sidebarSessions(agents)) {
       if (isAgentRunning(agent, runtimeBySession[agent.id])) activeList.push(agent);
       else recentList.push(agent);
     }

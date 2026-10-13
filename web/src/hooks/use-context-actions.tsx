@@ -4,19 +4,27 @@ import { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSetAtom } from "jotai";
 import {
+  Archive,
+  ArchiveRestore,
   Copy,
   ExternalLink,
+  FileJson,
+  FileText,
   FolderOpen,
   MessageSquarePlus,
   MessageSquare,
+  Pencil,
   Pin,
   PinOff,
   Trash2,
 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import type { ContextMenuEntry } from "@/components/context-menu/entity-context-menu";
+import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
+import { useExportSession } from "@/hooks/use-export-session";
 import { activeSessionIdAtom } from "@/stores/ui";
+import { agentProviderLabel } from "@/lib/agent-session-display";
 import { useConfirm } from "@/lib/use-confirm";
 import {
   isWorkspaceProjectPinned,
@@ -124,6 +132,49 @@ export function useSessionActions() {
   const navigate = useNavigate();
   const setActiveId = useSetAtom(activeSessionIdAtom);
   const deleteSession = useDeleteAgentSession();
+  const exportSession = useExportSession();
+  const actions = useAgentSession();
+  const { confirm, prompt } = useConfirm();
+
+  /** agent.update 失败时用应用内提示框反馈。 */
+  const updateSession = useCallback(
+    async (
+      agentId: string,
+      patch: { title?: string | null; pinned?: boolean; archived?: boolean },
+      failureTitle: string,
+    ): Promise<void> => {
+      try {
+        await actions.updateSession(agentId, patch);
+      } catch (error) {
+        await confirm({
+          title: failureTitle,
+          body: humanizeSidecarError(error),
+          confirmLabel: "知道了",
+          cancelLabel: "关闭",
+        });
+      }
+    },
+    [actions, confirm],
+  );
+
+  /** 重命名：弹窗输入新标题；「恢复自动标题」或保存空串 = 清除自定义标题（design.md 4.17）。 */
+  const renameSession = useCallback(
+    async (agent: AgentSnapshot, title: string): Promise<void> => {
+      const customTitle = agent.title?.trim();
+      const value = await prompt({
+        title: "重命名会话",
+        confirmLabel: "保存",
+        input: {
+          label: "会话标题",
+          initialValue: customTitle || title,
+          ...(customTitle ? { clearLabel: "恢复自动标题" } : {}),
+        },
+      });
+      if (value === null) return;
+      await updateSession(agent.id, { title: value.trim() === "" ? null : value }, "重命名失败");
+    },
+    [prompt, updateSession],
+  );
 
   const openSession = useCallback(
     (agent: Pick<AgentSnapshot, "id">) => {
@@ -136,9 +187,25 @@ export function useSessionActions() {
   const buildMenu = useCallback(
     (agent: AgentSnapshot, title: string): ContextMenuEntry[] => {
       const cwd = normalizeWorkspacePath(agent.cwd || readSessionWorkspaceMap()[agent.id]);
+      const running = agent.status === "running" || agent.status === "starting";
       const hasProject = !!cwd && readWorkspaceProjects().some((project) => project.path === cwd);
       return [
         { key: "open", label: "打开会话", icon: <MessageSquare size={ICON} />, onSelect: () => openSession(agent) },
+        { key: "rename", label: "重命名", icon: <Pencil size={ICON} />, onSelect: () => void renameSession(agent, title) },
+        {
+          key: "pin",
+          label: agent.pinned ? "取消置顶会话" : "置顶会话",
+          icon: agent.pinned ? <PinOff size={ICON} /> : <Pin size={ICON} />,
+          onSelect: () => void updateSession(agent.id, { pinned: !agent.pinned }, agent.pinned ? "取消置顶失败" : "置顶失败"),
+        },
+        ...(running
+          ? []
+          : [{
+              key: "archive",
+              label: agent.archived ? "取消归档" : "归档会话",
+              icon: agent.archived ? <ArchiveRestore size={ICON} /> : <Archive size={ICON} />,
+              onSelect: () => void updateSession(agent.id, { archived: !agent.archived }, agent.archived ? "取消归档失败" : "归档失败"),
+            }]),
         { key: "copy-title", label: "复制会话标题", icon: <Copy size={ICON} />, onSelect: () => void copyText(title) },
         ...(cwd
           ? [{ key: "copy-cwd", label: "复制工作目录", icon: <Copy size={ICON} />, onSelect: () => void copyText(cwd) }]
@@ -153,6 +220,9 @@ export function useSessionActions() {
           disabled: !hasProject,
           onSelect: () => navigate(`/projects/${encodeURIComponent(cwd)}`),
         },
+        { type: "separator", key: "sep-export" },
+        { key: "export-json", label: "导出为 JSON", icon: <FileJson size={ICON} />, onSelect: () => void exportSession(agent, title, "json", agentProviderLabel(agent.provider)) },
+        { key: "export-markdown", label: "导出为 Markdown", icon: <FileText size={ICON} />, onSelect: () => void exportSession(agent, title, "markdown", agentProviderLabel(agent.provider)) },
         { type: "separator", key: "sep" },
         {
           key: "delete",
@@ -163,7 +233,7 @@ export function useSessionActions() {
         },
       ];
     },
-    [deleteSession, navigate, openSession],
+    [deleteSession, exportSession, navigate, openSession, renameSession, updateSession],
   );
 
   return { openSession, buildMenu };

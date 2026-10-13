@@ -119,6 +119,20 @@ describe("tauri bridge", () => {
     });
   });
 
+  it("exposes session file export through Tauri IPC", async () => {
+    await installTauriBridge();
+
+    await window.agentdeckDesktop?.exportSessionFile?.({
+      fileName: "会话-20260102-0304",
+      content: "# 会话\n",
+      format: "markdown",
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith("export_session_file", {
+      input: { fileName: "会话-20260102-0304", content: "# 会话\n", format: "markdown" },
+    });
+  });
+
   it("exposes external URL opening through Tauri IPC", async () => {
     await installTauriBridge();
 

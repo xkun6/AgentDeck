@@ -406,6 +406,12 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   const lastSeq = value.lastSeq;
   meta.lastSeq = typeof lastSeq === "number" && Number.isInteger(lastSeq) && lastSeq > 0 ? lastSeq : 0;
   meta.resumable = false;
+  if (typeof value.pinned !== "boolean") {
+    delete meta.pinned;
+  }
+  if (typeof value.archived !== "boolean") {
+    delete meta.archived;
+  }
   if (!isRecord(value.persistence) || typeof value.persistence.sessionId !== "string") {
     meta.persistence = null;
   }

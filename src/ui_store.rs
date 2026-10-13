@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -162,16 +162,6 @@ fn init_schema(conn: &Connection) -> AppResult<()> {
             updated_at INTEGER NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS session_ui_state (
-            session_id TEXT PRIMARY KEY,
-            title_override TEXT,
-            archived INTEGER NOT NULL DEFAULT 0,
-            pinned INTEGER NOT NULL DEFAULT 0,
-            tags_json TEXT,
-            workspace_path TEXT,
-            updated_at INTEGER NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS turn_stats (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -290,36 +280,6 @@ pub fn remove_kv(data_dir: &str, input: UiStoreRemoveKvInput) -> AppResult<()> {
     conn.execute("DELETE FROM ui_kv WHERE key = ?", params![key])
         .map_err(sqlite_err)?;
     Ok(())
-}
-
-pub fn set_session_archived(data_dir: &str, session_id: &str, archived: bool) -> AppResult<()> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err(AppError::InvalidRequest("session id is empty".into()));
-    }
-    let conn = connect(data_dir)?;
-    conn.execute(
-        "INSERT INTO session_ui_state(session_id, archived, updated_at)
-         VALUES(?, ?, ?)
-         ON CONFLICT(session_id) DO UPDATE SET archived=excluded.archived, updated_at=excluded.updated_at",
-        params![session_id, if archived { 1 } else { 0 }, now_ms()],
-    )
-    .map_err(sqlite_err)?;
-    Ok(())
-}
-
-pub fn read_archived_session_ids(data_dir: &str) -> HashSet<String> {
-    let Ok(conn) = connect(data_dir) else {
-        return HashSet::new();
-    };
-    let Ok(mut stmt) = conn.prepare("SELECT session_id FROM session_ui_state WHERE archived = 1")
-    else {
-        return HashSet::new();
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
-        return HashSet::new();
-    };
-    rows.filter_map(Result::ok).collect()
 }
 
 pub fn record_turn_stats(data_dir: &str, mut stat: UiTurnStats) -> AppResult<()> {
@@ -572,15 +532,6 @@ mod tests {
         .unwrap();
         let snap = snapshot(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(snap.kv["hello"], serde_json::json!({ "world": true }));
-    }
-
-    #[test]
-    fn archived_sessions_roundtrip() {
-        let dir = TempDir::new().unwrap();
-        set_session_archived(dir.path().to_str().unwrap(), "s1", true).unwrap();
-        assert!(read_archived_session_ids(dir.path().to_str().unwrap()).contains("s1"));
-        set_session_archived(dir.path().to_str().unwrap(), "s1", false).unwrap();
-        assert!(!read_archived_session_ids(dir.path().to_str().unwrap()).contains("s1"));
     }
 
     #[test]

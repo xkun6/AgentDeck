@@ -383,6 +383,10 @@ export interface AgentSnapshot {
   lastSeq: number;
   /** 有 persistence 句柄且 provider 支持 resumeSession */
   resumable: boolean;
+  /** 置顶（design.md 4.17）；缺省视为 false */
+  pinned?: boolean;
+  /** 归档（design.md 4.17）；缺省视为 false */
+  archived?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -458,6 +462,7 @@ export const AGENT_RPC_METHODS = {
   agentClose: "agent.close",
   agentTimeline: "agent.timeline",
   agentDelete: "agent.delete",
+  agentUpdate: "agent.update",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
   agentCommands: "agent.commands",
@@ -513,6 +518,11 @@ export interface AgentRpcMethods {
   "agent.retract": {
     params: { agentId: string };
     result: { prompt: AgentPromptInput; clientMessageId?: string };
+  };
+  /** 只改元数据（design.md 4.17）：title 为 null / 空串 = 清除自定义标题；不改 updatedAt、不恢复会话 */
+  "agent.update": {
+    params: { agentId: string; title?: string | null; pinned?: boolean; archived?: boolean };
+    result: { agent: AgentSnapshot };
   };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };

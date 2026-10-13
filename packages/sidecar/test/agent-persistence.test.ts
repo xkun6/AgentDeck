@@ -698,3 +698,85 @@ describe("斜杠命令与 MCP（design.md 4.14）", () => {
     });
   });
 });
+
+describe("agent.update：重命名 / 置顶 / 归档（design.md 4.17）", () => {
+  test("改名、清除标题、置顶归档：推 agent.state、落盘 meta，不改 updatedAt", async () => {
+    const dataDir = makeDataDir();
+    const { client } = fakeClient();
+    const { manager, states } = createManager(client, dataDir, () => 5000);
+    const agent = await manager.createAgent({ provider: "fake", cwd: "/w", title: "旧标题" });
+    const updatedAt = manager.getAgent(agent.id).updatedAt;
+    const stateCount = states.length;
+
+    const renamed = await manager.updateAgent(agent.id, { title: "  新标题  " });
+    expect(renamed.title).toBe("新标题");
+    expect(states).toHaveLength(stateCount + 1);
+    const metaFile = path.join(dataDir, "agents", agent.id, "meta.json");
+    // 立即落盘，不等 500ms 防抖
+    expect(JSON.parse(readFileSync(metaFile, "utf8")).title).toBe("新标题");
+
+    const flagged = await manager.updateAgent(agent.id, { pinned: true, archived: true });
+    expect(flagged).toMatchObject({ title: "新标题", pinned: true, archived: true });
+    expect(JSON.parse(readFileSync(metaFile, "utf8"))).toMatchObject({ pinned: true, archived: true });
+
+    const cleared = await manager.updateAgent(agent.id, { title: null });
+    expect("title" in cleared).toBe(false);
+    expect("title" in JSON.parse(readFileSync(metaFile, "utf8"))).toBe(false);
+    const blank = await manager.updateAgent(agent.id, { title: "   " });
+    expect("title" in blank).toBe(false);
+
+    expect(manager.getAgent(agent.id).updatedAt).toBe(updatedAt);
+  });
+
+  test("dormant 会话可改且不被恢复；重启后 pinned / archived / title 仍在", async () => {
+    const seeded = await seedDormant();
+    const { manager, agentId, resumeCalls, sessions } = seeded;
+    const loadedUpdatedAt = manager.getAgent(agentId).updatedAt;
+
+    const updated = await manager.updateAgent(agentId, { title: "改名", pinned: true, archived: true });
+    expect(updated).toMatchObject({ status: "dormant", title: "改名", pinned: true, archived: true });
+    expect(updated.updatedAt).toBe(loadedUpdatedAt);
+    expect(resumeCalls).toEqual([]);
+    expect(sessions).toEqual([]);
+    await manager.shutdown();
+
+    const { client } = fakeClient();
+    const { manager: third } = createManager(client, seeded.dataDir);
+    await third.restore();
+    expect(third.getAgent(agentId)).toMatchObject({
+      status: "dormant",
+      title: "改名",
+      pinned: true,
+      archived: true,
+      updatedAt: loadedUpdatedAt,
+    });
+  });
+
+  test("运行中也可改，不受单 turn 约束", async () => {
+    const { client } = fakeClient();
+    const { manager } = createManager(client);
+    const agent = await manager.createAgent({ provider: "fake", cwd: "/w" });
+    await manager.sendPrompt(agent.id, "go");
+    const updated = await manager.updateAgent(agent.id, { pinned: true });
+    expect(updated).toMatchObject({ status: "running", pinned: true });
+  });
+
+  test("send 到已归档会话自动取消归档并推送", async () => {
+    const seeded = await seedDormant();
+    const { manager, agentId, states } = seeded;
+    await manager.updateAgent(agentId, { archived: true, pinned: true });
+    states.length = 0;
+
+    await manager.sendPrompt(agentId, "回来了");
+    expect(manager.getAgent(agentId)).toMatchObject({ archived: false, pinned: true });
+    expect(states.every((s) => s.archived === false)).toBe(true);
+  });
+
+  test("agent 不存在：AGENT_NOT_FOUND", async () => {
+    const { client } = fakeClient();
+    const { manager } = createManager(client);
+    await expect(manager.updateAgent("nope", { pinned: true })).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+    });
+  });
+});

@@ -160,7 +160,7 @@ fn main() {
             commands::file_dialogs::open_external_url,
             commands::fs::fs_list,
             commands::log_export::export_log_snapshot,
-            commands::session_export::export_session_json,
+            commands::session_export::export_session_file,
             commands::devtools::toggle_devtools,
             commands::environment::environment_check,
             commands::environment::environment_install,

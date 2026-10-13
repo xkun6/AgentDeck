@@ -44,6 +44,18 @@ describe("ConfirmDialog", () => {
     expect(onResolve).toHaveBeenCalledWith("def");
   });
 
+  it("clearLabel 按钮以空字符串 resolve（如「恢复自动标题」）", () => {
+    const onResolve = vi.fn();
+    render(
+      <ConfirmDialog
+        spec={{ title: "重命名", input: { label: "标题", initialValue: "abc", clearLabel: "恢复自动标题" }, confirmLabel: "保存" }}
+        onResolve={onResolve}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "恢复自动标题" }));
+    expect(onResolve).toHaveBeenCalledWith("");
+  });
+
   it("resolves null on cancel in input mode and Enter submits", () => {
     const onResolve = vi.fn();
     render(

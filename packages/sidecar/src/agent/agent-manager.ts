@@ -306,6 +306,10 @@ export class AgentManager {
 
     agent.sending = true;
     try {
+      // 向已归档会话发消息自动取消归档（design.md 4.17），随后续的 agent.state 一并推送
+      if (agent.snapshot.archived) {
+        agent.snapshot.archived = false;
+      }
       const session = await this.ensureSession(agent);
       const sentTurn: SentTurn = {
         prompt,
@@ -596,6 +600,35 @@ export class AgentManager {
   async close(agentId: string): Promise<void> {
     const agent = this.requireAgent(agentId);
     await this.closeAgent(agent, "closed");
+  }
+
+  /**
+   * design.md 4.17：只改元数据（标题 / 置顶 / 归档）。任何状态可调，不恢复会话、不受单 turn 约束、
+   * 不改 updatedAt；立即落盘 meta 并推 agent.state。title 为 null / 空白 = 清除自定义标题。
+   */
+  async updateAgent(
+    agentId: string,
+    patch: { title?: string | null; pinned?: boolean; archived?: boolean },
+  ): Promise<AgentSnapshot> {
+    const agent = this.requireAgent(agentId);
+    const snapshot = agent.snapshot;
+    if (patch.title !== undefined) {
+      const title = patch.title?.trim() ?? "";
+      if (title) {
+        snapshot.title = title;
+      } else {
+        delete snapshot.title;
+      }
+    }
+    if (patch.pinned !== undefined) {
+      snapshot.pinned = patch.pinned;
+    }
+    if (patch.archived !== undefined) {
+      snapshot.archived = patch.archived;
+    }
+    await this.persistNow(agent);
+    this.emitState(agent);
+    return cloneSnapshot(snapshot);
   }
 
   /** agent.delete：若在运行先关闭，然后从磁盘与注册表删除，广播 agent.removed */

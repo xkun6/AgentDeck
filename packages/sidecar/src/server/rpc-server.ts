@@ -57,6 +57,8 @@ export interface RpcServerOptions {
 // 参数校验（zod）
 // ---------------------------------------------------------------------------
 
+const AGENT_TITLE_MAX_LENGTH = 200;
+
 const emptyParams = z.object({}).optional();
 const agentIdParams = z.object({ agentId: z.string().min(1) });
 
@@ -318,6 +320,34 @@ export class RpcServer {
           sinceSeq: z.number().int().nonnegative().optional(),
         }),
         (params) => manager.timeline(params.agentId, params.sinceSeq),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentUpdate,
+        z
+          .object({
+            agentId: z.string().min(1),
+            title: z
+              .string()
+              .refine((value) => value.trim().length <= AGENT_TITLE_MAX_LENGTH, {
+                message: `title 去除首尾空白后不能超过 ${AGENT_TITLE_MAX_LENGTH} 个字符`,
+              })
+              .nullable()
+              .optional(),
+            pinned: z.boolean().optional(),
+            archived: z.boolean().optional(),
+          })
+          .refine(
+            (value) =>
+              value.title !== undefined || value.pinned !== undefined || value.archived !== undefined,
+            { message: "title / pinned / archived 至少需要提供一个" },
+          ),
+        async (params) => ({
+          agent: await manager.updateAgent(params.agentId, {
+            ...(params.title !== undefined ? { title: params.title } : {}),
+            ...(params.pinned !== undefined ? { pinned: params.pinned } : {}),
+            ...(params.archived !== undefined ? { archived: params.archived } : {}),
+          }),
+        }),
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
         await manager.deleteAgent(params.agentId);
