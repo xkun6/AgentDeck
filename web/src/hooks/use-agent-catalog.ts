@@ -1,7 +1,8 @@
-// provider 列表与模型 / 模式目录（来自 sidecar），以及新建会话的选择状态。
+// provider 列表、模型 / 模式目录、会话斜杠命令（来自 sidecar），以及新建会话的选择状态。
 import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
+import type { AgentStatus } from "@agentdeck/protocol";
 import { useAgentSession, humanizeSidecarError } from "@/hooks/use-agent-session";
 import {
   findMode,
@@ -37,6 +38,23 @@ export function useAgentCatalog(provider: string | null, cwd: string) {
     queryKey: [...AGENT_QUERY_KEYS.catalog, provider ?? "", cwd],
     queryFn: () => actions.listModels(provider!, cwd || undefined),
     enabled: connected && Boolean(provider),
+    staleTime: 60_000,
+    retry: 1,
+  });
+}
+
+/**
+ * 会话可用的斜杠命令（agent.commands）。key 带会话阶段：休眠（dormant / closed）走目录兜底，
+ * 恢复后（starting → idle / running）换 key 自动重新拉取运行时的完整列表；idle ↔ running 不重复拉取。
+ */
+export function useAgentCommands(agentId: string | null | undefined, status: AgentStatus | undefined) {
+  const actions = useAgentSession();
+  const connected = useAtomValue(sidecarConnectionAtom) === "open";
+  const phase = status === "dormant" || status === "closed" ? "inactive" : status === "starting" ? "starting" : "live";
+  return useQuery({
+    queryKey: [...AGENT_QUERY_KEYS.commands, agentId ?? "", phase],
+    queryFn: () => actions.listCommands(agentId!),
+    enabled: connected && Boolean(agentId),
     staleTime: 60_000,
     retry: 1,
   });

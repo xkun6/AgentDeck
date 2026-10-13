@@ -6,6 +6,8 @@ export const AGENT_QUERY_KEYS = {
   /** 前缀；完整 key 为 [...catalog, provider, cwd] */
   catalog: ["agentdeck", "catalog"] as const,
   providerConfig: ["agentdeck", "provider-config"] as const,
+  /** 前缀；完整 key 为 [...commands, agentId, 会话阶段] */
+  commands: ["agentdeck", "commands"] as const,
 };
 
 /** providers.json 变化：provider.list、各 provider 的模型目录、中转配置全部失效并重新拉取。 */

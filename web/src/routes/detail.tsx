@@ -30,7 +30,7 @@ import {
   useAgentSession,
   useProviderSubagents,
 } from "@/hooks/use-agent-session";
-import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
+import { useAgentCatalog, useAgentCommands, useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useProviderConfig } from "@/hooks/use-provider-config";
 import { relaySessionState } from "@/lib/provider-profiles";
 import { useComposerTimer } from "@/hooks/use-composer-timer";
@@ -38,6 +38,7 @@ import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
 import { agentProviderLabel } from "@/lib/agent-session-display";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
+import { isLocalMcpCommand, mergeSlashCommands, supportsLocalMcpCommand } from "@/lib/slash-commands";
 import { applyAgentSelectionChange, type AgentSelection } from "@/lib/agent-selection";
 import {
   composerDraftStorageKey,
@@ -49,6 +50,7 @@ import { TopBar, TopBarActionButton, TopBarActions } from "@/components/top-bar/
 import { GooseComposer } from "@/components/chat/goose-composer";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { ContextUsageIndicator } from "@/components/chat/context-usage-indicator";
+import { McpServersDialog } from "@/components/chat/mcp-servers-dialog";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
 import { QueuePanel } from "@/components/composer/queue-panel";
 import {
@@ -112,6 +114,8 @@ export function DetailRoute() {
   const snapshot = taskId ? snapshots[taskId] : undefined;
   const providersQuery = useAgentProviders();
   const catalogQuery = useAgentCatalog(snapshot?.provider ?? null, snapshot?.cwd ?? "");
+  const commandsQuery = useAgentCommands(taskId, snapshot?.status);
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const runtimeIsBusy = isRuntimeRunning(runtime) || snapshot?.status === "running";
   // dormant（sidecar 重启后的历史会话）/ closed：发送时自动恢复；starting：恢复进行中
   const inactive = isInactiveAgent(snapshot);
@@ -234,6 +238,10 @@ export function DetailRoute() {
     [runtime.messages],
   );
 
+  // provider 种类（自定义中转取 extends 的值）：决定 /mcp 拦截与手动压缩是否可用
+  const providerKind = providersQuery.data?.find((provider) => provider.id === snapshot?.provider)?.kind
+    ?? (snapshot?.provider === "claude" || snapshot?.provider === "codex" ? snapshot.provider : undefined);
+
   const submitPayload = useCallback(async (payload: ComposerSubmitPayload) => {
     if (!taskId) return;
     const prepared = await prepareAgentPrompt(payload);
@@ -253,13 +261,18 @@ export function DetailRoute() {
 
   const onSend = useCallback(async (payload: ComposerSubmitPayload) => {
     if (!taskId) return;
+    // `/mcp`：不发送也不排队（即使 Agent 正忙），直接打开 MCP 面板
+    if (isLocalMcpCommand(payload, providerKind)) {
+      setMcpDialogOpen(true);
+      return;
+    }
     // Agent 正忙时先排队，空闲后自动发出。
     if (runtimeIsBusy) {
       enqueueQueuedPrompt(taskId, { text: payload.text, attachments: payload.attachments }, Date.now());
       return;
     }
     await submitPayload(payload);
-  }, [runtimeIsBusy, submitPayload, taskId]);
+  }, [providerKind, runtimeIsBusy, submitPayload, taskId]);
 
   // ---- 发送队列（空闲时自动发出 / 立即发送 / 编辑 / 删除） ----------------------
   const queuedPrompts = useQueuedPrompts(taskId);
@@ -324,6 +337,7 @@ export function DetailRoute() {
     setControlNotice(undefined);
     setSendUnrecoverable(null);
     setRecreateState({ pending: false });
+    setMcpDialogOpen(false);
   }, [taskId]);
 
   const onStop = useCallback(async () => {
@@ -410,6 +424,30 @@ export function DetailRoute() {
   const pendingApproval = inactive ? null : runtime.pendingApprovals[0] ?? null;
   const notFound = timelineState.id === taskId && Boolean(timelineState.error) && !snapshot;
   const missing = agentListLoaded && !snapshot && runtime.messages.length === 0;
+
+  // ---- 斜杠命令 / 手动压缩 ---------------------------------------------------
+  const slashCommands = useMemo(
+    () => mergeSlashCommands(commandsQuery.data, providerKind),
+    [commandsQuery.data, providerKind],
+  );
+  const { isStale: commandsStale, refetch: refetchCommands } = commandsQuery;
+  const onSlashMenuOpen = useCallback(() => {
+    if (commandsStale) void refetchCommands();
+  }, [commandsStale, refetchCommands]);
+  const compactSupported = supportsLocalMcpCommand(providerKind)
+    || (providerKind === "acp" && Boolean(commandsQuery.data?.some((command) => command.name === "compact")));
+  const compactUnavailable = unrecoverable || notFound || missing || resuming;
+  const compactDisabledReason = runtimeIsBusy
+    ? "Agent 正在响应，结束后再压缩"
+    : resuming
+      ? "会话正在恢复，请稍候"
+      : compactUnavailable
+        ? "会话不可用"
+        : undefined;
+  const onCompact = useCallback(() => {
+    // 失败提示已由 sendPrompt 写进时间线
+    submitPayload({ text: "/compact", attachments: [] }).catch(() => {});
+  }, [submitPayload]);
 
   const composerTick = useComposerTimer(runtimeIsBusy, runtime.turnStartedAt);
   const stall = useStallWatchdog(runtime);
@@ -579,7 +617,16 @@ export function DetailRoute() {
               placeholder={unrecoverable ? unrecoverableMessage : undefined}
               onStop={onStop}
               // 运行时 usage 比快照新（压缩后会清掉已用量，见 stores/chat.ts）；没有时退回快照
-              toolbarTrailing={<ContextUsageIndicator usage={runtime.agentUsage ?? snapshot?.lastUsage} />}
+              toolbarTrailing={
+                <ContextUsageIndicator
+                  usage={runtime.agentUsage ?? snapshot?.lastUsage}
+                  onCompact={compactSupported ? onCompact : undefined}
+                  compactDisabled={runtimeIsBusy || compactUnavailable}
+                  compactDisabledReason={compactDisabledReason}
+                />
+              }
+              slashCommands={slashCommands}
+              onSlashMenuOpen={onSlashMenuOpen}
               toolbarExtra={
                 snapshot ? (
                   <AgentSessionPicker
@@ -614,6 +661,9 @@ export function DetailRoute() {
           />
         ) : null}
       </div>
+      {taskId ? (
+        <McpServersDialog open={mcpDialogOpen} agentId={taskId} onClose={() => setMcpDialogOpen(false)} />
+      ) : null}
     </div>
   );
 }

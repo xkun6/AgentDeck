@@ -1,6 +1,9 @@
 import {
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -27,6 +30,7 @@ import {
 import {
   ComposerAttachmentError,
   type ComposerAttachment,
+  type ComposerSlashCommand,
   type ComposerSubmitControls,
   type ComposerSubmitPayload,
 } from "./composer-types";
@@ -41,6 +45,13 @@ import {
   uniquePaths,
 } from "./goose-composer-attachments";
 import { SendIcon, StopIcon } from "./goose-composer-icons";
+import {
+  filterSlashCommands,
+  SLASH_MENU_LIMIT,
+  SlashCommandMenu,
+  slashOptionId,
+  slashQueryFromInput,
+} from "./slash-command-menu";
 import { WorkspacePickerModal } from "@/components/composer/workspace-picker";
 import { filesFromClipboardData, imageFileFromClipboardData, readClipboardImageAsFile } from "@/lib/clipboard-image";
 import s from "./goose-composer.module.css";
@@ -95,6 +106,10 @@ interface GooseComposerProps {
   toolbarTrailing?: ReactNode;
   /** 工作区变化时回调（宿主据此按 cwd 拉取模型列表等）。 */
   onWorkspaceChange?: (path: string) => void;
+  /** 斜杠命令补全候选；不传时输入 `/` 不弹菜单。 */
+  slashCommands?: ComposerSlashCommand[];
+  /** 斜杠命令菜单打开时回调（宿主可借此刷新命令列表）。 */
+  onSlashMenuOpen?: () => void;
 }
 
 function messageFromError(error: unknown): string {
@@ -131,6 +146,8 @@ export function GooseComposer({
   toolbarExtra,
   toolbarTrailing,
   onWorkspaceChange,
+  slashCommands,
+  onSlashMenuOpen,
 }: GooseComposerProps) {
   const configuredSubmitShortcut = useAtomValue(composerSubmitShortcutAtom);
   const effectiveSubmitShortcut = submitShortcut ?? configuredSubmitShortcut;
@@ -163,6 +180,52 @@ export function GooseComposer({
     !controlsDisabled &&
     !hasProcessingAttachment;
   const resolvedPlaceholder = placeholder ?? `发送消息，${submitHint}…`;
+
+  // ---- 斜杠命令补全 ----
+  const slashMenuId = useId();
+  const [caret, setCaret] = useState<number | null>(null);
+  const [textareaFocused, setTextareaFocused] = useState(false);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const pendingCaretRef = useRef<number | null>(null);
+  const slashQuery = slashCommands && textareaFocused && !slashDismissed && caret !== null
+    ? slashQueryFromInput(value, caret)
+    : null;
+  const slashMatches = useMemo(
+    () => (slashCommands && slashQuery !== null
+      ? filterSlashCommands(slashCommands, slashQuery).slice(0, SLASH_MENU_LIMIT)
+      : []),
+    [slashCommands, slashQuery],
+  );
+  const slashMenuOpen = slashMatches.length > 0 && !disabled;
+  const slashActive = Math.min(slashActiveIndex, Math.max(0, slashMatches.length - 1));
+
+  useEffect(() => {
+    setSlashActiveIndex(0);
+  }, [slashQuery]);
+
+  const onSlashMenuOpenRef = useRef(onSlashMenuOpen);
+  onSlashMenuOpenRef.current = onSlashMenuOpen;
+  useEffect(() => {
+    if (slashMenuOpen) onSlashMenuOpenRef.current?.();
+  }, [slashMenuOpen]);
+
+  // 补全后把光标放到末尾（受控 value 更新后再设置选区）
+  useLayoutEffect(() => {
+    const position = pendingCaretRef.current;
+    const textarea = textareaRef.current;
+    if (position === null || !textarea) return;
+    pendingCaretRef.current = null;
+    textarea.setSelectionRange(position, position);
+  }, [value]);
+
+  const applySlashCommand = (command: ComposerSlashCommand) => {
+    const next = `/${command.name} `;
+    pendingCaretRef.current = next.length;
+    setValue(next);
+    setCaret(next.length);
+    textareaRef.current?.focus();
+  };
 
   // Make `initial` reactive so external prefill (e.g. quick-start recipes) takes
   // effect after mount. We focus the textarea on non-empty external pushes so
@@ -444,6 +507,30 @@ export function GooseComposer({
     });
     if (isComposing) return;
 
+    if (slashMenuOpen) {
+      const count = slashMatches.length;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setSlashActiveIndex((slashActive + step + count) % count);
+        return;
+      }
+      if ((event.key === "Tab" || event.key === "Enter") && !event.shiftKey) {
+        // 菜单打开时 Enter / Tab 只补全，不发送
+        event.preventDefault();
+        const command = slashMatches[slashActive];
+        if (command) applySlashCommand(command);
+        return;
+      }
+      if (event.key === "Escape") {
+        // 阻止冒泡，避免关掉外层弹层
+        event.preventDefault();
+        event.stopPropagation();
+        setSlashDismissed(true);
+        return;
+      }
+    }
+
     const shouldSubmit = shouldSubmitComposerKey({
       key: event.key,
       shiftKey: event.shiftKey,
@@ -554,6 +641,15 @@ export function GooseComposer({
           tabIndex={-1}
         />
         {dragActive ? <div className={s.dropOverlay}>释放以添加到当前消息</div> : null}
+        {slashMenuOpen ? (
+          <SlashCommandMenu
+            id={slashMenuId}
+            commands={slashMatches}
+            activeIndex={slashActive}
+            onSelect={applySlashCommand}
+            onActiveIndexChange={setSlashActiveIndex}
+          />
+        ) : null}
 
         {isBig ? (
           <div className={s.bigHeader}>
@@ -572,7 +668,17 @@ export function GooseComposer({
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setCaret(event.target.selectionStart);
+            setSlashDismissed(false);
+          }}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+          onFocus={(event) => {
+            setTextareaFocused(true);
+            setCaret(event.currentTarget.selectionStart);
+          }}
+          onBlur={() => setTextareaFocused(false)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           onCompositionStart={() => { composingRef.current = true; }}
@@ -582,6 +688,9 @@ export function GooseComposer({
           className={s.textarea}
           disabled={disabled}
           aria-label="输入消息"
+          aria-autocomplete={slashCommands ? "list" : undefined}
+          aria-controls={slashMenuOpen ? slashMenuId : undefined}
+          aria-activedescendant={slashMenuOpen ? slashOptionId(slashMenuId, slashActive) : undefined}
         />
 
         {hints && hints.length > 0 && value.length === 0 ? (

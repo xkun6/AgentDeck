@@ -2,7 +2,8 @@
 // lib/sidecar-client.ts：
 // - bindSidecarToStore：把连续去重后的事件流 / 快照 / 连接状态写进 jotai store；
 // - useSidecarBridge：在应用根部挂一次，负责绑定与首次连接；
-// - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式/思考强度、列表、历史、删除）。
+// - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式/思考强度、列表、历史、删除、
+//   斜杠命令、MCP 状态与重连）。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useStore } from "jotai";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
@@ -11,8 +12,10 @@ import type {
   AgentPermissionResponse,
   AgentPromptInput,
   AgentSnapshot,
+  AgentMcpStatusResult,
   AgentModelDefinition,
   AgentMode,
+  AgentSlashCommand,
   ProviderInfo,
   ProviderProfile,
   ProviderSubagentDescriptor,
@@ -404,6 +407,22 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         mode: before !== undefined ? "before" : "tail",
       });
       return result;
+    },
+
+    /** agent.commands：会话可用的斜杠命令（name 不带前导 /；休眠会话走目录兜底，design.md 4.14）。 */
+    async listCommands(agentId: string): Promise<AgentSlashCommand[]> {
+      const { commands } = await client.request("agent.commands", { agentId });
+      return commands;
+    },
+
+    /** agent.mcp.status：MCP 服务器状态（休眠会话会先自动恢复；不支持时 NOT_SUPPORTED）。 */
+    async mcpStatus(agentId: string): Promise<AgentMcpStatusResult> {
+      return client.request("agent.mcp.status", { agentId });
+    },
+
+    /** agent.mcp.reconnect：重连后返回最新状态；Codex 忽略 serverName 整体重新加载。可能耗时数十秒。 */
+    async mcpReconnect(agentId: string, serverName?: string): Promise<AgentMcpStatusResult> {
+      return client.request("agent.mcp.reconnect", serverName ? { agentId, serverName } : { agentId });
     },
 
     /** agent.delete：sidecar 关闭并删除会话（含磁盘目录），随后本地移除（agent.removed 也会触发同样处理）。 */

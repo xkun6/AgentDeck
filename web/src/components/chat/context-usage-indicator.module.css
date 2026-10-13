@@ -19,7 +19,15 @@
   color: var(--h-color-danger-fg);
 }
 
-.root:focus-visible {
+.ringButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.ringButton:focus-visible {
   outline: var(--h-focus-outline);
 }
 
@@ -42,14 +50,14 @@
   transition: stroke-dashoffset 0.3s ease;
 }
 
-.tooltip {
+.popover {
   position: absolute;
   right: 0;
   bottom: calc(100% + 8px);
   z-index: var(--h-z-popover);
   display: none;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   width: max-content;
   max-width: 240px;
   border: 1px solid var(--h-line);
@@ -60,19 +68,61 @@
   font-size: var(--h-font-size-xs);
   line-height: 1.5;
   padding: 8px 12px;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
-.root:hover .tooltip,
-.root:focus-visible .tooltip {
+/* 透明桥接圆环与弹层之间 8px 的空隙：鼠标从圆环移到弹层上时不消失 */
+.popover::before {
+  content: "";
+  position: absolute;
+  right: 0;
+  left: 0;
+  top: 100%;
+  height: 8px;
+}
+
+.root:hover .popover,
+.root:focus-within .popover {
   display: flex;
 }
 
-.tooltipTitle {
+.popoverText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.popoverTitle {
   color: var(--h-text);
   font-weight: 600;
 }
 
-.tooltipHint {
+.popoverHint {
   color: var(--h-text-3);
+}
+
+.compactButton {
+  align-self: flex-start;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text);
+  cursor: pointer;
+  font-family: var(--h-font-cn);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.4;
+  padding: 4px 12px;
+}
+
+.compactButton:hover:not(:disabled) {
+  background: var(--h-bg-chip);
+}
+
+.compactButton:focus-visible {
+  outline: var(--h-focus-outline);
+}
+
+.compactButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }

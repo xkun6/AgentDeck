@@ -1,0 +1,68 @@
+/* 斜杠命令候选菜单：浮在输入框上方，宽度与输入框一致 */
+.menu {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  z-index: var(--h-z-popover);
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  padding: 4px 0;
+}
+
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  color: var(--h-text-2);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.item[aria-selected="true"] {
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+}
+
+.name {
+  flex-shrink: 0;
+  color: var(--h-accent);
+  font-family: var(--h-font-mono);
+}
+
+.argumentHint {
+  flex-shrink: 0;
+  max-width: 30%;
+  overflow: hidden;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex-shrink: 0;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-2xs);
+  line-height: 1.4;
+  padding: 0 4px;
+}
+
+.description {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--h-text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

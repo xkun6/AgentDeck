@@ -25,6 +25,16 @@ export interface ComposerSubmitPayload {
   workspacePath?: string;
 }
 
+/** 输入框斜杠命令补全的候选项（name 不带前导 /）。 */
+export interface ComposerSlashCommand {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  aliases?: string[];
+  /** 名称后的小标签（如「AgentDeck」表示由本应用处理） */
+  badge?: string;
+}
+
 export interface ComposerSubmitControls {
   updateAttachment(id: string, patch: Partial<ComposerAttachment>): void;
 }
