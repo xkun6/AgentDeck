@@ -78,8 +78,7 @@ import { parseFocusSeq } from "@/components/chat/focus-seq";
 import { StallNotice } from "@/components/chat/stall-notice";
 import { AutomationStatusBar } from "@/components/chat/automation-status-bar";
 import { PreviewRail } from "@/components/chat/preview-rail/preview-rail";
-import { SubagentTrack } from "@/components/chat/subagents/subagent-track";
-import { BackgroundTaskTrack } from "@/components/chat/background-tasks/background-task-track";
+import { ComposerStatusRow } from "@/components/chat/status-row/composer-status-row";
 import { SubagentPanel } from "@/components/chat/subagents/subagent-panel";
 import { BackgroundTaskPanel } from "@/components/chat/background-tasks/background-task-panel";
 import { useSidePanelSelection } from "@/components/chat/use-side-panel-selection";
@@ -157,6 +156,9 @@ export function DetailRoute() {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const runtimeIsBusy = isRuntimeRunning(runtime) || snapshot?.status === "running";
+  // 状态行「速度」芯片（design.md 4.29）：回合中以运行时（usage_updated 实时）为准，没有时退回快照 lastUsage
+  const outputSpeed = runtime.agentUsage?.outputTokensPerSecond ?? snapshot?.lastUsage?.outputTokensPerSecond;
+  const statusUsage = outputSpeed === undefined ? undefined : { outputTokensPerSecond: outputSpeed };
   // 按回合文件快照（design.md 4.24）：回合结束后刷新；「本回合修改了 N 个文件」小条据此显示
   const { turns: snapshotTurns } = useSnapshotTurns(taskId, runtimeIsBusy);
   // dormant（sidecar 重启后的历史会话）/ closed：发送时自动恢复；starting：恢复进行中
@@ -732,21 +734,19 @@ export function DetailRoute() {
                 ) : null}
               </div>
             ) : null}
-            <SubagentTrack
+            <ComposerStatusRow
+              agentId={taskId}
               subagents={subagents}
-              parentSubagentId={null}
-              onOpen={openSubagent}
-              activeSubagentId={openSubagentId}
+              openSubagentId={openSubagentId}
+              onOpenSubagent={openSubagent}
+              backgroundTasks={backgroundTasks}
+              openTaskId={openTaskId}
+              onOpenTask={openTask}
+              todos={runtime.agentTodos}
+              busy={runtimeIsBusy}
+              rateLimits={snapshot?.rateLimits}
+              usage={statusUsage}
             />
-            {taskId ? (
-              <BackgroundTaskTrack
-                key={taskId}
-                agentId={taskId}
-                tasks={backgroundTasks}
-                onOpen={openTask}
-                activeTaskId={openTaskId}
-              />
-            ) : null}
             <AutomationStatusBar agentId={taskId} />
             <QueuePanel
               entries={queuedPrompts}

@@ -5,6 +5,7 @@ import {
   codexTurnCompletedUsage,
   type CodexTurnTokens,
   planToTodoItems,
+  toAgentRateLimits,
   toAgentUsage,
   toModelDefinition,
   toSandboxPolicy,
@@ -204,6 +205,73 @@ describe("mapCodexToolCallFromThreadItem", () => {
     expect(collab({ t1: { status: "shutdown" } })?.status).toBe("canceled");
     expect(mapCodexToolCallFromThreadItem({ type: "agentMessage", id: "x", text: "hi" })).toBeNull();
     expect(mapCodexToolCallFromThreadItem({ type: "userMessage", id: "u", content: [] })).toBeNull();
+  });
+});
+
+describe("toAgentRateLimits（design.md 4.30）", () => {
+  const NOW = 1_700_000_000_000;
+  const response = (extra: Record<string, unknown> = {}) => ({
+    rateLimits: {
+      limitId: "codex",
+      primary: { usedPercent: 23.4, windowDurationMins: 300, resetsAt: 1_791_920_000 },
+      secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: null },
+      rateLimitReachedType: null,
+      ...extra,
+    },
+  });
+
+  test("窗口按 windowDurationMins 命名，resetsAt 为秒、转毫秒，低于 80% 为 allowed", () => {
+    expect(toAgentRateLimits(response(), NOW)).toEqual({
+      windows: [
+        { id: "primary", label: "5 小时", usedPercent: 23.4, resetsAt: 1_791_920_000_000 },
+        { id: "secondary", label: "每周", usedPercent: 60 },
+      ],
+      status: "allowed",
+      updatedAt: NOW,
+    });
+  });
+
+  test("其它时长按天 / 小时 / 分钟命名，没有时长退回主要 / 次要；毫秒量级的 resetsAt 原样保留", () => {
+    const limits = toAgentRateLimits(
+      {
+        rateLimits: {
+          primary: { usedPercent: 1, windowDurationMins: 1440, resetsAt: 1_791_920_000_000 },
+          secondary: { usedPercent: 2, windowDurationMins: null, resetsAt: null },
+        },
+      },
+      NOW,
+    );
+    expect(limits?.windows.map((w) => w.label)).toEqual(["1 天", "次要"]);
+    expect(limits?.windows[0]?.resetsAt).toBe(1_791_920_000_000);
+    expect(toAgentRateLimits({ rateLimits: { primary: { usedPercent: 1, windowDurationMins: 90 } } }, NOW)?.windows[0]?.label).toBe("90 分钟");
+    expect(toAgentRateLimits({ rateLimits: { primary: { usedPercent: 1 } } }, NOW)?.windows[0]?.label).toBe("主要");
+  });
+
+  test("status：任一窗口 ≥ 80% 为 warning；rateLimitReachedType 非空为 rejected（优先）", () => {
+    expect(toAgentRateLimits(response({ secondary: { usedPercent: 80, windowDurationMins: 10080 } }), NOW)?.status).toBe("warning");
+    expect(toAgentRateLimits(response({ rateLimitReachedType: "rate_limit_reached" }), NOW)?.status).toBe("rejected");
+    expect(
+      toAgentRateLimits(
+        response({ primary: { usedPercent: 100, windowDurationMins: 300 }, rateLimitReachedType: "workspace_member_usage_limit_reached" }),
+        NOW,
+      )?.status,
+    ).toBe("rejected");
+  });
+
+  test("稀疏更新：null 窗口沿用上一份；没有任何窗口返回 null", () => {
+    const first = toAgentRateLimits(response(), NOW)!;
+    const second = toAgentRateLimits(
+      { rateLimits: { primary: { usedPercent: 50, windowDurationMins: 300, resetsAt: 1_791_930_000 }, secondary: null } },
+      NOW + 1,
+      first,
+    );
+    expect(second?.windows).toEqual([
+      { id: "primary", label: "5 小时", usedPercent: 50, resetsAt: 1_791_930_000_000 },
+      { id: "secondary", label: "每周", usedPercent: 60 },
+    ]);
+    expect(second?.updatedAt).toBe(NOW + 1);
+    expect(toAgentRateLimits({ rateLimits: { primary: null, secondary: null } }, NOW)).toBeNull();
+    expect(toAgentRateLimits(null, NOW)).toBeNull();
   });
 });
 

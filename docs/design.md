@@ -1002,7 +1002,7 @@ interface AgentRateLimits {
 ```
 - 新事件 `{ type: "rate_limits_updated"; rateLimits: AgentRateLimits }`（`AgentStreamEvent`，照常分配 seq 并落盘）；AgentManager 收到后写入快照新字段 `AgentSnapshot.rateLimits?: AgentRateLimits`（随 meta 持久化）并推 `agent.state`。不计入 usage。
 - Claude：stream-json 的 `rate_limit_event`（`rate_limit_info`）：有 `unifiedWindows` 时取其中每个窗口（`five_hour`→「5 小时」、`seven_day`→「7 天」、其它窗口原名），`usedPercent = utilization × 100`，`resetsAt` 秒转毫秒；没有 `unifiedWindows` 时用顶层 `rateLimitType` + `utilization` + `resetsAt` 构成单个窗口。`status`：`allowed`→allowed、`allowed_warning`→warning、`rejected`→rejected。子代理 sidechain 中的同类事件同样处理（额度是账户级）。
-- Codex：会话进程初始化后调用一次 `account/rateLimits/read`，之后处理通知 `account/rateLimits/updated`；`primary` / `secondary` 窗口按 `windowDurationMins` 命名（300→「5 小时」、10080→「每周」、其它按分钟 / 小时 / 天格式化），`usedPercent` 原样，`resetsAt` 按实际单位转毫秒（实现前核实单位并在此补记）；`rateLimitReachedType` 非空时 `status: "rejected"`，任一窗口 ≥ 80% 时 `warning`，否则 `allowed`。读取失败只记 debug。
+- Codex：会话进程初始化后调用一次 `account/rateLimits/read`，之后处理通知 `account/rateLimits/updated`；`primary` / `secondary` 窗口按 `windowDurationMins` 命名（300→「5 小时」、10080→「每周」、其它按分钟 / 小时 / 天格式化），`usedPercent` 原样，`resetsAt` 为 **Unix 时间戳（秒）**（schema `RateLimitWindow.resetsAt: number | null` 无注释，按 Codex 上游约定与现有 `buildCodexRateLimitSection` / `formatResetsIn` 处理一致；兜底：> 1e12 视为已是毫秒），乘 1000 转毫秒；`account/rateLimits/updated` 是**稀疏滚动更新**（null 窗口不清除已知值），所以与上一份按窗口 id 合并，`limitId` 与已知主限额不同的更新忽略；会话订阅前读到的额度在订阅时补发（`createSession` 返回前尚无订阅者）；`rateLimitReachedType` 非空时 `status: "rejected"`，任一窗口 ≥ 80% 时 `warning`，否则 `allowed`。读取失败只记 debug。
 - ACP：不提供。
 
 **前端**：额度**不放进上下文窗口弹层**，显示在 4.29 状态行「步骤」之后的「额度」芯片：

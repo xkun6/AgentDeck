@@ -2202,3 +2202,141 @@ describe("ClaudeAgentSession 运行中插话（design.md 4.22）", () => {
     await waitUntil(() => terminalEvents(events).length === 2);
   });
 });
+
+describe("额度事件与输出速度（design.md 4.30）", () => {
+  const rateLimitEvent = (info: Record<string, unknown>, parent: string | null = null) => ({
+    type: "rate_limit_event",
+    parent_tool_use_id: parent,
+    rate_limit_info: info,
+    uuid: "rl",
+    session_id: SESSION_ID,
+  });
+  const messageDelta = (outputTokens: number, parent: string | null = null) => ({
+    type: "stream_event",
+    parent_tool_use_id: parent,
+    session_id: SESSION_ID,
+    uuid: "md",
+    event: { type: "message_delta", usage: { output_tokens: outputTokens } },
+  });
+  const rateLimits = (events: AgentStreamEvent[]) =>
+    events.flatMap((e) => (e.type === "rate_limits_updated" ? [e.rateLimits] : []));
+
+  test("有 unifiedWindows：逐窗口映射，utilization×100、resetsAt 秒转毫秒，allowed_warning → warning", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("hi");
+    h.clis[0]!.emit(
+      rateLimitEvent({
+        status: "allowed_warning",
+        resetsAt: 1791921600,
+        rateLimitType: "seven_day",
+        utilization: 0.96,
+        unifiedWindows: {
+          five_hour: { utilization: 0.03, resetsAt: 1791891600 },
+          seven_day: { utilization: 0.96, resetsAt: 1791921600 },
+          seven_day_opus: { utilization: 0.07 },
+        },
+      }),
+    );
+    await waitUntil(() => rateLimits(events).length === 1);
+    const limits = rateLimits(events)[0]!;
+    expect(limits.status).toBe("warning");
+    expect(limits.windows).toEqual([
+      { id: "five_hour", label: "5 小时", usedPercent: 3, resetsAt: 1791891600_000 },
+      { id: "seven_day", label: "7 天", usedPercent: 96, resetsAt: 1791921600_000 },
+      { id: "seven_day_opus", label: "seven_day_opus", usedPercent: 7 },
+    ]);
+    expect(limits.updatedAt).toBeGreaterThan(0);
+    // 不进 usage
+    expect(events.some((e) => e.type === "usage_updated")).toBe(false);
+  });
+
+  test("没有 unifiedWindows：用顶层 rateLimitType + utilization + resetsAt；status 映射 allowed / rejected", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("hi");
+    const cli = h.clis[0]!;
+    cli.emit(rateLimitEvent({ status: "allowed", rateLimitType: "five_hour", utilization: 0.5, resetsAt: 1000 }));
+    cli.emit(rateLimitEvent({ status: "rejected", rateLimitType: "seven_day", utilization: 1, resetsAt: 2000 }));
+    // 无可用窗口的事件被忽略
+    cli.emit(rateLimitEvent({ status: "allowed" }));
+    await waitUntil(() => rateLimits(events).length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(rateLimits(events)).toHaveLength(2);
+    expect(rateLimits(events)[0]).toMatchObject({
+      status: "allowed",
+      windows: [{ id: "five_hour", label: "5 小时", usedPercent: 50, resetsAt: 1_000_000 }],
+    });
+    expect(rateLimits(events)[1]).toMatchObject({
+      status: "rejected",
+      windows: [{ id: "seven_day", label: "7 天", usedPercent: 100, resetsAt: 2_000_000 }],
+    });
+  });
+
+  test("子代理 sidechain 里的 rate_limit_event 同样处理", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("hi");
+    h.clis[0]!.emit(
+      rateLimitEvent({ status: "allowed", rateLimitType: "five_hour", utilization: 0.1 }, "toolu_sub"),
+    );
+    await waitUntil(() => rateLimits(events).length === 1);
+    expect(rateLimits(events)[0]!.windows[0]).toMatchObject({ id: "five_hour", usedPercent: 10 });
+  });
+
+  test("输出速度：首个输出 1 秒后才计算、每秒最多一次只带 outputTokensPerSecond，sidechain 不计，result 给最终值", async () => {
+    let now = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("hi");
+      const cli = h.clis[0]!;
+      const user = cli.received[0]!;
+      const speeds = () =>
+        events.flatMap((e) =>
+          e.type === "usage_updated" && e.usage.outputTokensPerSecond !== undefined
+            ? [e.usage]
+            : [],
+        );
+      cli.emit(msg.init(), msg.streamStart("m1"), msg.textDelta("你好"));
+      await waitUntil(() => events.some((e) => e.type === "timeline"));
+      // 首个输出不足 1 秒：不计算
+      now += 500;
+      cli.emit(messageDelta(50));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(speeds()).toHaveLength(0);
+      // 满 2 秒：100 token / 2 秒 = 50
+      now += 1500;
+      cli.emit(messageDelta(100));
+      await waitUntil(() => speeds().length === 1);
+      expect(speeds()[0]).toEqual({ outputTokensPerSecond: 50 });
+      // 子代理 sidechain 的 message_delta 不计入
+      cli.emit(messageDelta(9999, "toolu_sub"));
+      // 距上次下发不足 1 秒：节流
+      now += 500;
+      cli.emit(messageDelta(120));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(speeds()).toHaveLength(1);
+      // 第二条消息的 token 累加到已输出里：120 + 80 = 200，距首个输出 3 秒 → 66.7
+      now += 500;
+      cli.emit(msg.streamStart("m2"), messageDelta(80));
+      await waitUntil(() => speeds().length === 2);
+      expect(speeds()[1]).toEqual({ outputTokensPerSecond: 66.7 });
+      // result：用最终输出 token（result.usage.output_tokens）与结束时刻计算最终值
+      now += 5000; // 距首个输出共 8 秒
+      const result = msg.result(user.uuid);
+      result.usage.output_tokens = 400;
+      cli.emit(result);
+      await waitUntil(() => terminalEvents(events).length === 1);
+      const done = terminalEvents(events)[0]!;
+      expect(done).toMatchObject({ type: "turn_completed", usage: { outputTokens: 400, outputTokensPerSecond: 50 } });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

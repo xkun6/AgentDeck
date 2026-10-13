@@ -297,6 +297,60 @@ describe("会话累计用量 totalUsage（design.md 4.4）", () => {
   });
 });
 
+describe("额度与输出速度（design.md 4.30）", () => {
+  const limits = {
+    windows: [{ id: "five_hour", label: "5 小时", usedPercent: 3, resetsAt: 1_791_891_600_000 }],
+    status: "allowed" as const,
+    updatedAt: 1_700_000_000_000,
+  };
+
+  test("rate_limits_updated 写快照、推 agent.state、随 meta 持久化并在重启后恢复，不计入 totalUsage", async () => {
+    const dataDir = makeDataDir();
+    const first = fakeClient();
+    const { manager, states } = createManager(first.client, dataDir);
+    const agent = await manager.createAgent({ provider: "fake", cwd: "/w" });
+    expect(agent.rateLimits).toBeUndefined();
+    const statesBefore = states.length;
+    first.sessions.at(-1)!.emit({ type: "rate_limits_updated", rateLimits: limits });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).rateLimits).toEqual(limits));
+    expect(states.length).toBeGreaterThan(statesBefore);
+    expect(states.at(-1)?.rateLimits).toEqual(limits);
+    expect(manager.getAgent(agent.id).totalUsage).toBeUndefined();
+    expect(manager.getAgent(agent.id).lastUsage).toBeUndefined();
+    await manager.shutdown();
+
+    const meta = JSON.parse(
+      readFileSync(path.join(dataDir, "agents", agent.id, "meta.json"), "utf8"),
+    ) as AgentSnapshot;
+    expect(meta.rateLimits).toEqual(limits);
+
+    const second = fakeClient();
+    const two = createManager(second.client, dataDir);
+    await two.manager.restore();
+    expect(two.manager.getAgent(agent.id).rateLimits).toEqual(limits);
+  });
+
+  test("outputTokensPerSecond 浅合并进 lastUsage 并在 turn_completed 后保留，但不进入 totalUsage", async () => {
+    const { client, sessions } = fakeClient();
+    const { manager } = createManager(client, makeDataDir());
+    const agent = await manager.createAgent({ provider: "fake", cwd: "/w" });
+    const turn = (await manager.sendPrompt(agent.id, "hi")).turnId;
+    sessions.at(-1)!.emit({ type: "usage_updated", usage: { outputTokensPerSecond: 42.5 } });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).lastUsage?.outputTokensPerSecond).toBe(42.5));
+    sessions.at(-1)!.emit({
+      type: "turn_completed",
+      turnId: turn,
+      usage: { inputTokens: 100, outputTokens: 10, outputTokensPerSecond: 38.2 },
+    });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
+    const snapshot = manager.getAgent(agent.id);
+    expect(snapshot.lastUsage?.outputTokensPerSecond).toBe(38.2);
+    expect(snapshot.totalUsage).toEqual({ inputTokens: 100, outputTokens: 10 });
+    expect(snapshot.totalUsage).not.toHaveProperty("outputTokensPerSecond");
+    await manager.shutdown();
+  });
+});
+
 describe("持久化与启动恢复", () => {
   test("shutdown 后重启：dormant、timeline 惰性读取、seq 续号、resume 后跑一轮", async () => {
     const seeded = await seedDormant();

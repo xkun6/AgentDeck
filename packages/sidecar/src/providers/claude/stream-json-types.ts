@@ -226,13 +226,34 @@ export interface ClaudeResultMessage {
   modelUsage?: Record<string, { contextWindow?: unknown } | undefined>;
 }
 
+/** `rate_limit_event`：账户额度（design.md 4.30）；字段宽松解析，utilization 为 0–1 的小数，resetsAt 为秒 */
+export interface ClaudeRateLimitWindowInfo {
+  utilization?: unknown;
+  resetsAt?: unknown;
+}
+
+export interface ClaudeRateLimitEventMessage {
+  type: "rate_limit_event";
+  /** 子代理（sidechain）里的同类事件也带它；额度是账户级，不影响处理 */
+  parent_tool_use_id?: string | null;
+  rate_limit_info?: {
+    /** allowed | allowed_warning | rejected */
+    status?: unknown;
+    resetsAt?: unknown;
+    rateLimitType?: unknown;
+    utilization?: unknown;
+    unifiedWindows?: Record<string, ClaudeRateLimitWindowInfo | undefined>;
+  };
+}
+
 /** 交给上层的普通消息（控制类消息由 ClaudeCliSession 内部处理，不会出现在这里） */
 export type ClaudeOutputMessage =
   | ClaudeSystemMessage
   | ClaudeStreamEventMessage
   | ClaudeAssistantMessage
   | ClaudeUserOutputMessage
-  | ClaudeResultMessage;
+  | ClaudeResultMessage
+  | ClaudeRateLimitEventMessage;
 
 /** CLI 发来的工具权限请求（control_request 的 request，subtype 为 can_use_tool） */
 export interface ClaudeCanUseToolRequest {

@@ -10,6 +10,9 @@
 .pill {
   align-self: flex-start;
   display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
   align-items: center;
   gap: 4px;
   height: 24px;
@@ -36,12 +39,20 @@
   color: var(--h-err);
 }
 
+.pill svg {
+  flex: 0 0 auto;
+}
+
 .pillTitle {
+  flex: 0 0 auto;
   color: var(--h-text);
   font-weight: 500;
 }
 
 .pillLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--h-text-3);
 }
 

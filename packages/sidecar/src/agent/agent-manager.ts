@@ -1503,6 +1503,10 @@ export class AgentManager {
         // 浅合并：回合中只带上下文字段的更新不能抹掉 token / 费用字段（design.md 4.3）
         snapshot.lastUsage = { ...snapshot.lastUsage, ...event.usage };
         return false;
+      case "rate_limits_updated":
+        // 账户额度（design.md 4.30）：只写快照并推 agent.state，不进 totalUsage / 用量账本
+        snapshot.rateLimits = event.rateLimits;
+        return true;
       case "model_changed":
         snapshot.model = event.modelId;
         return true;

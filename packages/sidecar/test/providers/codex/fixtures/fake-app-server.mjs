@@ -82,6 +82,21 @@ const scenarios = {
     completeTurn(turnId, "completed");
   },
 
+  // 输出速度与稀疏的额度滚动更新：首个输出后过 1.2 秒才给 token 用量
+  async speed(turnId) {
+    notify("item/agentMessage/delta", { ...base(turnId), itemId: "msg_s", delta: "x" });
+    notify("account/rateLimits/updated", {
+      rateLimits: {
+        limitId: "codex", limitName: null,
+        primary: { usedPercent: 85, windowDurationMins: 300, resetsAt: 1791920000 },
+        secondary: null, rateLimitReachedType: null,
+      },
+    });
+    await sleep(1200);
+    tokenUsage(turnId);
+    completeTurn(turnId, "completed");
+  },
+
   async shell(turnId) {
     const item = {
       type: "commandExecution", id: "exec_1", command: "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'echo hi'",

@@ -144,6 +144,33 @@ describe("CodexAgentClient（假 app-server）", () => {
 });
 
 describe("CodexAgentSession（假 app-server）", () => {
+  test("额度滚动更新与输出速度（design.md 4.30）", async () => {
+    const session = await newSession(makeClient(), "read-only");
+    const events = collect(session);
+    await session.startTurn("speed now");
+    await waitUntil(() => events.some(isTerminal));
+
+    // 读取到的额度（primary 23.4% / secondary 60%）再被稀疏更新：primary 85%（secondary 为 null 沿用），≥ 80% → warning
+    const limits = events.flatMap((e) => (e.type === "rate_limits_updated" ? [e.rateLimits] : []));
+    const last = limits.at(-1)!;
+    expect(last.status).toBe("warning");
+    expect(last.windows).toEqual([
+      { id: "primary", label: "5 小时", usedPercent: 85, resetsAt: 1791920000_000 },
+      { id: "secondary", label: "每周", usedPercent: 60 },
+    ]);
+
+    // 首个输出之后 1.2 秒到达 20 个输出 token：速度 ≈ 16.7，既出现在回合中的 usage_updated，也出现在最终 usage
+    const updated = events.flatMap((e) => (e.type === "usage_updated" ? [e.usage] : []));
+    const speed = updated.find((u) => u.outputTokensPerSecond !== undefined)?.outputTokensPerSecond;
+    expect(speed).toBeGreaterThan(5);
+    expect(speed).toBeLessThanOrEqual(20);
+    const done = events.find((e) => e.type === "turn_completed");
+    expect(done?.type === "turn_completed" ? done.usage : undefined).toMatchObject({ outputTokens: 20 });
+    const finalSpeed = done?.type === "turn_completed" ? done.usage?.outputTokensPerSecond : undefined;
+    expect(finalSpeed).toBeGreaterThan(5);
+    expect(finalSpeed).toBeLessThanOrEqual(20);
+  });
+
   test("握手 + thread/start + 增量文本 + reasoning + usage + turn_completed", async () => {
     const session = await newSession(makeClient(), "read-only");
     const events = collect(session);
@@ -168,8 +195,20 @@ describe("CodexAgentSession（假 app-server）", () => {
     });
     expect(turnStart?.params.sandboxPolicy).toBeUndefined();
 
-    expect(events[0]).toEqual({ type: "turn_started", turnId });
-    expect(events[1]).toEqual({ type: "thread_started", sessionId: "thr_fake" });
+    // 会话进程就绪后读到的账户额度（design.md 4.30）与回合事件的先后不定，先单独校验再剔除
+    const limits = events.find((e) => e.type === "rate_limits_updated");
+    expect(limits).toMatchObject({
+      rateLimits: {
+        status: "allowed",
+        windows: [
+          { id: "primary", label: "5 小时", usedPercent: 23.4 },
+          { id: "secondary", label: "每周", usedPercent: 60 },
+        ],
+      },
+    });
+    const turnEvents = events.filter((e) => e.type !== "rate_limits_updated");
+    expect(turnEvents[0]).toEqual({ type: "turn_started", turnId });
+    expect(turnEvents[1]).toEqual({ type: "thread_started", sessionId: "thr_fake" });
     expect(events.some((e) => e.type === "timeline" && e.item.type === "user_message")).toBe(false);
 
     const reasoning = events

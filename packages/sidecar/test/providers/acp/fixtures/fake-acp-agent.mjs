@@ -217,6 +217,12 @@ class FakeAgent {
           usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cachedReadTokens: 5 },
         };
       }
+      case "slowecho": {
+        // 首个输出之后 1.2 秒才结束回合，用于输出速度（design.md 4.30）
+        await say("慢");
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        return { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 } };
+      }
       case "thought": {
         await this.update(sessionId, {
           sessionUpdate: "agent_thought_chunk",

@@ -38,6 +38,7 @@ import { dedupeSlashCommands } from "../../agent/slash-commands.js";
 import type { AgentSession, InteropEndpoint } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { acpInteropServers } from "../shared/interop.js";
+import { OutputSpeedTracker } from "../shared/output-speed.js";
 import { spawnProcess } from "../../utils/spawn.js";
 import { terminateWithTreeKill } from "../../utils/tree-kill.js";
 import {
@@ -102,6 +103,8 @@ interface ActiveTurn {
   toolCallIds: Set<string>;
   /** agent 未提供 messageId 时，同一段连续文本共用的兜底 id */
   fallbackMessageId: string | null;
+  /** 输出速度（design.md 4.30） */
+  speed: OutputSpeedTracker;
 }
 
 interface PendingPermission {
@@ -215,6 +218,7 @@ export class AcpAgentSession implements AgentSession {
       resolveDone: () => resolveDone(),
       toolCallIds: new Set(),
       fallbackMessageId: null,
+      speed: new OutputSpeedTracker(),
     };
     this.active = turn;
 
@@ -645,6 +649,7 @@ export class AcpAgentSession implements AgentSession {
         } else if (turn) {
           turn.fallbackMessageId = null;
         }
+        turn?.speed.markOutput();
         this.emit({
           type: "timeline",
           ...turnRef,
@@ -658,6 +663,7 @@ export class AcpAgentSession implements AgentSession {
         }
         const text = textFromContentBlock(update.content);
         if (text) {
+          turn?.speed.markOutput();
           this.emit({ type: "timeline", ...turnRef, item: { type: "reasoning", text } });
         }
         return;
@@ -762,7 +768,12 @@ export class AcpAgentSession implements AgentSession {
     // token 只取本轮应答带的用量，不沿用上一轮合并进 this.usage 的值（design.md 5.3）
     const { inputTokens: _input, outputTokens: _output, cachedInputTokens: _cached, ...rest } =
       this.usage;
-    const turnUsage = { ...rest, ...(response.usage ? fromAcpUsage(response.usage) : {}) };
+    const turnUsage: AgentUsage = { ...rest, ...(response.usage ? fromAcpUsage(response.usage) : {}) };
+    // 输出速度只在回合结束用本轮应答的输出 token 算最终值（design.md 4.30）
+    const speed = response.usage && turnUsage.outputTokens !== undefined
+      ? turn.speed.speed(turnUsage.outputTokens)
+      : undefined;
+    if (speed !== undefined) turnUsage.outputTokensPerSecond = speed;
     const usage = Object.keys(turnUsage).length > 0 ? turnUsage : undefined;
     this.finishTurn(turn, { type: "turn_completed", turnId, ...(usage ? { usage } : {}) });
   }

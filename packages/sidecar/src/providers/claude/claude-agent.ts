@@ -46,6 +46,7 @@ import type {
 import type { Logger } from "../../logger.js";
 import { redactInteropTokens } from "../../utils/redact-interop.js";
 import { claudeInteropArgs } from "../shared/interop.js";
+import { OutputSpeedTracker } from "../shared/output-speed.js";
 import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { createExternalProcessEnv } from "../../utils/process-env.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
@@ -56,6 +57,7 @@ import {
   type ClaudeCliHandle,
 } from "./claude-cli-session.js";
 import { ClaudeBackgroundTaskRegistry, readFileTail } from "./background-tasks.js";
+import { mapClaudeRateLimitEvent } from "./rate-limits.js";
 import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
 import { ClaudeTaskProtocolSource } from "./subagents/live-source.js";
 import { foldSubagentObservations, type SubagentObservation } from "./subagents/observation.js";
@@ -604,6 +606,10 @@ export class ClaudeAgentSession implements AgentSession {
   private currentStreamMessageId: string | null = null;
   private contextInputTokens = 0;
   private contextOutputTokens = 0;
+  /** 本回合输出速度（design.md 4.30）：已结束消息的输出 token 累计 + 当前消息的累计 */
+  private readonly outputSpeed = new OutputSpeedTracker();
+  private speedBaseTokens = 0;
+  private speedMessageTokens = 0;
   /** 最近一次已知的上下文窗口上限（result 的 modelUsage / get_context_usage 应答）；切换模型后清掉 */
   private contextWindowMax: number | null = null;
   private contextUsageRequestInFlight = false;
@@ -687,6 +693,7 @@ export class ClaudeAgentSession implements AgentSession {
     };
     this.backgroundRunPending = false;
     this.activeTurn = turn;
+    this.resetOutputSpeed();
     this.emit({ type: "turn_started", turnId });
     this.flushPendingNotices(turn);
 
@@ -1178,6 +1185,14 @@ export class ClaudeAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   private handleMessage(message: ClaudeOutputMessage): void {
+    if (message.type === "rate_limit_event") {
+      // 额度是账户级：主线程与子代理 sidechain 里的同类事件都处理（design.md 4.30）
+      const rateLimits = mapClaudeRateLimitEvent(message, Date.now());
+      if (rateLimits) {
+        this.emit({ type: "rate_limits_updated", rateLimits });
+      }
+      return;
+    }
     if (message.type === "user") {
       this.observeBackgroundOutputPaths(message);
     } else if (message.type === "assistant") {
@@ -1260,6 +1275,8 @@ export class ClaudeAgentSession implements AgentSession {
     switch (event.type) {
       case "message_start": {
         this.currentStreamMessageId = event.message?.id ?? null;
+        this.speedBaseTokens += this.speedMessageTokens;
+        this.speedMessageTokens = 0;
         const usage = event.message?.usage;
         if (usage) {
           this.contextInputTokens =
@@ -1274,6 +1291,8 @@ export class ClaudeAgentSession implements AgentSession {
       case "message_delta":
         if (event.usage?.output_tokens !== undefined) {
           this.contextOutputTokens = toCount(event.usage.output_tokens);
+          this.speedMessageTokens = this.contextOutputTokens;
+          this.emitOutputSpeed();
         }
         return;
       case "content_block_delta": {
@@ -1463,6 +1482,10 @@ export class ClaudeAgentSession implements AgentSession {
     this.captureSession(message.session_id);
 
     const usage = this.convertUsage(message);
+    const finalSpeed = this.outputSpeed.speed(usage.outputTokens ?? this.speedBaseTokens + this.speedMessageTokens);
+    if (finalSpeed !== undefined) {
+      usage.outputTokensPerSecond = finalSpeed;
+    }
     this.emit({ type: "usage_updated", usage });
     this.cancelRunningTools(turn.turnId);
     this.emitSubagentEvents(
@@ -1760,6 +1783,7 @@ export class ClaudeAgentSession implements AgentSession {
       skipSupersededResult: false,
     };
     this.activeTurn = turn;
+    this.resetOutputSpeed();
     this.logger.info("Claude Code 自行开始了一轮（后台任务完成等），turnId=%s", turn.turnId);
     this.emit({ type: "turn_started", turnId: turn.turnId, origin: "background" });
     this.flushPendingNotices(turn);
@@ -1774,7 +1798,27 @@ export class ClaudeAgentSession implements AgentSession {
     }
   }
 
+  private resetOutputSpeed(): void {
+    this.outputSpeed.reset();
+    this.speedBaseTokens = 0;
+    this.speedMessageTokens = 0;
+  }
+
+  /** 回合中最多每秒一次、只带 outputTokensPerSecond 的 usage_updated（design.md 4.30） */
+  private emitOutputSpeed(): void {
+    if (!this.activeTurn) {
+      return;
+    }
+    const value = this.outputSpeed.throttledSpeed(this.speedBaseTokens + this.speedMessageTokens);
+    if (value !== undefined) {
+      this.emit({ type: "usage_updated", usage: { outputTokensPerSecond: value } });
+    }
+  }
+
   private emitTimeline(turn: ActiveTurn | null, item: AgentTimelineItem): void {
+    if (turn && (item.type === "assistant_message" || item.type === "reasoning")) {
+      this.outputSpeed.markOutput();
+    }
     const merged = item.type === "tool_call" ? this.mergeSubAgentCard(item) : item;
     this.emit({ type: "timeline", ...(turn ? { turnId: turn.turnId } : {}), item: merged });
   }

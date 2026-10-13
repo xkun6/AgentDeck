@@ -24,6 +24,8 @@ import type {
   AgentSlashCommand,
   AgentStatusSection,
   AgentStreamEvent,
+  AgentRateLimitWindow,
+  AgentRateLimits,
   AgentUsage,
   ToolCallDetail,
   ToolCallTimelineItem,
@@ -41,6 +43,7 @@ import type {
 } from "../../agent/types.js";
 import { redactInteropTokens } from "../../utils/redact-interop.js";
 import { codexInteropConfig } from "../shared/interop.js";
+import { OutputSpeedTracker } from "../shared/output-speed.js";
 import { buildMcpSection, buildRows, formatResetsIn, formatWindowLabel } from "../../agent/status-sections.js";
 import type { Logger } from "../../logger.js";
 import { execCommand, spawnProcess } from "../../utils/spawn.js";
@@ -178,6 +181,51 @@ export function buildCodexRateLimitSection(response: unknown, now = Date.now()):
     });
   }
   return rows.length > 0 ? { title: "用量限制", rows } : null;
+}
+
+/** 额度窗口 ≥ 该百分比视为 warning（design.md 4.30） */
+const CODEX_RATE_LIMIT_WARNING_PERCENT = 80;
+
+/**
+ * account/rateLimits/read 应答或 account/rateLimits/updated 通知 → AgentRateLimits（design.md 4.30）。
+ * RateLimitWindow.resetsAt 是 Unix 时间戳**秒**（schema 无注释；与 buildCodexRateLimitSection 一致，>1e12 兜底按毫秒），转毫秒。
+ * 滚动更新是稀疏的：本次没有给出的窗口（null）沿用 previous 里的同 id 窗口。
+ * 没有任何窗口返回 null。
+ */
+export function toAgentRateLimits(
+  response: unknown,
+  now: number,
+  previous?: AgentRateLimits | null,
+): AgentRateLimits | null {
+  const snapshot = asRecord(asRecord(response)?.rateLimits);
+  if (!snapshot) return null;
+  const byId = new Map<string, AgentRateLimitWindow>((previous?.windows ?? []).map((w) => [w.id, w]));
+  for (const key of ["primary", "secondary"] as const) {
+    const window = asRecord(snapshot[key]);
+    const used = window?.usedPercent;
+    if (!window || typeof used !== "number" || !Number.isFinite(used)) continue;
+    const minutes = typeof window.windowDurationMins === "number" ? window.windowDurationMins : null;
+    const label = formatWindowLabel(minutes);
+    const resets = typeof window.resetsAt === "number" && Number.isFinite(window.resetsAt) && window.resetsAt > 0
+      ? Math.round(window.resetsAt > 1e12 ? window.resetsAt : window.resetsAt * 1000)
+      : undefined;
+    byId.set(key, {
+      id: key,
+      label: label === "用量" ? (key === "primary" ? "主要" : "次要") : label,
+      usedPercent: Math.min(100, Math.max(0, used)),
+      ...(resets !== undefined ? { resetsAt: resets } : {}),
+    });
+  }
+  const windows = ["primary", "secondary"].flatMap((id) => byId.get(id) ?? []);
+  if (windows.length === 0) return null;
+  const reached = pick(snapshot, "rateLimitReachedType", "rate_limit_reached_type");
+  const status: AgentRateLimits["status"] =
+    reached !== null && reached !== undefined
+      ? "rejected"
+      : windows.some((w) => w.usedPercent >= CODEX_RATE_LIMIT_WARNING_PERCENT)
+        ? "warning"
+        : "allowed";
+  return { windows, status, updatedAt: now };
 }
 
 export const DEFAULT_CODEX_MODE_ID = "auto";
@@ -771,6 +819,8 @@ interface ActiveTurn {
   usage?: AgentUsage;
   /** 本轮 token 起点与最新合计（design.md 5.3） */
   tokens?: CodexTurnTokens;
+  /** 输出速度（design.md 4.30） */
+  speed: OutputSpeedTracker;
   /** itemId → 已流式发出的 assistant 文本 */
   agentText: Map<string, string>;
   /** itemId → 已流式发出的 reasoning 文本与来源（summary / raw，先到者为准） */
@@ -848,6 +898,11 @@ export class CodexAgentSession implements AgentSession {
   readonly provider: string;
 
   private client: CodexAppServerClient | null = null;
+  /** 最近的账户额度（design.md 4.30）；滚动更新稀疏，需与上一份合并 */
+  private rateLimits: AgentRateLimits | null = null;
+  private rateLimitId: string | null = null;
+  /** 额度在还没有订阅者时就读到了：订阅时补发 */
+  private rateLimitsUnsent = false;
   private connecting: Promise<CodexAppServerClient> | null = null;
   private threadId: string | null;
   private threadLoaded = false;
@@ -903,6 +958,13 @@ export class CodexAgentSession implements AgentSession {
 
   subscribe(cb: (event: AgentSessionEvent) => void): () => void {
     this.listeners.add(cb);
+    if (this.rateLimitsUnsent && this.rateLimits) {
+      this.rateLimitsUnsent = false;
+      const rateLimits = this.rateLimits;
+      queueMicrotask(() => {
+        if (this.listeners.has(cb)) cb({ type: "rate_limits_updated", rateLimits });
+      });
+    }
     return () => {
       this.listeners.delete(cb);
     };
@@ -931,6 +993,7 @@ export class CodexAgentSession implements AgentSession {
       nativeTurnId: null,
       nativeTurnIdWaiters: [],
       finished: false,
+      speed: new OutputSpeedTracker(),
       agentText: new Map(),
       reasoning: new Map(),
       lastError: null,
@@ -1296,6 +1359,7 @@ export class CodexAgentSession implements AgentSession {
   private attachClient(client: CodexAppServerClient): void {
     this.client = client;
     this.threadLoaded = false;
+    this.readRateLimits(client);
     // 旧进程已不在，它的回合不会再有通知
     this.finishedNativeTurnIds.clear();
     client.setNotificationHandler((method, params) => {
@@ -1531,6 +1595,12 @@ export class CodexAgentSession implements AgentSession {
       return;
     }
 
+    // 账户级通知，不属于任何线程 / 回合（空闲时也会到）
+    if (method === "account/rateLimits/updated") {
+      this.applyRateLimits(rawParams);
+      return;
+    }
+
     // 其它线程（子代理）的通知路由到子代理时间线，不进入本会话时间线；不受父回合限制
     const threadId = str(pick(params, "threadId", "thread_id"));
     if (threadId && this.threadId && threadId !== this.threadId) {
@@ -1593,7 +1663,13 @@ export class CodexAgentSession implements AgentSession {
         if (usage) {
           turn.usage = usage;
           turn.tokens = updateCodexTurnTokens(turn.tokens, tokenUsage);
-          this.emit({ type: "usage_updated", usage });
+          // 本轮输出 token = 最新 total − 起点（与 5.3 的本轮合计同口径）
+          const turnOutput = codexTurnCompletedUsage(usage, turn.tokens)?.outputTokens;
+          const speed = turnOutput === undefined ? undefined : turn.speed.speed(turnOutput);
+          this.emit({
+            type: "usage_updated",
+            usage: speed !== undefined ? { ...usage, outputTokensPerSecond: speed } : usage,
+          });
         }
         return;
       }
@@ -1744,7 +1820,10 @@ export class CodexAgentSession implements AgentSession {
       });
       return;
     }
-    const usage = codexTurnCompletedUsage(turn.usage, turn.tokens);
+    const baseUsage = codexTurnCompletedUsage(turn.usage, turn.tokens);
+    const finalSpeed = baseUsage?.outputTokens === undefined ? undefined : turn.speed.speed(baseUsage.outputTokens);
+    const usage =
+      baseUsage && finalSpeed !== undefined ? { ...baseUsage, outputTokensPerSecond: finalSpeed } : baseUsage;
     this.finishTurn(turn, {
       type: "turn_completed",
       turnId: turn.turnId,
@@ -1908,7 +1987,39 @@ export class CodexAgentSession implements AgentSession {
     turn: ActiveTurn,
     item: Extract<AgentStreamEvent, { type: "timeline" }>["item"],
   ): void {
+    if (item.type === "assistant_message" || item.type === "reasoning") {
+      turn.speed.markOutput();
+    }
     this.emit({ type: "timeline", turnId: turn.turnId, item });
+  }
+
+  /** account/rateLimits/read（会话进程就绪后一次）：失败只记 debug */
+  private readRateLimits(client: CodexAppServerClient): void {
+    client.request("account/rateLimits/read", undefined, MODEL_LIST_TIMEOUT_MS).then(
+      (response) => {
+        if (this.client === client && !this.closed) this.applyRateLimits(response);
+      },
+      (error: unknown) => {
+        this.deps.logger.debug("[codex] account/rateLimits/read 失败：%s", errorMessage(error));
+      },
+    );
+  }
+
+  private applyRateLimits(response: unknown): void {
+    const snapshot = asRecord(asRecord(response)?.rateLimits);
+    const limitId = str(pick(snapshot, "limitId", "limit_id"));
+    // 其它限额别名（如按模型的限额）的滚动更新不覆盖当前账户限额
+    if (limitId && this.rateLimitId && limitId !== this.rateLimitId) return;
+    const next = toAgentRateLimits(response, Date.now(), this.rateLimits);
+    if (!next) return;
+    if (limitId) this.rateLimitId = limitId;
+    this.rateLimits = next;
+    if (this.listeners.size === 0) {
+      // createSession 返回前尚无订阅者：订阅时补发
+      this.rateLimitsUnsent = true;
+      return;
+    }
+    this.emit({ type: "rate_limits_updated", rateLimits: next });
   }
 
   private emit(event: AgentSessionEvent): void {

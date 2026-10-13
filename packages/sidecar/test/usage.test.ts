@@ -81,6 +81,30 @@ describe("UsageTurnTracker", () => {
     });
   });
 
+  test("outputTokensPerSecond 与 rate_limits_updated 不进入账本记录（design.md 4.30）", () => {
+    const tracker = new UsageTurnTracker("a1", "claude");
+    tracker.observe(env(1000, { type: "turn_started", turnId: "t1" }), "opus");
+    expect(
+      tracker.observe(
+        env(1500, {
+          type: "rate_limits_updated",
+          rateLimits: { windows: [{ id: "five_hour", label: "5 小时", usedPercent: 3 }], updatedAt: 1500 },
+        }),
+        "opus",
+      ),
+    ).toBeNull();
+    const record = tracker.observe(
+      env(3000, {
+        type: "turn_completed",
+        turnId: "t1",
+        usage: { inputTokens: 10, outputTokens: 20, outputTokensPerSecond: 12.5 },
+      }),
+      "opus",
+    );
+    expect(record).toMatchObject({ inputTokens: 10, outputTokens: 20 });
+    expect(JSON.stringify(record)).not.toContain("PerSecond");
+  });
+
   test("失败 / 中断 / background 回合", () => {
     const tracker = new UsageTurnTracker("a1", "mock");
     tracker.observe(env(100, { type: "turn_started", turnId: "b1", origin: "background" }), null);

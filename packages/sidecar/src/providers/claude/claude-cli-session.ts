@@ -36,7 +36,7 @@ const KILL_FORCE_TIMEOUT_MS = 1_500;
 const STDOUT_DRAIN_TIMEOUT_MS = 500;
 const STDERR_TAIL_LIMIT = 4_096;
 
-const OUTPUT_MESSAGE_TYPES = new Set(["system", "stream_event", "assistant", "user", "result"]);
+const OUTPUT_MESSAGE_TYPES = new Set(["system", "stream_event", "assistant", "user", "result", "rate_limit_event"]);
 
 export interface ClaudeCliOptions {
   /** 真实可执行文件（.exe / 原生二进制）；.js/.cjs/.mjs 入口用当前 node 执行 */

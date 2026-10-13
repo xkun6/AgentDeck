@@ -190,6 +190,27 @@ export interface AgentUsage {
   totalCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;
+  /** 本回合输出速度 tok/s（design.md 4.30）；回合中实时、结束时为最终值，不计入 totalUsage */
+  outputTokensPerSecond?: number;
+}
+
+/** 额度窗口（design.md 4.30） */
+export interface AgentRateLimitWindow {
+  /** "five_hour" | "seven_day" | "primary" | "secondary" | 其它原样 */
+  id: string;
+  /** 中文，如「5 小时」「7 天」「每周」 */
+  label: string;
+  /** 0–100 */
+  usedPercent: number;
+  /** 重置时刻，毫秒 */
+  resetsAt?: number;
+}
+
+export interface AgentRateLimits {
+  windows: AgentRateLimitWindow[];
+  status?: "allowed" | "warning" | "rejected";
+  /** 毫秒 */
+  updatedAt: number;
 }
 
 export type ToolCallDetail =
@@ -313,6 +334,8 @@ export type AgentStreamEvent =
   | { type: "permission_requested"; turnId?: string; request: AgentPermissionRequest }
   | { type: "permission_resolved"; requestId: string; response: AgentPermissionResponse }
   | { type: "usage_updated"; usage: AgentUsage }
+  /** 账户额度更新（design.md 4.30）；写入快照 rateLimits，不计入 usage */
+  | { type: "rate_limits_updated"; rateLimits: AgentRateLimits }
   | { type: "model_changed"; modelId: string | null }
   /** modeId 为 null 表示回到「跟随 Agent 设置」（如 Claude 批准计划后切回用户默认模式） */
   | { type: "mode_changed"; modeId: string | null }
@@ -392,6 +415,8 @@ export interface AgentSnapshot {
   lastUsage?: AgentUsage;
   /** 会话累计 token：每次 turn_completed 按本轮用量累加；旧会话无此字段（design.md 4.4） */
   totalUsage?: { inputTokens: number; outputTokens: number };
+  /** 最近收到的账户额度（design.md 4.30）；随 meta 持久化 */
+  rateLimits?: AgentRateLimits;
   lastError?: string | null;
   persistence?: AgentPersistenceHandle | null;
   /** 首条用户消息前 120 字（首尾空白去掉、换行压成空格） */

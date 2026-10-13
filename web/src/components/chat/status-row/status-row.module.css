@@ -1,0 +1,206 @@
+/* 输入框上方状态行：子代理 / 后台任务 / 步骤 / 额度 / 速度同处一行（design.md 4.29）。 */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 8px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+/* 整行没有任何芯片时不占高度 */
+.row:empty {
+  display: none;
+}
+
+/* 各药丸组件的根元素不参与布局：药丸直接成为行内弹性项；展开的列表 / 面板排到整行下方 */
+.row > div {
+  display: contents;
+}
+
+.row > div > :nth-child(n + 2) {
+  order: 1;
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+/* 步骤列表 */
+.todoRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--h-text-2);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.todoRow[data-status="completed"] {
+  color: var(--h-text-3);
+}
+
+.todoRow[data-status="in_progress"] {
+  color: var(--h-text);
+}
+
+.todoIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--h-text-3);
+}
+
+.todoRow[data-status="completed"] .todoIcon {
+  color: var(--h-ok);
+}
+
+.todoDot {
+  width: var(--h-status-dot-size);
+  height: var(--h-status-dot-size);
+  border-radius: 50%;
+  background: var(--h-ok);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.todoHollowDot {
+  box-sizing: border-box;
+  width: var(--h-status-dot-size);
+  height: var(--h-status-dot-size);
+  border: 1px solid var(--h-text-3);
+  border-radius: 50%;
+}
+
+.todoText {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 步骤药丸：全部完成用成功色 */
+.pill[data-tone="done"] .pillValue {
+  color: var(--h-ok);
+}
+
+/* 额度药丸颜色 */
+.pill[data-tone="warn"] .pillValue {
+  color: var(--h-warn);
+}
+
+.pill[data-tone="err"] .pillValue {
+  color: var(--h-err);
+}
+
+/* 额度弹层 */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--h-line-soft);
+  background: var(--h-bg-app);
+  font-size: 12px;
+}
+
+.limitRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--h-text-2);
+}
+
+.limitName {
+  flex: 0 0 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar {
+  flex: 1 1 auto;
+  min-width: 48px;
+  height: 4px;
+  background: var(--h-bg-chip);
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  background: var(--h-ok);
+}
+
+.limitRow[data-tone="warn"] .barFill {
+  background: var(--h-warn);
+}
+
+.limitRow[data-tone="warn"] .limitPercent {
+  color: var(--h-warn);
+}
+
+.panel[data-rejected="true"] .barFill {
+  background: var(--h-err);
+}
+
+.panel[data-rejected="true"] .limitPercent {
+  color: var(--h-err);
+}
+
+.limitPercent {
+  flex: 0 0 auto;
+  min-width: 56px;
+  text-align: right;
+}
+
+.limitReset {
+  flex: 0 0 auto;
+  min-width: 112px;
+  color: var(--h-text-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+.limitFoot {
+  color: var(--h-text-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+/* 输出速度芯片（只读，不可点） */
+.speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.speed[data-idle="true"] {
+  color: var(--h-text-3);
+}
+
+.speedText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
