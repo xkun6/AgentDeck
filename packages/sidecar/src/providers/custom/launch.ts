@@ -15,6 +15,8 @@ export const CLAUDE_CREDENTIAL_ENV = [
   "ANTHROPIC_AUTH_TOKEN",
 ] as const;
 export const CODEX_CREDENTIAL_ENV = ["OPENAI_BASE_URL", "OPENAI_API_KEY"] as const;
+/** claude.ai OAuth 令牌环境变量：中转时从继承环境中剔除（design.md 4.7） */
+export const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
  * 中转没有任何凭据时写入 ANTHROPIC_AUTH_TOKEN 的占位值：Claude Code 2.1.296 实测，中转地址 + 两个凭据都为空时，
@@ -137,7 +139,7 @@ function isolateRelayCredentials(merged: Record<string, unknown>): Record<string
 
 /**
  * Claude 中转的启动覆盖：
- * - 进程环境：剔除继承的 ANTHROPIC_* 凭据变量，再叠加推导值与 profile.env；
+ * - 进程环境：剔除继承的 ANTHROPIC_* 凭据变量（中转时还剔除 CLAUDE_CODE_OAUTH_TOKEN），再叠加推导值与 profile.env；
  * - `--settings <json>`：内联 settings 与推导 env 合并成一份 flag 级设置（flag 设置优先于用户
  *   ~/.claude/settings.json）；中转时两个凭据变量都显式写入（未提供的置空，都没有时写占位值），
  *   避免用户设置里的密钥或 OAuth 登录令牌一并发给中转；
@@ -159,7 +161,10 @@ export function buildClaudeLaunchOverride(
   if (disallowed.length > 0) {
     extraArgs.push("--disallowedTools", disallowed.join(","));
   }
-  return { stripEnv: [...CLAUDE_CREDENTIAL_ENV], envOverlay, extraArgs };
+  // 中转时一并剔除继承的 OAuth 令牌（与占位值双重保护）；非中转可能正依赖它登录，保留（design.md 4.7）
+  const relay = Boolean(settingsEnvOf(settings).ANTHROPIC_BASE_URL?.trim());
+  const stripEnv = relay ? [...CLAUDE_CREDENTIAL_ENV, CLAUDE_OAUTH_TOKEN_ENV] : [...CLAUDE_CREDENTIAL_ENV];
+  return { stripEnv, envOverlay, extraArgs };
 }
 
 /** OpenAI 兼容地址：去掉末尾斜杠，不以 /v1 结尾则补 /v1 */

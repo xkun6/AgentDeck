@@ -81,6 +81,33 @@ describe("Claude 中转：env 推导与剔除", () => {
     });
   });
 
+  test("中转（表单或 settings.env 给出 baseUrl）剔除继承的 CLAUDE_CODE_OAUTH_TOKEN；非中转保留", () => {
+    const inherited = { ...INHERITED, CLAUDE_CODE_OAUTH_TOKEN: "oauth-inherited" };
+    const viaForm = buildClaudeLaunchOverride(relay());
+    expect(viaForm.stripEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(buildClaudeChildEnv(inherited, viaForm).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+
+    const viaSettings = buildClaudeLaunchOverride({
+      id: "s",
+      extends: "claude",
+      label: "s",
+      settings: { env: { ANTHROPIC_BASE_URL: "https://relay.example.com" } },
+    });
+    expect(viaSettings.stripEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+
+    const plain = buildClaudeLaunchOverride({ id: "p", extends: "claude", label: "p", apiKey: "sk-x" });
+    expect(plain.stripEnv).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(buildClaudeChildEnv(inherited, plain).CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-inherited");
+  });
+
+  test("profile.env 显式设置 CLAUDE_CODE_OAUTH_TOKEN 时仍在剔除之后叠加", () => {
+    const launch = buildClaudeLaunchOverride(relay({ env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-explicit" } }));
+    expect(launch.stripEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(launch.envOverlay.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-explicit");
+    const env = buildClaudeChildEnv({ ...INHERITED, CLAUDE_CODE_OAUTH_TOKEN: "oauth-inherited" }, launch);
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-explicit");
+  });
+
   test("不传 launch 时与原行为一致（只剔除内部变量与父 Claude 会话变量）", () => {
     expect(buildClaudeChildEnv(INHERITED)).toEqual({
       PATH: "/usr/bin",
