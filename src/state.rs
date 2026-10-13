@@ -42,6 +42,8 @@ pub struct AppStateInner {
     pub sidecar_status: SidecarStatusPayload,
     /// 正在启动 / 重启 sidecar，防止监管器与手动重启竞争。
     pub sidecar_busy: bool,
+    /// 自动重启策略状态，监管器与手动重启共用。
+    pub sidecar_restart_policy: crate::supervisor::RestartPolicy,
     /// The live Rust→sidecar WS relay connection, when the webview is on the
     /// relay socket path. `None` on webview-direct WS or before the first
     /// relay connect.
@@ -63,6 +65,7 @@ impl AppState {
                 sidecar: None,
                 sidecar_status: SidecarStatusPayload::stopped(),
                 sidecar_busy: false,
+                sidecar_restart_policy: crate::supervisor::RestartPolicy::default(),
                 gateway_ws: None,
             }),
         }
