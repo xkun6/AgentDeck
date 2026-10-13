@@ -396,3 +396,26 @@ describe("MessageTimeline：上下文压缩提示（design.md 4.13）", () => {
     expect(html.match(/systemNotice(?!Icon|Body|Text|Title|Toggle)/g) ?? []).toHaveLength(1);
   });
 });
+
+describe("MessageTimeline 撤回操作（design.md 4.16）", () => {
+  const messages: ChatMessage[] = [
+    { id: "u1", role: "user", text: "你好", createdAt: 1 },
+    { id: "u2", role: "user", text: "再问", createdAt: 2 },
+  ] as ChatMessage[];
+
+  it("仅在 retractMessageId 对应的用户消息上显示撤回", () => {
+    const html = renderTimeline(
+      <MessageTimeline messages={messages} retractMessageId="u2" onRetract={() => {}} />,
+    );
+    expect(html.match(/撤回/g)).toHaveLength(1);
+    const without = renderTimeline(<MessageTimeline messages={messages} onRetract={() => {}} />);
+    expect(without).not.toContain("撤回");
+  });
+
+  it("retractDisabled 时按钮禁用", () => {
+    const html = renderTimeline(
+      <MessageTimeline messages={messages} retractMessageId="u2" onRetract={() => {}} retractDisabled />,
+    );
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>.*撤回/);
+  });
+});

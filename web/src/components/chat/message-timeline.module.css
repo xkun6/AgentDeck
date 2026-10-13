@@ -764,6 +764,17 @@
   padding: 0;
 }
 
+.messageActions .retractButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.messageActions .retractButton:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .messageActions button:hover {
   color: var(--h-text);
 }

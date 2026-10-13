@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
-import { AlertTriangle, ChevronRight, Info } from "lucide-react";
+import { AlertTriangle, ChevronRight, Info, Undo2 } from "lucide-react";
 import { ASSISTANT_FALLBACK_NAME, assistantAvatarDataUrlAtom, showReasoningAtom } from "@/stores/ui";
 import { AGENT_COMPACTION_NOTICE_PREFIX } from "@/stores/chat";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
@@ -39,6 +39,10 @@ interface MessageTimelineProps {
   assistantName?: string;
   /** compact：窄容器（子代理面板）用，不渲染头像列/助手名与轮次导航，收窄左右留白。 */
   density?: "default" | "compact";
+  /** 可撤回的用户消息 id（design.md 4.16）：该消息气泡上显示「撤回」操作。 */
+  retractMessageId?: string;
+  onRetract?: () => void;
+  retractDisabled?: boolean;
 }
 
 interface TurnAnchor {
@@ -757,6 +761,8 @@ interface MessageBubbleProps {
   progressModel?: string;
   assistantName: string;
   compact?: boolean;
+  onRetract?: () => void;
+  retractDisabled?: boolean;
 }
 
 function MessageBubble({
@@ -766,6 +772,8 @@ function MessageBubble({
   progressModel,
   assistantName,
   compact = false,
+  onRetract,
+  retractDisabled = false,
 }: MessageBubbleProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
   const assistantAvatarDataUrl = useAtomValue(assistantAvatarDataUrlAtom);
@@ -899,6 +907,17 @@ function MessageBubble({
                 复制
               </CopyButton>
             ) : null}
+            {isUser && onRetract ? (
+              <button
+                type="button"
+                className={s.retractButton}
+                onClick={onRetract}
+                disabled={retractDisabled}
+              >
+                <Undo2 size={12} aria-hidden />
+                撤回
+              </button>
+            ) : null}
           </span>
           {messageStats ? <MessageStatsFooter stats={messageStats} /> : null}
         </div>
@@ -917,6 +936,9 @@ export function MessageTimeline({
   progressModel,
   assistantName = ASSISTANT_FALLBACK_NAME,
   density = "default",
+  retractMessageId,
+  onRetract,
+  retractDisabled,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1314,6 +1336,8 @@ export function MessageTimeline({
                 progressModel={isLast ? progressModel : undefined}
                 assistantName={assistantName}
                 compact={compact}
+                onRetract={retractMessageId === message.id ? onRetract : undefined}
+                retractDisabled={retractDisabled}
               />
             </div>
           );

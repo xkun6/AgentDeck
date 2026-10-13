@@ -13,7 +13,13 @@ import {
   conversationWidthModeAtom,
   rightRailVisibleAtom,
 } from "@/stores/ui";
-import { chatRuntimeBySessionAtom, createEmptyChatRuntime, type PendingApproval } from "@/stores/chat";
+import {
+  chatRuntimeBySessionAtom,
+  createEmptyChatRuntime,
+  retractableUserMessageId,
+  type PendingApproval,
+} from "@/stores/chat";
+import { useRetractMessage, type RetractPrefill } from "@/hooks/use-retract-message";
 import {
   agentListLoadedAtom,
   agentSnapshotsAtom,
@@ -80,6 +86,8 @@ interface ComposerPrefillState {
   text: string;
   nonce: number;
   sessionId?: string;
+  /** 撤回消息回填的图片附件（design.md 4.16） */
+  files?: File[];
 }
 
 function firstUserText(messages: { role: string; parts: { type: string; text?: string }[] }[]): string {
@@ -340,6 +348,34 @@ export function DetailRoute() {
     removeQueuedPrompt(taskId, entry.id);
   }, [taskId]);
 
+  const retractMessageId = retractableUserMessageId(runtime);
+  const retractAgent = useCallback(
+    () => (taskId ? actions.retract(taskId) : Promise.reject(new Error("无当前会话"))),
+    [actions, taskId],
+  );
+  const onRetractPrefill = useCallback((prefill: RetractPrefill) => {
+    setComposerPrefill((previous) => ({
+      text: prefill.text,
+      files: prefill.files,
+      nonce: previous.nonce + 1,
+      sessionId: taskId,
+    }));
+  }, [taskId]);
+  // 撤回会中断本轮：抑制一次队列自动出队，避免刚撤回的回合被队列立刻顶替
+  const onRetracted = useCallback(() => {
+    userInterruptedRef.current = true;
+  }, []);
+  const retraction = useRetractMessage({
+    retract: retractAgent,
+    onPrefill: onRetractPrefill,
+    onRetracted,
+  });
+  const onEmptyArrowUp = useCallback(() => {
+    if (!retractMessageId || retraction.retracting) return false;
+    void retraction.run();
+    return true;
+  }, [retractMessageId, retraction]);
+
   const onQueueDelete = useCallback((id: string) => {
     removeQueuedPrompt(taskId, id);
   }, [taskId]);
@@ -572,8 +608,18 @@ export function DetailRoute() {
             turnStartedAt={runtimeIsBusy ? runtime.turnStartedAt : undefined}
             progressModel={runtimeIsBusy ? model || undefined : undefined}
             assistantName={assistantName}
+            retractMessageId={retractMessageId}
+            onRetract={() => void retraction.run()}
+            retractDisabled={retraction.retracting}
           />
           <div className={s.composerArea}>
+            {retraction.notice ? (
+              <div className={s.sessionNotice} data-tone="info" role="status">
+                <div className={s.sessionNoticeText}>
+                  <span>{retraction.notice}</span>
+                </div>
+              </div>
+            ) : null}
             {runtimeIsBusy && stall.isStalled ? (
               <StallNotice silenceMs={stall.silenceMs} onInterrupt={onStop} />
             ) : null}
@@ -633,6 +679,8 @@ export function DetailRoute() {
               initialWorkspacePath={sessionWorkspace}
               initial={composerInitial}
               initialNonce={composerInitialNonce}
+              initialFiles={hasActiveComposerPrefill ? composerPrefill.files : undefined}
+              onEmptyArrowUp={onEmptyArrowUp}
               onDraftChange={onComposerDraftChange}
               onSend={onSend}
               loadingPlaceholder={composerLoadingPlaceholder}

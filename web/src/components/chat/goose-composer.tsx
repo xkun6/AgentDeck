@@ -80,6 +80,10 @@ interface GooseComposerProps {
   placeholder?: string;
   initial?: string;
   initialNonce?: number;
+  /** 随 initialNonce 变化一并注入的图片 / 文件附件（撤回消息回填，design.md 4.16）。 */
+  initialFiles?: File[];
+  /** 输入框与附件都为空时按 ↑：返回 true 表示宿主已处理（阻止默认行为）。 */
+  onEmptyArrowUp?: () => boolean;
   autoFocus?: boolean;
   disabled?: boolean;
   loading?: boolean;
@@ -130,6 +134,8 @@ export function GooseComposer({
   placeholder,
   initial = "",
   initialNonce = 0,
+  initialFiles,
+  onEmptyArrowUp,
   autoFocus = false,
   disabled = false,
   loading = false,
@@ -242,6 +248,11 @@ export function GooseComposer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial, initialNonce]);
+
+  useEffect(() => {
+    if (initialNonce > 0 && initialFiles?.length) addBrowserFiles(initialFiles);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialNonce]);
 
   useEffect(() => {
     if (autoFocus) {
@@ -529,6 +540,21 @@ export function GooseComposer({
         setSlashDismissed(true);
         return;
       }
+    }
+
+    if (
+      event.key === "ArrowUp" &&
+      onEmptyArrowUp &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      value.length === 0 &&
+      attachments.length === 0 &&
+      onEmptyArrowUp()
+    ) {
+      event.preventDefault();
+      return;
     }
 
     const shouldSubmit = shouldSubmitComposerKey({

@@ -85,6 +85,8 @@ export interface ChatSessionRuntime {
   agentUsage?: AgentUsage;
   /** AgentDeck：Agent 最近一次上报的待办列表。 */
   agentTodos?: { text: string; completed: boolean }[];
+  /** AgentDeck：已撤回的 turnId；其 turn_canceled 不再追加「已中断」提示（design.md 4.16）。 */
+  retractedTurnId?: string;
   /** AgentDeck：最近一段 assistant_message 的 messageId（不同 messageId 分段拼接）。 */
   agentTextMessageId?: string;
 }
@@ -661,6 +663,62 @@ function reduceAgentTimelineItem(
   }
 }
 
+/**
+ * design.md 4.16：当前回合尚无任何输出（助手消息只有进度占位、无待审批）时，
+ * 返回可撤回的最后一条用户消息 id；否则 undefined。
+ */
+export function retractableUserMessageId(runtime: ChatSessionRuntime | undefined): string | undefined {
+  if (!runtime || runtime.streamStatus !== "streaming" || runtime.pendingApprovals.length > 0) {
+    return undefined;
+  }
+  if (runtime.turnFirstTokenAt !== undefined || runtime.statusKind === "todo") return undefined;
+  const { messages } = runtime;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user") return message.id;
+    if (message.role === "assistant" && withoutProgressParts(message.parts).length > 0) return undefined;
+    if (message.role === "system") return undefined;
+  }
+  return undefined;
+}
+
+/** design.md 4.16：移除被撤回的用户消息（按 clientMessageId，缺省取最近一条）与本轮空的助手占位。 */
+function retractAgentUserMessage(
+  runtime: ChatSessionRuntime,
+  turnId: string,
+  clientMessageId: string | undefined,
+): ChatSessionRuntime {
+  let userIndex = -1;
+  if (clientMessageId) {
+    userIndex = runtime.messages.findIndex(
+      (message) => message.role === "user" && message.id === clientMessageId,
+    );
+  }
+  if (userIndex < 0) {
+    for (let index = runtime.messages.length - 1; index >= 0; index -= 1) {
+      if (runtime.messages[index]!.role === "user") {
+        userIndex = index;
+        break;
+      }
+    }
+  }
+  const placeholderIds = new Set<string>([agentAssistantMessageId(turnId, 0)]);
+  if (runtime.activeAssistantId) placeholderIds.add(runtime.activeAssistantId);
+  if (clientMessageId) placeholderIds.add(agentPendingAssistantId(clientMessageId));
+  const messages = runtime.messages.filter((message, index) => {
+    if (index === userIndex) return false;
+    if (message.role === "assistant" && placeholderIds.has(message.id)) {
+      return withoutProgressParts(message.parts).length > 0;
+    }
+    return true;
+  });
+  const activeKept =
+    runtime.activeAssistantId && messages.some((message) => message.id === runtime.activeAssistantId)
+      ? runtime.activeAssistantId
+      : undefined;
+  return { ...runtime, messages, activeAssistantId: activeKept, retractedTurnId: turnId };
+}
+
 function reduceAgentEventInner(
   runtime: ChatSessionRuntime,
   envelope: AgentStreamEnvelope,
@@ -710,8 +768,14 @@ function reduceAgentEventInner(
       return appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, text, "error");
     }
 
+    case "user_message_retracted":
+      return retractAgentUserMessage(runtime, event.turnId, event.clientMessageId);
+
     case "turn_canceled": {
       const finished = finishAgentTurn(runtime, timestamp, "canceled", undefined);
+      if (runtime.retractedTurnId === event.turnId) {
+        return { ...finished, retractedTurnId: undefined };
+      }
       return appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, "已中断本轮", "info");
     }
 

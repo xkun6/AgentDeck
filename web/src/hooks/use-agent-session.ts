@@ -340,6 +340,11 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       await client.request("agent.cancel", { agentId }, { timeoutMs: 15_000 });
     },
 
+    /** 首次响应前撤回本轮消息（design.md 4.16）；返回原始 prompt 供回填输入框。 */
+    async retract(agentId: string): Promise<{ prompt: AgentPromptInput; clientMessageId?: string }> {
+      return client.request("agent.retract", { agentId }, { timeoutMs: 15_000 });
+    },
+
     async closeSession(agentId: string): Promise<void> {
       await client.request("agent.close", { agentId });
     },
