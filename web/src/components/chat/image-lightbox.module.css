@@ -1,0 +1,110 @@
+/* 图片查看器：全屏覆盖，覆写 Dialog 的居中与尺寸（双类提高优先级） */
+.overlay.overlay {
+  background: color-mix(in srgb, var(--h-color-ink-000) 80%, transparent);
+}
+
+.content.content {
+  inset: 0;
+  top: 0;
+  left: 0;
+  transform: none;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  background: transparent;
+  animation: none;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 72px;
+  overflow: hidden;
+}
+
+.stage[data-actual="true"] {
+  display: block;
+  overflow: auto;
+  cursor: grab;
+}
+
+.image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+  user-select: none;
+}
+
+.image[data-actual="true"] {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  cursor: zoom-out;
+}
+
+.close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: var(--h-bg-pane);
+}
+
+.prev,
+.next {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--h-bg-pane);
+}
+
+.prev {
+  left: 16px;
+}
+
+.next {
+  right: 16px;
+}
+
+.footer {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 4px 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  font-size: var(--h-font-size-sm);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  flex: none;
+  color: var(--h-text-3);
+}

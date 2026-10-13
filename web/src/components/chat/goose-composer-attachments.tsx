@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { fileNameFromPath, isImagePath } from "@/lib/composer-prompt";
 import type { ComposerAttachment } from "./composer-types";
+import { ImageLightbox } from "./image-lightbox";
 import s from "./goose-composer.module.css";
 
 export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -111,10 +113,23 @@ export function AttachmentTray({
   attachments: ComposerAttachment[];
   onRemove: (id: string) => void;
 }) {
+  const [preview, setPreview] = useState<string | null>(null);
   if (!attachments.length) return null;
+
+  const images = attachments.filter(
+    (item): item is ComposerAttachment & { previewUrl: string } => item.kind === "image" && !!item.previewUrl,
+  );
+  const previewIndex = images.findIndex((item) => item.id === preview);
 
   return (
     <div className={s.attachmentTray}>
+      {previewIndex >= 0 ? (
+        <ImageLightbox
+          images={images.map((item) => ({ src: item.previewUrl, name: item.name }))}
+          startIndex={previewIndex}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
       {attachments.map((attachment) => (
         <span
           key={attachment.id}
@@ -124,9 +139,14 @@ export function AttachmentTray({
           title={attachment.error || attachment.path || attachment.name}
         >
           {attachment.kind === "image" && attachment.previewUrl ? (
-            <span className={s.attachmentPreview}>
+            <button
+              type="button"
+              className={s.attachmentPreview}
+              onClick={() => setPreview(attachment.id)}
+              aria-label={`查看大图：${attachment.name}`}
+            >
               <img src={attachment.previewUrl} alt="" />
-            </span>
+            </button>
           ) : (
             <span className={s.attachmentIcon} aria-hidden="true">
               {attachment.kind === "directory" ? "□" : attachment.kind === "image" ? "▧" : "▤"}

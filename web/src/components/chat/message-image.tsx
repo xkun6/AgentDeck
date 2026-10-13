@@ -3,6 +3,7 @@ import { ImageOff } from "lucide-react";
 import { isLikelyLocalFilePath, normalizeLocalFilePath, safeImageSrc } from "@/lib/message-images";
 import { fetchMediaDataUrl } from "@/lib/transport";
 import type { ChatImageItem } from "./chat-types";
+import { ImageLightbox } from "./image-lightbox";
 import s from "./message-timeline.module.css";
 
 interface MessageImageProps {
@@ -57,6 +58,7 @@ function ImagePlaceholder({
 
 export function MessageImage({ image }: MessageImageProps) {
   const [failedSrc, setFailedSrc] = useState<string>();
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [localImage, setLocalImage] = useState<{
     path: string;
     src?: string;
@@ -101,20 +103,25 @@ export function MessageImage({ image }: MessageImageProps) {
   if (failedSrc === src) return <ImagePlaceholder image={image} reason="failed" />;
 
   return (
-    <a
-      className={s.imageFrame}
-      href={src}
-      target="_blank"
-      rel="noreferrer"
-      title={image.title || label}
-    >
-      <img
-        src={src}
-        alt={label}
-        loading="lazy"
-        decoding="async"
-        onError={() => setFailedSrc(src)}
-      />
-    </a>
+    <>
+      <button
+        type="button"
+        className={s.imageFrame}
+        onClick={() => setPreviewOpen(true)}
+        title={image.title || label}
+        aria-label={`查看大图：${label}`}
+      >
+        <img
+          src={src}
+          alt={label}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailedSrc(src)}
+        />
+      </button>
+      {previewOpen ? (
+        <ImageLightbox images={[{ src, name: label }]} onClose={() => setPreviewOpen(false)} />
+      ) : null}
+    </>
   );
 }
