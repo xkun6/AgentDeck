@@ -974,6 +974,49 @@ interface BoardTask {
 - 会话被删除（`onRemoved`）：该会话的任务解除 `agentId`，running → todo（开启自动派发时会立即重新派发）。sidecar 重启（`start()`）：running 任务的会话不存在 → todo；会话在重启后一律 dormant，时间线末尾有未结束回合 → blocked（「sidecar 重启时任务回合尚未结束…」）；否则按最后一个已结束回合补判（规则同上，失败回合会计一次 attempts 并按需重发）；没有任何已结束回合同样 blocked。
 - 前端：`web/src/components/board/`（`board-view` 看板与原生 HTML5 拖拽——项目没有拖拽依赖，不新增；`task-drawer` 详情抽屉；`board-settings-dialog`；`assignee-picker` 复用 `AgentSessionPicker`，选择状态由调用方持有、不写新建会话的记忆，思考强度不属于指派）。落点规则：落在列上 = 追加到列尾，落在卡片上半 / 下半 = 排在其前 / 后，`order` 取邻居中点（`lib/board-display.ts` 的 `orderForDrop`）；运行中任务拖出 running 前先确认。看板 store `stores/boards.ts` 按规范化路径索引，`board.changed` 整张替换，进入看板与每次（重）连成功后 `board.get` 一次。抽屉里「查看 diff」复用 `ReviewTab`，`workspaceRoot` 指向任务 worktree（无 worktree 时指向项目目录）。项目详情页新增「概览 / 看板」标签。
 
+### 4.29 输入框上方状态行：子代理 · 后台任务 · 步骤 · 额度 · 速度
+
+- 输入框上方原本上下两行的「子代理」（4.11）与「后台任务」（4.15）芯片合并为**同一行**，从左到右：子代理、后台任务；之后依次新增「步骤」「额度」（4.30）「速度」芯片。各芯片没有内容时隐藏，整行都没有内容时不占高度。窄宽度时芯片不换行，文字省略。
+- 「步骤」= Agent 自己维护的待办清单：取当前会话时间线中**最近一条** `todo` 项（Claude TodoWrite、Codex plan、ACP plan 均归一为 `todo`，见 4.3 / 5.1）。
+  - 芯片文字「步骤 已完成数/总数」（全部完成时显示「步骤 N/N ✓」样式的完成态，颜色用 token 中的成功色）；回合进行中且有未完成项时，第一条未完成项视为「进行中」。
+  - 点击展开弹层（与子代理 / 后台任务弹层同一套样式与开合行为）：按顺序列出每一步，状态图标区分已完成 / 进行中 / 未开始，已完成项文字弱化；列表过长时弹层内滚动。
+  - 没有任何 `todo` 项时不显示；新会话或分叉（4.23）后以新会话自身时间线为准。
+- 「步骤」纯前端实现，不改协议。
+- 「速度」芯片显示输出速度「N tok/s」（取快照 `lastUsage.outputTokensPerSecond`，保留 1 位小数、≥100 取整）：回合进行中显示实时值，空闲时显示上一回合的最终值（文字弱化，悬停提示「上一回合平均输出速度」）；没有值时隐藏。
+
+### 4.30 额度（用量限制）显示
+
+**协议**：
+```ts
+interface AgentRateLimitWindow {
+  id: string;                 // "five_hour" | "seven_day" | "primary" | "secondary" | 其它原样
+  label: string;              // 中文，如「5 小时」「7 天」「每周」
+  usedPercent: number;        // 0–100
+  resetsAt?: number;          // ms
+}
+interface AgentRateLimits {
+  windows: AgentRateLimitWindow[];
+  status?: "allowed" | "warning" | "rejected";
+  updatedAt: number;          // ms
+}
+```
+- 新事件 `{ type: "rate_limits_updated"; rateLimits: AgentRateLimits }`（`AgentStreamEvent`，照常分配 seq 并落盘）；AgentManager 收到后写入快照新字段 `AgentSnapshot.rateLimits?: AgentRateLimits`（随 meta 持久化）并推 `agent.state`。不计入 usage。
+- Claude：stream-json 的 `rate_limit_event`（`rate_limit_info`）：有 `unifiedWindows` 时取其中每个窗口（`five_hour`→「5 小时」、`seven_day`→「7 天」、其它窗口原名），`usedPercent = utilization × 100`，`resetsAt` 秒转毫秒；没有 `unifiedWindows` 时用顶层 `rateLimitType` + `utilization` + `resetsAt` 构成单个窗口。`status`：`allowed`→allowed、`allowed_warning`→warning、`rejected`→rejected。子代理 sidechain 中的同类事件同样处理（额度是账户级）。
+- Codex：会话进程初始化后调用一次 `account/rateLimits/read`，之后处理通知 `account/rateLimits/updated`；`primary` / `secondary` 窗口按 `windowDurationMins` 命名（300→「5 小时」、10080→「每周」、其它按分钟 / 小时 / 天格式化），`usedPercent` 原样，`resetsAt` 按实际单位转毫秒（实现前核实单位并在此补记）；`rateLimitReachedType` 非空时 `status: "rejected"`，任一窗口 ≥ 80% 时 `warning`，否则 `allowed`。读取失败只记 debug。
+- ACP：不提供。
+
+**前端**：额度**不放进上下文窗口弹层**，显示在 4.29 状态行「步骤」之后的「额度」芯片：
+- 芯片文字为各窗口的简写与已用比例，如「额度 5h 3% · 7d 96%」（窗口简写：5 小时→5h、7 天 / 每周→7d / 周，其它取 label）；任一窗口 ≥ 80% 用警告色，`status: "rejected"` 用危险色并显示「额度已用尽」。
+- 点击展开弹层（同状态行其它弹层样式）：每个窗口一行——标签、细进度条、「已用 N%」、「HH:mm 重置」（不在今天则「M月D日 HH:mm 重置」），底部「更新于 HH:mm」。颜色全部取 token。
+- 快照没有 `rateLimits` 时隐藏。额度为账户级：每个会话显示自己快照中最近收到的值。
+
+**输出速度（tok/s）**：
+- `AgentUsage` 增加 `outputTokensPerSecond?: number`：本回合输出 token 数 ÷（当前或结束时刻 − 本回合首个输出到达时刻）秒；首个输出不足 1 秒时不计算。随 `usage_updated`（回合中）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
+- Claude：主线程（不含子代理 sidechain）每条 assistant 消息的 `stream_event` `message_delta.usage.output_tokens`（该消息内累计）累加为本回合已输出 token，回合中最多每秒发一次只带 `outputTokensPerSecond` 的 `usage_updated`；result 时用最终输出 token 计算最终值。
+- Codex：本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径）到达时计算并下发；只在回合结束才有用量时只给最终值。
+- ACP：只在回合结束用 `PromptResponse.usage` 的输出 token 计算最终值（没有 usage 则不给）。
+- 首个输出时刻：本回合第一个 `assistant_message` 或 `reasoning` 事件。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
