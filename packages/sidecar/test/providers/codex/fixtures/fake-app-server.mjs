@@ -1,7 +1,7 @@
 // 假的 `codex app-server`：按行读 JSON-RPC，按剧本回放通知与审批请求（字段形状取自 codex-cli 0.162.1）。
 // 用法：node fake-app-server.mjs app-server
 // 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
-// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / patch / fail / error / hang / crash / plan / unknownreq / resolved。
+// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
 
@@ -149,6 +149,21 @@ const scenarios = {
       ...base(turnId), explanation: null,
       plan: [{ step: "第一步", status: "completed" }, { step: "第二步", status: "inProgress" }],
     });
+    completeTurn(turnId, "completed");
+  },
+
+  // 上下文压缩：contextCompaction item（started / completed），随后的旧版 thread/compacted 不应重复
+  async compact(turnId) {
+    const item = { type: "contextCompaction", id: "cc_1" };
+    notify("item/started", { ...base(turnId), item, startedAtMs: Date.now() });
+    notify("item/completed", { ...base(turnId), item, completedAtMs: Date.now() });
+    notify("thread/compacted", base(turnId));
+    completeTurn(turnId, "completed");
+  },
+
+  // 只有旧版 thread/compacted 通知
+  async compactlegacy(turnId) {
+    notify("thread/compacted", base(turnId));
     completeTurn(turnId, "completed");
   },
 

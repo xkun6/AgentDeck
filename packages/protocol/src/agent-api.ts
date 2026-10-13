@@ -156,7 +156,25 @@ export type ToolCallDetail =
       actions?: { index: number; toolName: string; summary?: string }[];
     }
   | { type: "plain_text"; label?: string; text?: string }
+  /** Claude AskUserQuestion（design.md 4.13）；answers 键为 question 原文，多选为 ", " 拼接 */
+  | {
+      type: "question";
+      questions: AgentQuestion[];
+      answers?: Record<string, string>;
+    }
   | { type: "unknown"; input: unknown; output: unknown };
+
+export interface AgentQuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+export interface AgentQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: AgentQuestionOption[];
+}
 
 export type ToolCallStatus = "running" | "completed" | "failed" | "canceled";
 export interface ToolCallTimelineItem {
@@ -175,7 +193,16 @@ export type AgentTimelineItem =
   | { type: "reasoning"; text: string } // 增量 chunk
   | ToolCallTimelineItem // 同 callId 多次推送，后者覆盖前者
   | { type: "todo"; items: { text: string; completed: boolean }[] }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** 上下文压缩（design.md 4.13）；同 compactionId 多次推送后者覆盖前者 */
+  | {
+      type: "compaction";
+      compactionId: string;
+      status: "running" | "completed" | "failed";
+      trigger?: "auto" | "manual";
+      preTokens?: number;
+      error?: string;
+    };
 
 export interface AgentPermissionAction {
   id: string;

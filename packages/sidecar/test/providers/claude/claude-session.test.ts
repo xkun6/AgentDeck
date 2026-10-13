@@ -934,6 +934,234 @@ describe("ClaudeAgentSession", () => {
     expect(events.filter((e) => e.type === "mode_changed")).toEqual([{ type: "mode_changed", modeId: null }]);
   });
 
+  const QUESTION_INPUT = {
+    questions: [
+      {
+        question: "用哪个日期库？",
+        header: "库",
+        multiSelect: false,
+        options: [
+          { label: "dayjs", description: "轻量" },
+          { label: "luxon", description: "功能全", preview: "import { DateTime } from 'luxon'" },
+        ],
+      },
+      {
+        question: "启用哪些功能？",
+        header: "功能",
+        multiSelect: true,
+        options: [
+          { label: "缓存", description: "加快构建" },
+          { label: "日志", description: "" },
+          { description: "缺 label 的选项被跳过" },
+        ],
+      },
+      { header: "缺 question 的题目被跳过", options: [] },
+    ],
+  };
+  const PARSED_QUESTIONS = [
+    {
+      question: "用哪个日期库？",
+      header: "库",
+      multiSelect: false,
+      options: [
+        { label: "dayjs", description: "轻量" },
+        { label: "luxon", description: "功能全", preview: "import { DateTime } from 'luxon'" },
+      ],
+    },
+    {
+      question: "启用哪些功能？",
+      header: "功能",
+      multiSelect: true,
+      options: [{ label: "缓存", description: "加快构建" }, { label: "日志" }],
+    },
+  ];
+
+  test("AskUserQuestion：question 审批，回答随 updatedInput 回传，完成的工具卡片带 answers", async () => {
+    const h = createHarness();
+    h.setup(
+      (q) =>
+        (q.onUser = () => {
+          q.emit(
+            msg.init(),
+            msg.assistant("m1", [
+              { type: "tool_use", id: "toolu_q", name: "AskUserQuestion", input: QUESTION_INPUT },
+            ]),
+          );
+        }),
+    );
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("问我");
+    await waitUntil(() => toolCalls(events).length === 1);
+    expect(toolCalls(events)[0]).toEqual({
+      type: "tool_call",
+      callId: "toolu_q",
+      name: "AskUserQuestion",
+      status: "running",
+      error: null,
+      detail: { type: "question", questions: PARSED_QUESTIONS },
+    });
+
+    const cli = h.clis[0]!;
+    const promise = canUseTool(cli, "AskUserQuestion", QUESTION_INPUT, { toolUseId: "toolu_q" });
+    const requested = events.find((e) => e.type === "permission_requested");
+    if (requested?.type !== "permission_requested") throw new Error("缺少 permission_requested");
+    expect(requested.request).toMatchObject({
+      name: "AskUserQuestion",
+      kind: "question",
+      title: "Claude 有问题需要你回答",
+      input: QUESTION_INPUT,
+      detail: { type: "question", questions: PARSED_QUESTIONS },
+      actions: [
+        { id: "submit", label: "提交回答", behavior: "allow" },
+        { id: "skip", label: "跳过", behavior: "deny" },
+      ],
+    });
+
+    const answers = { "用哪个日期库？": "luxon", "启用哪些功能？": "缓存, 自定义说明" };
+    // 前端只回传 answers 时也要保证 questions 原样透传
+    await session.respondToPermission(requested.request.id, {
+      behavior: "allow",
+      selectedActionId: "submit",
+      updatedInput: { answers },
+    });
+    await expect(promise).resolves.toEqual({
+      behavior: "allow",
+      updatedInput: { ...QUESTION_INPUT, answers },
+    } satisfies ClaudePermissionResult);
+
+    cli.emit(
+      msg.toolResult("toolu_q", 'User has answered your questions: "用哪个日期库？"="luxon"'),
+      msg.result(cli.received[0]!.uuid),
+    );
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(toolCalls(events).at(-1)).toEqual({
+      type: "tool_call",
+      callId: "toolu_q",
+      name: "AskUserQuestion",
+      status: "completed",
+      error: null,
+      detail: { type: "question", questions: PARSED_QUESTIONS, answers },
+    });
+  });
+
+  test("AskUserQuestion：allow 但没有回答按 deny；跳过使用默认 message", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("x");
+    const cli = h.clis[0]!;
+
+    const unanswered = canUseTool(cli, "AskUserQuestion", QUESTION_INPUT, { toolUseId: "q1" });
+    const first = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(first.id, {
+      behavior: "allow",
+      selectedActionId: "submit",
+      updatedInput: { answers: { "用哪个日期库？": "  " } },
+    });
+    await expect(unanswered).resolves.toEqual({ behavior: "deny", message: "用户没有回答问题" });
+    expect(events.at(-1)).toEqual({
+      type: "permission_resolved",
+      requestId: first.id,
+      response: { behavior: "deny", selectedActionId: "submit", message: "用户没有回答问题" },
+    });
+
+    const skipped = canUseTool(cli, "AskUserQuestion", QUESTION_INPUT, { toolUseId: "q2" });
+    const second = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(second.id, { behavior: "deny", selectedActionId: "skip" });
+    await expect(skipped).resolves.toEqual({ behavior: "deny", message: "用户跳过了这些问题" });
+
+    // 题目解析不出来时按普通工具审批
+    const malformed = canUseTool(cli, "AskUserQuestion", { questions: "?" }, { toolUseId: "q3" });
+    const third = session.getPendingPermissions()[0]!;
+    expect(third).toMatchObject({ kind: "tool", actions: [{ id: "allow" }, { id: "deny" }] });
+    await session.respondToPermission(third.id, { behavior: "deny" });
+    await expect(malformed).resolves.toEqual({ behavior: "deny", message: "用户拒绝了该操作" });
+  });
+
+  test("上下文压缩：compacting → running，compact_boundary → 同 id 的 completed；之后 result 不再报压缩前的已用量", async () => {
+    const status = (value: string | null, extra: Record<string, unknown> = {}) => ({
+      type: "system",
+      subtype: "status",
+      status: value,
+      session_id: SESSION_ID,
+      uuid: `st-${String(value)}`,
+      ...extra,
+    });
+    const h = createHarness();
+    let round = 0;
+    h.setup(
+      (q) =>
+        (q.onUser = (user) => {
+          round += 1;
+          if (round === 1) {
+            q.emit(
+              msg.init(),
+              msg.streamStart("m1"), // 压缩前已用 100
+              status("compacting"),
+              status("compacting"),
+              {
+                type: "system",
+                subtype: "compact_boundary",
+                session_id: SESSION_ID,
+                uuid: "cb",
+                compact_metadata: { trigger: "manual", pre_tokens: 150_000, post_tokens: 12_000 },
+              },
+              status(null, { compact_result: "success" }),
+              msg.result(user.uuid),
+            );
+          } else {
+            q.emit(
+              status("compacting"),
+              status(null, { compact_result: "failed", compact_error: "摘要失败" }),
+              msg.result(user.uuid),
+            );
+          }
+        }),
+    );
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    const compactions = () =>
+      events.flatMap((e) => (e.type === "timeline" && e.item.type === "compaction" ? [e] : []));
+
+    const { turnId } = await session.startTurn("/compact");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    const [running, completed] = compactions();
+    expect(compactions()).toHaveLength(2);
+    expect(running).toEqual({
+      type: "timeline",
+      turnId,
+      item: { type: "compaction", compactionId: expect.stringMatching(/^compact-/), status: "running" },
+    });
+    expect(completed).toEqual({
+      type: "timeline",
+      turnId,
+      item: {
+        type: "compaction",
+        compactionId: running?.type === "timeline" && running.item.type === "compaction" ? running.item.compactionId : "",
+        status: "completed",
+        trigger: "manual",
+        preTokens: 150_000,
+      },
+    });
+    expect(terminalEvents(events)[0]).toMatchObject({
+      type: "turn_completed",
+      usage: { contextWindowUsedTokens: 12_000, contextWindowMaxTokens: 200_000 },
+    });
+
+    await session.startTurn("再来");
+    await waitUntil(() => terminalEvents(events).length === 2);
+    const [, , failedStart, failed] = compactions();
+    expect(failed).toMatchObject({
+      item: {
+        type: "compaction",
+        compactionId: failedStart?.type === "timeline" && failedStart.item.type === "compaction" ? failedStart.item.compactionId : "",
+        status: "failed",
+        error: "摘要失败",
+      },
+    });
+  });
+
   /** 模拟 CLI 在当前回合发来 ExitPlanMode，并批准 */
   async function approvePlan(h: Harness, session: AgentSession): Promise<void> {
     const cli = h.clis.at(-1)!;

@@ -626,6 +626,8 @@ interface ActiveTurn {
   reasoning: Map<string, { text: string; source: "summary" | "raw" }>;
   /** 最近一次不再重试的 error 通知 */
   lastError: { message: string; code?: string } | null;
+  /** 本轮见过 contextCompaction item：旧版 thread/compacted 通知不再重复发压缩事件（design.md 4.13） */
+  sawCompaction?: boolean;
 }
 
 type PermissionKind = "command" | "file" | "legacy-exec" | "legacy-patch" | "elicitation";
@@ -1274,6 +1276,17 @@ export class CodexAgentSession implements AgentSession {
         }
         return;
       }
+      case "thread/compacted":
+        // 旧版通知（已被 contextCompaction item 取代）：本轮没见过 item 时补一条完成事件
+        if (!turn.sawCompaction) {
+          turn.sawCompaction = true;
+          this.emitTimeline(turn, {
+            type: "compaction",
+            compactionId: `compact-${notificationTurnId ?? turn.turnId}`,
+            status: "completed",
+          });
+        }
+        return;
       case "turn/completed":
         this.handleTurnCompleted(turn, params);
         return;
@@ -1366,6 +1379,17 @@ export class CodexAgentSession implements AgentSession {
           detail: { type: "plan", text },
         });
       }
+      return;
+    }
+
+    // 上下文压缩（design.md 4.13）：不是工具调用，单独成一条 compaction 事件
+    if (type === "contextCompaction" || type === "context_compaction") {
+      turn.sawCompaction = true;
+      this.emitTimeline(turn, {
+        type: "compaction",
+        compactionId: itemId ?? `compact-${turn.turnId}`,
+        status: phase === "started" ? "running" : "completed",
+      });
       return;
     }
 

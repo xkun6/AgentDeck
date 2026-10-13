@@ -1,9 +1,10 @@
 // Derived from paseo packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts (Apache-2.0); modified for AgentDeck
 // 改动：ToolCallDetail 来自 @agentdeck/protocol（精简版）；去掉 speak 工具；Skill 的 plain_text 不带 icon；
-// Task / Agent 子代理工具 → sub_agent（design.md 4.11；log 由会话按子代理活动补全）。
+// Task / Agent 子代理工具 → sub_agent（design.md 4.11；log 由会话按子代理活动补全）；
+// AskUserQuestion → question（design.md 4.13，AgentDeck 新增）。
 import { z } from "zod";
 
-import type { ToolCallDetail } from "@agentdeck/protocol";
+import type { AgentQuestion, AgentQuestionOption, ToolCallDetail } from "@agentdeck/protocol";
 
 import {
   ToolEditInputSchema,
@@ -214,11 +215,86 @@ const ClaudeToolDetailPass2Schema = z.union([
   subAgentBranch("Agent"),
 ]);
 
+type QuestionToolDetail = Extract<ToolCallDetail, { type: "question" }>;
+
+/** Claude AskUserQuestion 的工具名 */
+export const CLAUDE_ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+
+/**
+ * AskUserQuestion 的 input → question detail（design.md 4.13）。宽松解析：缺 question / 没有合法选项的题目、
+ * 缺 label 的选项一律跳过；answers 只保留字符串值。没有任何合法题目时返回 null。
+ */
+export function toQuestionToolDetail(input: unknown): QuestionToolDetail | null {
+  if (!isRecord(input) || !Array.isArray(input.questions)) {
+    return null;
+  }
+  const questions: AgentQuestion[] = [];
+  for (const raw of input.questions) {
+    if (!isRecord(raw) || !nonEmptyString(raw.question) || !Array.isArray(raw.options)) {
+      continue;
+    }
+    const options = raw.options.flatMap((option): AgentQuestionOption[] => {
+      if (!isRecord(option) || !nonEmptyString(option.label)) {
+        return [];
+      }
+      return [
+        {
+          label: option.label,
+          ...(nonEmptyString(option.description) ? { description: option.description } : {}),
+          ...(nonEmptyString(option.preview) ? { preview: option.preview } : {}),
+        },
+      ];
+    });
+    if (options.length === 0) {
+      continue;
+    }
+    questions.push({
+      question: raw.question,
+      ...(nonEmptyString(raw.header) ? { header: raw.header } : {}),
+      multiSelect: raw.multiSelect === true,
+      options,
+    });
+  }
+  if (questions.length === 0) {
+    return null;
+  }
+  const answers = readQuestionAnswers(input.answers);
+  return { type: "question", questions, ...(answers ? { answers } : {}) };
+}
+
+/** answers 对象中的字符串值；没有任何非空回答时返回 undefined */
+export function readQuestionAnswers(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const answers: Record<string, string> = {};
+  for (const [question, answer] of Object.entries(value)) {
+    if (nonEmptyString(answer)) {
+      answers[question] = answer;
+    }
+  }
+  return Object.keys(answers).length > 0 ? answers : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export function deriveClaudeToolDetail(
   name: string,
   input: unknown,
   output: unknown,
 ): ToolCallDetail {
+  if (name === CLAUDE_ASK_USER_QUESTION_TOOL) {
+    const question = toQuestionToolDetail(input);
+    if (question) {
+      return question;
+    }
+  }
   const pass1 = ClaudeToolEnvelopeSchema.safeParse({
     name,
     input: input ?? null,

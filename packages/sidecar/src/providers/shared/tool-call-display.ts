@@ -53,6 +53,8 @@ function detailDisplay(
       return { summary: detail.label };
     case "plan":
       return { displayName: "Plan" };
+    case "question":
+      return { displayName: "Question", summary: readString(detail.questions[0]?.question) };
     case "unknown":
       return {};
   }

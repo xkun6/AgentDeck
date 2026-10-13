@@ -351,6 +351,31 @@ describe("CodexAgentSession（假 app-server）", () => {
     });
   });
 
+  test("contextCompaction item → compaction running / completed（不出工具卡片）；旧版 thread/compacted 只在没见过 item 时补发", async () => {
+    const session = await newSession();
+    const events = collect(session);
+    const compactions = () =>
+      events.flatMap((e) => (e.type === "timeline" && e.item.type === "compaction" ? [e] : []));
+
+    const { turnId } = await session.startTurn("compact");
+    await waitUntil(() => events.some(isTerminal));
+    expect(compactions()).toEqual([
+      { type: "timeline", turnId, item: { type: "compaction", compactionId: "cc_1", status: "running" } },
+      { type: "timeline", turnId, item: { type: "compaction", compactionId: "cc_1", status: "completed" } },
+    ]);
+    expect(events.some((e) => e.type === "timeline" && e.item.type === "tool_call")).toBe(false);
+
+    const second = await session.startTurn("compactlegacy");
+    await waitUntil(() => events.filter(isTerminal).length === 2);
+    expect(compactions().slice(2)).toEqual([
+      {
+        type: "timeline",
+        turnId: second.turnId,
+        item: { type: "compaction", compactionId: "compact-turn_2", status: "completed" },
+      },
+    ]);
+  });
+
   test("interrupt → turn/interrupt { threadId, turnId } 并发 turn_canceled", async () => {
     const session = await newSession();
     const events = collect(session);

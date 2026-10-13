@@ -71,6 +71,21 @@ export interface ClaudeSystemMessage {
 }
 
 /**
+ * `system` `status` 消息：status 为 requesting / compacting / null；压缩结束时可带 compact_result / compact_error
+ * （字段以 @anthropic-ai/claude-agent-sdk 的 SDKStatusMessage 为准，design.md 4.13）。
+ */
+export interface ClaudeStatusSystemMessage extends ClaudeSystemMessage {
+  status?: unknown;
+  compact_result?: unknown;
+  compact_error?: unknown;
+}
+
+/** `system` `compact_boundary` 消息（SDKCompactBoundaryMessage）：上下文压缩完成 */
+export interface ClaudeCompactBoundaryMessage extends ClaudeSystemMessage {
+  compact_metadata?: { trigger?: unknown; pre_tokens?: unknown; post_tokens?: unknown };
+}
+
+/**
  * 子代理 task 协议的 system 消息（subtype 为 task_started / task_updated / task_progress / task_notification）
  * 中用到的字段（Claude Code 2.1.296 实测，design.md 4.11）。
  */

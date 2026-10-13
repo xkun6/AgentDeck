@@ -58,9 +58,15 @@ import {
   buildOutputCandidates,
   toolResultText,
 } from "./tool-call-mapper.js";
+import {
+  CLAUDE_ASK_USER_QUESTION_TOOL,
+  readQuestionAnswers,
+  toQuestionToolDetail,
+} from "./tool-call-detail-parser.js";
 import type {
   ClaudeAssistantMessage,
   ClaudeCanUseTool,
+  ClaudeCompactBoundaryMessage,
   ClaudeContentBlock,
   ClaudeImageMediaType,
   ClaudeInitializeResponse,
@@ -68,6 +74,7 @@ import type {
   ClaudePermissionMode,
   ClaudePermissionResult,
   ClaudeResultMessage,
+  ClaudeStatusSystemMessage,
   ClaudeStreamEvent,
   ClaudeTaskSystemMessage,
   ClaudeUserContentBlock,
@@ -149,6 +156,14 @@ const PLAN_PERMISSION_ACTIONS: AgentPermissionAction[] = [
   { id: "approve", label: "批准计划", behavior: "allow" },
   { id: "keep_planning", label: "继续规划", behavior: "deny" },
 ];
+
+/** AskUserQuestion 的应答动作（design.md 4.13） */
+const QUESTION_PERMISSION_ACTIONS: AgentPermissionAction[] = [
+  { id: "submit", label: "提交回答", behavior: "allow" },
+  { id: "skip", label: "跳过", behavior: "deny" },
+];
+const QUESTION_SKIPPED_MESSAGE = "用户跳过了这些问题";
+const QUESTION_UNANSWERED_MESSAGE = "用户没有回答问题";
 
 /**
  * 启动配置覆盖（自定义中转 provider 用，design.md 4.7）；不传时行为与内置 claude provider 完全相同。
@@ -410,6 +425,8 @@ interface ActiveTurn {
 interface PendingPermission {
   request: AgentPermissionRequest;
   input: Record<string, unknown>;
+  /** CLI 给出的 tool_use_id（与 toolUses 的键一致），回答问题后据此更新工具卡片的 input */
+  toolUseId?: string;
   resolve: (result: ClaudePermissionResult) => void;
   cleanup: () => void;
 }
@@ -471,6 +488,8 @@ export class ClaudeAgentSession implements AgentSession {
   private currentStreamMessageId: string | null = null;
   private contextInputTokens = 0;
   private contextOutputTokens = 0;
+  /** 进行中的上下文压缩（status compacting 时生成，compact_boundary / 失败时清空，design.md 4.13） */
+  private compactionId: string | null = null;
   /** 父会话 Task / Agent 调用的 input（按 tool_use_id，会话级）：子代理标题、类型与描述来源 */
   private readonly subagentToolInputs = new Map<string, Record<string, unknown>>();
   /** 子代理父卡片的最近一次推送（按 callId）：后续推送在此合并，保留 log 且终态不回退 */
@@ -573,9 +592,13 @@ export class ClaudeAgentSession implements AgentSession {
     }
     this.pendingPermissions.delete(requestId);
     pending.cleanup();
-    this.emit({ type: "permission_resolved", requestId, response });
 
     const isPlan = pending.request.kind === "plan";
+    if (pending.request.kind === "question") {
+      this.respondToQuestion(requestId, pending, response);
+      return;
+    }
+    this.emit({ type: "permission_resolved", requestId, response });
     if (response.behavior === "allow") {
       pending.resolve({
         behavior: "allow",
@@ -597,6 +620,45 @@ export class ClaudeAgentSession implements AgentSession {
     });
   }
 
+  /**
+   * AskUserQuestion 的应答（design.md 4.13）：allow 时 updatedInput 合并在原 input 上（questions 原样回传），
+   * 没有回答按 deny 处理；回答写回该工具调用的 input，工具卡片完成时 detail 带上 answers。
+   */
+  private respondToQuestion(
+    requestId: string,
+    pending: PendingPermission,
+    response: AgentPermissionResponse,
+  ): void {
+    if (response.behavior === "allow") {
+      const updatedInput = { ...pending.input, ...response.updatedInput };
+      if (readQuestionAnswers(updatedInput.answers)) {
+        const entry = pending.toolUseId ? this.toolUses.get(pending.toolUseId) : undefined;
+        if (entry) {
+          entry.input = updatedInput;
+        }
+        this.emit({ type: "permission_resolved", requestId, response });
+        pending.resolve({ behavior: "allow", updatedInput });
+        return;
+      }
+    }
+    const message =
+      response.behavior === "deny"
+        ? (response.message ?? QUESTION_SKIPPED_MESSAGE)
+        : QUESTION_UNANSWERED_MESSAGE;
+    const interrupt = response.behavior === "deny" && response.interrupt === true;
+    this.emit({
+      type: "permission_resolved",
+      requestId,
+      response: {
+        behavior: "deny",
+        ...(response.selectedActionId ? { selectedActionId: response.selectedActionId } : {}),
+        message,
+        ...(interrupt ? { interrupt: true } : {}),
+      },
+    });
+    pending.resolve({ behavior: "deny", message, ...(interrupt ? { interrupt: true } : {}) });
+  }
+
   async interrupt(): Promise<void> {
     const turn = this.activeTurn;
     if (!turn) {
@@ -606,6 +668,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.backgroundRunPending = false;
     this.denyAllPendingPermissions("回合已取消");
     this.cancelRunningTools(turn.turnId);
+    this.failCompaction(turn, "压缩已中断");
     // 回合取消：前台子代理随之结束（已转入后台的不动）
     this.sidechainTracker.clear();
     this.emitSubagentObservations(this.taskProtocolSource.cancelRunningForegroundTasks());
@@ -799,6 +862,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.sidechainTracker.clear();
     this.emitSubagentObservations(this.taskProtocolSource.failRunningTasks());
     const turn = this.activeTurn;
+    this.failCompaction(turn, "Claude Code 进程已退出");
     if (turn) {
       this.denyAllPendingPermissions("Claude Code 进程已退出");
       this.cancelRunningTools(turn.turnId);
@@ -848,9 +912,18 @@ export class ClaudeAgentSession implements AgentSession {
           if (!this.activeTurn) {
             this.backgroundRunPending = true;
           }
-        } else if (message.subtype === "status" && (message as { status?: unknown }).status === "requesting") {
-          // 已经在请求模型：不是空轮，尽早显示「运行中」
-          this.startPendingBackgroundTurn();
+        } else if (message.subtype === "status") {
+          const status = (message as ClaudeStatusSystemMessage).status;
+          if (status === "requesting") {
+            // 已经在请求模型：不是空轮，尽早显示「运行中」
+            this.startPendingBackgroundTurn();
+          } else if (status === "compacting") {
+            this.handleCompactionStarted();
+          } else {
+            this.handleCompactionStatusEnded(message as ClaudeStatusSystemMessage);
+          }
+        } else if (message.subtype === "compact_boundary") {
+          this.handleCompactBoundary(message as ClaudeCompactBoundaryMessage);
         }
         this.handleTaskAnnouncement(message);
         return;
@@ -1134,6 +1207,63 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   // -------------------------------------------------------------------------
+  // 上下文压缩（design.md 4.13）
+  // -------------------------------------------------------------------------
+
+  /** status compacting：开始压缩（同一次压缩重复的 compacting 不再新发） */
+  private handleCompactionStarted(): void {
+    const turn = this.startPendingBackgroundTurn();
+    if (this.compactionId) {
+      return;
+    }
+    this.compactionId = `compact-${randomUUID()}`;
+    this.emitTimeline(turn, { type: "compaction", compactionId: this.compactionId, status: "running" });
+  }
+
+  /** compacting 之后的 status（null 等）：只处理压缩失败，成功由 compact_boundary 表达 */
+  private handleCompactionStatusEnded(message: ClaudeStatusSystemMessage): void {
+    if (!this.compactionId || message.compact_result !== "failed") {
+      return;
+    }
+    const error =
+      typeof message.compact_error === "string" && message.compact_error.trim()
+        ? message.compact_error.trim()
+        : "上下文压缩失败";
+    this.failCompaction(this.activeTurn, error);
+  }
+
+  /** compact_boundary：压缩完成，沿用 compacting 时的 id（没有则新建） */
+  private handleCompactBoundary(message: ClaudeCompactBoundaryMessage): void {
+    const turn = this.startPendingBackgroundTurn();
+    const meta = message.compact_metadata;
+    const trigger = meta?.trigger === "auto" || meta?.trigger === "manual" ? meta.trigger : undefined;
+    const preTokens = toCount(meta?.pre_tokens);
+    const compactionId = this.compactionId ?? `compact-${randomUUID()}`;
+    this.compactionId = null;
+    // 压缩后上下文只剩摘要：「已用」改为 post_tokens（没有则清零），之后的 message_start 会给出准确值，
+    // 避免压缩后（如手动 /compact 那一轮）的 result 仍报压缩前的大数字
+    this.contextInputTokens = toCount(meta?.post_tokens);
+    this.contextOutputTokens = 0;
+    this.emitTimeline(turn, {
+      type: "compaction",
+      compactionId,
+      status: "completed",
+      ...(trigger ? { trigger } : {}),
+      ...(preTokens > 0 ? { preTokens } : {}),
+    });
+  }
+
+  /** 进行中的压缩以失败收尾（压缩失败、回合中断、进程退出） */
+  private failCompaction(turn: ActiveTurn | null, error: string): void {
+    const compactionId = this.compactionId;
+    if (!compactionId) {
+      return;
+    }
+    this.compactionId = null;
+    this.emitTimeline(turn, { type: "compaction", compactionId, status: "failed", error });
+  }
+
+  // -------------------------------------------------------------------------
   // 权限
   // -------------------------------------------------------------------------
 
@@ -1144,26 +1274,40 @@ export class ClaudeAgentSession implements AgentSession {
     }
     const requestId = `perm-${randomUUID()}`;
     const isPlan = toolName === "ExitPlanMode";
+    // AskUserQuestion 需要用户作答（design.md 4.13）；题目解析不出来时按普通工具审批
+    const question = toolName === CLAUDE_ASK_USER_QUESTION_TOOL ? toQuestionToolDetail(input) : null;
     const detail: ToolCallDetail | undefined = isPlan
       ? { type: "plan", text: typeof input.plan === "string" ? input.plan : "" }
-      : mapClaudeRunningToolCall({
+      : (question ??
+        mapClaudeRunningToolCall({
           callId: options.toolUseId || requestId,
           name: toolName,
           input,
-        })?.detail;
+        })?.detail);
     const description = options.description ?? options.decisionReason;
+    const kind: AgentPermissionRequest["kind"] = isPlan ? "plan" : question ? "question" : "tool";
+    const title =
+      kind === "plan"
+        ? "批准执行计划？"
+        : kind === "question"
+          ? "Claude 有问题需要你回答"
+          : (options.title ?? `允许使用 ${options.displayName ?? toolName}？`);
+    const actions =
+      kind === "plan"
+        ? PLAN_PERMISSION_ACTIONS
+        : kind === "question"
+          ? QUESTION_PERMISSION_ACTIONS
+          : TOOL_PERMISSION_ACTIONS;
     const request: AgentPermissionRequest = {
       id: requestId,
       provider: this.provider,
       name: toolName,
-      kind: isPlan ? "plan" : "tool",
-      title: isPlan ? "批准执行计划？" : (options.title ?? `允许使用 ${options.displayName ?? toolName}？`),
+      kind,
+      title,
       ...(description ? { description } : {}),
       input,
       ...(detail ? { detail } : {}),
-      actions: (isPlan ? PLAN_PERMISSION_ACTIONS : TOOL_PERMISSION_ACTIONS).map((action) => ({
-        ...action,
-      })),
+      actions: actions.map((action) => ({ ...action })),
     };
 
     return new Promise<ClaudePermissionResult>((resolve) => {
@@ -1180,7 +1324,13 @@ export class ClaudeAgentSession implements AgentSession {
         resolve({ behavior: "deny", message });
       };
       const cleanup = () => options.signal.removeEventListener("abort", onAbort);
-      this.pendingPermissions.set(requestId, { request, input, resolve, cleanup });
+      this.pendingPermissions.set(requestId, {
+        request,
+        input,
+        ...(options.toolUseId ? { toolUseId: options.toolUseId } : {}),
+        resolve,
+        cleanup,
+      });
       this.emit({ type: "permission_requested", turnId: turn.turnId, request });
       if (options.signal.aborted) {
         onAbort();

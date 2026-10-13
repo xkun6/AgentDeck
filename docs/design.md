@@ -163,7 +163,11 @@ export type ToolCallDetail =
   | { type: "sub_agent"; subAgentType?: string; description?: string; childSessionId?: string;
       log: string; actions?: { index: number; toolName: string; summary?: string }[] }   // 4.11
   | { type: "plain_text"; label?: string; text?: string }
+  | { type: "question"; questions: AgentQuestion[]; answers?: Record<string, string> }   // Claude AskUserQuestion，见 4.13
   | { type: "unknown"; input: unknown; output: unknown };
+
+export interface AgentQuestionOption { label: string; description?: string; preview?: string }
+export interface AgentQuestion { question: string; header?: string; multiSelect: boolean; options: AgentQuestionOption[] }
 
 export type ToolCallStatus = "running" | "completed" | "failed" | "canceled";
 export interface ToolCallTimelineItem {
@@ -177,7 +181,9 @@ export type AgentTimelineItem =
   | { type: "reasoning"; text: string }                              // 增量 chunk
   | ToolCallTimelineItem                                              // 同 callId 多次推送，后者覆盖前者
   | { type: "todo"; items: { text: string; completed: boolean }[] }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "compaction"; compactionId: string; status: "running" | "completed" | "failed";
+      trigger?: "auto" | "manual"; preTokens?: number; error?: string };   // 上下文压缩，同 compactionId 后者覆盖前者（4.13）
 
 export interface AgentPermissionAction { id: string; label: string; behavior: "allow" | "deny" }
 export interface AgentPermissionRequest {
@@ -471,6 +477,18 @@ Claude Code 的后台子代理（`Agent` 工具 `run_in_background`）与后台�
 
 **Codex**（codex-cli 0.162.1 实测，主线程派出子代理后不 wait 直接结束回合）：子线程跑完后主线程只收到一条 `item/started` / `item/completed`（`subAgentActivity`，kind `completed`，turnId 为**已结束**的父回合），180 秒内主线程没有新的 `turn/started`——app-server 不会在没有 `turn/start` 的情况下自行开始主线程回合，无需处理。该条 subAgentActivity 因 turnId 属于已结束回合而被忽略，父卡片的完成状态由子线程的 `turn/completed` 路由更新（4.11）。
 
+### 4.13 Agent 提问（AskUserQuestion）与上下文压缩
+
+**提问（仅 Claude）**：Claude Code 的 `AskUserQuestion` 工具经 `can_use_tool` 到达，input 为 `{ questions: Array<{ question; header; options: Array<{ label; description; preview? }>; multiSelect }> }`（1–4 题，每题 2–4 个选项，「其他」由界面自行提供）。CLI 从 `updatedInput.answers` 读回答案，allow 时不带 `answers` 会被视为「用户没有回答」。
+- 类型：`ToolCallDetail` 增加 `{ type: "question"; questions: AgentQuestion[]; answers?: Record<string, string> }`；`AgentQuestionOption { label; description?; preview? }`、`AgentQuestion { question; header?; multiSelect; options }`。`answers` 的键为 question 原文，值为选中的 label；多选以 `", "` 拼接；「其他」自由输入时值为用户文本。
+- sidecar：`permission_requested` 的 `kind: "question"`、title「Claude 有问题需要你回答」、`detail` 为 question 类型（宽松解析，非法题目 / 选项跳过）、actions `[{ id: "submit", label: "提交回答", behavior: "allow" }, { id: "skip", label: "跳过", behavior: "deny" }]`。应答 allow 时 `updatedInput = { ...原 input, ...response.updatedInput }`（保证 questions 原样回传），合并后没有非空 `answers` 对象则按 deny 处理（message「用户没有回答问题」）；deny 缺省 message 为「用户跳过了这些问题」。合并后的 input 同时写回该工具调用（按 tool_use_id）的记录，工具卡片完成时 detail 带上 answers。时间线中的 AskUserQuestion 工具卡片 detail 同为 question 类型（answers 取自 input.answers）。
+- 前端应答：提交 `{ behavior: "allow", selectedActionId: "submit", updatedInput: { ...request.input, answers } }`；跳过 `{ behavior: "deny", selectedActionId: "skip", message: "用户跳过了这些问题" }`。
+
+**上下文压缩**：`AgentTimelineItem` 增加 `{ type: "compaction"; compactionId; status: "running" | "completed" | "failed"; trigger?: "auto" | "manual"; preTokens?; error? }`，同 compactionId 多次推送后者覆盖前者（与 tool_call 相同）。`failed` 为对原设计的最小补充：Claude 压缩失败时只有 `status` 消息（`compact_result: "failed"`）而没有 `compact_boundary`，不补这一态「正在压缩」会一直挂着。
+- Claude：`system` `status: "compacting"` → running（compactionId 为 `compact-<uuid>`）；`system` `compact_boundary`（`compact_metadata.trigger` / `pre_tokens`）→ 同一 id 的 completed（之前没有 running 时新建 id）；`status` 消息带 `compact_result: "failed"` 且有进行中的压缩 → failed（error 取 `compact_error`）。需要时以 4.12 的规则开自发回合。压缩完成后上下文用量的「已用」改为 `compact_metadata.post_tokens`（没有则清零），下一次 `message_start` 自然刷新，避免压缩后 result 仍报压缩前的大数字。
+- Codex：ThreadItem `contextCompaction`（兼容 `context_compaction`）的 `item/started` → running、`item/completed` → completed（compactionId = item.id），不产生工具卡片；旧版 `thread/compacted` 通知在本回合没见过 contextCompaction item 时补一条 completed。
+- 前端：每个 compactionId 对应一条居中分隔线样式的系统提示（消息 id `agent-compaction-<compactionId>`）：running「正在压缩上下文…」，completed 原地改为「上下文已自动压缩 / 上下文已手动压缩」（有 preTokens 时附「（压缩前 约 84.1k tokens）」），failed「上下文压缩失败」。提示插在当前回合尚无内容的助手消息之前，否则追加在末尾。completed 时清掉运行时 usage 的 `contextWindowUsedTokens`，输入框的上下文用量指示器随之隐藏，直到下一次 usage 到达。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -526,7 +544,7 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 与 `system` 的 status 等子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
