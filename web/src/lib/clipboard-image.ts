@@ -48,8 +48,11 @@ export function filesFromClipboardData(clipboardData?: DataTransfer | null): Fil
     files.push(file);
   };
 
-  for (const file of Array.from(clipboardData.files ?? [])) {
-    add(file);
+  // files 与 items 描述同一份数据（截图的 items.getAsFile() 每次生成新的 lastModified，去重不住）：files 非空就只用 files
+  const direct = Array.from(clipboardData.files ?? []);
+  if (direct.length) {
+    direct.forEach(add);
+    return files;
   }
 
   for (const item of Array.from(clipboardData.items ?? [])) {

@@ -45,6 +45,21 @@ describe("clipboard image helpers", () => {
     expect(filesFromClipboardData(clipboardDataWithFile(file))).toEqual([file]);
   });
 
+  it("files 与 items 含同一截图（lastModified 不同）时只返回 1 个", () => {
+    const fromFiles = new File(["png"], "image.png", { type: "image/png", lastModified: 1 });
+    const fromItems = new File(["png"], "image.png", { type: "image/png", lastModified: 2 });
+    const data = {
+      files: [fromFiles],
+      items: [{ kind: "file", type: "image/png", getAsFile: () => fromItems }],
+    } as unknown as DataTransfer;
+    expect(filesFromClipboardData(data)).toEqual([fromFiles]);
+  });
+
+  it("files 为空时从 items 取", () => {
+    const file = new File(["png"], "image.png", { type: "image/png" });
+    expect(filesFromClipboardData(clipboardDataWithItem(file))).toEqual([file]);
+  });
+
   it("falls back to native clipboard image when paste data has no image", async () => {
     const nativeImage: NativeClipboardImage = {
       size: vi.fn(async () => ({ width: 1, height: 1 })),
