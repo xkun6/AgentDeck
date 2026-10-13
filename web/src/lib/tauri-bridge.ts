@@ -9,6 +9,7 @@
 // 启动时等待 Node sidecar 就绪（sidecar-status）后再挂载 React。
 
 import type {
+  CodingAgentPaths,
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
   ExportLogSnapshotInput,
@@ -42,6 +43,7 @@ import type {
   HermesGitBridge,
   DesktopWindowControls,
 } from "./runtime";
+import { detectHostOS } from "./runtime";
 import { BUILD_COMMIT, DESKTOP_VERSION, versionLabel } from "./build-info";
 import type { SidecarStatusPayload } from "./sidecar-client";
 
@@ -234,6 +236,22 @@ const tauriBridge = {
     return { canceled: paths.length === 0, paths };
   },
 
+  /** 选择单个可执行文件（编程 Agent 路径）：同样直接调用 dialog 插件的 open；Windows 只列 .exe / .cmd。 */
+  async pickExecutableFile(input?: { title?: string }): Promise<FilePickerResult> {
+    const selected = await invokeCommand<string | string[] | null>("plugin:dialog|open", {
+      options: {
+        title: input?.title ?? "选择可执行文件",
+        multiple: false,
+        directory: false,
+        ...(detectHostOS() === "windows"
+          ? { filters: [{ name: "可执行文件", extensions: ["exe", "cmd"] }] }
+          : {}),
+      },
+    });
+    const paths = selected == null ? [] : Array.isArray(selected) ? selected : [selected];
+    return { canceled: paths.length === 0, paths };
+  },
+
   async createWorkspaceProject(): Promise<FilePickerResult> {
     return invokeCommand("create_workspace_project");
   },
@@ -286,6 +304,14 @@ const tauriBridge = {
 
   async codingAgentsCheck(): Promise<CodingAgentsCheckResult> {
     return invokeCommand("coding_agents_check");
+  },
+
+  async codingAgentPathsGet(): Promise<CodingAgentPaths> {
+    return invokeCommand("coding_agent_paths_get");
+  },
+
+  async codingAgentPathsSet(paths: CodingAgentPaths): Promise<CodingAgentPaths> {
+    return invokeCommand("coding_agent_paths_set", { paths });
   },
 
   async uiStoreSnapshot(): Promise<UiStoreSnapshot> {

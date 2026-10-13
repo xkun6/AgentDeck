@@ -322,6 +322,19 @@ interface ProviderProfile {
 - settingsFile 在建会话、恢复会话、模型探测前都会重新读取；模型探测读取失败时回退静态别名而不报错；`isAvailable` 先检查 CLI 再检查文件。合并后的整份设置（含文件内容与其中密钥）会出现在 claude 的命令行中。文件选择由前端直接调用 dialog 插件的 open。
 - 脱敏：`settings.env` 的值与 `profile.env` 同样规则脱敏；日志中不打印 settings 全文。
 
+### 4.8 编程 Agent 可执行文件路径（Rust 命令 + sidecar 共用）
+
+「编程 Agent」设置页可为 Claude Code / Codex 手动指定可执行文件，Rust 检测与 sidecar 启动共用同一份配置。
+
+- **配置文件**：`<数据目录>/coding-agent-paths.json`（数据目录见 3.5，即 sidecar 的 `AGENTDECK_DATA_DIR`），内容 `{ "claude"?: string, "codex"?: string }`；键缺省、`null` 或空字符串（去首尾空白后）= 自动查找。文件不存在或不是合法 JSON 对象时视为全部自动查找（允许 UTF-8 BOM）。
+- **Rust 命令**（`src/commands/coding_agents.rs`，逻辑在 `src/coding_agents.rs`）：
+  - `coding_agent_paths_get` → `{ claude?: string, codex?: string }`（未配置的键省略）。
+  - `coding_agent_paths_set { paths: { claude?: string | null, codex?: string | null } }` → 规范化后的同结构：整份替换；非空值必须是绝对路径且文件存在（目录不算），否则返回中文错误（`AppError` 的 message，如「Codex 可执行文件不存在：…」）且不改动已有文件；写入为「临时文件 `coding-agent-paths.json.tmp` + rename」。
+  - `coding_agents_check` 读取该文件：某 agent 配置了路径时**只探测该路径**（不再回退 PATH 与常见安装点）；路径不存在时 `installed=false`，`version` 字段为「配置的路径不存在：…」。`CodingAgentStatus` 增加 `configuredPath: string | null`（未配置为 null）。
+- **sidecar 优先级**：配置文件 > 环境变量（`AGENTDECK_CLAUDE_PATH` / `AGENTDECK_CODEX_PATH`）> 自动查找。配置中的路径沿用环境变量那套解析（Claude：`.cmd` shim → 真实 exe 或 cli.js，并跑 `--version` 校验；Codex：`.js` 入口 / `.cmd` shim → 平台原生 exe 或 node + codex.js，其它直接执行）。配置路径无效（不存在、shim 解析不出、Claude `--version` 失败）时 provider 不可用，`unavailableReason` 为中文原因（「配置的 … 路径不存在：…；请在「编程 Agent」页修改路径或恢复自动查找」），`agent.create` 返回 `PROVIDER_UNAVAILABLE`，**不静默回退**。基于 claude / codex 的中转（未填 `command`）同样使用该配置；中转填了 `command` 时以 `command` 为准。读取工具 `packages/sidecar/src/utils/coding-agent-paths.ts`。
+- **即时生效**：sidecar 每次解析可执行文件都同步重读配置文件（文件很小）。Codex 每次 `isAvailable` / 建会话都重新解析；Claude 的解析结果原本缓存 60 秒，缓存键改为「当前配置的 claude 路径」，配置变化即作废重解析。因此保存后无需重启 sidecar，下一次 `provider.list` / 新建会话即按新配置。已在运行的会话继续使用旧可执行文件直到关闭。前端保存成功后让 `coding_agents_check` 查询与 sidecar 的 provider.list / 模型目录查询失效并重新获取。
+- **前端**：`settings-coding-agents.tsx` 的 Claude Code / Codex 卡片各有「可执行文件路径」一栏（输入框占位「留空则自动查找」、「浏览…」、「保存」、「恢复自动查找」），显示当前生效路径与是否手动配置；「浏览…」经 bridge 的 `pickExecutableFile` 直接调用 dialog 插件 open（Windows 过滤 `.exe` / `.cmd`）；保存时先 `coding_agent_paths_get` 再整份 `coding_agent_paths_set`。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -375,10 +388,10 @@ interface AgentClient {
 ### 5.1 provider 要点（P3）
 
 - **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 与 `system` 的 status 等子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
-  可执行文件定位顺序：设置项 / 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
+  可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
-  可执行文件定位：`AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 PATH 或 `%APPDATA%
+  可执行文件定位：「编程 Agent」页配置的路径（见 4.8，规则同上）→ `AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 PATH 或 `%APPDATA%
 pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；同样跳过 `node_modules` 内的 PATH 目录，只运行用户本机全局安装的 codex。
 - **ACP**：`spawn(command)` + NDJSON 流 → `ClientSideConnection`；`initialize { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile:false, writeTextFile:false }, terminal:false } }`；`newSession { cwd, mcpServers: [] }`；`prompt` 的 Promise resolve 即 turn 结束；`sessionUpdate`：`agent_message_chunk`→assistant_message、`agent_thought_chunk`→reasoning、`tool_call`/`tool_call_update`→tool_call（按 toolCallId 合并）、`plan`→todo；`requestPermission`：options 映射为 actions，按 selectedActionId 或 allow_once/allow_always、reject_once/reject_always 选；中断 `cancel { sessionId }`；模型 `unstable_setSessionModel`，失败忽略。
   内置命令目录只有一项：`acp:dsh`「DeepSeek Harness」= `dsh --profile acp`；另支持用户在 `AGENTDECK_DATA_DIR/acp-agents.json` 自定义 `{ id, label, command: string[] }[]`（同 id 覆盖内置项）。Windows 上 DeepSeek Harness 的 bin 目录（`%APPDATA%\DeepSeek Harness\bin`）同时有 `dsh.exe` 与 `dsh.cmd`，经 cmd 启动 `dsh --profile acp` 会挂住无输出，必须直接启动 `dsh.exe`（shell:false）：`findExecutable` 在 PATH 命中 `.cmd` / `.bat` 且同目录存在同名 `.exe` 时优先 `.exe`（不受 PATHEXT 顺序影响）。

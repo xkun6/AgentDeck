@@ -349,6 +349,37 @@ describe("ClaudeAgentClient", () => {
     expect(calls).toBe(2);
   });
 
+  test("可用结果缓存，但「编程 Agent」页配置的路径变化后立即重新解析（无需重启 sidecar）", async () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), "agentdeck-claude-cfg-"));
+    try {
+      let calls = 0;
+      const client = new ClaudeAgentClient({
+        logger: createSilentLogger(),
+        env: { AGENTDECK_DATA_DIR: dataDir },
+        resolveExecutable: async () => {
+          calls += 1;
+          return { available: true, path: `claude-${calls}`, source: "path", version: "1" };
+        },
+      });
+      await expect(client.isAvailable()).resolves.toEqual({ available: true, command: ["claude-1"] });
+      await expect(client.isAvailable()).resolves.toEqual({ available: true, command: ["claude-1"] });
+      expect(calls).toBe(1);
+
+      writeFileSync(
+        path.join(dataDir, "coding-agent-paths.json"),
+        JSON.stringify({ claude: "C:\\tools\\claude.exe" }),
+      );
+      await expect(client.isAvailable()).resolves.toEqual({ available: true, command: ["claude-2"] });
+      await expect(client.isAvailable()).resolves.toEqual({ available: true, command: ["claude-2"] });
+      expect(calls).toBe(2);
+
+      writeFileSync(path.join(dataDir, "coding-agent-paths.json"), JSON.stringify({}));
+      await expect(client.isAvailable()).resolves.toEqual({ available: true, command: ["claude-3"] });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("fetchCatalog：优先用 initialize 返回的模型，探测进程随即关闭并缓存结果", async () => {
     const h = createHarness();
     h.setup((cli) => {

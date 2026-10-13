@@ -1,5 +1,6 @@
 // Codex 可执行文件定位（design.md 5.1 / 5.2）：
-// AGENTDECK_CODEX_PATH → PATH 上的 codex.exe（非 Windows 为 codex）→ 解析 npm 的 codex.cmd shim：
+// 「编程 Agent」页配置的路径（<AGENTDECK_DATA_DIR>/coding-agent-paths.json 的 codex；配置了就只用它，无效时抛出中文原因，
+// 不回退）→ AGENTDECK_CODEX_PATH → PATH 上的 codex.exe（非 Windows 为 codex）→ 解析 npm 的 codex.cmd shim：
 // 背后是 node_modules/@openai/codex/bin/codex.js 时优先找平台包里的原生 codex.exe，找不到则用当前 node 执行 codex.js。
 // 只使用用户本机全局安装的 codex：PATH 中位于 node_modules 内的目录（项目本地依赖，如 pnpm 注入的
 // node_modules/.bin）一律跳过，因此不会解析到 AgentDeck 仓库或打包产物里的 @openai/codex。
@@ -7,9 +8,10 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
+import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { isInsideNodeModules } from "../../utils/node-modules-dir.js";
 
-export type CodexLaunchSource = "env" | "path" | "npm-shim-native" | "npm-shim-js";
+export type CodexLaunchSource = "config" | "env" | "path" | "npm-shim-native" | "npm-shim-js";
 
 export interface CodexLaunch {
   /** 直接 spawn 的可执行文件（原生 exe 或 node） */
@@ -30,6 +32,8 @@ export interface ResolveCodexLaunchOptions {
   exists?: (p: string) => boolean;
   readFile?: (p: string) => string;
   onWarning?: (message: string) => void;
+  /** 「编程 Agent」页配置的路径；undefined 时从 `<env.AGENTDECK_DATA_DIR>/coding-agent-paths.json` 读取，null 表示未配置 */
+  configuredPath?: string | null;
 }
 
 const WINDOWS_TARGETS: Record<string, string> = {
@@ -155,7 +159,37 @@ function resolveCmdShim(
   return resolveFromCodexJs(target, opts);
 }
 
-/** 解析 codex 的启动方式；找不到返回 null */
+const CONFIG_HINT = "请在「编程 Agent」页修改路径或恢复自动查找";
+
+/** 配置的路径沿用 AGENTDECK_CODEX_PATH 的解析规则（.js 入口 / .cmd shim / 直接可执行），无效时抛出中文原因 */
+function resolveConfiguredCodex(
+  configured: string,
+  ctx: {
+    exists: (p: string) => boolean;
+    readFile: (p: string) => string;
+    platform: NodeJS.Platform;
+    arch: string;
+    nodePath: string;
+  },
+): CodexLaunch {
+  if (!ctx.exists(configured)) {
+    throw new Error(`配置的 Codex 路径不存在：${configured}；${CONFIG_HINT}`);
+  }
+  const ext = path.extname(configured).toLowerCase();
+  if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
+    return { ...resolveFromCodexJs(configured, ctx), source: "config" };
+  }
+  if (ext === ".cmd" || ext === ".bat") {
+    const fromShim = resolveCmdShim(configured, ctx);
+    if (!fromShim) {
+      throw new Error(`无法从配置的 shim 解析出 Codex 可执行文件：${configured}；${CONFIG_HINT}`);
+    }
+    return { ...fromShim, source: "config" };
+  }
+  return { command: configured, args: [], source: "config" };
+}
+
+/** 解析 codex 的启动方式；找不到返回 null；「编程 Agent」页配置的路径无效时抛出中文原因（不回退自动查找） */
 export function resolveCodexLaunch(options: ResolveCodexLaunchOptions): CodexLaunch | null {
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
@@ -163,6 +197,15 @@ export function resolveCodexLaunch(options: ResolveCodexLaunchOptions): CodexLau
   const exists = options.exists ?? existsSync;
   const readFile = options.readFile ?? ((p: string) => readFileSync(p, "utf8"));
   const ctx = { exists, readFile, platform, arch, nodePath };
+
+  // 0. 「编程 Agent」页配置的路径（每次重读，保存后即时生效）
+  const configured =
+    options.configuredPath !== undefined
+      ? options.configuredPath?.trim() || null
+      : readConfiguredAgentPath(envValue(options.env, DATA_DIR_ENV, platform), "codex");
+  if (configured) {
+    return resolveConfiguredCodex(configured, ctx);
+  }
 
   // 1. AGENTDECK_CODEX_PATH
   const override = envValue(options.env, "AGENTDECK_CODEX_PATH", platform)?.trim();

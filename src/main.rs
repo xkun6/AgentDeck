@@ -166,6 +166,8 @@ fn main() {
             commands::devtools::toggle_devtools,
             commands::environment::environment_check,
             commands::coding_agents::coding_agents_check,
+            commands::coding_agents::coding_agent_paths_get,
+            commands::coding_agents::coding_agent_paths_set,
             commands::api_proxy::external_request,
             commands::api_proxy::download_external_image,
             commands::notify::desktop_notify,

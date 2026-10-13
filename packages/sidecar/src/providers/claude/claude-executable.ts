@@ -1,4 +1,6 @@
 // Claude Code 可执行文件定位（design.md 5.1）。顺序：
+//   0. 「编程 Agent」页配置的路径（<AGENTDECK_DATA_DIR>/coding-agent-paths.json 的 claude）：
+//      配置了就只用它（.cmd shim 同样解析出真实 exe），无效时直接报不可用，不回退后续步骤
 //   1. 环境变量 AGENTDECK_CLAUDE_PATH（指向 .cmd shim 时同样解析出背后的真实 exe）
 //   2. PATH 上的 claude.exe（非 Windows 为 claude）
 //   3. PATH 上的 npm shim claude.cmd → 解析出真实 exe（或 cli.js）
@@ -8,10 +10,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { isInsideNodeModules } from "../../utils/node-modules-dir.js";
 import { execCommand } from "../../utils/spawn.js";
 
-export type ClaudeExecutableSource = "env" | "path" | "npm-shim";
+export type ClaudeExecutableSource = "config" | "env" | "path" | "npm-shim";
 
 export interface ClaudeExecutable {
   /** 真实可执行文件（.exe 或无扩展名的原生二进制；极少数情况为 cli.js，由当前 node 执行） */
@@ -31,6 +34,8 @@ export interface ClaudeExecutableDeps {
   readFile(filePath: string): string;
   /** 跑 `--version`，成功返回版本文本，失败返回 null */
   probe(executablePath: string): Promise<string | null>;
+  /** 「编程 Agent」页配置的路径；未配置返回 null（缺省视为未配置） */
+  configuredPath?(): string | null;
   warn?(message: string): void;
 }
 
@@ -59,6 +64,12 @@ export async function resolveClaudeExecutable(
     }
     return { path: candidate, source, version };
   };
+
+  // 0. 「编程 Agent」页配置的路径：只用它，不回退
+  const fromConfig = deps.configuredPath?.() ?? null;
+  if (fromConfig) {
+    return resolveConfiguredClaude(fromConfig, deps);
+  }
 
   // 1. AGENTDECK_CLAUDE_PATH
   const configured = deps.env[CLAUDE_PATH_ENV]?.trim();
@@ -103,6 +114,32 @@ export async function resolveClaudeExecutable(
 
   const detail = failures.length > 0 ? `；已尝试：${failures.join("、")}` : "";
   return { available: false, reason: `${CLAUDE_UNAVAILABLE_REASON}${detail}` };
+}
+
+const CONFIG_HINT = "请在「编程 Agent」页修改路径或恢复自动查找";
+
+async function resolveConfiguredClaude(
+  configured: string,
+  deps: ClaudeExecutableDeps,
+): Promise<ClaudeExecutableResolution> {
+  if (!deps.exists(configured)) {
+    return { available: false, reason: `配置的 Claude Code 路径不存在：${configured}；${CONFIG_HINT}` };
+  }
+  const target = isCommandScript(configured) ? parseNpmCmdShim(configured, deps) : configured;
+  if (!target) {
+    return {
+      available: false,
+      reason: `无法从配置的 shim 解析出 Claude Code 可执行文件：${configured}；${CONFIG_HINT}`,
+    };
+  }
+  const version = await deps.probe(target);
+  if (version === null) {
+    return {
+      available: false,
+      reason: `配置的 Claude Code 路径无法运行（--version 校验失败）：${target}；${CONFIG_HINT}`,
+    };
+  }
+  return { available: true, path: target, source: "config", version };
 }
 
 /**
@@ -215,6 +252,7 @@ export function createDefaultClaudeExecutableDeps(
     exists: existsSync,
     readFile: (filePath) => readFileSync(filePath, "utf8"),
     probe: (executablePath) => probeClaudeVersion(executablePath, env),
+    configuredPath: () => readConfiguredAgentPath(env[DATA_DIR_ENV], "claude"),
     ...(warn ? { warn } : {}),
   };
 }

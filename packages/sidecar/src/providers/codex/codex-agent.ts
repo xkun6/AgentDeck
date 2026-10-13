@@ -390,7 +390,13 @@ export class CodexAgentClient implements AgentClient {
   }
 
   async isAvailable(): Promise<AgentAvailability> {
-    const launch = await this.resolveLaunch();
+    let launch: CodexLaunch | null;
+    try {
+      launch = await this.resolveLaunch();
+    } catch (error) {
+      // 「编程 Agent」页配置的路径无效：报不可用并给出原因，不回退自动查找
+      return { available: false, reason: errorMessage(error) };
+    }
     if (!launch) {
       return { available: false, reason: NOT_FOUND_REASON };
     }

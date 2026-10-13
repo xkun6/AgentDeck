@@ -47,8 +47,11 @@ export interface CodingAgentStatus {
   id: string;
   label: string;
   installed: boolean;
+  /** 版本号；未安装或版本命令失败时为原因说明（如「配置的路径不存在：…」） */
   version?: string;
   path?: string;
+  /** 「编程 Agent」页手动配置的可执行文件路径；null / 缺省 = 自动查找 */
+  configuredPath?: string | null;
   loginState: CodingAgentLoginState;
   loginDetail?: string;
   configDir: string;
@@ -61,4 +64,13 @@ export interface CodingAgentsCheckResult {
   generatedAtMs: number;
   platform: string;
   agents: CodingAgentStatus[];
+}
+
+/**
+ * 「编程 Agent」页配置的可执行文件路径（`<数据目录>/coding-agent-paths.json`，Rust 命令
+ * coding_agent_paths_get / coding_agent_paths_set）；缺省或空字符串 = 自动查找。
+ */
+export interface CodingAgentPaths {
+  claude?: string | null;
+  codex?: string | null;
 }

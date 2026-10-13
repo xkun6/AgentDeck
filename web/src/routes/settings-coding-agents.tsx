@@ -4,7 +4,9 @@
 // 不读任何 token 密文）。
 // 边界：本页只做检测 + 指引，不代写 ~/.claude / ~/.codex 配置文件——
 // 三方中转在「Agent 与中转」（/agent-providers）中配置，不改 CLI 自身配置。
-import type { ReactNode } from "react";
+// 唯一可写的是 AgentDeck 自己的 `<数据目录>/coding-agent-paths.json`（手动指定 claude / codex 可执行文件），
+// 检测与 sidecar 启动共用该配置（design.md 5.1）。
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
@@ -12,8 +14,11 @@ import {
   CircleHelp,
   Copy,
   FolderOpen,
+  FolderSearch,
   KeyRound,
   RefreshCw,
+  RotateCcw,
+  Save,
   SquareTerminal,
   XCircle,
 } from "lucide-react";
@@ -21,7 +26,11 @@ import type { CodingAgentStatus } from "@agentdeck/protocol";
 import { Button, LoadingState } from "@agentdeck/shared-ui";
 import { CopyButton } from "@/components/ui/copy-button";
 import { DiagnosticCopyButton } from "@/components/ui/diagnostic-copy-button";
-import { useCodingAgentsCheck } from "@/hooks/use-coding-agents";
+import {
+  useCodingAgentsCheck,
+  useSaveCodingAgentPath,
+  type CodingAgentPathKey,
+} from "@/hooks/use-coding-agents";
 import s from "./settings.module.css";
 
 type CardStatus = "ok" | "warning" | "error" | "unknown";
@@ -41,6 +50,10 @@ function agentCardStatus(agent: CodingAgentStatus): CardStatus {
 }
 
 function agentStatusLine(agent: CodingAgentStatus): string {
+  if (!agent.installed && agent.configuredPath) {
+    const reason = agent.version ?? `配置的路径不存在：${agent.configuredPath}`;
+    return `${agent.label} 不可用：${reason}；请修改路径或恢复自动查找`;
+  }
   if (!agent.installed) {
     return `${agent.label} 未安装；安装后才能在 AgentDeck 中新建 ${agent.label} 会话`;
   }
@@ -107,9 +120,117 @@ export function CodingAgentToolbar({ isFetching, hasBridge, onRefresh, diagnosti
   );
 }
 
-function AgentCard({ agent, onOpenPath }: {
+const PATH_KEYS: Record<string, CodingAgentPathKey> = {
+  "claude-code": "claude",
+  codex: "codex",
+};
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 「可执行文件路径」一栏：留空 = 自动查找；保存后检测与 sidecar 立即按新配置解析。 */
+export function AgentPathField({ agent, onSave }: {
+  agent: CodingAgentStatus;
+  onSave: (value: string | null) => Promise<unknown>;
+}) {
+  const configured = agent.configuredPath ?? "";
+  const [draft, setDraft] = useState(configured);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  useEffect(() => setDraft(configured), [configured]);
+
+  const canSave = typeof window !== "undefined" && Boolean(window.hermesDesktop?.codingAgentPathsSet);
+  const canBrowse = typeof window !== "undefined" && Boolean(window.hermesDesktop?.pickExecutableFile);
+  const trimmed = draft.trim();
+
+  const save = async (value: string | null) => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      await onSave(value);
+      setMessage({ tone: "ok", text: value ? "已保存，之后的检测与新建会话使用该路径" : "已恢复自动查找" });
+    } catch (error) {
+      setMessage({ tone: "error", text: `保存失败：${errorText(error)}` });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const browse = async () => {
+    const result = await window.hermesDesktop?.pickExecutableFile?.({ title: `选择 ${agent.label} 可执行文件` })
+      .catch(() => null);
+    const picked = result && !result.canceled ? result.paths[0] : undefined;
+    if (picked) setDraft(picked);
+  };
+
+  const effective = agent.installed && agent.path ? agent.path : "未找到可用的可执行文件";
+
+  return (
+    <div className={s.codingAgentPathField} data-coding-agent-path={agent.id}>
+      <div className={s.codingAgentPathHeader}>
+        <span>可执行文件路径</span>
+        <span className={s.codingAgentPathMode} data-manual={configured ? "true" : undefined}>
+          {configured ? "手动配置" : "自动查找"}
+        </span>
+      </div>
+      <div className={s.codingAgentPathRow}>
+        <input
+          className={[s.input, s.codingAgentPathInput].join(" ")}
+          data-mono="true"
+          type="text"
+          value={draft}
+          placeholder="留空则自动查找"
+          spellCheck={false}
+          aria-label={`${agent.label} 可执行文件路径`}
+          disabled={!canSave || saving}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        {canBrowse ? (
+          <button className={s.btn} type="button" disabled={saving} onClick={() => void browse()}>
+            <FolderSearch size={12} />
+            浏览…
+          </button>
+        ) : null}
+        <button
+          className={s.btn}
+          type="button"
+          disabled={!canSave || saving || trimmed === configured}
+          onClick={() => void save(trimmed || null)}
+        >
+          <Save size={12} />
+          保存
+        </button>
+        <button
+          className={s.btn}
+          type="button"
+          disabled={!canSave || saving || !configured}
+          onClick={() => {
+            setDraft("");
+            void save(null);
+          }}
+        >
+          <RotateCcw size={12} />
+          恢复自动查找
+        </button>
+      </div>
+      <p className={s.codingAgentPathHint}>
+        当前生效：<code>{effective}</code>
+        {configured ? "（手动配置，不再自动查找）" : "（自动查找）"}
+      </p>
+      {message ? (
+        <div className={s.runtimeMessage} data-tone={message.tone} role="status">
+          {message.text}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AgentCard({ agent, onOpenPath, onSavePath }: {
   agent: CodingAgentStatus;
   onOpenPath: (path: string | undefined) => Promise<void>;
+  onSavePath?: (value: string | null) => Promise<unknown>;
 }) {
   const status = agentCardStatus(agent);
   return (
@@ -175,6 +296,8 @@ function AgentCard({ agent, onOpenPath }: {
             打开路径
           </button>
         ) : null}
+
+        {onSavePath ? <AgentPathField agent={agent} onSave={onSavePath} /> : null}
       </div>
     </section>
   );
@@ -182,6 +305,7 @@ function AgentCard({ agent, onOpenPath }: {
 
 export function CodingAgentsSection({ showHeading = true }: { showHeading?: boolean }) {
   const query = useCodingAgentsCheck();
+  const savePath = useSaveCodingAgentPath();
   const data = query.data;
   const hasBridge = typeof window !== "undefined" && Boolean(window.hermesDesktop?.codingAgentsCheck);
 
@@ -258,6 +382,11 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
               key={agent.id}
               agent={agent}
               onOpenPath={openPath}
+              onSavePath={
+                PATH_KEYS[agent.id]
+                  ? (value) => savePath(PATH_KEYS[agent.id]!, value)
+                  : undefined
+              }
             />
           ))}
         </div>

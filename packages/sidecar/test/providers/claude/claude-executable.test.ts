@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import {
+  createDefaultClaudeExecutableDeps,
   parseNpmCmdShim,
   resolveClaudeExecutable,
   type ClaudeExecutableDeps,
@@ -73,6 +74,73 @@ function makeDeps(overrides: Partial<ClaudeExecutableDeps> & { good?: string[] }
   };
   return { deps, probed };
 }
+
+describe("resolveClaudeExecutable：「编程 Agent」页配置的路径", () => {
+  test("配置的路径优先于 AGENTDECK_CLAUDE_PATH 与 PATH", async () => {
+    const configured = touch("configured", "claude.exe");
+    const fromEnv = touch("custom", "claude.exe");
+    const onPath = touch("bin", "claude.exe");
+    const { deps } = makeDeps({
+      env: { AGENTDECK_CLAUDE_PATH: fromEnv, PATH: path.join(root, "bin") },
+      configuredPath: () => configured,
+      good: [configured, fromEnv, onPath],
+    });
+    await expect(resolveClaudeExecutable(deps)).resolves.toEqual({
+      available: true,
+      path: configured,
+      source: "config",
+      version: "2.1.296 (Claude Code)",
+    });
+  });
+
+  test("配置的 .cmd shim 同样解析出真实 exe", async () => {
+    const shim = writeShim("npm", NPM_EXE_SHIM);
+    const exe = touch("npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    const { deps } = makeDeps({ configuredPath: () => shim, good: [exe] });
+    await expect(resolveClaudeExecutable(deps)).resolves.toMatchObject({
+      available: true,
+      path: exe,
+      source: "config",
+    });
+  });
+
+  test("配置的路径不存在：不可用并给中文原因，不回退 PATH", async () => {
+    const onPath = touch("bin", "claude.exe");
+    const missing = path.join(root, "nowhere", "claude.exe");
+    const { deps, probed } = makeDeps({
+      env: { PATH: path.join(root, "bin") },
+      configuredPath: () => missing,
+      good: [onPath],
+    });
+    const result = await resolveClaudeExecutable(deps);
+    expect(result.available).toBe(false);
+    expect(result.available ? "" : result.reason).toContain(`配置的 Claude Code 路径不存在：${missing}`);
+    expect(probed).toEqual([]);
+  });
+
+  test("配置的路径 --version 校验失败：不可用，不回退 PATH", async () => {
+    const configured = touch("configured", "claude.exe");
+    const onPath = touch("bin", "claude.exe");
+    const { deps, probed } = makeDeps({
+      env: { PATH: path.join(root, "bin") },
+      configuredPath: () => configured,
+      good: [onPath],
+    });
+    const result = await resolveClaudeExecutable(deps);
+    expect(result.available ? "" : result.reason).toContain("配置的 Claude Code 路径无法运行");
+    expect(probed).toEqual([configured]);
+  });
+
+  test("默认依赖从 <AGENTDECK_DATA_DIR>/coding-agent-paths.json 读取配置", async () => {
+    const configured = touch("configured", "claude.exe");
+    const dataDir = path.join(root, "data");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(path.join(dataDir, "coding-agent-paths.json"), JSON.stringify({ claude: configured }));
+    const deps = createDefaultClaudeExecutableDeps({ AGENTDECK_DATA_DIR: dataDir });
+    expect(deps.configuredPath?.()).toBe(configured);
+    expect(createDefaultClaudeExecutableDeps({}).configuredPath?.()).toBeNull();
+  });
+});
 
 describe("resolveClaudeExecutable", () => {
   test("AGENTDECK_CLAUDE_PATH 优先", async () => {

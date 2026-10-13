@@ -28,6 +28,7 @@ import type {
 } from "../../agent/types.js";
 import { AgentRpcError } from "../../agent/errors.js";
 import type { Logger } from "../../logger.js";
+import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { createExternalProcessEnv } from "../../utils/process-env.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
 import type { ProcessTerminator } from "../../utils/tree-kill.js";
@@ -182,7 +183,9 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly cliFactory: ClaudeCliFactory;
   private readonly resolveExecutable: () => Promise<ClaudeExecutableResolution>;
   private readonly terminateProcess: ProcessTerminator | undefined;
-  private cached: { at: number; promise: Promise<ClaudeExecutableResolution> } | null = null;
+  /** 「编程 Agent」页配置文件所在的数据目录（AGENTDECK_DATA_DIR），配置变化时作废可执行文件缓存 */
+  private readonly dataDir: string | undefined;
+  private cached: { at: number; key: string; promise: Promise<ClaudeExecutableResolution> } | null = null;
   private modelCache: { at: number; models: AgentModelDefinition[] } | null = null;
   private modelProbe: Promise<AgentModelDefinition[] | null> | null = null;
 
@@ -204,6 +207,7 @@ export class ClaudeAgentClient implements AgentClient {
           createDefaultClaudeExecutableDeps(options.env, (message) => this.logger.warn(message)),
         ));
     this.terminateProcess = options.terminateProcess;
+    this.dataDir = options.env[DATA_DIR_ENV];
   }
 
   async isAvailable(): Promise<AgentAvailability> {
@@ -331,10 +335,14 @@ export class ClaudeAgentClient implements AgentClient {
     return this.resolveExtraArgs ? [...(await this.resolveExtraArgs())] : this.extraArgs;
   }
 
-  /** 成功结果缓存 60 秒（provider.list 与 agent.create 都会调用）；失败不缓存，便于安装后立即生效 */
+  /**
+   * 成功结果缓存 60 秒（provider.list 与 agent.create 都会调用）；失败不缓存，便于安装后立即生效。
+   * 缓存以「编程 Agent」页配置的路径为键：每次都重读配置文件，配置变化即重新解析，保存后无需重启 sidecar。
+   */
   private resolve(): Promise<ClaudeExecutableResolution> {
     const now = Date.now();
-    if (this.cached && now - this.cached.at < AVAILABILITY_CACHE_MS) {
+    const key = readConfiguredAgentPath(this.dataDir, "claude") ?? "";
+    if (this.cached && this.cached.key === key && now - this.cached.at < AVAILABILITY_CACHE_MS) {
       return this.cached.promise;
     }
     const promise = this.resolveExecutable().then(
@@ -351,7 +359,7 @@ export class ClaudeAgentClient implements AgentClient {
         throw error;
       },
     );
-    this.cached = { at: now, promise };
+    this.cached = { at: now, key, promise };
     return promise;
   }
 }

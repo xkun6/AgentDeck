@@ -1,4 +1,5 @@
 import type {
+  CodingAgentPaths,
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
   ExportLogSnapshotInput,
@@ -333,6 +334,8 @@ declare global {
       pickDirectory?(): Promise<FilePickerResult>;
       /** 选择单个 .json 文件 */
       pickJsonFile?(input?: { title?: string }): Promise<FilePickerResult>;
+      /** 选择单个可执行文件（Windows 过滤 .exe / .cmd） */
+      pickExecutableFile?(input?: { title?: string }): Promise<FilePickerResult>;
       createWorkspaceProject?(): Promise<FilePickerResult>;
       openWorkspacePath?(input: { path: string }): Promise<ExternalRequestResult>;
       openExternalUrl?(input: { url: string }): Promise<SimpleResult>;
@@ -340,6 +343,9 @@ declare global {
       exportLogSnapshot?(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult>;
       environmentCheck?(): Promise<EnvironmentCheckResult>;
       codingAgentsCheck?(): Promise<CodingAgentsCheckResult>;
+      /** 「编程 Agent」页配置的 Claude / Codex 可执行文件路径（Rust coding_agent_paths_get / set） */
+      codingAgentPathsGet?(): Promise<CodingAgentPaths>;
+      codingAgentPathsSet?(paths: CodingAgentPaths): Promise<CodingAgentPaths>;
       uiStoreSnapshot?(): Promise<UiStoreSnapshot>;
       uiStoreSetKv?(input: { key: string; value: unknown }): Promise<boolean>;
       uiStoreRemoveKv?(input: { key: string }): Promise<boolean>;

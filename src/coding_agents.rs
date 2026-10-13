@@ -9,13 +9,108 @@
 //! `claudeAiOauth.expiresAt` 等元数据字段；macOS `security` 查询不带 `-w`
 //! （只确认条目存在，不导出密码，也不会触发钥匙串 ACL 授权弹窗）。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::environment::{now_ms, probe_commands};
+use crate::environment::{now_ms, probe_commands, CommandProbe};
 
 pub const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 pub const CODEX_KEYCHAIN_SERVICE: &str = "Codex Auth";
+
+/// 「编程 Agent」页手动配置的可执行文件路径，存于 `<数据目录>/coding-agent-paths.json`
+/// （design.md 5.1）。sidecar 每次解析 claude / codex 时重读同一文件，保存后无需重启即生效。
+pub const CODING_AGENT_PATHS_FILE: &str = "coding-agent-paths.json";
+
+/// `{ "claude"?: string, "codex"?: string }`；缺省或空字符串 = 自动查找。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodingAgentPaths {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<String>,
+}
+
+impl CodingAgentPaths {
+    /// 去首尾空白，空字符串归为 None（= 自动查找）。
+    fn normalized(self) -> Self {
+        fn clean(value: Option<String>) -> Option<String> {
+            value
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        }
+        Self {
+            claude: clean(self.claude),
+            codex: clean(self.codex),
+        }
+    }
+}
+
+pub(crate) fn coding_agent_paths_file(data_dir: &Path) -> PathBuf {
+    data_dir.join(CODING_AGENT_PATHS_FILE)
+}
+
+/// 读取配置；文件不存在或损坏时视为全部自动查找。
+pub fn read_coding_agent_paths(data_dir: &Path) -> CodingAgentPaths {
+    std::fs::read_to_string(coding_agent_paths_file(data_dir))
+        .ok()
+        .and_then(|raw| {
+            serde_json::from_str::<CodingAgentPaths>(raw.trim_start_matches('\u{feff}')).ok()
+        })
+        .unwrap_or_default()
+        .normalized()
+}
+
+/// 校验：非空值必须是绝对路径且文件存在，否则返回中文错误。
+pub fn validate_coding_agent_paths(paths: CodingAgentPaths) -> Result<CodingAgentPaths, String> {
+    let paths = paths.normalized();
+    for (label, value) in [("Claude Code", &paths.claude), ("Codex", &paths.codex)] {
+        let Some(value) = value else { continue };
+        let path = Path::new(value);
+        if !path.is_absolute() {
+            return Err(format!("{label} 可执行文件路径必须是绝对路径：{value}"));
+        }
+        if !path.is_file() {
+            return Err(format!("{label} 可执行文件不存在：{value}"));
+        }
+    }
+    Ok(paths)
+}
+
+/// 校验后写入（临时文件 + rename），返回规范化后的配置。
+pub fn save_coding_agent_paths(
+    data_dir: &Path,
+    paths: CodingAgentPaths,
+) -> Result<CodingAgentPaths, String> {
+    let paths = validate_coding_agent_paths(paths)?;
+    std::fs::create_dir_all(data_dir).map_err(|err| format!("创建数据目录失败：{err}"))?;
+    let target = coding_agent_paths_file(data_dir);
+    let tmp = data_dir.join(format!("{CODING_AGENT_PATHS_FILE}.tmp"));
+    let body =
+        serde_json::to_string_pretty(&paths).map_err(|err| format!("序列化配置失败：{err}"))?;
+    std::fs::write(&tmp, body).map_err(|err| format!("写入配置失败：{err}"))?;
+    std::fs::rename(&tmp, &target).map_err(|err| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("保存配置失败：{err}")
+    })?;
+    Ok(paths)
+}
+
+/// 配置了路径时只探测该路径（不回退自动查找）；否则按候选列表探测。
+fn probe_agent_binary(configured: Option<&str>, candidates: &[String]) -> CommandProbe {
+    match configured {
+        Some(path) if !Path::new(path).is_file() => CommandProbe {
+            found: false,
+            path: None,
+            version: None,
+            error: Some(format!("配置的路径不存在：{path}")),
+        },
+        Some(path) => probe_commands(&[path], &["--version"]),
+        None => {
+            let refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
+            probe_commands(&refs, &["--version"])
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,8 +127,11 @@ pub struct CodingAgentStatus {
     pub id: String,
     pub label: String,
     pub installed: bool,
+    /// 版本号；未安装或版本命令失败时为原因说明（如「配置的路径不存在：…」）。
     pub version: Option<String>,
     pub path: Option<String>,
+    /// 「编程 Agent」页手动配置的路径（None = 自动查找）。
+    pub configured_path: Option<String>,
     pub login_state: CodingAgentLoginState,
     /// 人话补充（过期时间、凭据位置等），不含任何秘密。
     pub login_detail: Option<String>,
@@ -217,24 +315,25 @@ fn codex_binary_candidates(home: &Path) -> Vec<String> {
     ]
 }
 
-pub fn collect_coding_agents_check() -> CodingAgentsCheckResult {
+pub fn collect_coding_agents_check(data_dir: &Path) -> CodingAgentsCheckResult {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let configured = read_coding_agent_paths(data_dir);
 
     let claude_dir = claude_config_dir(std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(), &home);
     let codex_dir = codex_config_dir(std::env::var("CODEX_HOME").ok().as_deref(), &home);
 
-    let claude_candidates = claude_binary_candidates(&home);
-    let claude_refs: Vec<&str> = claude_candidates.iter().map(String::as_str).collect();
-    let claude_probe = probe_commands(&claude_refs, &["--version"]);
+    let claude_probe = probe_agent_binary(
+        configured.claude.as_deref(),
+        &claude_binary_candidates(&home),
+    );
     let (claude_login, claude_detail) = if claude_probe.found {
         detect_claude_login(&claude_dir)
     } else {
         (CodingAgentLoginState::Unknown, None)
     };
 
-    let codex_candidates = codex_binary_candidates(&home);
-    let codex_refs: Vec<&str> = codex_candidates.iter().map(String::as_str).collect();
-    let codex_probe = probe_commands(&codex_refs, &["--version"]);
+    let codex_probe =
+        probe_agent_binary(configured.codex.as_deref(), &codex_binary_candidates(&home));
     let (codex_login, codex_detail) = if codex_probe.found {
         detect_codex_login(&codex_dir)
     } else {
@@ -251,6 +350,7 @@ pub fn collect_coding_agents_check() -> CodingAgentsCheckResult {
                 installed: claude_probe.found,
                 version: claude_probe.version.or(claude_probe.error),
                 path: claude_probe.path.map(|p| p.to_string_lossy().into_owned()),
+                configured_path: configured.claude,
                 login_state: claude_login,
                 login_detail: claude_detail,
                 config_dir: claude_dir.to_string_lossy().into_owned(),
@@ -264,6 +364,7 @@ pub fn collect_coding_agents_check() -> CodingAgentsCheckResult {
                 installed: codex_probe.found,
                 version: codex_probe.version.or(codex_probe.error),
                 path: codex_probe.path.map(|p| p.to_string_lossy().into_owned()),
+                configured_path: configured.codex,
                 login_state: codex_login,
                 login_detail: codex_detail,
                 config_dir: codex_dir.to_string_lossy().into_owned(),
@@ -367,6 +468,206 @@ mod tests {
         .unwrap();
         let (state, _) = detect_codex_login(&codex_dir);
         assert_eq!(state, CodingAgentLoginState::LoggedIn);
+    }
+
+    #[test]
+    fn coding_agent_paths_read_defaults_and_normalizes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // 文件不存在 → 全部自动查找
+        assert_eq!(
+            read_coding_agent_paths(dir.path()),
+            CodingAgentPaths::default()
+        );
+
+        let file = coding_agent_paths_file(dir.path());
+        std::fs::write(
+            &file,
+            "\u{feff}{\"claude\":\"  /opt/claude  \",\"codex\":\"\"}",
+        )
+        .unwrap();
+        assert_eq!(
+            read_coding_agent_paths(dir.path()),
+            CodingAgentPaths {
+                claude: Some("/opt/claude".into()),
+                codex: None,
+            }
+        );
+
+        std::fs::write(&file, "{broken").unwrap();
+        assert_eq!(
+            read_coding_agent_paths(dir.path()),
+            CodingAgentPaths::default()
+        );
+    }
+
+    #[test]
+    fn coding_agent_paths_validation_rejects_relative_and_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let exe = dir.path().join("claude.exe");
+        std::fs::write(&exe, b"x").unwrap();
+        let exe = exe.to_string_lossy().into_owned();
+
+        let ok = validate_coding_agent_paths(CodingAgentPaths {
+            claude: Some(format!(" {exe} ")),
+            codex: Some("   ".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            ok,
+            CodingAgentPaths {
+                claude: Some(exe.clone()),
+                codex: None,
+            }
+        );
+
+        let err = validate_coding_agent_paths(CodingAgentPaths {
+            claude: Some("bin/claude".into()),
+            codex: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("绝对路径"), "{err}");
+
+        let missing = dir.path().join("codex.exe").to_string_lossy().into_owned();
+        let err = validate_coding_agent_paths(CodingAgentPaths {
+            claude: None,
+            codex: Some(missing.clone()),
+        })
+        .unwrap_err();
+        assert!(err.contains("不存在") && err.contains(&missing), "{err}");
+
+        // 目录不算可执行文件
+        let err = validate_coding_agent_paths(CodingAgentPaths {
+            claude: Some(dir.path().to_string_lossy().into_owned()),
+            codex: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("不存在"), "{err}");
+    }
+
+    #[test]
+    fn coding_agent_paths_save_roundtrips_atomically() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data_dir = dir.path().join("data");
+        let exe = dir.path().join("codex.exe");
+        std::fs::write(&exe, b"x").unwrap();
+        let exe = exe.to_string_lossy().into_owned();
+
+        let saved = save_coding_agent_paths(
+            &data_dir,
+            CodingAgentPaths {
+                claude: Some(String::new()),
+                codex: Some(exe.clone()),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.codex.as_deref(), Some(exe.as_str()));
+        assert_eq!(saved.claude, None);
+        assert_eq!(read_coding_agent_paths(&data_dir), saved);
+        // 未配置的键不写入文件；临时文件已被 rename 掉
+        let raw = std::fs::read_to_string(coding_agent_paths_file(&data_dir)).unwrap();
+        assert!(!raw.contains("claude"), "{raw}");
+        assert!(!data_dir
+            .join(format!("{CODING_AGENT_PATHS_FILE}.tmp"))
+            .exists());
+
+        // 清空 = 恢复自动查找
+        let cleared = save_coding_agent_paths(&data_dir, CodingAgentPaths::default()).unwrap();
+        assert_eq!(cleared, CodingAgentPaths::default());
+        assert_eq!(
+            std::fs::read_to_string(coding_agent_paths_file(&data_dir))
+                .unwrap()
+                .trim(),
+            "{}"
+        );
+
+        // 校验失败不覆盖已有文件
+        save_coding_agent_paths(
+            &data_dir,
+            CodingAgentPaths {
+                claude: None,
+                codex: Some(exe.clone()),
+            },
+        )
+        .unwrap();
+        assert!(save_coding_agent_paths(
+            &data_dir,
+            CodingAgentPaths {
+                claude: Some("relative".into()),
+                codex: None,
+            },
+        )
+        .is_err());
+        assert_eq!(read_coding_agent_paths(&data_dir).codex, Some(exe));
+    }
+
+    #[test]
+    fn configured_path_is_probed_exclusively() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let auto = dir.path().join("auto-claude");
+        std::fs::write(&auto, b"x").unwrap();
+        let auto_candidates = vec![auto.to_string_lossy().into_owned()];
+
+        // 未配置：按候选探测
+        let probe = probe_agent_binary(None, &auto_candidates);
+        assert!(probe.found);
+        assert_eq!(probe.path.as_deref(), Some(auto.as_path()));
+
+        // 配置的路径存在：只用它
+        let configured = dir.path().join("configured-claude");
+        std::fs::write(&configured, b"x").unwrap();
+        let configured_str = configured.to_string_lossy().into_owned();
+        let probe = probe_agent_binary(Some(&configured_str), &auto_candidates);
+        assert!(probe.found);
+        assert_eq!(probe.path.as_deref(), Some(configured.as_path()));
+
+        // 配置的路径不存在：不回退候选
+        let missing = dir.path().join("missing").to_string_lossy().into_owned();
+        let probe = probe_agent_binary(Some(&missing), &auto_candidates);
+        assert!(!probe.found);
+        assert_eq!(probe.path, None);
+        assert_eq!(probe.error, Some(format!("配置的路径不存在：{missing}")));
+    }
+
+    #[test]
+    fn collect_check_reports_configured_paths() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing_claude = dir
+            .path()
+            .join("nope-claude.exe")
+            .to_string_lossy()
+            .into_owned();
+        let missing_codex = dir
+            .path()
+            .join("nope-codex.exe")
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(
+            coding_agent_paths_file(dir.path()),
+            serde_json::json!({ "claude": missing_claude, "codex": missing_codex }).to_string(),
+        )
+        .unwrap();
+
+        let result = collect_coding_agents_check(dir.path());
+        let claude = &result.agents[0];
+        assert!(!claude.installed);
+        assert_eq!(
+            claude.configured_path.as_deref(),
+            Some(missing_claude.as_str())
+        );
+        assert!(claude
+            .version
+            .as_deref()
+            .unwrap()
+            .contains("配置的路径不存在"));
+        let codex = &result.agents[1];
+        assert!(!codex.installed);
+        assert_eq!(
+            codex.configured_path.as_deref(),
+            Some(missing_codex.as_str())
+        );
+
+        let json = serde_json::to_value(claude).unwrap();
+        assert_eq!(json["configuredPath"], serde_json::json!(missing_claude));
     }
 
     #[test]
