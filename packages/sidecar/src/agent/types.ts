@@ -16,6 +16,7 @@ import type {
   AgentSlashCommand,
   AgentStreamEvent,
   AgentTimelineItem,
+  ProviderCapabilities,
   ProviderProfileExtends,
   ProviderSubagentStatus,
 } from "@agentdeck/protocol";
@@ -117,6 +118,11 @@ export interface AgentSession {
   stopBackgroundTask?(taskId: string): Promise<void>;
   /** 读任务输出文件尾部（只读 CLI 报告过的路径）；任务未知抛 TASK_NOT_FOUND */
   readBackgroundTaskOutput?(taskId: string, maxBytes: number): Promise<AgentBackgroundTaskOutput>;
+  /**
+   * 运行中插话（design.md 4.22）：把消息投递给进行中的回合，不开新回合、不发 `turn_started`。
+   * 不支持的 provider 不实现；当前回合不可插话时抛错（AgentManager 原样转成业务错误）。
+   */
+  steer?(prompt: AgentPromptInput, opts?: { clientMessageId?: string }): Promise<void>;
 }
 
 export interface AgentAvailability {
@@ -130,6 +136,8 @@ export interface AgentClient {
   readonly provider: AgentProviderId;
   readonly kind: AgentProviderKind;
   readonly label: string;
+  /** provider 能力（design.md 4.22 / 4.23），provider.list 原样带出 */
+  readonly capabilities?: ProviderCapabilities;
   /** 来自 providers.json 的自定义 provider（design.md 4.7）；内置 provider 不设置 */
   readonly custom?: { extends: ProviderProfileExtends; description?: string };
   isAvailable(): Promise<AgentAvailability>;

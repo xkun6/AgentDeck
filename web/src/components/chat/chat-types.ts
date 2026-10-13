@@ -46,4 +46,8 @@ export interface ChatMessage {
   title?: string;
   error?: boolean;
   stats?: AssistantMessageStats;
+  /** 回合以失败 / 中断结束留下的提示：对应的用户消息 id，可在此处重试（design.md 4.21） */
+  retryUserMessageId?: string;
+  /** 用户消息由时间线重建，图片没有保存（design.md 4.21） */
+  restored?: boolean;
 }

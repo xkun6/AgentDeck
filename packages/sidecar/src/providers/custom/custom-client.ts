@@ -204,6 +204,10 @@ export class CustomProviderClient implements AgentClient {
         : null;
   }
 
+  get capabilities(): AgentClient["capabilities"] {
+    return this.inner.capabilities;
+  }
+
   async isAvailable(): Promise<AgentAvailability> {
     const availability = await this.guard(() => this.inner.isAvailable());
     return availability.reason !== undefined

@@ -38,6 +38,15 @@ describe("ProviderRegistry", () => {
     );
   });
 
+  test("listProviderInfo 带出 capabilities（steer）：Claude / Codex 为真，ACP 不带", async () => {
+    const registry = await createProviderRegistry(ctx);
+    const infos = await registry.listProviderInfo();
+    const byId = new Map(infos.map((info) => [info.id, info]));
+    expect(byId.get("claude")?.capabilities?.steer).toBe(true);
+    expect(byId.get("codex")?.capabilities?.steer).toBe(true);
+    expect(byId.get("acp:dsh")?.capabilities?.steer).toBeFalsy();
+  });
+
   test("listProviderInfo：可用性探测异常记为不可用并带 command", async () => {
     const broken: AgentClient = {
       provider: "broken",

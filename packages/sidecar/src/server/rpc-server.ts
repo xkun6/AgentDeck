@@ -275,6 +275,18 @@ export class RpcServer {
         }),
         (params) => manager.sendPrompt(params.agentId, params.prompt, params.clientMessageId),
       ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentSteer,
+        z.object({
+          agentId: z.string().min(1),
+          prompt: promptSchema,
+          clientMessageId: z.string().optional(),
+        }),
+        async (params) => {
+          await manager.steer(params.agentId, params.prompt, params.clientMessageId);
+          return {};
+        },
+      ),
       defineMethod(AGENT_RPC_METHODS.agentCancel, agentIdParams, async (params) => {
         await manager.cancel(params.agentId);
         return {};

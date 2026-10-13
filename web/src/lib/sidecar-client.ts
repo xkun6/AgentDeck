@@ -716,6 +716,8 @@ export interface SidecarStatusPayload {
   version: string | null;
   status: "starting" | "ready" | "failed" | "stopped";
   error: string | null;
+  /** sidecar 进程 pid，未运行时为 null（design.md 3.4） */
+  pid: number | null;
 }
 
 export function buildSidecarSocketUrl(wsUrl: string, token: string): string {

@@ -3,7 +3,7 @@
 // - bindSidecarToStore：把连续去重后的事件流 / 快照 / 连接状态写进 jotai store；
 // - useSidecarBridge：在应用根部挂一次，负责绑定与首次连接；
 // - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式/思考强度、列表、历史、删除、
-//   斜杠命令、MCP 状态与重连、重命名 / 置顶 / 归档）。
+//   斜杠命令、MCP 状态与重连、重命名 / 置顶 / 归档、运行中插话）。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useStore } from "jotai";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
@@ -339,6 +339,24 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
 
     async interrupt(agentId: string): Promise<void> {
       await client.request("agent.cancel", { agentId }, { timeoutMs: 15_000 });
+    },
+
+    /**
+     * 运行中插话（design.md 4.22）：把消息投递给进行中的回合。用户消息由 sidecar 写入时间线（带 steer 标记），
+     * 随 agent.stream 回到前端，这里不做乐观插入；失败时抛出带中文提示的 Error。
+     */
+    async steerPrompt(
+      agentId: string,
+      prompt: AgentPromptInput,
+      options: { clientMessageId?: string } = {},
+    ): Promise<{ clientMessageId: string }> {
+      const clientMessageId = options.clientMessageId ?? newClientMessageId();
+      try {
+        await client.request("agent.steer", { agentId, prompt, clientMessageId });
+      } catch (error) {
+        throw new Error(humanizeSidecarError(error));
+      }
+      return { clientMessageId };
     },
 
     /** 首次响应前撤回本轮消息（design.md 4.16）；返回原始 prompt 供回填输入框。 */

@@ -336,3 +336,23 @@ describe("删除会话", () => {
     unbind();
   });
 });
+
+describe("steerPrompt（design.md 4.22）", () => {
+  it("请求 agent.steer 并带上 clientMessageId，不做乐观插入", async () => {
+    const store = createStore();
+    const client = fakeClient(async () => ({}));
+    const actions = createAgentSessionActions(client, store);
+    const { clientMessageId } = await actions.steerPrompt(AGENT, "补充一句", { clientMessageId: "cm-9" });
+    expect(clientMessageId).toBe("cm-9");
+    expect(client.request).toHaveBeenCalledWith("agent.steer", { agentId: AGENT, prompt: "补充一句", clientMessageId: "cm-9" });
+    expect(store.get(chatRuntimeBySessionAtom)[AGENT]).toBeUndefined();
+  });
+
+  it("失败时抛出中文提示的 Error", async () => {
+    const client = fakeClient(async () => {
+      throw rpcError("NOT_SUPPORTED", "该 Agent 不支持运行中插话");
+    });
+    const actions = createAgentSessionActions(client, createStore());
+    await expect(actions.steerPrompt(AGENT, "x")).rejects.toThrow("该 Agent 不支持运行中插话");
+  });
+});

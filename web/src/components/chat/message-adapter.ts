@@ -173,6 +173,11 @@ function partsToBlocks(
       blocks.push({ type: "image", image: imagePartToEntry(part) });
       continue;
     }
+    if (part.type === "steer") {
+      const text = normalizeContent(part.text);
+      if (text) blocks.push({ type: "steer", text });
+      continue;
+    }
     if (part.type === "moa_reference") {
       const text = normalizeContent(part.text);
       if (text) {
@@ -337,6 +342,8 @@ export function agentUIMessageToChatMessage(msg: AgentUIMessage): ChatMessage | 
     status: msg.status,
     error: msg.status === "error" || messageHasErrorNotice(msg),
     stats: deriveAssistantStats(msg),
+    ...(typeof msg.retryFor === "string" ? { retryUserMessageId: msg.retryFor } : {}),
+    ...(msg.restored === true ? { restored: true } : {}),
   };
 }
 

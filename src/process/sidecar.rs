@@ -94,6 +94,8 @@ pub struct SidecarStatusPayload {
     pub version: Option<String>,
     pub status: SidecarStatus,
     pub error: Option<String>,
+    /// sidecar 进程 pid，未运行时为 null（Debug 面板显示）。
+    pub pid: Option<u32>,
 }
 
 impl SidecarStatusPayload {
@@ -104,6 +106,7 @@ impl SidecarStatusPayload {
             version: None,
             status: SidecarStatus::Stopped,
             error: None,
+            pid: None,
         }
     }
 }
@@ -695,6 +698,7 @@ mod tests {
             version: Some("0.1.0".to_string()),
             status: SidecarStatus::Ready,
             error: None,
+            pid: Some(4321),
         };
         assert_eq!(
             serde_json::to_value(&payload).unwrap(),
@@ -703,13 +707,13 @@ mod tests {
                 "token": "t",
                 "version": "0.1.0",
                 "status": "ready",
-                "error": null
+                "error": null,
+                "pid": 4321
             })
         );
-        assert_eq!(
-            serde_json::to_value(SidecarStatusPayload::stopped()).unwrap()["status"],
-            "stopped"
-        );
+        let stopped = serde_json::to_value(SidecarStatusPayload::stopped()).unwrap();
+        assert_eq!(stopped["status"], "stopped");
+        assert_eq!(stopped["pid"], serde_json::Value::Null);
     }
 
     fn touch(path: &Path) {

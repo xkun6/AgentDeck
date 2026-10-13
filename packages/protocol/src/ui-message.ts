@@ -119,6 +119,13 @@ interface AgentNoticeMessagePart {
   text: string;
 }
 
+/** 运行中插话（design.md 4.22）：当前助手消息流里的内联用户气泡。 */
+interface AgentSteerMessagePart {
+  type: "steer";
+  text: string;
+  clientMessageId?: string;
+}
+
 /** 多模型参考输出块（历史结构，保留以兼容渲染层的分支）。 */
 interface AgentMoaReferenceMessagePart {
   type: "moa_reference";
@@ -135,6 +142,7 @@ export type AgentMessagePart =
   | AgentImageMessagePart
   | AgentToolMessagePart
   | AgentNoticeMessagePart
+  | AgentSteerMessagePart
   | AgentMoaReferenceMessagePart;
 
 export interface AgentUIMessage {
