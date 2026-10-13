@@ -2,6 +2,7 @@
 // 协议流程与事件映射参考 paseo packages/server/src/server/agent/providers/codex-app-server-agent.ts
 // （Apache-2.0）的启动、initialize、thread/start、turn/start、审批、interrupt、model/list 与通知处理，
 // 按 AgentDeck 的精简接口重写；字段以本机 codex-cli 0.162.1 `app-server generate-ts` 生成的类型为准。
+// 子线程（子代理）通知由 ./subagent-router.ts 路由到子代理时间线（design.md 4.11）。
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +30,7 @@ import type {
   AgentClient,
   AgentSession,
   AgentSessionConfig,
+  AgentSessionEvent,
 } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { execCommand, spawnProcess } from "../../utils/spawn.js";
@@ -38,6 +40,7 @@ import {
   type JsonRpcId,
 } from "./app-server-transport.js";
 import { describeCodexLaunch, resolveCodexLaunch, type CodexLaunch } from "./launch.js";
+import { CodexSubagentRouter } from "./subagent-router.js";
 import {
   makeThinkingOption,
   normalizeThinkingOptionId,
@@ -633,8 +636,9 @@ export class CodexAgentSession implements AgentSession {
   private readonly pending = new Map<string, PendingPermission>();
   /** itemId → 最近一次映射出的工具调用（审批请求复用其 detail） */
   private readonly toolItems = new Map<string, ToolCallTimelineItem>();
-  private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
+  private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly imageFiles: string[] = [];
+  private readonly subagents: CodexSubagentRouter;
   private closed = false;
 
   constructor(private readonly deps: CodexSessionDeps) {
@@ -643,6 +647,14 @@ export class CodexAgentSession implements AgentSession {
     this.model = deps.model;
     this.modeId = deps.modeId;
     this.thinkingOptionId = normalizeThinkingOptionId(deps.thinkingOptionId);
+    this.subagents = new CodexSubagentRouter({
+      cwd: deps.cwd,
+      rootThreadId: () => this.threadId,
+      emitSubagent: (event) => this.emit({ type: "provider_subagent", event }),
+      // 子线程活动可能晚于父回合结束：没有活动回合时不带 turnId
+      emitParentCard: (item) =>
+        this.emit({ type: "timeline", ...(this.active ? { turnId: this.active.turnId } : {}), item }),
+    });
   }
 
   get id(): string | null {
@@ -657,7 +669,7 @@ export class CodexAgentSession implements AgentSession {
     }
   }
 
-  subscribe(cb: (event: AgentStreamEvent) => void): () => void {
+  subscribe(cb: (event: AgentSessionEvent) => void): () => void {
     this.listeners.add(cb);
     return () => {
       this.listeners.delete(cb);
@@ -894,6 +906,7 @@ export class CodexAgentSession implements AgentSession {
     for (const file of this.imageFiles.splice(0)) {
       rmSync(file, { force: true });
     }
+    this.subagents.reset();
     this.listeners.clear();
     this.deps.onClosed?.(this);
   }
@@ -998,6 +1011,9 @@ export class CodexAgentSession implements AgentSession {
     this.threadLoaded = false;
     this.deps.logger.warn("[codex] app-server 意外退出：%s", error.message);
     this.cancelAllPermissions({ behavior: "deny", message: "Codex app-server 已退出" });
+    // 子线程随进程一起消失
+    this.subagents.failRunning();
+    this.subagents.reset();
     const turn = this.active;
     if (turn) {
       this.finishTurn(turn, {
@@ -1119,9 +1135,10 @@ export class CodexAgentSession implements AgentSession {
       return;
     }
 
-    // 子 Agent 等其它线程的通知不进入本会话时间线
+    // 其它线程（子代理）的通知路由到子代理时间线，不进入本会话时间线；不受父回合限制
     const threadId = str(pick(params, "threadId", "thread_id"));
     if (threadId && this.threadId && threadId !== this.threadId) {
+      this.subagents.routeNotification(method, params, threadId);
       return;
     }
 
@@ -1279,8 +1296,12 @@ export class CodexAgentSession implements AgentSession {
 
     const tool = mapCodexToolCallFromThreadItem(item, { cwd: this.deps.cwd });
     if (!tool) return;
-    this.toolItems.set(tool.callId, tool);
-    this.emitTimeline(turn, tool);
+    const routed = this.subagents.handleRootItem(item, tool);
+    if (routed === "handled") return; // 已登记子线程的 subAgentActivity：更新的是既有卡片
+    const card = routed ? routed.card : tool;
+    this.toolItems.set(card.callId, card);
+    this.emitTimeline(turn, card);
+    routed?.replay();
   }
 
   private handleTurnCompleted(turn: ActiveTurn, params: JsonRecord | null): void {
@@ -1469,7 +1490,7 @@ export class CodexAgentSession implements AgentSession {
     this.emit({ type: "timeline", turnId: turn.turnId, item });
   }
 
-  private emit(event: AgentStreamEvent): void {
+  private emit(event: AgentSessionEvent): void {
     for (const listener of this.listeners) {
       try {
         listener(event);

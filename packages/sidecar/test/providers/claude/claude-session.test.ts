@@ -179,7 +179,9 @@ function canUseTool(
 
 function collect(session: AgentSession): AgentStreamEvent[] {
   const events: AgentStreamEvent[] = [];
-  session.subscribe((event) => events.push(event));
+  session.subscribe((event) => {
+    if (event.type !== "provider_subagent") events.push(event);
+  });
   return events;
 }
 
@@ -639,7 +641,7 @@ describe("ClaudeAgentSession", () => {
     expect(session.describePersistence()).toEqual({ provider: "claude", sessionId: SESSION_ID });
   });
 
-  test("没有流式增量时使用完整 assistant 消息；子代理消息被忽略", async () => {
+  test("没有流式增量时使用完整 assistant 消息；子代理消息不进主时间线的文本", async () => {
     const h = createHarness();
     h.setup(
       (q) =>
@@ -660,7 +662,16 @@ describe("ClaudeAgentSession", () => {
     await session.startTurn("hi");
     await waitUntil(() => terminalEvents(events).length === 1);
     const items = events.flatMap((e) => (e.type === "timeline" ? [e.item] : []));
+    // 没有 task 公告的旧版 CLI：sidechain 帧只产生一张子代理父卡片，文本写入子代理时间线
     expect(items).toEqual([
+      {
+        type: "tool_call",
+        callId: "toolu_parent",
+        name: "Task",
+        status: "running",
+        error: null,
+        detail: { type: "sub_agent", log: "", actions: [] },
+      },
       { type: "reasoning", text: "完整思考" },
       { type: "assistant_message", text: "完整回复", messageId: "m2" },
     ]);

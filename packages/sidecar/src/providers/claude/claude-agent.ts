@@ -1,7 +1,8 @@
 // Derived from paseo packages/server/src/server/agent/providers/claude/agent.ts and query.ts (Apache-2.0); modified for AgentDeck
 // 大幅精简：一个会话一个长生命周期 claude 子进程（stream-json stdio 协议，见 claude-cli-session.ts），每轮写一条用户消息；
 // 只保留 AgentDeck 协议需要的事件翻译、权限中转、中断、模型/模式切换与 tree-kill 关闭。
-// 去掉了 paseo 的子代理侧链、steer、rewind、历史回放、快速模式、思考预算等功能；
+// 去掉了 paseo 的 steer、rewind、历史回放、快速模式、思考预算等功能；子代理按 paseo 的 task 协议 + sidechain
+// 移植（design.md 4.11），但不做子代理 effort hooks 与磁盘回放；
 // 思考强度（--effort / --thinking disabled）按 paseo 的做法在切换后标记重启，下一轮以 --resume 重新拉起。
 // AgentDeck 改动：不再依赖 Anthropic 的 Agent SDK，直接 spawn 用户本机安装的 claude 可执行文件。
 import { randomUUID } from "node:crypto";
@@ -19,6 +20,7 @@ import type {
   AgentTimelineItem,
   AgentUsage,
   ToolCallDetail,
+  ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 
 import type {
@@ -26,6 +28,8 @@ import type {
   AgentClient,
   AgentSession,
   AgentSessionConfig,
+  AgentSessionEvent,
+  ProviderSubagentInputEvent,
 } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
@@ -37,6 +41,9 @@ import {
   type ClaudeCliFactory,
   type ClaudeCliHandle,
 } from "./claude-cli-session.js";
+import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
+import { ClaudeTaskProtocolSource } from "./subagents/live-source.js";
+import { foldSubagentObservations, type SubagentObservation } from "./subagents/observation.js";
 import {
   createDefaultClaudeExecutableDeps,
   resolveClaudeExecutable,
@@ -47,7 +54,8 @@ import {
   mapClaudeCompletedToolCall,
   mapClaudeFailedToolCall,
   mapClaudeRunningToolCall,
-  resolveClaudeToolKind,
+  buildOutputCandidates,
+  toolResultText,
 } from "./tool-call-mapper.js";
 import type {
   ClaudeAssistantMessage,
@@ -431,7 +439,7 @@ export class ClaudeAgentSession implements AgentSession {
   private cli: ClaudeCliHandle | null = null;
 
   private activeTurn: ActiveTurn | null = null;
-  private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
+  private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly toolUses = new Map<string, ToolUseEntry>();
   /** 已通过 stream_event 增量输出过文本 / 思考的 API message id，完整 assistant 消息到达时跳过对应块 */
@@ -440,6 +448,20 @@ export class ClaudeAgentSession implements AgentSession {
   private currentStreamMessageId: string | null = null;
   private contextInputTokens = 0;
   private contextOutputTokens = 0;
+  /** 父会话 Task / Agent 调用的 input（按 tool_use_id，会话级）：子代理标题、类型与描述来源 */
+  private readonly subagentToolInputs = new Map<string, Record<string, unknown>>();
+  /** 子代理父卡片的最近一次推送（按 callId）：后续推送在此合并，保留 log 且终态不回退 */
+  private readonly subAgentCards = new Map<string, ToolCallTimelineItem>();
+  private readonly taskProtocolSource = new ClaudeTaskProtocolSource({
+    getToolInput: (toolUseId) => this.subagentToolInputs.get(toolUseId) ?? null,
+  });
+  private readonly sidechainTracker = new ClaudeSidechainTracker({
+    getToolInput: (toolUseId) => this.subagentToolInputs.get(toolUseId) ?? null,
+    // 早于 task 协议的 CLI 什么都不公告，此时由 tracker 从帧推导身份与状态
+    isDescriptorOwnedElsewhere: () => this.taskProtocolSource.isActive,
+    needsSyntheticParentToolCard: (toolUseId) =>
+      this.taskProtocolSource.needsSyntheticParentToolCard(toolUseId),
+  });
 
   constructor(options: ClaudeAgentSessionOptions) {
     if (options.modeId !== null) {
@@ -494,7 +516,7 @@ export class ClaudeAgentSession implements AgentSession {
     return { turnId };
   }
 
-  subscribe(cb: (event: AgentStreamEvent) => void): () => void {
+  subscribe(cb: (event: AgentSessionEvent) => void): () => void {
     this.listeners.add(cb);
     return () => {
       this.listeners.delete(cb);
@@ -544,6 +566,9 @@ export class ClaudeAgentSession implements AgentSession {
     this.activeTurn = null;
     this.denyAllPendingPermissions("回合已取消");
     this.cancelRunningTools(turn.turnId);
+    // 回合取消：前台子代理随之结束（已转入后台的不动）
+    this.sidechainTracker.clear();
+    this.emitSubagentObservations(this.taskProtocolSource.cancelRunningForegroundTasks());
 
     const cli = this.cli;
     if (cli) {
@@ -571,6 +596,8 @@ export class ClaudeAgentSession implements AgentSession {
     }
     this.closed = true;
     await this.teardownCli();
+    this.sidechainTracker.clear();
+    this.taskProtocolSource.reset();
     this.listeners.clear();
   }
 
@@ -727,6 +754,9 @@ export class ClaudeAgentSession implements AgentSession {
     if (failure) {
       this.logger.warn("Claude Code 消息流异常结束：%s", failure);
     }
+    // 进程丢失：它拥有的子代理（含后台）全部失败
+    this.sidechainTracker.clear();
+    this.emitSubagentObservations(this.taskProtocolSource.failRunningTasks());
     const turn = this.activeTurn;
     if (turn) {
       this.denyAllPendingPermissions("Claude Code 进程已退出");
@@ -746,6 +776,11 @@ export class ClaudeAgentSession implements AgentSession {
       await cli.close().catch((error: unknown) => {
         this.logger.warn("结束 Claude Code 进程失败：%s", errorMessage(error));
       });
+      if (!this.closed) {
+        // 主动重建进程（切换思考强度 / 中断失败）：旧进程里仍在运行的子代理（如后台子代理）随之结束
+        this.sidechainTracker.clear();
+        this.emitSubagentObservations(this.taskProtocolSource.failRunningTasks());
+      }
     }
   }
 
@@ -754,29 +789,27 @@ export class ClaudeAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   private handleMessage(message: ClaudeOutputMessage): void {
+    const parentToolUseId = readParentToolUseId(message);
+    if (parentToolUseId) {
+      // 子代理（sidechain）内部输出不进主时间线，改写入子代理时间线（design.md 4.11）
+      this.handleSidechainFrame(message, parentToolUseId);
+      return;
+    }
     switch (message.type) {
       case "system":
         if (message.subtype === "init") {
           this.captureSession(message.session_id);
         }
+        this.handleTaskAnnouncement(message);
         return;
       case "stream_event":
-        if (message.parent_tool_use_id) {
-          return; // 子代理内部输出不进主时间线
-        }
         this.handleStreamEvent(message.event);
         return;
       case "assistant":
-        if (message.parent_tool_use_id) {
-          return;
-        }
         this.captureSession(message.session_id);
         this.handleAssistantMessage(message.message);
         return;
       case "user":
-        if (message.parent_tool_use_id) {
-          return;
-        }
         this.handleUserMessage(message);
         return;
       case "result":
@@ -903,6 +936,9 @@ export class ClaudeAgentSession implements AgentSession {
       return;
     }
     this.toolUses.set(callId, { name, input, hidden: false });
+    if (isClaudeSubagentToolName(name) && isRecord(input)) {
+      this.subagentToolInputs.set(callId, input);
+    }
     const item = mapClaudeRunningToolCall({ callId, name, input });
     if (item) {
       this.emitTimeline(turn, item);
@@ -912,12 +948,26 @@ export class ClaudeAgentSession implements AgentSession {
   private handleUserMessage(message: ClaudeUserOutputMessage): void {
     const turn = this.activeTurn;
     const content = message.message?.content;
-    if (!turn || !Array.isArray(content)) {
+    if (!Array.isArray(content)) {
       return;
     }
     const results = (content as ClaudeContentBlock[]).filter(
       (block) => block?.type === "tool_result" || block?.type === "mcp_tool_result",
     );
+    // 父消息出现 Task 的 tool_result：对应 sidechain 结束
+    for (const block of results) {
+      if (typeof block.tool_use_id === "string") {
+        this.emitSubagentEvents(
+          this.sidechainTracker.finish(
+            block.tool_use_id,
+            block.is_error === true ? "failed" : "completed",
+          ),
+        );
+      }
+    }
+    if (!turn) {
+      return;
+    }
     // CLI 的 tool_use_result 是单个工具的结构化输出，只有一条结果时才能对应上
     const structured = results.length === 1 ? message.tool_use_result : undefined;
     for (const block of results) {
@@ -973,6 +1023,11 @@ export class ClaudeAgentSession implements AgentSession {
     const usage = this.convertUsage(message);
     this.emit({ type: "usage_updated", usage });
     this.cancelRunningTools(turn.turnId);
+    this.emitSubagentEvents(
+      this.sidechainTracker.finishAll(
+        message.subtype === "success" && !message.is_error ? "completed" : "failed",
+      ),
+    );
 
     if (message.subtype === "success" && !message.is_error) {
       this.finishTurn(turn, { type: "turn_completed", turnId: turn.turnId, usage });
@@ -1090,7 +1145,7 @@ export class ClaudeAgentSession implements AgentSession {
       }
       const item = mapClaudeCanceledToolCall({ callId, name: entry.name, input: entry.input });
       if (item) {
-        this.emit({ type: "timeline", turnId, item });
+        this.emit({ type: "timeline", turnId, item: this.mergeSubAgentCard(item) });
       }
     }
     this.toolUses.clear();
@@ -1106,11 +1161,106 @@ export class ClaudeAgentSession implements AgentSession {
     this.emit(event);
   }
 
-  private emitTimeline(turn: ActiveTurn, item: AgentTimelineItem): void {
-    this.emit({ type: "timeline", turnId: turn.turnId, item });
+  private emitTimeline(turn: ActiveTurn | null, item: AgentTimelineItem): void {
+    const merged = item.type === "tool_call" ? this.mergeSubAgentCard(item) : item;
+    this.emit({ type: "timeline", ...(turn ? { turnId: turn.turnId } : {}), item: merged });
   }
 
-  private emit(event: AgentStreamEvent): void {
+  // -------------------------------------------------------------------------
+  // provider 子代理（design.md 4.11）
+  // -------------------------------------------------------------------------
+
+  /** task_started / task_updated / task_progress / task_notification */
+  private handleTaskAnnouncement(message: ClaudeOutputMessage): void {
+    const observations = this.taskProtocolSource.observe(message);
+    if (observations.length === 0) {
+      return;
+    }
+    this.emitSubagentObservations(observations);
+    for (const observation of observations) {
+      // 嵌套子代理的卡片在上级子代理的时间线里，不进父会话时间线
+      if (observation.kind !== "declared" || observation.parentSubagentId) continue;
+      if (!this.taskProtocolSource.needsSyntheticParentToolCard(observation.id)) continue;
+      // 后台子代理没有 sidechain 帧：声明时立即补一张父卡片
+      this.emitTimeline(this.activeTurn, {
+        type: "tool_call",
+        callId: observation.id,
+        name: "Task",
+        status: "running",
+        error: null,
+        detail: {
+          type: "sub_agent",
+          ...(observation.title ? { subAgentType: observation.title } : {}),
+          ...(observation.description ? { description: observation.description } : {}),
+          log: "",
+          actions: [],
+        },
+      });
+    }
+  }
+
+  /** 子代理内部的帧：路由到该子代理，不进父时间线 */
+  private handleSidechainFrame(message: ClaudeOutputMessage, parentToolUseId: string): void {
+    const canonicalId = this.taskProtocolSource.resolveSubagentId(parentToolUseId);
+    // CLI 一旦公告 task 就公告全部 task：未声明 id 的帧属于被过滤的工作（workflow 子任务、后台杂务等）
+    if (this.taskProtocolSource.announcesTasks && !canonicalId) {
+      return;
+    }
+    const routedId = canonicalId ?? parentToolUseId;
+    // 子代理实际运行的模型只出现在它自己的帧里
+    const runtime = foldSubagentObservations(
+      this.taskProtocolSource.observeSidechainFrame(message, routedId),
+    );
+    const { events, parentCard } = this.sidechainTracker.handleMessage(message, routedId);
+    this.emitSubagentEvents([...runtime, ...events]);
+    if (parentCard) {
+      this.emitTimeline(this.activeTurn, parentCard);
+    }
+  }
+
+  /**
+   * 子代理父卡片合并：主时间线的 Task/Agent 调用、task_started 补的卡片与 tracker 的卡片共用 callId，
+   * 后来的推送补全而不是抹掉已有的 log / 类型 / 描述；终态不会被 running 覆盖。
+   */
+  private mergeSubAgentCard(item: ToolCallTimelineItem): ToolCallTimelineItem {
+    if (item.detail.type !== "sub_agent") {
+      return item;
+    }
+    const previous = this.subAgentCards.get(item.callId);
+    const previousDetail = previous?.detail.type === "sub_agent" ? previous.detail : undefined;
+    const subAgentType = item.detail.subAgentType ?? previousDetail?.subAgentType;
+    const description = item.detail.description ?? previousDetail?.description;
+    const actions = item.detail.actions ?? previousDetail?.actions;
+    const keepPreviousStatus =
+      previous !== undefined && previous.status !== "running" && item.status === "running";
+    const merged: ToolCallTimelineItem = {
+      ...item,
+      name: item.name === "Task" && previous ? previous.name : item.name,
+      status: keepPreviousStatus ? previous.status : item.status,
+      error: keepPreviousStatus ? (previous.error ?? null) : (item.error ?? null),
+      detail: {
+        type: "sub_agent",
+        ...(subAgentType ? { subAgentType } : {}),
+        ...(description ? { description } : {}),
+        log: item.detail.log || previousDetail?.log || "",
+        ...(actions ? { actions } : {}),
+      },
+    };
+    this.subAgentCards.set(item.callId, merged);
+    return merged;
+  }
+
+  private emitSubagentObservations(observations: readonly SubagentObservation[]): void {
+    this.emitSubagentEvents(foldSubagentObservations(observations));
+  }
+
+  private emitSubagentEvents(events: readonly ProviderSubagentInputEvent[]): void {
+    for (const event of events) {
+      this.emit({ type: "provider_subagent", event });
+    }
+  }
+
+  private emit(event: AgentSessionEvent): void {
     for (const listener of this.listeners) {
       try {
         listener(event);
@@ -1266,40 +1416,6 @@ function parseTodoItems(input: unknown): { text: string; completed: boolean }[] 
   });
 }
 
-/** tool_result.content 可能是字符串或块数组；只取文本，图片等丢弃 */
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((block) =>
-        block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-          ? String((block as { text?: unknown }).text ?? "")
-          : "",
-      )
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-/**
- * 工具输出候选：shell / read 等用文本（结构化 tool_use_result 的字段名与 shared schema 不一致），
- * search / fetch 优先用 CLI 的结构化输出（Glob/Grep/WebFetch/WebSearch 的 Output 与 schema 吻合）。
- */
-function buildOutputCandidates(name: string, text: string, structured: unknown): unknown[] {
-  const structuredCandidate =
-    structured !== null && typeof structured === "object" ? [structured] : [];
-  const textCandidates = text ? [text, { output: text }] : [];
-  const kind = resolveClaudeToolKind(name);
-  const ordered =
-    kind === "search" || kind === "fetch"
-      ? [...structuredCandidate, ...textCandidates]
-      : [...textCandidates, ...structuredCandidate];
-  return [...ordered, null];
-}
-
 function resultErrorText(message: ClaudeResultMessage): string {
   if (message.subtype === "success") {
     return message.result?.trim() || "Claude Code 返回了错误";
@@ -1326,4 +1442,22 @@ function toCount(value: unknown): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 派出子代理的工具（Workflow 也走 task 协议，但它的卡片由 CLI 自己的 Workflow 调用承载） */
+function isClaudeSubagentToolName(name: string): boolean {
+  return name === "Task" || name === "Agent" || name === "Workflow";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 带非空 parent_tool_use_id 的消息来自子代理（sidechain） */
+function readParentToolUseId(message: ClaudeOutputMessage): string | null {
+  if (!("parent_tool_use_id" in message)) {
+    return null;
+  }
+  const value = message.parent_tool_use_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }

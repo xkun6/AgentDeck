@@ -1,12 +1,15 @@
 import type { AgentStreamEvent } from "@agentdeck/protocol";
 import { describe, expect, test } from "vitest";
 
+import type { AgentSessionEvent } from "../src/agent/types.js";
 import { MockAgentClient } from "../src/providers/mock/index.js";
 import { splitIntoChunks } from "../src/providers/mock/mock-agent.js";
 
-function collect(session: { subscribe(cb: (e: AgentStreamEvent) => void): () => void }) {
+function collect(session: { subscribe(cb: (e: AgentSessionEvent) => void): () => void }) {
   const events: AgentStreamEvent[] = [];
-  session.subscribe((e) => events.push(e));
+  session.subscribe((e) => {
+    if (e.type !== "provider_subagent") events.push(e);
+  });
   return events;
 }
 

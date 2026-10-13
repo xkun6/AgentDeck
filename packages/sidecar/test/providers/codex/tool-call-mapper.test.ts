@@ -157,7 +157,7 @@ describe("mapCodexToolCallFromThreadItem", () => {
     });
   });
 
-  test("collabAgentToolCall / subAgentActivity 降级为 plain_text；消息类 item 返回 null", () => {
+  test("collabAgentToolCall / subAgentActivity 映射为 sub_agent；消息类 item 返回 null", () => {
     expect(
       mapCodexToolCallFromThreadItem({
         type: "collabAgentToolCall",
@@ -166,7 +166,11 @@ describe("mapCodexToolCallFromThreadItem", () => {
         prompt: "调查 bug",
         agentsStates: {},
       }),
-    ).toMatchObject({ name: "Sub-agent", status: "running", detail: { type: "plain_text", text: "调查 bug" } });
+    ).toMatchObject({
+      name: "Sub-agent",
+      status: "running",
+      detail: { type: "sub_agent", subAgentType: "Sub-agent", description: "调查 bug", log: "" },
+    });
     expect(
       mapCodexToolCallFromThreadItem({
         type: "subAgentActivity",
@@ -175,7 +179,26 @@ describe("mapCodexToolCallFromThreadItem", () => {
         agentThreadId: "t2",
         agentPath: "/root/code_reviewer",
       }),
-    ).toMatchObject({ status: "canceled", detail: { type: "plain_text", label: "Code reviewer" } });
+    ).toMatchObject({
+      status: "canceled",
+      detail: { type: "sub_agent", subAgentType: "Code reviewer", description: "code_reviewer" },
+    });
+    // agentsStates 汇总状态：任一失败 → failed；shutdown → canceled；全部完成 → completed
+    const collab = (agentsStates: Record<string, unknown>) =>
+      mapCodexToolCallFromThreadItem({
+        type: "collabAgentToolCall",
+        id: "c2",
+        status: "completed",
+        tool: "spawnAgent",
+        receiverThreadIds: ["t1", "t2"],
+        agentsStates,
+      });
+    expect(collab({ t1: { status: "completed" }, t2: { status: "running" } })?.status).toBe("running");
+    expect(collab({ t1: { status: "completed" }, t2: { status: "completed" } })?.status).toBe(
+      "completed",
+    );
+    expect(collab({ t1: { status: "notFound" }, t2: { status: "completed" } })?.status).toBe("failed");
+    expect(collab({ t1: { status: "shutdown" } })?.status).toBe("canceled");
     expect(mapCodexToolCallFromThreadItem({ type: "agentMessage", id: "x", text: "hi" })).toBeNull();
     expect(mapCodexToolCallFromThreadItem({ type: "userMessage", id: "u", content: [] })).toBeNull();
   });

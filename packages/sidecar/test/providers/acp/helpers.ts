@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import type { AgentStreamEvent } from "@agentdeck/protocol";
 
+import type { AgentSessionEvent } from "../../../src/agent/types.js";
 import { createSilentLogger } from "../../../src/logger.js";
 import { AcpAgentClient } from "../../../src/providers/acp/acp-client.js";
 import type { AcpAgentEntry } from "../../../src/providers/acp/catalog.js";
@@ -27,9 +28,11 @@ export function fakeClient(env: Record<string, string> = {}): AcpAgentClient {
   });
 }
 
-export function collect(session: { subscribe(cb: (e: AgentStreamEvent) => void): () => void }) {
+export function collect(session: { subscribe(cb: (e: AgentSessionEvent) => void): () => void }) {
   const events: AgentStreamEvent[] = [];
-  session.subscribe((e) => events.push(e));
+  session.subscribe((e) => {
+    if (e.type !== "provider_subagent") events.push(e);
+  });
   return events;
 }
 

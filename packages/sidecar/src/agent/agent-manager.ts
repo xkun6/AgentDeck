@@ -9,6 +9,8 @@ import type {
   AgentStatus,
   AgentStreamEnvelope,
   AgentStreamEvent,
+  ProviderSubagentDescriptor,
+  ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
@@ -16,7 +18,17 @@ import { withTimeout } from "../utils/promise-timeout.js";
 import type { AgentStore, PersistedAgentMeta } from "./agent-store.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS, AgentStreamCoalescer } from "./coalescer.js";
 import { AgentRpcError } from "./errors.js";
-import type { AgentClient, AgentSession } from "./types.js";
+import {
+  ProviderSubagentStore,
+  type SubagentTimelinePage,
+  type SubagentTimelineQuery,
+} from "./provider-subagent-store.js";
+import type {
+  AgentClient,
+  AgentSession,
+  AgentSessionEvent,
+  ProviderSubagentInputEvent,
+} from "./types.js";
 
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
 const PREVIEW_MAX_CHARS = 120;
@@ -30,6 +42,8 @@ export interface AgentManagerListener {
   onStream?(envelope: AgentStreamEnvelope): void;
   onState?(agent: AgentSnapshot): void;
   onRemoved?(agentId: string): void;
+  /** provider 子代理变化（design.md 4.11） */
+  onSubagent?(update: ProviderSubagentUpdate): void;
 }
 
 export interface AgentManagerOptions {
@@ -96,6 +110,8 @@ export class AgentManager {
   private readonly now: () => number;
   private readonly coalescer: AgentStreamCoalescer;
   private readonly store: AgentStore | undefined;
+  /** provider 子代理（只在内存，会话关闭 / 删除时清空） */
+  private readonly subagents: ProviderSubagentStore;
 
   constructor(options: AgentManagerOptions) {
     this.registry = options.registry;
@@ -103,6 +119,7 @@ export class AgentManager {
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
+    this.subagents = new ProviderSubagentStore(this.now);
     this.coalescer = new AgentStreamCoalescer({
       windowMs: options.coalesceWindowMs ?? AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS,
       timers: { setTimeout, clearTimeout },
@@ -395,6 +412,7 @@ export class AgentManager {
     if (agent.removed) {
       return;
     }
+    this.clearSubagents(agent);
     agent.removed = true;
     this.agents.delete(agent.id);
     this.coalescer.flushAndDiscard(agent.id);
@@ -420,6 +438,22 @@ export class AgentManager {
       epoch: this.epoch,
       entries: entries.filter((entry) => entry.seq > since),
     };
+  }
+
+  /** design.md 4.11：该会话全部层级的 provider 子代理 */
+  listSubagents(agentId: string): ProviderSubagentDescriptor[] {
+    this.requireAgent(agentId);
+    return this.subagents.list(agentId);
+  }
+
+  /** design.md 4.11：子代理时间线分页；子代理不存在返回空 */
+  subagentTimeline(
+    agentId: string,
+    subagentId: string,
+    query?: SubagentTimelineQuery,
+  ): SubagentTimelinePage {
+    this.requireAgent(agentId);
+    return this.subagents.fetchTimeline(agentId, subagentId, query);
   }
 
   /**
@@ -524,6 +558,7 @@ export class AgentManager {
     }
     await agent.tail;
     this.coalescer.flushAndDiscard(agent.id);
+    this.clearSubagents(agent);
     agent.unsubscribe();
     agent.unsubscribe = () => undefined;
     agent.session = null;
@@ -714,11 +749,16 @@ export class AgentManager {
     });
   }
 
-  private enqueueEvent(agent: ManagedAgent, event: AgentStreamEvent): void {
+  private enqueueEvent(agent: ManagedAgent, event: AgentSessionEvent): void {
     this.runInChain(agent, () => this.processEvent(agent, event));
   }
 
-  private processEvent(agent: ManagedAgent, rawEvent: AgentStreamEvent): void {
+  private processEvent(agent: ManagedAgent, rawEvent: AgentSessionEvent): void {
+    if (rawEvent.type === "provider_subagent") {
+      // 子代理事件写入子代理 store，不进主时间线、不占 seq
+      this.applySubagentEvent(agent, rawEvent.event);
+      return;
+    }
     const event = this.attachTurnId(agent, rawEvent);
     if (this.isDuplicate(agent, event)) {
       return;
@@ -897,6 +937,30 @@ export class AgentManager {
         listener.onStream?.(envelope);
       } catch (error) {
         this.logger.error("agent.stream 监听器出错：%s", String(error));
+      }
+    }
+  }
+
+  private applySubagentEvent(agent: ManagedAgent, event: ProviderSubagentInputEvent): void {
+    if (agent.removed) {
+      return;
+    }
+    this.emitSubagentUpdate(this.subagents.apply(agent.id, agent.snapshot.provider, event));
+  }
+
+  /** 会话关闭 / 删除：清空该会话的子代理并逐个广播 remove */
+  private clearSubagents(agent: ManagedAgent): void {
+    for (const update of this.subagents.deleteParent(agent.id)) {
+      this.emitSubagentUpdate(update);
+    }
+  }
+
+  private emitSubagentUpdate(update: ProviderSubagentUpdate): void {
+    for (const listener of this.listeners) {
+      try {
+        listener.onSubagent?.(update);
+      } catch (error) {
+        this.logger.error("agent.subagents.update 监听器出错：%s", String(error));
       }
     }
   }

@@ -188,7 +188,11 @@ export class ClaudeCliSession implements ClaudeCliHandle {
     lines.on("line", (line) => this.handleLine(line));
     lines.on("close", () => this.onStreamClosed());
 
-    this.initialized = this.request({ subtype: "initialize" }) as Promise<ClaudeInitializeResponse>;
+    // forwardSubagentText：CLI 才会转发子代理（sidechain）的完整 assistant 消息（design.md 4.11）
+    this.initialized = this.request({
+      subtype: "initialize",
+      forwardSubagentText: true,
+    }) as Promise<ClaudeInitializeResponse>;
     // 调用方可以不关心 initialize 结果；失败只在等待它的地方体现
     this.initialized.catch(() => undefined);
   }

@@ -143,6 +143,18 @@ export type ToolCallDetail =
     }
   | { type: "fetch"; url: string; prompt?: string; result?: string }
   | { type: "plan"; text: string }
+  /**
+   * provider 子代理（Claude Task/Agent、Codex collab）的父卡片（design.md 4.11）。
+   * 显示名 `subAgentType ?? "Task"`，摘要为 description；log 每行形如 `[Read] foo.ts`。
+   */
+  | {
+      type: "sub_agent";
+      subAgentType?: string;
+      description?: string;
+      childSessionId?: string;
+      log: string;
+      actions?: { index: number; toolName: string; summary?: string }[];
+    }
   | { type: "plain_text"; label?: string; text?: string }
   | { type: "unknown"; input: unknown; output: unknown };
 
@@ -208,6 +220,47 @@ export interface AgentStreamEnvelope {
   timestamp: number;
   event: AgentStreamEvent;
 }
+
+// ---------------------------------------------------------------------------
+// 4.11 provider 子代理（移植自 paseo provider-subagents/store.ts 与 protocol messages.ts，精简版）
+// ---------------------------------------------------------------------------
+
+export type ProviderSubagentStatus = "running" | "completed" | "failed" | "canceled";
+
+/** 一个 provider 子代理（Claude 的 Task/Agent 子代理、Codex 的子线程）；只存在于 sidecar 内存中 */
+export interface ProviderSubagentDescriptor {
+  /** Claude：Task 工具调用的 tool_use_id；Codex：子线程 id */
+  id: string;
+  parentAgentId: string;
+  /** 直接上级 provider 子代理；null 表示父会话的直接子代理 */
+  parentSubagentId: string | null;
+  provider: AgentProviderId;
+  /** 子代理类型（如 Explore）；同一批并发子代理通常相同 */
+  title: string | null;
+  /** 交给该子代理的任务，用于区分兄弟子代理 */
+  description: string | null;
+  status: ProviderSubagentStatus;
+  createdAt: number;
+  updatedAt: number;
+  /** 父时间线中对应的工具卡片 callId */
+  toolCallId: string | null;
+  cwd: string | null;
+  /** provider 给出的完整次级标签（如「Explore · Haiku 4.5 · 12.3k tokens」），前端原样显示 */
+  subtitle: string | null;
+}
+
+/** 子代理时间线的一行；seq 在同一子代理内从 1 递增 */
+export interface ProviderSubagentTimelineRow {
+  seq: number;
+  timestamp: number;
+  item: AgentTimelineItem;
+}
+
+/** `agent.subagents.update` 通知 */
+export type ProviderSubagentUpdate =
+  | { kind: "upsert"; agentId: string; subagent: ProviderSubagentDescriptor }
+  | { kind: "timeline"; agentId: string; subagentId: string; row: ProviderSubagentTimelineRow }
+  | { kind: "remove"; agentId: string; subagentId: string };
 
 /** `dormant`：已持久化但未加载到内存的会话（sidecar 重启后的历史会话），再 send 时自动恢复 */
 export type AgentStatus = "starting" | "idle" | "running" | "error" | "closed" | "dormant";
@@ -311,6 +364,8 @@ export const AGENT_RPC_METHODS = {
   agentClose: "agent.close",
   agentTimeline: "agent.timeline",
   agentDelete: "agent.delete",
+  agentSubagentsList: "agent.subagents.list",
+  agentSubagentsTimeline: "agent.subagents.timeline",
   providerConfigGet: "provider.config.get",
   providerConfigSet: "provider.config.set",
   providerTest: "provider.test",
@@ -321,6 +376,7 @@ export const AGENT_RPC_NOTIFICATIONS = {
   agentState: "agent.state",
   agentRemoved: "agent.removed",
   providerChanged: "provider.changed",
+  agentSubagentsUpdate: "agent.subagents.update",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -371,6 +427,25 @@ export interface AgentRpcMethods {
     result: { epoch: string; entries: AgentStreamEnvelope[] };
   };
   "agent.delete": { params: { agentId: string }; result: Record<string, never> };
+  /** 该会话当前已知的 provider 子代理（按 createdAt 升序，含各层级） */
+  "agent.subagents.list": {
+    params: { agentId: string };
+    result: { subagents: ProviderSubagentDescriptor[] };
+  };
+  /**
+   * 子代理时间线分页：direction 缺省 tail（最近 limit 条）；before 取 seq < cursorSeq 的最近 limit 条；
+   * after 取 seq > cursorSeq 的前 limit 条。limit 缺省 200、上限 1000。子代理不存在返回空 rows。
+   */
+  "agent.subagents.timeline": {
+    params: {
+      agentId: string;
+      subagentId: string;
+      direction?: "tail" | "before" | "after";
+      cursorSeq?: number;
+      limit?: number;
+    };
+    result: { rows: ProviderSubagentTimelineRow[]; hasOlder: boolean; hasNewer: boolean };
+  };
   /** 含明文 apiKey（仅本机 token 鉴权的连接可见，前端负责遮挡显示）；未设 AGENTDECK_DATA_DIR 时 path 为 null */
   "provider.config.get": {
     params: AgentRpcEmptyParams;
@@ -395,6 +470,8 @@ export interface AgentRpcNotifications {
   "agent.removed": { agentId: string };
   /** providers.json 被替换后广播，前端据此刷新 provider.list */
   "provider.changed": Record<string, never>;
+  /** provider 子代理描述 / 时间线变化（design.md 4.11），向所有连接广播，前端按 agentId 过滤 */
+  "agent.subagents.update": ProviderSubagentUpdate;
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

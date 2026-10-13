@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentStreamEvent } from "@agentdeck/protocol";
+
+import type { ProviderSubagentInputEvent } from "../../../src/agent/types.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { createSilentLogger } from "../../../src/logger.js";
@@ -158,8 +160,14 @@ describe("buildClaudeCliArgs", () => {
 describe("ClaudeCliSession（假 claude 脚本）", () => {
   test("initialize 自动发送；正常一轮：system / stream_event / assistant / result", async () => {
     const session = start();
-    const init = (await session.initialized) as { models?: unknown[]; argv?: string[] };
+    const init = (await session.initialized) as {
+      models?: unknown[];
+      argv?: string[];
+      forwardSubagentText?: unknown;
+    };
     expect(init.models).toHaveLength(2);
+    // initialize 打开子代理文本转发（design.md 4.11）
+    expect(init.forwardSubagentText).toBe(true);
     expect(init.argv).toEqual(buildClaudeCliArgs({ model: null, permissionMode: "default", resumeSessionId: null }));
 
     const iterator = session[Symbol.asyncIterator]();
@@ -334,6 +342,7 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
     const session = await client.createSession({ cwd });
     const events: AgentStreamEvent[] = [];
     session.subscribe((event) => {
+      if (event.type === "provider_subagent") return;
       events.push(event);
       if (event.type === "permission_requested") {
         void session.respondToPermission(event.request.id, {
@@ -370,6 +379,59 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
       await waitTerminal(events, 3);
       expect(events.at(-1)?.type).toBe("turn_completed");
       expect(session.describePersistence()).toEqual({ provider: "claude", sessionId: FAKE_SESSION_ID });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("子代理：task 公告与 sidechain 帧写入子代理时间线，父卡片为 sub_agent 并带 log，被过滤的 local_bash 不出现", async () => {
+    const session = await createClient().createSession({ cwd });
+    const events: AgentStreamEvent[] = [];
+    const subagentEvents: ProviderSubagentInputEvent[] = [];
+    session.subscribe((event) => {
+      if (event.type === "provider_subagent") subagentEvents.push(event.event);
+      else events.push(event);
+    });
+    try {
+      await session.startTurn("subagent");
+      await waitTerminal(events, 1);
+      expect(events.at(-1)?.type).toBe("turn_completed");
+
+      // 主时间线只有父会话自己的文本
+      const mainText = events
+        .flatMap((e) => (e.type === "timeline" && e.item.type === "assistant_message" ? [e.item.text] : []))
+        .join("");
+      expect(mainText).toBe("子代理回报 name 是 demo");
+
+      // 被过滤的 local_bash 任务及其帧不进入子代理 store
+      expect(subagentEvents.every((e) => e.id === "toolu_task")).toBe(true);
+      expect(subagentEvents[0]).toMatchObject({
+        type: "upsert",
+        id: "toolu_task",
+        status: "running",
+        title: "Explore",
+        description: "读 package.json",
+        toolCallId: "toolu_task",
+      });
+      const subtitles = subagentEvents.flatMap((e) => (e.type === "upsert" && e.subtitle ? [e.subtitle] : []));
+      expect(subtitles.at(-1)).toBe("Explore · Haiku 4.5 · 2k tokens");
+      const statuses = subagentEvents.flatMap((e) => (e.type === "upsert" && e.status ? [e.status] : []));
+      expect(statuses.at(-1)).toBe("completed");
+
+      const timeline = subagentEvents.flatMap((e) => (e.type === "timeline" ? [e.item] : []));
+      expect(timeline[0]).toEqual({ type: "user_message", text: "读取 name" });
+      expect(
+        timeline.map((item) => (item.type === "tool_call" ? `tool:${item.name}:${item.status}` : item.type)),
+      ).toEqual(["user_message", "tool:Read:running", "tool:Read:completed", "assistant_message"]);
+      expect(timeline.at(-1)).toMatchObject({ type: "assistant_message", text: "name 是 demo" });
+
+      // 父卡片：同一 callId，sub_agent，log 记录了子代理动作，最终 completed
+      const cards = events.flatMap((e) =>
+        e.type === "timeline" && e.item.type === "tool_call" && e.item.callId === "toolu_task" ? [e.item] : [],
+      );
+      const last = cards.at(-1);
+      expect(last).toMatchObject({ status: "completed", detail: { type: "sub_agent", subAgentType: "Explore" } });
+      expect(last?.detail.type === "sub_agent" ? last.detail.log : "").toContain("[Read] package.json");
     } finally {
       await session.close();
     }

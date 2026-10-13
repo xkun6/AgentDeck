@@ -3,6 +3,7 @@ import { format } from "node:util";
 
 import type { AgentStreamEvent, ProviderProfile } from "@agentdeck/protocol";
 
+import type { ProviderSubagentStreamEvent } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { settingsEnvOf } from "./launch.js";
 
@@ -79,6 +80,21 @@ export function createRedactingLogger(base: Logger, secrets: readonly string[]):
 }
 
 /** 会话事件中会展示给用户 / 落盘的错误文本脱敏 */
+/** 子代理时间线里的错误条目同样脱敏（design.md 4.7 / 4.11） */
+export function redactSubagentEvent(
+  event: ProviderSubagentStreamEvent,
+  secrets: readonly string[],
+): ProviderSubagentStreamEvent {
+  const inner = event.event;
+  if (secrets.length === 0 || inner.type !== "timeline" || inner.item.type !== "error") {
+    return event;
+  }
+  return {
+    ...event,
+    event: { ...inner, item: { ...inner.item, message: redactText(inner.item.message, secrets) } },
+  };
+}
+
 export function redactEvent(event: AgentStreamEvent, secrets: readonly string[]): AgentStreamEvent {
   if (secrets.length === 0) {
     return event;

@@ -32,7 +32,8 @@ export interface ClaudeUserInput {
 
 /** 我们发给 CLI 的控制请求体 */
 export type ClaudeOutgoingControl =
-  | { subtype: "initialize" }
+  /** forwardSubagentText：让 CLI 转发子代理的完整 assistant 消息（与 Agent SDK 相同，design.md 4.11） */
+  | { subtype: "initialize"; forwardSubagentText?: boolean }
   | { subtype: "interrupt" }
   | { subtype: "set_model"; model?: string }
   /** mode 也可能是用户设置里的其它 CLI 模式（切回基础模式时） */
@@ -58,6 +59,7 @@ export interface ClaudeContentBlock {
   text?: unknown;
   thinking?: unknown;
   tool_use_id?: unknown;
+  tool_name?: unknown;
   content?: unknown;
   is_error?: unknown;
 }
@@ -66,6 +68,27 @@ export interface ClaudeSystemMessage {
   type: "system";
   subtype?: string;
   session_id?: string;
+}
+
+/**
+ * 子代理 task 协议的 system 消息（subtype 为 task_started / task_updated / task_progress / task_notification）
+ * 中用到的字段（Claude Code 2.1.296 实测，design.md 4.11）。
+ */
+export interface ClaudeTaskSystemMessage extends ClaudeSystemMessage {
+  task_id?: unknown;
+  tool_use_id?: unknown;
+  description?: unknown;
+  subagent_type?: unknown;
+  /** local_agent / local_workflow / local_bash 等 */
+  task_type?: unknown;
+  prompt?: unknown;
+  skip_transcript?: unknown;
+  /** task_updated */
+  patch?: { status?: unknown; is_backgrounded?: unknown };
+  /** task_notification */
+  status?: unknown;
+  /** task_progress / task_notification */
+  usage?: { total_tokens?: unknown };
 }
 
 /** Messages API 流式事件（message_start / content_block_delta / message_delta 等）中用到的字段 */
@@ -95,7 +118,8 @@ export interface ClaudeAssistantMessage {
   type: "assistant";
   parent_tool_use_id?: string | null;
   session_id?: string;
-  message: { id?: unknown; content?: ClaudeContentBlock[] };
+  /** model 只在子代理帧里用到（子代理 subtitle） */
+  message: { id?: unknown; model?: unknown; content?: ClaudeContentBlock[] };
 }
 
 /** CLI 回送的 user 消息：主要承载 tool_result 块，`tool_use_result` 为单个工具的结构化输出 */

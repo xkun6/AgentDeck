@@ -161,6 +161,27 @@ const scenarios = {
     completeTurn(turnId, "completed");
   },
 
+  // 子代理：子线程通知先于父线程登记到达（应缓冲），登记后回放，随后继续实时路由
+  async subagent(turnId) {
+    const child = "thr_child";
+    const childTurn = "turn_child_1";
+    const cb = { threadId: child, turnId: childTurn };
+    const collab = { type: "collabAgentToolCall", id: "collab_1", tool: "spawnAgent", prompt: "读取 name", receiverThreadIds: [], agentsStates: {}, status: "inProgress" };
+    notify("item/started", { ...base(turnId), item: collab, startedAtMs: Date.now() });
+    notify("turn/started", { threadId: child, turn: turnObj(childTurn, "inProgress") });
+    notify("item/completed", { ...cb, item: { type: "userMessage", id: "cu_1", content: [{ type: "text", text: "读取 name", text_elements: [] }] } });
+    notify("item/agentMessage/delta", { ...cb, itemId: "cm_1", delta: "我来" });
+    const exec = { type: "commandExecution", id: "cexec_1", command: "cat package.json", cwd: CWD, processId: "2", source: "agent", status: "inProgress", commandActions: [], aggregatedOutput: null, exitCode: null, durationMs: null };
+    notify("item/started", { ...cb, item: exec, startedAtMs: Date.now() });
+    notify("item/completed", { ...cb, item: { ...exec, status: "completed", aggregatedOutput: "{\"name\":\"demo\"}", exitCode: 0, durationMs: 3 }, completedAtMs: Date.now() });
+    await sleep(10);
+    notify("item/completed", { ...base(turnId), item: { ...collab, status: "completed", receiverThreadIds: [child], agentsStates: { [child]: { status: "running" } } }, completedAtMs: Date.now() });
+    notify("item/completed", { ...cb, item: { type: "agentMessage", id: "cm_1", text: "我来读取：name 是 demo" } });
+    notify("turn/completed", { threadId: child, turn: turnObj(childTurn, "completed") });
+    await agentMessage(turnId, "msg_sub", ["子代理说 name 是 demo"]);
+    completeTurn(turnId, "completed");
+  },
+
   async resolved(turnId) {
     const id = serverRequestId;
     void serverRequest("item/commandExecution/requestApproval", {

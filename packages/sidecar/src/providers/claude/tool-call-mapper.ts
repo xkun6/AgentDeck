@@ -190,3 +190,37 @@ export function mapClaudeCanceledToolCall(
 ): ToolCallTimelineItem | null {
   return mapClaudeToolCall(params, "canceled", null);
 }
+
+/** tool_result.content 可能是字符串或块数组；只取文本，图片等丢弃 */
+export function toolResultText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((block) =>
+        block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+          ? String((block as { text?: unknown }).text ?? "")
+          : "",
+      )
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+/**
+ * 工具输出候选：shell / read 等用文本（结构化 tool_use_result 的字段名与 shared schema 不一致），
+ * search / fetch 优先用 CLI 的结构化输出（Glob/Grep/WebFetch/WebSearch 的 Output 与 schema 吻合）。
+ */
+export function buildOutputCandidates(name: string, text: string, structured: unknown): unknown[] {
+  const structuredCandidate =
+    structured !== null && typeof structured === "object" ? [structured] : [];
+  const textCandidates = text ? [text, { output: text }] : [];
+  const kind = resolveClaudeToolKind(name);
+  const ordered =
+    kind === "search" || kind === "fetch"
+      ? [...structuredCandidate, ...textCandidates]
+      : [...textCandidates, ...structuredCandidate];
+  return [...ordered, null];
+}

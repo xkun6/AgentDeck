@@ -8,7 +8,7 @@ import type { AgentStreamEvent, ProviderProfile } from "@agentdeck/protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AgentManager } from "../../../src/agent/agent-manager.js";
-import type { AgentClient, AgentSession } from "../../../src/agent/types.js";
+import type { AgentClient, AgentSession, AgentSessionEvent } from "../../../src/agent/types.js";
 import { createSilentLogger } from "../../../src/logger.js";
 import {
   createCustomProviderClient,
@@ -171,7 +171,7 @@ describe("CustomProviderClient 包装", () => {
     expect(acpCatalog.models[0]!.defaultThinkingOptionId).toBe("high");
 
     const session = await codex.createSession({ cwd: "/w", thinkingOptionId: "low" });
-    const events: AgentStreamEvent[] = [];
+    const events: AgentSessionEvent[] = [];
     session.subscribe((event) => events.push(event));
     expect(session.setThinking).toBeTypeOf("function");
     await session.setThinking!("high");
@@ -219,7 +219,7 @@ describe("CustomProviderClient 包装", () => {
     expect((await client.isAvailable()).reason).toBe("token *** 无效");
     await expect(client.fetchCatalog()).rejects.toThrow("catalog ***");
     const wrapped = await client.createSession({ cwd: "/w" });
-    const events: AgentStreamEvent[] = [];
+    const events: AgentSessionEvent[] = [];
     wrapped.subscribe((e) => events.push(e));
     await wrapped.startTurn("hi");
     expect(events).toEqual([{ type: "turn_failed", turnId: "t1", error: "401: bad key ***" }]);

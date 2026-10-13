@@ -320,7 +320,7 @@ describe("claude tool-call mapper", () => {
     expect(fallback.detail).toEqual({ type: "fetch", url: "https://example.com/b", prompt: "总结" });
   });
 
-  it("Task / Agent 子代理与 Skill 映射为 plain_text", () => {
+  it("Task / Agent 子代理映射为 sub_agent，Skill 映射为 plain_text", () => {
     const task = expectMapped(
       mapClaudeCompletedToolCall({
         callId: "task-1",
@@ -329,12 +329,17 @@ describe("claude tool-call mapper", () => {
         outputCandidates: ["找到了 main.ts", null],
       }),
     );
-    expect(task.detail).toEqual({ type: "plain_text", label: "Explore", text: "找到了 main.ts" });
+    expect(task.detail).toEqual({
+      type: "sub_agent",
+      subAgentType: "Explore",
+      description: "查找入口",
+      log: "",
+    });
 
     const running = expectMapped(
       mapClaudeRunningToolCall({ callId: "task-2", name: "Agent", input: { description: "调研" } }),
     );
-    expect(running.detail).toEqual({ type: "plain_text", label: "Agent", text: "调研" });
+    expect(running.detail).toEqual({ type: "sub_agent", description: "调研", log: "" });
 
     const skill = expectMapped(
       mapClaudeCompletedToolCall({

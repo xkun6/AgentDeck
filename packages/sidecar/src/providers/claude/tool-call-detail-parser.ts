@@ -1,6 +1,6 @@
 // Derived from paseo packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts (Apache-2.0); modified for AgentDeck
 // 改动：ToolCallDetail 来自 @agentdeck/protocol（精简版）；去掉 speak 工具；Skill 的 plain_text 不带 icon；
-// 新增 Task / Agent 子代理工具 → plain_text（见 providers/shared/index.ts 的 sub_agent 降级约定）。
+// Task / Agent 子代理工具 → sub_agent（design.md 4.11；log 由会话按子代理活动补全）。
 import { z } from "zod";
 
 import type { ToolCallDetail } from "@agentdeck/protocol";
@@ -74,15 +74,15 @@ function subAgentBranch(name: string) {
         prompt: z.string().optional(),
       })
       .passthrough(),
-    TextOutputSchema,
-    (input, output) => {
-      const text = output || input?.description || input?.prompt;
-      return {
-        type: "plain_text" as const,
-        label: input?.subagent_type || "Agent",
-        ...(text ? { text } : {}),
-      } satisfies ToolCallDetail;
-    },
+    z.unknown(),
+    // design.md 4.11：Task / Agent 的卡片为 sub_agent，log 由会话按子代理活动补全
+    (input) =>
+      ({
+        type: "sub_agent" as const,
+        ...(input?.subagent_type ? { subAgentType: input.subagent_type } : {}),
+        ...(input?.description ? { description: input.description } : {}),
+        log: "",
+      }) satisfies ToolCallDetail,
   );
 }
 

@@ -9,7 +9,6 @@ import type {
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
-  AgentStreamEvent,
   ProviderProfile,
   ProviderProfileExtends,
 } from "@agentdeck/protocol";
@@ -19,6 +18,7 @@ import type {
   AgentClient,
   AgentSession,
   AgentSessionConfig,
+  AgentSessionEvent,
 } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { findExecutable } from "../../utils/executable-resolution/executable-resolution.js";
@@ -39,6 +39,7 @@ import {
   createRedactingLogger,
   redactError,
   redactEvent,
+  redactSubagentEvent,
   redactText,
 } from "./redact.js";
 import { customProviderId } from "./schema.js";
@@ -312,8 +313,14 @@ class RedactingSession implements AgentSession {
     return this.guard(() => this.inner.startTurn(prompt, opts));
   }
 
-  subscribe(cb: (e: AgentStreamEvent) => void): () => void {
-    return this.inner.subscribe((event) => cb(redactEvent(event, this.secrets)));
+  subscribe(cb: (e: AgentSessionEvent) => void): () => void {
+    return this.inner.subscribe((event) =>
+      cb(
+        event.type === "provider_subagent"
+          ? redactSubagentEvent(event, this.secrets)
+          : redactEvent(event, this.secrets),
+      ),
+    );
   }
 
   getPendingPermissions(): AgentPermissionRequest[] {

@@ -6,6 +6,8 @@
 //   hang         → 只发 system init，等 interrupt 控制请求后以 error_during_execution 结束本轮
 //   crash        → stderr 打印错误并以退出码 3 退出
 //   noisy        → 先输出一行非 JSON，再按 hello 回复
+//   subagent     → Agent 工具派出子代理：task_* 公告 + 带 parent_tool_use_id 的 sidechain 帧，
+//                  另有一个应被过滤的 local_bash task 及其帧，最后父消息回 tool_result 并 result
 // 环境变量 FAKE_CLAUDE_SILENT=1 时忽略所有控制请求（用于测试超时）。
 import readline from "node:readline";
 
@@ -62,6 +64,47 @@ function reply(uuid, text) {
   });
 }
 
+function subagentScenario(uuid) {
+  const base = { session_id: SESSION_ID };
+  const task = { ...base, type: "system" };
+  send({
+    ...base,
+    type: "assistant",
+    parent_tool_use_id: null,
+    message: {
+      id: "msg_parent_1",
+      role: "assistant",
+      content: [{ type: "tool_use", id: "toolu_task", name: "Agent", input: { subagent_type: "Explore", description: "读 package.json", prompt: "读取 name" } }],
+    },
+  });
+  send({ ...task, subtype: "task_started", task_id: "task_1", tool_use_id: "toolu_task", description: "读 package.json", subagent_type: "Explore", task_type: "local_agent", prompt: "读取 name" });
+  // 被过滤的后台 shell 任务：它的帧不应出现在任何地方
+  send({ ...task, subtype: "task_started", task_id: "task_bg", tool_use_id: "toolu_bash", description: "sleep", task_type: "local_bash" });
+  send({ ...base, type: "assistant", parent_tool_use_id: "toolu_bash", message: { id: "msg_bg", role: "assistant", content: [{ type: "text", text: "后台杂务" }] } });
+  send({
+    ...base,
+    type: "assistant",
+    parent_tool_use_id: "toolu_task",
+    message: { id: "msg_sub_1", role: "assistant", model: "claude-haiku-4-5-20251001", content: [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "package.json" } }] },
+  });
+  send({ ...task, subtype: "task_progress", task_id: "task_1", usage: { total_tokens: 1234 } });
+  send({
+    ...base,
+    type: "user",
+    parent_tool_use_id: "toolu_task",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read", content: '{"name":"demo"}' }] },
+  });
+  send({ ...base, type: "assistant", parent_tool_use_id: "toolu_task", message: { id: "msg_sub_2", role: "assistant", model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: "name 是 demo" }] } });
+  send({ ...task, subtype: "task_notification", task_id: "task_1", tool_use_id: "toolu_task", status: "completed", usage: { total_tokens: 2000 } });
+  send({
+    ...base,
+    type: "user",
+    parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_task", content: [{ type: "text", text: "name 是 demo" }] }] },
+  });
+  reply(uuid, "子代理回报 name 是 demo");
+}
+
 function requestPermission(requestId, toolName, cancel) {
   return new Promise((resolve) => {
     pendingResponses.set(requestId, resolve);
@@ -99,6 +142,10 @@ async function handleUser(message) {
     reply(uuid, "Hello");
     return;
   }
+  if (text === "subagent") {
+    subagentScenario(uuid);
+    return;
+  }
   if (text.startsWith("perm:") || text === "cancel-perm") {
     const cancel = text === "cancel-perm";
     const response = await requestPermission(`perm-${++counter}`, cancel ? "Bash" : text.slice(5), cancel);
@@ -115,7 +162,8 @@ function handleControlRequest(message) {
     send({ type: "control_response", response: { subtype: "success", request_id: requestId, ...(response ? { response } : {}) } });
   switch (request?.subtype) {
     case "initialize":
-      ok({ models: [{ value: "default", displayName: "Default" }, { value: "haiku", displayName: "Haiku" }], argv });
+      // forwardSubagentText 原样回显，便于测试确认 initialize 打开了子代理文本转发
+      ok({ models: [{ value: "default", displayName: "Default" }, { value: "haiku", displayName: "Haiku" }], argv, forwardSubagentText: request.forwardSubagentText });
       return;
     case "interrupt":
       ok({ still_queued: [] });

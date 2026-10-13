@@ -107,6 +107,8 @@ sidecar 入口：
 | `agent.setThinking` | `{ agentId, thinkingOptionId: string \| null }` | `{ agent: AgentSnapshot, notice?: string }`（见 4.10） |
 | `agent.close` | `{ agentId }` | `{}` |
 | `agent.timeline` | `{ agentId, sinceSeq? }` | `{ epoch, entries: AgentStreamEnvelope[] }` |
+| `agent.subagents.list` | `{ agentId }` | `{ subagents: ProviderSubagentDescriptor[] }`（见 4.11） |
+| `agent.subagents.timeline` | `{ agentId, subagentId, direction?, cursorSeq?, limit? }` | `{ rows, hasOlder, hasNewer }`（见 4.11） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。
 
@@ -116,6 +118,7 @@ sidecar 入口：
 |---|---|
 | `agent.stream` | `AgentStreamEnvelope` = `{ agentId, seq, epoch, timestamp, event: AgentStreamEvent }` |
 | `agent.state` | `{ agent: AgentSnapshot }`（创建、状态变化、模型/模式变化、关闭时推送） |
+| `agent.subagents.update` | `ProviderSubagentUpdate`（见 4.11） |
 
 `seq` 每个 agent 从 1 自增；`epoch` 是 sidecar 进程启动时生成的随机串，用来让前端识别 sidecar 重启。断线重连后前端调用 `agent.timeline { sinceSeq }` 补齐。
 
@@ -156,6 +159,8 @@ export type ToolCallDetail =
   | { type: "search"; query: string; toolName?: "search" | "grep" | "glob" | "web_search"; content?: string; filePaths?: string[] }
   | { type: "fetch"; url: string; prompt?: string; result?: string }
   | { type: "plan"; text: string }
+  | { type: "sub_agent"; subAgentType?: string; description?: string; childSessionId?: string;
+      log: string; actions?: { index: number; toolName: string; summary?: string }[] }   // 4.11
   | { type: "plain_text"; label?: string; text?: string }
   | { type: "unknown"; input: unknown; output: unknown };
 
@@ -396,6 +401,54 @@ interface ProviderProfile {
 - 新建会话：选择随 `agent.create` 传入，并与模型 / 模式一起记忆在 ui_store（`agentdeck.composer.agent-selection` 增加 `thinkingOptionId`）；切换模型 / Agent 后若当前档位不在新模型选项中，重置为默认。
 - 会话中：调 `agent.setThinking`，运行中也可切换（其它 chip 运行中仍禁用），显示返回的 notice；快照经 `agent.state` 同步显示。
 
+### 4.11 provider 子代理（Claude / Codex；ACP 不支持）
+
+参照 paseo 的 provider subagents（`packages/server/src/server/agent/provider-subagents/store.ts`、`providers/claude/subagents/*`、`providers/claude/sidechain-tracker.ts`、`providers/codex-app-server-agent.ts`，以及 `packages/protocol/src/messages.ts` 的 `agent.provider_subagents.*`）。子代理**只存在于 sidecar 内存**，不落盘、不随会话恢复；父时间线里的 `sub_agent` 工具卡片照常持久化。
+
+**类型**（`agent-api.ts`）：
+- `ToolCallDetail` 增加 `sub_agent`（见 4.3）：父会话时间线中「派出子代理」的工具卡片。`log` 每行一个动作，形如 `[Read] src/a.ts`（`[工具显示名] 摘要`，无摘要时只有 `[工具显示名]`）；Codex 还会出现 `[Assistant] …` / `[Thought] …` / `[User] …` 行。前端显示名取 `subAgentType ?? "Task"`、摘要取 `description`。
+- `ProviderSubagentStatus = "running" | "completed" | "failed" | "canceled"`。
+- `ProviderSubagentDescriptor { id; parentAgentId; parentSubagentId: string | null; provider; title: string | null; description: string | null; status; createdAt: number; updatedAt: number; toolCallId: string | null; cwd: string | null; subtitle: string | null }`（时间为毫秒时间戳）。`parentSubagentId` 为 null 表示父会话的直接子代理，否则为上级子代理 id（孙代理）。
+- `ProviderSubagentTimelineRow { seq; timestamp; item: AgentTimelineItem }`：每个子代理一条独立时间线（seq 从 1 递增），item 与主时间线同形（`assistant_message` / `reasoning` 可能是增量，前端照主时间线规则拼接）。
+- `ProviderSubagentUpdate`：
+  - `{ kind: "upsert"; agentId; subagent }`
+  - `{ kind: "timeline"; agentId; subagentId; row }`
+  - `{ kind: "remove"; agentId; subagentId }`
+
+**RPC**：
+- `agent.subagents.list { agentId }` → `{ subagents }`：该会话全部层级的子代理，按 createdAt 升序；agent 不存在 → `AGENT_NOT_FOUND`。
+- `agent.subagents.timeline { agentId, subagentId, direction?: "tail" | "before" | "after", cursorSeq?: number, limit?: number }` → `{ rows, hasOlder, hasNewer }`：`tail`（缺省）取最近 limit 条；`before` 取 `seq < cursorSeq` 的最近 limit 条；`after` 取 `seq > cursorSeq` 的前 limit 条（before / after 缺 cursorSeq 时按 tail 处理）。limit 缺省 200，范围 1–1000。子代理不存在返回空 rows（不报错）。
+- 通知 `agent.subagents.update`：向所有连接广播，前端按 `agentId` 过滤。
+
+**sidecar 内部**：
+- provider 会话通过内部流事件 `{ type: "provider_subagent"; event }` 上报（不进主时间线、不占 seq，`AgentSession.subscribe` 的回调类型为 `AgentSessionEvent = AgentStreamEvent | ProviderSubagentStreamEvent`）。`event`：
+  - `{ type: "upsert"; id; title?; description?; status?; toolCallId?; cwd?; subtitle?; parentSubagentId?; timestamp? }`：字段**省略 = 保留原值，显式 null = 清空**；status 省略时保留（新建默认 running）。
+  - `{ type: "timeline"; id; item; timestamp? }`：追加到该子代理时间线（不存在则先建空时间线，但不建描述）。
+  - `{ type: "remove"; id }`。
+- `ProviderSubagentStore`（`agent/provider-subagent-store.ts`）：键 `parentAgentId\0subagentId`；每个子代理时间线最多保留 2000 行（超出丢最旧的，hasOlder 以实际保留为准）。AgentManager 在事件尾链中拦截 `provider_subagent` 写入 store，并经监听器 `onSubagent` 推给 RpcServer 广播。
+- 清理：会话关闭（`agent.close`、shutdown）与删除时清空该会话的全部子代理，并逐个广播 `remove`。
+
+**Claude**：
+- initialize 控制请求体带 `forwardSubagentText: true`（与 Agent SDK 一致；不加则 CLI 不转发子代理的完整 assistant 消息）。
+- task 协议（Claude Code 2.1.296 实测）：`system` 消息 `task_started { task_id, tool_use_id, description, subagent_type, task_type, prompt, skip_transcript? }`、`task_updated { task_id, patch: { status?, is_backgrounded? } }`、`task_progress { task_id, usage: { total_tokens } }`、`task_notification { task_id, tool_use_id, status, usage? }`。只把 `task_type` 为 `local_agent` / `local_workflow`（无 task_type 时要求有 subagent_type）、且未标 `skip_transcript` 的任务当作子代理；`local_bash`（后台命令）等忽略。子代理 id = `task_started.tool_use_id`（同一 task 再次 task_started 带新 tool_use_id 时视为别名）；状态 pending / running / paused → running，completed → completed，failed → failed，killed / stopped → canceled。title 取 Task 调用 input 的 `name`，否则 `subagent_type`（workflow 为 `Workflow`）；description 取 `task_started.description`；首条子代理时间线为 `user_message`（task prompt；workflow 用 description）。subtitle 为「类型 · 模型 · effort · Nk tokens」（模型取子代理 assistant 帧的 `message.model`，tokens 取 task_progress / task_notification 的 usage；effort 不采集）。
+- 带 `parent_tool_use_id` 的帧（子代理 sidechain）不进父时间线：本会话已出现过 task 公告后，未声明的 id 的帧直接丢弃；否则交给 sidechain tracker：完整 assistant 消息的 text → `assistant_message`、thinking → `reasoning`、tool_use → running `tool_call`；子代理 user 消息里的 tool_result → completed / failed `tool_call`；**不处理子代理的 stream_event 增量**。tracker 同时维护父卡片 `sub_agent` detail 的 log（最多 200 条、单条摘要 160 字）。
+- 父卡片：callId 为 Task/Agent 的 tool_use_id。主时间线的 Task/Agent 工具调用本身 detail 即为 `sub_agent`（subagent_type → subAgentType，description → description）；`task_started` 时立即补一张父卡片（后台子代理没有 sidechain 帧）；sidechain 帧到达时更新 log。同一 callId 的后续推送在 sidecar 内合并（保留已有 log / 类型 / 描述；终态不会被 running 覆盖），因此「后者覆盖前者」对前端仍成立。嵌套子代理（由子代理派出）的父卡片只出现在上级子代理的时间线里，不进父会话时间线；其 `parentSubagentId` 为上级子代理 id。
+- 生命周期：回合被中断时，未后台化（`task_updated.patch.is_backgrounded` 不为 true）且仍在运行的子代理记为 canceled；claude 进程意外退出时所有仍在运行的子代理记为 failed；`task_notification` 之后的状态以它为准。父消息出现该 Task/Agent 的 tool_result 时 tracker 结束该 sidechain。
+- 不做：子代理 effort hooks、从磁盘回放子代理历史。
+
+**Codex**：
+- `collabAgentToolCall`（spawnAgent / wait 等）与 `subAgentActivity` 映射为 `sub_agent` detail（名称 `Sub-agent`；collab 的 description 为 prompt；状态由 `agentsStates` 汇总：任一子线程 failed / notFound → failed，shutdown → canceled，全部 completed → completed，否则 running；subAgentActivity 的 subAgentType 由 agentPath 生成，kind interrupted → canceled、completed → completed，其余 running）。
+- codex-cli 0.162.1 实测：派出子代理是主线程上的 `subAgentActivity`（kind `started`，`agentThreadId` 为子线程），子线程回合结束时主线程收到 `subAgentActivity`（kind `completed`，id `subagent-completed-…`）；`wait` 是 `receiverThreadIds` 为空的 `collabAgentToolCall`，作为普通 sub_agent 卡片显示。已登记子线程的 subAgentActivity 只更新原卡片，不另起卡片；子线程发给父线程的 subAgentActivity（`agentThreadId` 为父线程）不把父线程登记成子代理。
+- 主线程上出现 sub_agent 工具项时登记 `receiverThreadIds` 与 `agentThreadId`（子线程 → 父 callId，先登记者为准），对每个子线程发 upsert（子代理 id = 子线程 id，title = subAgentType，description，toolCallId = callId）。
+- 按通知的 threadId 路由：主线程 → 原逻辑；已登记子线程 → 子代理时间线（`item/agentMessage/delta`、`item/reasoning/*Delta` 增量照发；`item/started` / `item/completed` 的工具项与完整消息；`turn/started` → running，`turn/completed` → completed / failed / canceled）；未登记的其它线程先缓冲（最多 32 个线程、每线程 128 条，超出丢最旧），登记后按序回放。子线程活动同时累积到父卡片：log 由子线程条目整理（`[工具] 摘要`、`[Assistant] 文本`、`[Thought] 文本`），父卡片在子线程条目开始 / 完成与回合变化时重推（文本增量只累积、不逐条重推，避免父时间线被大量卡片更新淹没；终态不被 running 覆盖，子线程重新 turn/started 时可重新打开）；嵌套子线程的卡片冒泡到上级子代理。
+- 子线程通知不受父会话是否在回合中的限制。恢复会话时不递归读取子线程历史。
+
+**前端**：
+- 时间线 `sub_agent` 卡片：显示名为 subAgentType（缺省 Task）、标题行为 description；展开显示 log 解析出的动作列表（`[Tool] summary` 行）与其余文本、状态。同一 callId 的工具卡片在任意已有消息里按 callId 原地更新（子代理活动可能晚于回合结束）。
+- 输入框上方「子代理」药丸：只统计当前层级（父会话视图为 `parentSubagentId === null`），文案按状态计数如「2 运行中 · 1 失败」，没有运行中 / 失败时显示「N 个子代理」；展开列出子代理行（标签优先 description，其次 title；行尾 subtitle 与状态），点击一行打开子代理面板。
+- 子代理面板：右侧分栏（与预览面板同位置，打开时替代预览面板），只读时间线（复用主时间线渲染，无输入框、无审批卡片），顶部「加载更早记录」按 before 分页；面板内也有本层级的子代理药丸，可进入孙代理并返回上一级。
+- 数据：进入会话时 `agent.subagents.list` 拉一次（重连后重拉），之后由 `agent.subagents.update` 增量维护；打开面板时 `agent.subagents.timeline` 拉 tail，之后实时 timeline 行按 seq 追加去重。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -423,7 +476,8 @@ interface AgentSession {
   readonly provider: AgentProviderId;
   readonly id: string | null;                       // 原生会话 id，thread_started 后可得
   startTurn(prompt: AgentPromptInput, opts?: { clientMessageId?: string }): Promise<{ turnId: string }>;
-  subscribe(cb: (e: AgentStreamEvent) => void): () => void;
+  /** AgentSessionEvent = AgentStreamEvent | { type: "provider_subagent"; event }（4.11，内部事件） */
+  subscribe(cb: (e: AgentSessionEvent) => void): () => void;
   getPendingPermissions(): AgentPermissionRequest[];
   respondToPermission(requestId: string, r: AgentPermissionResponse): Promise<void>;
   interrupt(): Promise<void>;
@@ -476,12 +530,12 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。
-- detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent / Skill→plain_text、MCP 等→unknown；TodoWrite 只发 `todo`。
+- detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent→sub_agent（见 4.11）、Skill→plain_text、MCP 等→unknown；TodoWrite 只发 `todo`。
 - 始终传 `--allow-dangerously-skip-permissions` 以允许会话中途切到 `bypassPermissions`；前端须把 bypassPermissions 标为危险选项且不得默认选中。
 - 模式表顺序：`default`「逐项审批」、`acceptEdits`「自动接受编辑」、`auto`「自动模式」（独立分类器模型审查，常规操作直接执行，越权 / 可疑 / 高风险操作被拦截；出处 code.claude.com/docs/en/permission-modes）、`plan`「计划模式」、`bypassPermissions`「跳过所有审批」（dangerous）。CLI 的 `manual` 是 `default` 的别名（2.1.296 实测两者都回报 `default`），传参仍用 `default`。
 - modeId 为 null（前端「默认模式」）时**不传** `--permission-mode`，跟随用户 Claude 设置中的默认模式；initialize 应答的 `current_permission_mode` 记为会话「基础模式」。跟随设置时直接进入 plan（新建选计划模式或恢复）：先不带参数启动读取基础模式，再立即发 `set_permission_mode plan`。
 - 批准计划后切回进入 plan 之前的模式；之前为 null 则切回基础模式且快照 modeId 回到 null；基础模式未知或本身为 plan 时退回 `default`。
-- 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`（不设置 `CLAUDE_CODE_ENTRYPOINT`）；子代理内部消息（带 `parent_tool_use_id`）不进主时间线；AskUserQuestion 暂按普通工具权限处理。
+- 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`（不设置 `CLAUDE_CODE_ENTRYPOINT`）；子代理内部消息（带 `parent_tool_use_id`）不进主时间线，改写入子代理时间线（见 4.11）；AskUserQuestion 暂按普通工具权限处理。
 - `fetchCatalog` 起一个临时 claude 进程只发 `initialize`（不对话、不计费），读取应答中的 `models`（value / displayName / description）后关闭；成功结果缓存 10 分钟，失败回退静态别名（default / sonnet / opus / haiku），`default` 保留中文标签。
 - 设置模型发现（参照 paseo）：之后追加用户 Claude 设置（`$CLAUDE_CONFIG_DIR/settings.json`，否则 `~/.claude/settings.json`；允许 BOM，读取失败忽略，只读）中顶层 `model` 与 `env` 的 `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` / `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`，去重并保留原样 id；只读 settings 文件中的 env，不读进程环境。带 `[1m]` 的显示名追加「· 1M 上下文」。「默认模型」说明为「跟随 Claude Code 设置（当前：X）」，X 取 `env.ANTHROPIC_MODEL`，否则取 `model`。设置每次 fetchCatalog 重读，探测结果仍缓存 10 分钟。
 - 1M 上下文的实际表达（实测）：选 `opus[1m]` 时请求体 model 为去掉后缀的 `claude-opus-5-5`，另带 beta 头 `context-1m-2025-08-07`；选 `opus` 则不带该 beta 头。

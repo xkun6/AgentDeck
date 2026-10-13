@@ -183,6 +183,7 @@ export class RpcServer {
       onStream: (envelope) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentStream, envelope),
       onState: (agent) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentState, { agent }),
       onRemoved: (agentId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentRemoved, { agentId }),
+      onSubagent: (update) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentSubagentsUpdate, update),
     });
   }
 
@@ -314,6 +315,25 @@ export class RpcServer {
         await manager.deleteAgent(params.agentId);
         return {};
       }),
+      defineMethod(AGENT_RPC_METHODS.agentSubagentsList, agentIdParams, (params) => ({
+        subagents: manager.listSubagents(params.agentId),
+      })),
+      defineMethod(
+        AGENT_RPC_METHODS.agentSubagentsTimeline,
+        z.object({
+          agentId: z.string().min(1),
+          subagentId: z.string().min(1),
+          direction: z.enum(["tail", "before", "after"]).optional(),
+          cursorSeq: z.number().int().nonnegative().optional(),
+          limit: z.number().int().min(1).max(1000).optional(),
+        }),
+        (params) =>
+          manager.subagentTimeline(params.agentId, params.subagentId, {
+            ...(params.direction !== undefined ? { direction: params.direction } : {}),
+            ...(params.cursorSeq !== undefined ? { cursorSeq: params.cursorSeq } : {}),
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+          }),
+      ),
       ...this.createProviderConfigMethods(),
     ];
   }

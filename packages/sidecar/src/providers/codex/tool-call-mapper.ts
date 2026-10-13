@@ -1,7 +1,7 @@
 // Derived from paseo packages/server/src/server/agent/providers/codex/tool-call-mapper.ts (Apache-2.0); modified for AgentDeck
 // 改动：
 // - 类型改用 @agentdeck/protocol 的 ToolCallTimelineItem，error 统一转为字符串；
-// - 去掉 speak；collabAgentToolCall / subAgentActivity 的 sub_agent 降级为 plain_text（协议无 sub_agent）；
+// - 去掉 speak；collabAgentToolCall / subAgentActivity 映射为 sub_agent（design.md 4.11）；
 // - 兼容本机 codex 0.162 的 fileChange：kind 为对象 `{ type: "add" | "update" | "delete" }`；
 //   单文件新增且内容不是 diff 时输出 write 详情；
 // - commandExecution / fileChange 的 `declined` 状态归为 failed（paseo 的状态词表没有它）。
@@ -823,9 +823,11 @@ function mapCollabAgentToolCallItem(
     status,
     error: status === "failed" ? (toolErrorToString(item.error) ?? "子 Agent 失败") : null,
     detail: {
-      type: "plain_text",
-      label: "Sub-agent",
-      ...(item.prompt ? { text: item.prompt } : {}),
+      type: "sub_agent",
+      subAgentType: "Sub-agent",
+      ...(item.prompt ? { description: item.prompt } : {}),
+      log: "",
+      actions: [],
     },
   };
 }
@@ -855,9 +857,15 @@ function mapSubAgentActivityItem(
     type: "tool_call",
     callId: item.id,
     name: "Sub-agent",
-    status: item.kind === "interrupted" ? "canceled" : "running",
+    status: item.kind === "interrupted" ? "canceled" : item.kind === "completed" ? "completed" : "running",
     error: null,
-    detail: { type: "plain_text", label, ...(description ? { text: description } : {}) },
+    detail: {
+      type: "sub_agent",
+      subAgentType: label,
+      ...(description ? { description } : {}),
+      log: "",
+      actions: [],
+    },
   };
 }
 

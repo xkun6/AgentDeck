@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentStreamEvent } from "@agentdeck/protocol";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import type { AgentSession } from "../../../src/agent/types.js";
+import type { AgentSession, ProviderSubagentInputEvent } from "../../../src/agent/types.js";
 import { createSilentLogger } from "../../../src/logger.js";
 import { CodexAgentClient } from "../../../src/providers/codex/index.js";
 import type { CodexLaunch } from "../../../src/providers/codex/launch.js";
@@ -43,7 +43,9 @@ async function newSession(client = makeClient(), modeId?: string): Promise<Agent
 
 function collect(session: AgentSession): AgentStreamEvent[] {
   const events: AgentStreamEvent[] = [];
-  session.subscribe((e) => events.push(e));
+  session.subscribe((e) => {
+    if (e.type !== "provider_subagent") events.push(e);
+  });
   return events;
 }
 
@@ -521,6 +523,58 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(readFileSync(input[1].path, "utf8")).toBe("png-bytes");
     await session.close();
     expect(existsSync(input[1].path)).toBe(false);
+  });
+
+  test("子代理：子线程通知先缓冲、登记后回放，写入子代理时间线；父卡片累积 log 并随子线程完成", async () => {
+    const session = await newSession();
+    const events = collect(session);
+    const subagentEvents: ProviderSubagentInputEvent[] = [];
+    session.subscribe((e) => {
+      if (e.type === "provider_subagent") subagentEvents.push(e.event);
+    });
+    await session.startTurn("subagent");
+    await waitUntil(() => events.some(isTerminal));
+    expect(events.find(isTerminal)?.type).toBe("turn_completed");
+
+    // 子线程的消息没有进入父时间线
+    const assistantTexts = events.flatMap((e) =>
+      e.type === "timeline" && e.item.type === "assistant_message" ? [e.item.text] : [],
+    );
+    expect(assistantTexts.join("")).toBe("子代理说 name 是 demo");
+
+    // 登记：子代理 id = 子线程 id，挂在 collab_1 卡片上
+    const upserts = subagentEvents.filter((e) => e.type === "upsert");
+    expect(upserts[0]).toMatchObject({
+      type: "upsert",
+      id: "thr_child",
+      title: "Sub-agent",
+      description: "读取 name",
+      toolCallId: "collab_1",
+      parentSubagentId: null,
+    });
+    expect(upserts.at(-1)).toMatchObject({ id: "thr_child", status: "completed" });
+
+    // 子代理时间线：回放的 user_message、增量文本、命令卡片，以及完成时补发的缺失后缀
+    const timeline = subagentEvents.flatMap((e) => (e.type === "timeline" ? [e.item] : []));
+    expect(timeline[0]).toEqual({ type: "user_message", text: "读取 name" });
+    expect(
+      timeline.filter((i) => i.type === "assistant_message").map((i) => (i.type === "assistant_message" ? i.text : "")),
+    ).toEqual(["我来", "读取：name 是 demo"]);
+    expect(timeline.some((i) => i.type === "tool_call" && i.callId === "cexec_1" && i.status === "completed")).toBe(
+      true,
+    );
+
+    // 父卡片：同 callId 多次推送，最后一次为 completed 且 log 汇总了子线程活动
+    const cards = events.flatMap((e) =>
+      e.type === "timeline" && e.item.type === "tool_call" && e.item.callId === "collab_1" ? [e.item] : [],
+    );
+    const last = cards.at(-1);
+    expect(last?.status).toBe("completed");
+    expect(last?.detail.type).toBe("sub_agent");
+    const log = last?.detail.type === "sub_agent" ? last.detail.log : "";
+    expect(log).toContain("[User] 读取 name");
+    expect(log).toContain("cat package.json");
+    expect(log).toContain("[Assistant] 我来读取：name 是 demo");
   });
 
   test("close 结束 app-server 进程；关闭后 startTurn 报错", async () => {

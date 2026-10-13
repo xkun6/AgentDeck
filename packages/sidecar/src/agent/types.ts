@@ -10,10 +10,41 @@ import type {
   AgentProviderId,
   AgentProviderKind,
   AgentStreamEvent,
+  AgentTimelineItem,
   ProviderProfileExtends,
+  ProviderSubagentStatus,
 } from "@agentdeck/protocol";
 
 import type { Logger } from "../logger.js";
+
+/**
+ * provider 子代理的输入事件（design.md 4.11）。upsert 中字段省略 = 保留原值，显式 null = 清空；
+ * status 省略时保留（新建默认 running）。timestamp 为毫秒时间戳，缺省取当前时间。
+ */
+export type ProviderSubagentInputEvent =
+  | {
+      type: "upsert";
+      id: string;
+      title?: string | null;
+      description?: string | null;
+      status?: ProviderSubagentStatus;
+      toolCallId?: string | null;
+      cwd?: string | null;
+      subtitle?: string | null;
+      parentSubagentId?: string | null;
+      timestamp?: number;
+    }
+  | { type: "timeline"; id: string; item: AgentTimelineItem; timestamp?: number }
+  | { type: "remove"; id: string };
+
+/** 会话内部流事件：provider 子代理变化，不进主时间线、不占 seq（AgentManager 拦截写入子代理 store） */
+export interface ProviderSubagentStreamEvent {
+  type: "provider_subagent";
+  event: ProviderSubagentInputEvent;
+}
+
+/** AgentSession.subscribe 回调收到的事件 */
+export type AgentSessionEvent = AgentStreamEvent | ProviderSubagentStreamEvent;
 
 export interface AgentSessionConfig {
   cwd: string;
@@ -42,7 +73,8 @@ export interface AgentSession {
     prompt: AgentPromptInput,
     opts?: { clientMessageId?: string },
   ): Promise<{ turnId: string }>;
-  subscribe(cb: (e: AgentStreamEvent) => void): () => void;
+  /** 回调可能收到内部事件 `provider_subagent`（只有支持子代理的 provider 会发） */
+  subscribe(cb: (e: AgentSessionEvent) => void): () => void;
   getPendingPermissions(): AgentPermissionRequest[];
   respondToPermission(requestId: string, r: AgentPermissionResponse): Promise<void>;
   interrupt(): Promise<void>;
