@@ -365,10 +365,15 @@ export function DetailRoute() {
   const onRetracted = useCallback(() => {
     userInterruptedRef.current = true;
   }, []);
+  // 撤回失败（如 Agent 刚好开始响应）：本轮并未被中断，复位标记
+  const onRetractFailed = useCallback(() => {
+    userInterruptedRef.current = false;
+  }, []);
   const retraction = useRetractMessage({
     retract: retractAgent,
     onPrefill: onRetractPrefill,
     onRetracted,
+    onRetractFailed,
   });
   const onEmptyArrowUp = useCallback(() => {
     if (!retractMessageId || retraction.retracting) return false;

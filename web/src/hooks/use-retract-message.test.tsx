@@ -30,12 +30,14 @@ describe("useRetractMessage", () => {
     const retract = vi.fn(async () => ({ prompt: [{ type: "text" as const, text: "原文" }] }));
     const onPrefill = vi.fn();
     const onRetracted = vi.fn();
-    const { result } = renderHook(() => useRetractMessage({ retract, onPrefill, onRetracted }));
+    const onRetractFailed = vi.fn();
+    const { result } = renderHook(() => useRetractMessage({ retract, onPrefill, onRetracted, onRetractFailed }));
     await act(async () => {
       await result.current.run();
     });
     expect(retract).toHaveBeenCalledTimes(1);
     expect(onRetracted).toHaveBeenCalledTimes(1);
+    expect(onRetractFailed).not.toHaveBeenCalled();
     expect(onPrefill).toHaveBeenCalledWith({ text: "原文", files: [] });
     expect(result.current.notice).toBeUndefined();
     expect(result.current.retracting).toBe(false);
@@ -46,10 +48,12 @@ describe("useRetractMessage", () => {
       throw new Error("RETRACT_UNAVAILABLE");
     });
     const onPrefill = vi.fn();
-    const { result } = renderHook(() => useRetractMessage({ retract, onPrefill }));
+    const onRetractFailed = vi.fn();
+    const { result } = renderHook(() => useRetractMessage({ retract, onPrefill, onRetractFailed }));
     await act(async () => {
       await result.current.run();
     });
+    expect(onRetractFailed).toHaveBeenCalledTimes(1);
     expect(onPrefill).not.toHaveBeenCalled();
     expect(result.current.notice).toBe(RETRACT_UNAVAILABLE_NOTICE);
   });

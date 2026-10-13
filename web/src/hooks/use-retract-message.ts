@@ -41,10 +41,17 @@ interface UseRetractMessageOptions {
   onPrefill: (prefill: RetractPrefill) => void;
   /** 撤回成功（中断前）回调：宿主据此抑制队列自动出队。 */
   onRetracted?: () => void;
+  /** 撤回失败回调：宿主据此复位 onRetracted 里提前置位的状态。 */
+  onRetractFailed?: () => void;
 }
 
 /** 撤回按钮 / ↑ 键共用：防重复、成功回填、失败短提示。 */
-export function useRetractMessage({ retract, onPrefill, onRetracted }: UseRetractMessageOptions) {
+export function useRetractMessage({
+  retract,
+  onPrefill,
+  onRetracted,
+  onRetractFailed,
+}: UseRetractMessageOptions) {
   const [retracting, setRetracting] = useState(false);
   const [notice, setNotice] = useState<string | undefined>();
   const busyRef = useRef(false);
@@ -62,6 +69,7 @@ export function useRetractMessage({ retract, onPrefill, onRetracted }: UseRetrac
       const { prompt } = await retract();
       onPrefill(promptToPrefill(prompt));
     } catch {
+      onRetractFailed?.();
       setNotice(RETRACT_UNAVAILABLE_NOTICE);
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setNotice(undefined), NOTICE_MS);
@@ -69,7 +77,7 @@ export function useRetractMessage({ retract, onPrefill, onRetracted }: UseRetrac
       busyRef.current = false;
       setRetracting(false);
     }
-  }, [onPrefill, onRetracted, retract]);
+  }, [onPrefill, onRetracted, onRetractFailed, retract]);
 
   return { retracting, notice, run };
 }
