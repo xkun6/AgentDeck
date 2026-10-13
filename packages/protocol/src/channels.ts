@@ -29,6 +29,25 @@ export interface EnvironmentCheckItem {
   path?: string;
   details?: string;
   recommendation?: string;
+  /** 一键安装方案：仅在该项「未找到」且当前平台有白名单方案时给出。 */
+  install?: EnvironmentInstallHint;
+}
+
+/** Rust 白名单中的安装方案（winget / brew / npm），前端只展示命令、只回传检测项 id。 */
+export interface EnvironmentInstallHint {
+  /** 展示给用户的完整命令行 */
+  command: string;
+  /** false = 前置条件不满足（如未找到 winget / npm），按钮禁用 */
+  available: boolean;
+  unavailableReason?: string;
+}
+
+/** Rust 命令 environment_install { id } 的返回值。 */
+export interface EnvironmentInstallResult {
+  ok: boolean;
+  exitCode: number | null;
+  /** stdout + stderr 末尾（最多约 4000 字符） */
+  output: string;
 }
 
 export interface EnvironmentCheckResult {

@@ -1,8 +1,9 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   CircleHelp,
+  Download,
   FolderOpen,
   MonitorCog,
   RefreshCw,
@@ -14,7 +15,8 @@ import {
 import type { EnvironmentCheckCategory, EnvironmentCheckItem, EnvironmentCheckResult, EnvironmentCheckStatus } from "@agentdeck/protocol";
 import { Button, LoadingState } from "@agentdeck/shared-ui";
 import { DiagnosticCopyButton } from "@/components/ui/diagnostic-copy-button";
-import { useEnvironmentCheck } from "@/hooks/use-environment-check";
+import { useEnvironmentCheck, useEnvironmentInstall } from "@/hooks/use-environment-check";
+import { useConfirm } from "@/lib/use-confirm";
 import s from "./settings.module.css";
 
 const CATEGORY_LABELS: Record<EnvironmentCheckCategory, string> = {
@@ -33,6 +35,13 @@ const STATUS_LABELS: Record<EnvironmentCheckStatus, string> = {
 };
 
 const CATEGORY_ORDER: EnvironmentCheckCategory[] = ["core", "runtime", "tools", "browser", "paths"];
+
+/** 装完这些项后，已在运行的 sidecar 可能仍沿用旧 PATH，需要提示重启 sidecar。 */
+const SIDECAR_RESTART_HINT_IDS = new Set(["node", "npm", "claude-code", "codex", "agent-browser"]);
+
+type InstallOutcome =
+  | { kind: "success"; restartHint: boolean }
+  | { kind: "failed"; message: string; output: string };
 
 export function summarizeEnvironmentItems(items: readonly EnvironmentCheckItem[]) {
   const errors = items.filter((item) => item.status === "error").length;
@@ -74,10 +83,63 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
   const grouped = useMemo(() => groupItems(data?.items ?? []), [data?.items]);
   const hasBridge = typeof window !== "undefined" && Boolean(window.hermesDesktop?.environmentCheck);
   const healthy = summary.requiredErrors === 0 && summary.errors === 0;
+  const { confirm } = useConfirm();
+  const installTool = useEnvironmentInstall();
+  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installOutcomes, setInstallOutcomes] = useState<Record<string, InstallOutcome>>({});
 
   const openPath = async (path: string | undefined) => {
     if (!path || !window.hermesDesktop?.openWorkspacePath) return;
     await window.hermesDesktop.openWorkspacePath({ path }).catch(() => undefined);
+  };
+
+  const setOutcome = (id: string, outcome: InstallOutcome | null) => {
+    setInstallOutcomes((prev) => {
+      const next = { ...prev };
+      if (outcome) next[id] = outcome;
+      else delete next[id];
+      return next;
+    });
+  };
+
+  const runInstall = async (item: EnvironmentCheckItem) => {
+    const install = item.install;
+    if (!install?.available || installingId) return;
+    const confirmed = await confirm({
+      title: `安装 ${item.label}`,
+      body: (
+        <>
+          将执行以下命令：
+          <pre className={s.envInstallCommand}>{install.command}</pre>
+          winget 安装时可能弹出管理员授权（UAC）窗口，请留意并确认；安装可能需要几分钟。
+        </>
+      ),
+      confirmLabel: "开始安装",
+    });
+    if (!confirmed) return;
+    setInstallingId(item.id);
+    setOutcome(item.id, null);
+    try {
+      const result = await installTool(item.id);
+      setOutcome(
+        item.id,
+        result.ok
+          ? { kind: "success", restartHint: SIDECAR_RESTART_HINT_IDS.has(item.id) }
+          : {
+              kind: "failed",
+              message: result.exitCode === null ? "安装失败" : `安装失败（退出码 ${result.exitCode}）`,
+              output: result.output,
+            },
+      );
+    } catch (error) {
+      setOutcome(item.id, {
+        kind: "failed",
+        message: `安装失败：${error instanceof Error ? error.message : String(error)}`,
+        output: "",
+      });
+    } finally {
+      setInstallingId(null);
+    }
   };
 
   return (
@@ -154,7 +216,15 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
             <DebugCard key={group.category} icon={categoryIcon(group.category)} title={CATEGORY_LABELS[group.category]} wide>
               <div className={s.platformList}>
                 {group.items.map((item) => (
-                  <EnvironmentItemRow key={item.id} item={item} onOpenPath={openPath} />
+                  <EnvironmentItemRow
+                    key={item.id}
+                    item={item}
+                    onOpenPath={openPath}
+                    installing={installingId === item.id}
+                    installBusy={installingId !== null}
+                    installOutcome={installOutcomes[item.id]}
+                    onInstall={() => void runInstall(item)}
+                  />
                 ))}
               </div>
             </DebugCard>
@@ -167,7 +237,14 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
   );
 }
 
-function EnvironmentItemRow({ item, onOpenPath }: { item: EnvironmentCheckItem; onOpenPath: (path: string | undefined) => Promise<void> }) {
+function EnvironmentItemRow({ item, onOpenPath, installing, installBusy, installOutcome, onInstall }: {
+  item: EnvironmentCheckItem;
+  onOpenPath: (path: string | undefined) => Promise<void>;
+  installing: boolean;
+  installBusy: boolean;
+  installOutcome?: InstallOutcome;
+  onInstall: () => void;
+}) {
   return (
     <div className={s.envCheckItem} data-status={item.status}>
       <div className={s.envCheckHeader}>
@@ -187,6 +264,45 @@ function EnvironmentItemRow({ item, onOpenPath }: { item: EnvironmentCheckItem; 
           {item.path && <RuntimeField label="路径" value={item.path} mono wide />}
           {item.details && <RuntimeField label="详情" value={item.details} mono wide />}
           {item.recommendation && <RuntimeField label="建议" value={item.recommendation} wide />}
+        </div>
+      )}
+      {(item.install || installOutcome) && (
+        <div className={s.envInstall}>
+          {item.install && (
+            <div className={s.envInstallActions}>
+              <Button
+                variant="solid"
+                tone="accent"
+                size="sm"
+                type="button"
+                onClick={onInstall}
+                disabled={!item.install.available || installBusy}
+                loading={installing}
+                leadingIcon={<Download size={12} />}
+              >
+                {installing ? "安装中…" : "一键安装"}
+              </Button>
+              {!item.install.available && item.install.unavailableReason && (
+                <span className={s.envInstallReason}>{item.install.unavailableReason}</span>
+              )}
+            </div>
+          )}
+          {installOutcome?.kind === "success" && (
+            <p className={s.envInstallMessage} data-tone="ok">
+              安装完成{installOutcome.restartHint ? "。如 Agent 仍显示不可用，请重启 sidecar" : ""}
+            </p>
+          )}
+          {installOutcome?.kind === "failed" && (
+            <>
+              <p className={s.envInstallMessage} data-tone="error">{installOutcome.message}</p>
+              {installOutcome.output && (
+                <details className={s.envInstallOutput}>
+                  <summary>查看输出</summary>
+                  <pre>{installOutcome.output}</pre>
+                </details>
+              )}
+            </>
+          )}
         </div>
       )}
       {item.path && window.hermesDesktop?.openWorkspacePath && (

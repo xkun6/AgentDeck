@@ -2,6 +2,7 @@ import type {
   CodingAgentPaths,
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
+  EnvironmentInstallResult,
   ExportLogSnapshotInput,
   ExportLogSnapshotResult,
 } from "@agentdeck/protocol";
@@ -340,6 +341,8 @@ declare global {
       toggleDevtools?(): Promise<void>;
       exportLogSnapshot?(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult>;
       environmentCheck?(): Promise<EnvironmentCheckResult>;
+      /** 一键安装缺失工具（Rust environment_install；只传检测项 id，命令由 Rust 白名单决定） */
+      environmentInstall?(id: string): Promise<EnvironmentInstallResult>;
       codingAgentsCheck?(): Promise<CodingAgentsCheckResult>;
       /** 「编程 Agent」页配置的 Claude / Codex 可执行文件路径（Rust coding_agent_paths_get / set） */
       codingAgentPathsGet?(): Promise<CodingAgentPaths>;

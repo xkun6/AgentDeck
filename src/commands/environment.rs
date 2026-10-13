@@ -21,3 +21,14 @@ pub async fn environment_check(
     .await;
     Ok(environment::collect_environment_check(input).await)
 }
+
+/// 一键安装缺失工具：只接受检测项 id，方案在 `environment::install_plan` 白名单中写死。
+#[tauri::command]
+pub async fn environment_install(
+    id: String,
+) -> Result<environment::EnvironmentInstallResult, AppError> {
+    tauri::async_runtime::spawn_blocking(move || environment::run_environment_install(&id))
+        .await
+        .map_err(|err| AppError::Internal(format!("安装任务异常退出：{err}")))?
+        .map_err(AppError::Internal)
+}

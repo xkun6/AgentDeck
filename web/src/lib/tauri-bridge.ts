@@ -12,6 +12,7 @@ import type {
   CodingAgentPaths,
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
+  EnvironmentInstallResult,
   ExportLogSnapshotInput,
   ExportLogSnapshotResult,
 } from "@agentdeck/protocol";
@@ -286,6 +287,10 @@ const tauriBridge = {
 
   async environmentCheck(): Promise<EnvironmentCheckResult> {
     return invokeCommand("environment_check");
+  },
+
+  async environmentInstall(id: string): Promise<EnvironmentInstallResult> {
+    return invokeCommand("environment_install", { id });
   },
 
   async codingAgentsCheck(): Promise<CodingAgentsCheckResult> {

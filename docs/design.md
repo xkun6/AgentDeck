@@ -335,6 +335,25 @@ interface ProviderProfile {
 - **即时生效**：sidecar 每次解析可执行文件都同步重读配置文件（文件很小）。Codex 每次 `isAvailable` / 建会话都重新解析；Claude 的解析结果原本缓存 60 秒，缓存键改为「当前配置的 claude 路径」，配置变化即作废重解析。因此保存后无需重启 sidecar，下一次 `provider.list` / 新建会话即按新配置。已在运行的会话继续使用旧可执行文件直到关闭。前端保存成功后让 `coding_agents_check` 查询与 sidecar 的 provider.list / 模型目录查询失效并重新获取。
 - **前端**：`settings-coding-agents.tsx` 的 Claude Code / Codex 卡片各有「可执行文件路径」一栏（输入框占位「留空则自动查找」、「浏览…」、「保存」、「恢复自动查找」），显示当前生效路径与是否手动配置；「浏览…」经 bridge 的 `pickExecutableFile` 直接调用 dialog 插件 open（Windows 过滤 `.exe` / `.cmd`）；保存时先 `coding_agent_paths_get` 再整份 `coding_agent_paths_set`。
 
+### 4.9 环境检查一键安装（Rust 命令）
+
+设置「环境」页（`web/src/routes/environment.tsx`，数据来自 `environment_check`）对缺失的工具项提供「一键安装」。逻辑在 `src/environment.rs`，命令在 `src/commands/environment.rs`。
+
+- **白名单（只在 Rust 内写死，前端只传检测项 id，绝不接受任意命令）**：
+  - `git` / `bash`：Windows `winget install --id Git.Git -e`；macOS `brew install git`
+  - `node` / `npm`：Windows `winget install --id OpenJS.NodeJS.LTS -e`；macOS `brew install node`
+  - `ripgrep`：Windows `winget install --id BurntSushi.ripgrep.MSVC -e`；macOS `brew install ripgrep`
+  - `ffmpeg`：Windows `winget install --id Gyan.FFmpeg -e`；macOS `brew install ffmpeg`
+  - `agent-browser` / `claude-code` / `codex`：`npm install -g agent-browser` / `@anthropic-ai/claude-code` / `@openai/codex`（Windows / macOS）
+  - winget 统一追加 `--accept-package-agreements --accept-source-agreements --disable-interactivity --silent`。Linux 及其它平台无方案（只保留 recommendation 文本）。
+- **`EnvironmentCheckItem.install?`**：`{ command: string /* 展示用完整命令行 */, available: boolean, unavailableReason?: string }`，仅在该项「未找到」且当前平台有方案时给出。winget / brew / npm 按有效 PATH（`path_resolver`）查找，找不到时 `available=false`，原因分别为「未找到 winget，请从 Microsoft Store 安装“应用安装程序”」「未找到 Homebrew，…」「需先安装 Node.js（含 npm）」。
+- **命令 `environment_install { id }`** → `{ ok: boolean, exitCode: number | null, output: string }`：
+  - 不在白名单 / 当前平台无方案 / 安装器不可用 → 中文错误（`AppError` message）；全局同时只允许一个安装，忙时返回「已有安装任务在进行」。
+  - 执行前后各 force 刷新一次有效 PATH 缓存；子进程 `.env("PATH", 有效 PATH)`、Windows `CREATE_NO_WINDOW`、stdin null、捕获 stdout/stderr；20 分钟超时结束整棵进程树（Windows `taskkill /T /F`，Unix 独立进程组 SIGKILL）。npm 在 Windows 为 `npm.cmd`，由 Rust std 经 cmd.exe 调用（参数全为常量）。
+  - `output` 为 stdout + stderr 末尾最多 4000 字符（winget 进度条的 `\r` 重绘只保留每行最后一帧）。退出码 0 为成功；winget 另把 `0x8A15002B`（UPDATE_NOT_APPLICABLE）与 `0x8A150061`（PACKAGE_ALREADY_INSTALLED）视为成功。
+  - winget 某些安装包会弹 UAC，属预期，不绕过。
+- **前端**：缺失项有 `install` 时显示「一键安装」（`available=false` 时禁用并显示原因）；点击先 `useConfirm` 确认（展示完整命令，提示可能弹管理员授权、需要几分钟）；安装中该按钮 loading、其它安装按钮禁用；成功显示「安装完成」并让环境检查与编程 Agent 检测查询失效重取，node / npm / claude-code / codex / agent-browser 额外提示「如 Agent 仍显示不可用，请重启 sidecar」；失败显示退出码与可折叠的输出末尾。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```

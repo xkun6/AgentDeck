@@ -165,6 +165,7 @@ fn main() {
             commands::session_export::export_session_json,
             commands::devtools::toggle_devtools,
             commands::environment::environment_check,
+            commands::environment::environment_install,
             commands::coding_agents::coding_agents_check,
             commands::coding_agents::coding_agent_paths_get,
             commands::coding_agents::coding_agent_paths_set,

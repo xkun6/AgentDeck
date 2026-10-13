@@ -1134,6 +1134,69 @@
   margin-top: 0;
 }
 
+.envInstall {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.envInstallActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.envInstallReason {
+  color: var(--h-warn);
+  font-size: var(--h-font-size-sm);
+  line-height: 1.6;
+}
+
+.envInstallMessage {
+  margin: 0;
+  color: var(--h-text-2);
+  font-size: var(--h-font-size-sm);
+  line-height: 1.6;
+}
+
+.envInstallMessage[data-tone="ok"] {
+  color: var(--h-ok);
+}
+
+.envInstallMessage[data-tone="error"] {
+  color: var(--h-err);
+}
+
+.envInstallOutput summary {
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-sm);
+  cursor: pointer;
+}
+
+.envInstallOutput pre,
+.envInstallCommand {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--h-line-soft);
+  background: var(--h-bg-soft);
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: var(--h-font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.envInstallOutput pre {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.envInstallCommand {
+  margin-bottom: 8px;
+}
+
 .catalogToolbar {
   display: flex;
   align-items: center;

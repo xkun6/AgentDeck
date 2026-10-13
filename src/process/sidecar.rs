@@ -347,7 +347,7 @@ fn create_kill_on_close_job(child: &Child) -> Result<JobHandle, String> {
 }
 
 #[cfg(windows)]
-fn force_kill_process_tree(pid: u32) {
+pub(crate) fn force_kill_process_tree(pid: u32) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     if pid == 0 {
@@ -363,7 +363,7 @@ fn force_kill_process_tree(pid: u32) {
 }
 
 #[cfg(unix)]
-fn signal_process_group(pid: u32, signal: libc::c_int) {
+pub(crate) fn signal_process_group(pid: u32, signal: libc::c_int) {
     if pid == 0 {
         return;
     }
