@@ -188,6 +188,20 @@ describe("reduceAgentEvent", () => {
     expect(runtime.agentUsage).toEqual({ inputTokens: 3 });
   });
 
+  it("usage_updated 浅合并：只带上下文字段的中途更新保留 token / 费用字段，同名字段被覆盖", () => {
+    const runtime = replay([
+      { type: "usage_updated", usage: { inputTokens: 3, outputTokens: 2, totalCostUsd: 0.1, contextWindowUsedTokens: 10 } },
+      { type: "usage_updated", usage: { contextWindowUsedTokens: 500, contextWindowMaxTokens: 1000 } },
+    ]);
+    expect(runtime.agentUsage).toEqual({
+      inputTokens: 3,
+      outputTokens: 2,
+      totalCostUsd: 0.1,
+      contextWindowUsedTokens: 500,
+      contextWindowMaxTokens: 1000,
+    });
+  });
+
   it("按 seq 去重，与 epoch 无关：重复或更旧的 seq 一律忽略", () => {
     const first = reduceAgentEvent(
       createEmptyChatRuntime(0),

@@ -43,7 +43,9 @@ export type ClaudeOutgoingControl =
   /** 重连单个 MCP 服务器；失败时控制应答为 error */
   | { subtype: "mcp_reconnect"; serverName: string }
   /** 停止单个后台任务（design.md 4.15） */
-  | { subtype: "stop_task"; task_id: string };
+  | { subtype: "stop_task"; task_id: string }
+  /** 当前上下文用量（design.md 4.13；应答见 ClaudeContextUsageResponse） */
+  | { subtype: "get_context_usage" };
 
 /** 对 CLI 控制请求的应答（写入 stdin） */
 export interface ClaudeControlResponseOut {
@@ -152,6 +154,15 @@ export interface ClaudeMcpStatusResponse {
     scope?: unknown;
     tools?: unknown;
   }>;
+}
+
+/** get_context_usage 控制请求的应答（字段以 Agent SDK 的 SDKControlGetContextUsageResponse 为准，只声明用到的） */
+export interface ClaudeContextUsageResponse {
+  totalTokens?: unknown;
+  maxTokens?: unknown;
+  rawMaxTokens?: unknown;
+  percentage?: unknown;
+  model?: unknown;
 }
 
 /** Messages API 流式事件（message_start / content_block_delta / message_delta 等）中用到的字段 */

@@ -385,7 +385,7 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
         behavior: "allow",
         updatedInput: { file_path: "c.txt", content: "y" },
       });
-      expect(events.find((e) => e.type === "usage_updated")).toMatchObject({
+      expect(events.findLast((e) => e.type === "usage_updated")).toMatchObject({
         usage: { inputTokens: 10, cachedInputTokens: 7, outputTokens: 2, totalCostUsd: 0.001 },
       });
 

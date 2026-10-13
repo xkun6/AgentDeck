@@ -740,7 +740,8 @@ function reduceAgentEventInner(
       };
 
     case "usage_updated":
-      return { ...runtime, agentUsage: event.usage };
+      // 浅合并：回合中只带上下文字段的更新不抹掉 token / 费用字段（design.md 4.3）
+      return { ...runtime, agentUsage: { ...runtime.agentUsage, ...event.usage } };
 
     default:
       // thread_started / model_changed / mode_changed：快照由 agent.state 更新，时间线无变化

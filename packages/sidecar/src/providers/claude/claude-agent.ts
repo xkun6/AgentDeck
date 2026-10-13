@@ -562,6 +562,11 @@ export class ClaudeAgentSession implements AgentSession {
   private currentStreamMessageId: string | null = null;
   private contextInputTokens = 0;
   private contextOutputTokens = 0;
+  /** 最近一次已知的上下文窗口上限（result 的 modelUsage / get_context_usage 应答）；切换模型后清掉 */
+  private contextWindowMax: number | null = null;
+  private contextUsageRequestInFlight = false;
+  /** get_context_usage 失败后不再重试，直到切换模型 */
+  private contextUsageUnavailable = false;
   /** 进行中的上下文压缩（status compacting 时生成，compact_boundary / 失败时清空，design.md 4.13） */
   private compactionId: string | null = null;
   /** 父会话 Task / Agent 调用的 input（按 tool_use_id，会话级）：子代理标题、类型与描述来源 */
@@ -795,6 +800,8 @@ export class ClaudeAgentSession implements AgentSession {
       await this.cli.setModel(normalizeModel(modelId));
     }
     this.model = modelId;
+    this.contextWindowMax = null;
+    this.contextUsageUnavailable = false;
     this.emit({ type: "model_changed", modelId });
   }
 
@@ -999,6 +1006,8 @@ export class ClaudeAgentSession implements AgentSession {
         if (commands && this.cli === cli) {
           this.commands = commands;
         }
+        // 恢复的会话在第一轮之前就能显示上下文用量
+        if (this.cli === cli) this.requestContextUsage(cli, true);
       },
       (error: unknown) => {
         if (this.cli === cli) {
@@ -1174,6 +1183,7 @@ export class ClaudeAgentSession implements AgentSession {
             toCount(usage.cache_creation_input_tokens) +
             toCount(usage.cache_read_input_tokens);
           this.contextOutputTokens = 0;
+          this.emitContextUsage();
         }
         return;
       }
@@ -1389,6 +1399,68 @@ export class ClaudeAgentSession implements AgentSession {
     });
   }
 
+  /**
+   * 回合中的上下文用量（design.md 4.13）：message_start 时只带上下文字段，前端 / AgentManager 浅合并。
+   * 上限未知时向 CLI 请求 get_context_usage，拿到后补发。
+   */
+  private emitContextUsage(): void {
+    const used = this.contextInputTokens;
+    if (used <= 0) {
+      return;
+    }
+    this.emit({
+      type: "usage_updated",
+      usage: {
+        contextWindowUsedTokens: used,
+        ...(this.contextWindowMax !== null ? { contextWindowMaxTokens: this.contextWindowMax } : {}),
+      },
+    });
+    if (this.contextWindowMax === null && this.cli) {
+      this.requestContextUsage(this.cli, false);
+    }
+  }
+
+  /** get_context_usage：缓存 maxTokens 并补发 usage_updated；失败只记 debug 且不再重试（切换模型后重置） */
+  private requestContextUsage(cli: ClaudeCliHandle, fromInitialize: boolean): void {
+    if (this.contextUsageRequestInFlight || this.contextUsageUnavailable) {
+      return;
+    }
+    this.contextUsageRequestInFlight = true;
+    cli.getContextUsage().then(
+      (response) => {
+        this.contextUsageRequestInFlight = false;
+        if (this.cli !== cli || this.closed) {
+          return;
+        }
+        const max = toCount(response.maxTokens);
+        if (max > 0) {
+          this.contextWindowMax = max;
+        } else {
+          this.contextUsageUnavailable = true;
+        }
+        const ownUsed = this.contextInputTokens;
+        // 启动时还没有 message_start 给出已用量，用应答里的 totalTokens
+        const used = ownUsed > 0 ? ownUsed : fromInitialize ? toCount(response.totalTokens) : 0;
+        // 只有上限、或启动时补出的已用量才值得再发一次
+        if (max <= 0 && !(fromInitialize && ownUsed <= 0 && used > 0)) {
+          return;
+        }
+        this.emit({
+          type: "usage_updated",
+          usage: {
+            ...(used > 0 ? { contextWindowUsedTokens: used } : {}),
+            ...(max > 0 ? { contextWindowMaxTokens: max } : {}),
+          },
+        });
+      },
+      (error: unknown) => {
+        this.contextUsageRequestInFlight = false;
+        this.contextUsageUnavailable = true;
+        this.logger.debug("get_context_usage 失败（忽略）：%s", errorMessage(error));
+      },
+    );
+  }
+
   private convertUsage(message: ClaudeResultMessage): AgentUsage {
     const usage = message.usage;
     const cacheRead = toCount(usage?.cache_read_input_tokens);
@@ -1408,6 +1480,7 @@ export class ClaudeAgentSession implements AgentSession {
     );
     if (contextWindow > 0) {
       result.contextWindowMaxTokens = contextWindow;
+      this.contextWindowMax = contextWindow;
     }
     const used = this.contextInputTokens + this.contextOutputTokens;
     if (used > 0) {

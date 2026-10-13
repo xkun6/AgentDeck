@@ -225,6 +225,32 @@ describe("快照新字段：preview / lastSeq / resumable", () => {
 });
 
 describe("会话累计用量 totalUsage（design.md 4.4）", () => {
+  test("usage_updated 浅合并进 lastUsage，中途事件不计入累计", async () => {
+    const { client, sessions } = fakeClient();
+    const { manager } = createManager(client, makeDataDir());
+    const agent = await manager.createAgent({ provider: "fake", cwd: "/w" });
+    const turn = (await manager.sendPrompt(agent.id, "hi")).turnId;
+    sessions.at(-1)!.emit({
+      type: "turn_completed",
+      turnId: turn,
+      usage: { inputTokens: 100, outputTokens: 10, totalCostUsd: 0.5 },
+    });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
+    sessions.at(-1)!.emit({ type: "usage_updated", usage: { contextWindowUsedTokens: 777 } });
+    sessions.at(-1)!.emit({ type: "usage_updated", usage: { contextWindowUsedTokens: 800, contextWindowMaxTokens: 1000 } });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).lastUsage?.contextWindowUsedTokens).toBe(800));
+    const snapshot = manager.getAgent(agent.id);
+    expect(snapshot.lastUsage).toEqual({
+      inputTokens: 100,
+      outputTokens: 10,
+      totalCostUsd: 0.5,
+      contextWindowUsedTokens: 800,
+      contextWindowMaxTokens: 1000,
+    });
+    expect(snapshot.totalUsage).toEqual({ inputTokens: 100, outputTokens: 10 });
+    await manager.shutdown();
+  });
+
   test("多轮累加、重复 turn_completed 不重复累加、持久化后重启仍保留", async () => {
     const dataDir = makeDataDir();
     const first = fakeClient();

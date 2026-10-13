@@ -19,6 +19,7 @@ import type {
   ClaudeCanUseToolRequest,
   ClaudeControlResponseOut,
   ClaudeInitializeResponse,
+  ClaudeContextUsageResponse,
   ClaudeMcpStatusResponse,
   ClaudeOutgoingControl,
   ClaudeOutputMessage,
@@ -74,6 +75,8 @@ export interface ClaudeCliHandle extends AsyncIterable<ClaudeOutputMessage> {
   mcpReconnect(serverName: string): Promise<void>;
   /** 停止单个后台任务（design.md 4.15）；任务的终态由随后的 task_updated / task_notification 带回 */
   stopTask(taskId: string): Promise<void>;
+  /** 当前上下文用量与上限（design.md 4.13）；失败时 reject */
+  getContextUsage(): Promise<ClaudeContextUsageResponse>;
   close(): Promise<void>;
 }
 
@@ -239,6 +242,10 @@ export class ClaudeCliSession implements ClaudeCliHandle {
 
   async stopTask(taskId: string): Promise<void> {
     await this.request({ subtype: "stop_task", task_id: taskId });
+  }
+
+  async getContextUsage(): Promise<ClaudeContextUsageResponse> {
+    return (await this.request({ subtype: "get_context_usage" })) as ClaudeContextUsageResponse;
   }
 
   close(): Promise<void> {

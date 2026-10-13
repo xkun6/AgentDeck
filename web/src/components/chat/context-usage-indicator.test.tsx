@@ -48,6 +48,11 @@ describe("ContextUsageIndicator", () => {
     expect(container.innerHTML).toBe("");
   });
 
+  it("回合进行中只带上下文字段的用量也显示圆环（不依赖 token / 费用字段）", () => {
+    render(<ContextUsageIndicator usage={{ contextWindowUsedTokens: 50_500, contextWindowMaxTokens: 200_000 }} />);
+    expect(screen.getByRole("img", { name: "上下文窗口：已用 25%，50.5k / 200k tokens" })).toBeTruthy();
+  });
+
   it("传 onCompact 时渲染「立即压缩上下文」按钮，点击触发并失焦", () => {
     const onCompact = vi.fn();
     render(<ContextUsageIndicator usage={usage} onCompact={onCompact} />);

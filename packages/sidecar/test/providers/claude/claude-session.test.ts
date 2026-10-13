@@ -19,6 +19,7 @@ import {
   type ClaudeCliOptions,
 } from "../../../src/providers/claude/index.js";
 import type {
+  ClaudeContextUsageResponse,
   ClaudeInitializeResponse,
   ClaudeMcpStatusResponse,
   ClaudeOutputMessage,
@@ -41,9 +42,11 @@ class FakeCli implements ClaudeCliHandle {
     mcpStatus: 0,
     mcpReconnect: [] as string[],
     stopTask: [] as string[],
+    getContextUsage: 0,
     close: 0,
   };
   mcpStatusResponse: ClaudeMcpStatusResponse = {};
+  contextUsageImpl: () => Promise<ClaudeContextUsageResponse> = async () => ({});
   initialized: Promise<ClaudeInitializeResponse> = Promise.resolve({});
   interruptImpl: () => Promise<void> = async () => undefined;
   onUser: (message: ClaudeUserInput, cli: FakeCli) => void = () => undefined;
@@ -133,6 +136,11 @@ class FakeCli implements ClaudeCliHandle {
 
   async stopTask(taskId: string): Promise<void> {
     this.calls.stopTask.push(taskId);
+  }
+
+  async getContextUsage(): Promise<ClaudeContextUsageResponse> {
+    this.calls.getContextUsage += 1;
+    return this.contextUsageImpl();
   }
 
   async close(): Promise<void> {
@@ -620,6 +628,73 @@ describe("ClaudeAgentSession", () => {
     expect(typeof h.clis[0]!.received[0]!.uuid).toBe("string");
   });
 
+  test("message_start 发出只带上下文字段的 usage_updated；上限未知时 get_context_usage 补发并缓存，result 后缓存 max 不再请求", async () => {
+    const h = createHarness();
+    h.setup((q) => {
+      q.onUser = replyText("你好世界");
+      q.contextUsageImpl = async () => ({ totalTokens: 12_000, maxTokens: 1_000_000, rawMaxTokens: 1_000_000 });
+    });
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("hi");
+    await waitUntil(() => terminalEvents(events).length === 1);
+
+    const usages = events.flatMap((e) => (e.type === "usage_updated" ? [e.usage] : []));
+    // 第一次：只有已用；随后补发上限；最后是 result 的完整 usage
+    expect(usages[0]).toEqual({ contextWindowUsedTokens: 100 });
+    expect(usages[1]).toEqual({ contextWindowUsedTokens: 100, contextWindowMaxTokens: 1_000_000 });
+    expect(usages.at(-1)).toMatchObject({ inputTokens: 100, contextWindowMaxTokens: 200000 });
+    expect(usages[0]).not.toHaveProperty("inputTokens");
+    const requestsBefore = h.clis[0]!.calls.getContextUsage;
+
+    // result 记下 max 后，下一轮 message_start 直接带上限，不再发控制请求
+    await session.startTurn("again");
+    await waitUntil(() => terminalEvents(events).length === 2);
+    const second = events.flatMap((e) => (e.type === "usage_updated" ? [e.usage] : [])).slice(usages.length);
+    expect(second[0]).toEqual({ contextWindowUsedTokens: 100, contextWindowMaxTokens: 200000 });
+    expect(h.clis[0]!.calls.getContextUsage).toBe(requestsBefore);
+  });
+
+  test("get_context_usage 失败被忽略且不重试；切换模型后清掉缓存的 max", async () => {
+    const h = createHarness();
+    h.setup((q) => {
+      q.onUser = replyText("好的");
+      q.contextUsageImpl = async () => {
+        throw new Error("不支持");
+      };
+    });
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("hi");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(events.filter((e) => e.type === "turn_failed")).toHaveLength(0);
+    const requests = h.clis[0]!.calls.getContextUsage;
+    expect(requests).toBeGreaterThan(0);
+    // result 缓存了 max；切换模型后清掉，下一轮 message_start 重新没有上限，并重新请求
+    h.clis[0]!.contextUsageImpl = async () => ({ maxTokens: 500_000 });
+    await session.setModel!("claude-opus-4-5");
+    await session.startTurn("again");
+    await waitUntil(() => terminalEvents(events).length === 2);
+    expect(h.clis[0]!.calls.getContextUsage).toBeGreaterThan(requests);
+    const usages = events.flatMap((e) => (e.type === "usage_updated" ? [e.usage] : []));
+    expect(usages).toContainEqual({ contextWindowUsedTokens: 100, contextWindowMaxTokens: 500_000 });
+  });
+
+  test("initialize 完成后调一次 get_context_usage，用 totalTokens 作为已用（恢复的会话第一轮之前就有用量）", async () => {
+    const h = createHarness();
+    h.setup((q) => {
+      q.contextUsageImpl = async () => ({ totalTokens: 34_000, maxTokens: 200_000 });
+    });
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("hi");
+    await waitUntil(() => events.some((e) => e.type === "usage_updated"));
+    expect(events.find((e) => e.type === "usage_updated")).toEqual({
+      type: "usage_updated",
+      usage: { contextWindowUsedTokens: 34_000, contextWindowMaxTokens: 200_000 },
+    });
+  });
+
   test("一轮完整事件：thread_started、思考/文本增量（无重复）、usage、turn_completed", async () => {
     const h = createHarness();
     h.setup((q) => (q.onUser = replyText("你好世界")));
@@ -631,6 +706,7 @@ describe("ClaudeAgentSession", () => {
     expect(events.map((e) => (e.type === "timeline" ? `timeline:${e.item.type}` : e.type))).toEqual([
       "turn_started",
       "thread_started",
+      "usage_updated", // message_start 的回合中上下文用量（design.md 4.13）
       "timeline:reasoning",
       "timeline:assistant_message",
       "timeline:assistant_message",

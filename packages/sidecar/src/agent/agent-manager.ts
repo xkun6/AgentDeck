@@ -1012,7 +1012,8 @@ export class AgentManager {
         );
         return true;
       case "usage_updated":
-        snapshot.lastUsage = event.usage;
+        // 浅合并：回合中只带上下文字段的更新不能抹掉 token / 费用字段（design.md 4.3）
+        snapshot.lastUsage = { ...snapshot.lastUsage, ...event.usage };
         return false;
       case "model_changed":
         snapshot.model = event.modelId;

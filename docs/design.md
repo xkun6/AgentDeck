@@ -231,7 +231,7 @@ export interface AgentSnapshot {
   status: AgentStatus; activeTurnId?: string | null;
   pendingPermissions: AgentPermissionRequest[];
   lastUsage?: AgentUsage; lastError?: string | null;
-  totalUsage?: { inputTokens: number; outputTokens: number };   // 会话累计（见 4.4）
+  totalUsage?: { inputTokens: number; outputTokens: number };   // 会话累计（见 4.4）；只累加 turn_completed.usage，usage_updated 不计入
   persistence?: AgentPersistenceHandle | null;
   createdAt: number; updatedAt: number;
 }
@@ -243,7 +243,7 @@ export interface AgentSnapshot {
 - `turn_completed.usage` 的 `inputTokens` / `outputTokens` 表示**本轮**合计用量（上下文窗口字段仍为最新值）；AgentManager 每次 `turn_completed` 把它累加进快照 `totalUsage`（随 meta.json 持久化，并推 `agent.state`）。早于该字段的旧会话没有 `totalUsage`，前端退回显示 `lastUsage`。
 - `timeline` / `permission_requested` 未带 turnId 时，AgentManager 自动补上当前 turnId。
 - provider 未发 `permission_resolved` / `model_changed` / `mode_changed` 时由 AgentManager 补发；重复事件去重。
-- `usage_updated` 只更新快照的 `lastUsage`，不推 `agent.state`。
+- `usage_updated` 只更新快照的 `lastUsage`，不推 `agent.state`。**语义为浅合并**（`{ ...prev, ...event.usage }`，AgentManager 与前端运行时一致），provider 可以只带部分字段（如回合中只带上下文字段）而不抹掉其余；`turn_completed.usage` 才计入 `totalUsage`，`usage_updated` 一律不计入。
 - `agent.close` 后 agent 保留在注册表中（status `closed`），仍可查询 `agent.timeline`；再 `agent.send` 时若可恢复则自动恢复（见 4.5），否则返回 `AGENT_CLOSED`。
 - `agent.create` 未传 model / modeId 时快照中为 `null`，表示使用 provider 默认值；`availableModes` 取自 `fetchCatalog`。
 - turn 结束时清空 pendingPermissions；`turn_failed` 记录 `lastError`，下一轮开始时清空。
@@ -496,6 +496,11 @@ Claude Code 的后台子代理（`Agent` 工具 `run_in_background`）与后台�
 - Claude：`system` `status: "compacting"` → running（compactionId 为 `compact-<uuid>`）；`system` `compact_boundary`（`compact_metadata.trigger` / `pre_tokens`）→ 同一 id 的 completed（之前没有 running 时新建 id）；`status` 消息带 `compact_result: "failed"` 且有进行中的压缩 → failed（error 取 `compact_error`）。需要时以 4.12 的规则开自发回合。压缩完成后上下文用量的「已用」改为 `compact_metadata.post_tokens`（没有则清零），下一次 `message_start` 自然刷新，避免压缩后 result 仍报压缩前的大数字。
 - Codex：ThreadItem `contextCompaction`（兼容 `context_compaction`）的 `item/started` → running、`item/completed` → completed（compactionId = item.id），不产生工具卡片；旧版 `thread/compacted` 通知在本回合没见过 contextCompaction item 时补一条 completed。
 - 前端：每个 compactionId 对应一条居中分隔线样式的系统提示（消息 id `agent-compaction-<compactionId>`）：running「正在压缩上下文…」，completed 原地改为「上下文已自动压缩 / 上下文已手动压缩」（有 preTokens 时附「（压缩前 约 84.1k tokens）」），failed「上下文压缩失败」。提示插在当前回合尚无内容的助手消息之前，否则追加在末尾。completed 时清掉运行时 usage 的 `contextWindowUsedTokens`，输入框的上下文用量指示器随之隐藏，直到下一次 usage 到达。
+
+**回合中的上下文用量（Claude）**：result 才带完整 usage，新会话 / 刚恢复 / 压缩后「思考中」整轮都没有可显示的用量，所以：
+- 主线程（非子代理 sidechain）每个 `message_start` 发一次 `usage_updated`，只带 `{ contextWindowUsedTokens, contextWindowMaxTokens? }`（已用 = input + cache_creation + cache_read）。上限取最近已知的 contextWindow（result 的 `modelUsage` 缓存到会话）。
+- 上限未知时向 CLI 发控制请求 `{ subtype: "get_context_usage" }`（应答 `totalTokens / maxTokens / rawMaxTokens / percentage / model`），拿到 `maxTokens` 后缓存并补发一次 `usage_updated`；失败只记 debug，不再重试（切换模型后重置）。会话进程 initialize 完成后也调一次，用 `totalTokens` 作为已用（还没有 message_start 时），让恢复的会话在第一轮之前就有用量。切换模型清掉缓存的上限。
+- 这些中途事件不带 `inputTokens / outputTokens`，不进入 `totalUsage`；result 的完整 usage 覆盖同名字段。
 
 ### 4.14 斜杠命令与 MCP 状态
 
