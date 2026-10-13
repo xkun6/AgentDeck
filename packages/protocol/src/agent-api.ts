@@ -524,6 +524,65 @@ export interface ScheduleNotice {
 }
 
 // ---------------------------------------------------------------------------
+// 4.28 看板式任务分派
+// ---------------------------------------------------------------------------
+
+export interface BoardAssignee {
+  provider: AgentProviderId;
+  model?: string | null;
+  modeId?: string | null;
+}
+
+export type BoardTaskStatus = "todo" | "running" | "review" | "done" | "blocked";
+
+export interface BoardSettings {
+  /** 每个任务独立 git worktree（默认：项目在 git 仓库内时 true）；非 git 仓库时忽略 */
+  worktreePerTask: boolean;
+  /** 依赖全部 done 的 todo 按 order 自动派发，受 maxConcurrent 限制 */
+  autoDispatch: boolean;
+  maxConcurrent: number;
+  defaultAssignee: BoardAssignee;
+}
+
+export interface BoardTask {
+  id: string;
+  title: string;
+  description: string;
+  status: BoardTaskStatus;
+  assignee?: BoardAssignee;
+  dependsOn?: string[];
+  agentId?: string;
+  worktree?: { path: string; branch: string };
+  attempts: number;
+  maxAttempts: number;
+  blockedReason?: string;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Board {
+  projectPath: string;
+  settings: BoardSettings;
+  tasks: BoardTask[];
+}
+
+/** `board.upsertTask` 入参：无 id 为新建；状态只能经 `board.moveTask` 改变 */
+export interface BoardTaskDraft {
+  id?: string;
+  title: string;
+  description?: string;
+  /** null = 清除指派（使用看板默认指派） */
+  assignee?: BoardAssignee | null;
+  dependsOn?: string[];
+  maxAttempts?: number;
+}
+
+export type BoardSettingsPatch = Partial<Omit<BoardSettings, "defaultAssignee">> & {
+  defaultAssignee?: BoardAssignee;
+};
+
+// ---------------------------------------------------------------------------
 // JSON-RPC 2.0 线协议
 // ---------------------------------------------------------------------------
 
@@ -741,6 +800,12 @@ export const AGENT_RPC_METHODS = {
   scheduleRunNow: "schedule.runNow",
   scheduleRuns: "schedule.runs",
   scheduleSetPaused: "schedule.setPaused",
+  boardGet: "board.get",
+  boardUpdateSettings: "board.updateSettings",
+  boardUpsertTask: "board.upsertTask",
+  boardDeleteTask: "board.deleteTask",
+  boardMoveTask: "board.moveTask",
+  boardMerge: "board.merge",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
   agentCommands: "agent.commands",
@@ -765,6 +830,7 @@ export const AGENT_RPC_NOTIFICATIONS = {
   agentTasksUpdate: "agent.tasks.update",
   scheduleChanged: "schedule.changed",
   scheduleNotice: "schedule.notice",
+  boardChanged: "board.changed",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -864,6 +930,31 @@ export interface AgentRpcMethods {
   /** 默认 100，按时间倒序 */
   "schedule.runs": { params: { id?: string; limit?: number }; result: { runs: ScheduleRun[] } };
   "schedule.setPaused": { params: { paused: boolean }; result: { paused: boolean } };
+  /** 看板式任务分派（design.md 4.28）；不存在的看板返回默认空看板 */
+  "board.get": { params: { projectPath: string }; result: { board: Board } };
+  /** settings 为补丁：只覆盖给出的字段 */
+  "board.updateSettings": {
+    params: { projectPath: string; settings: BoardSettingsPatch };
+    result: { board: Board };
+  };
+  "board.upsertTask": {
+    params: { projectPath: string; task: BoardTaskDraft };
+    result: { board: Board; task: BoardTask };
+  };
+  /** removeWorktree 清理失败不阻止删除，原因放在 warning */
+  "board.deleteTask": {
+    params: { projectPath: string; taskId: string; removeWorktree?: boolean };
+    result: { board: Board; warning?: string };
+  };
+  "board.moveTask": {
+    params: { projectPath: string; taskId: string; status: BoardTaskStatus; order?: number };
+    result: { board: Board };
+  };
+  /** 冲突时已 merge --abort，任务留在 review；工作区有未提交改动等 → 业务错误 */
+  "board.merge": {
+    params: { projectPath: string; taskId: string; removeWorktree: boolean };
+    result: { ok: boolean; conflicts?: string[]; board: Board; warning?: string };
+  };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };
     result: Record<string, never>;
@@ -963,6 +1054,8 @@ export interface AgentRpcNotifications {
   "schedule.changed": { schedules: Schedule[]; paused: boolean };
   /** 目标循环结束 / 定时任务失败（design.md 4.25），前端据此弹系统通知 */
   "schedule.notice": ScheduleNotice;
+  /** 看板变化（design.md 4.28），向所有连接广播 */
+  "board.changed": { projectPath: string; board: Board };
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAtomValue } from "jotai";
-import { LoadingState, Popover } from "@agentdeck/shared-ui";
+import { LoadingState, PageTabs, Popover } from "@agentdeck/shared-ui";
 import {
   ChevronLeft,
   ExternalLink,
@@ -25,6 +25,7 @@ import {
   type WorkspaceProject,
 } from "@/lib/workspaces";
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
+import { BoardView } from "@/components/board/board-view";
 import { WorktreePanel } from "@/components/projects/worktree-panel";
 import { sessionTokens } from "@/components/panel/panel-session";
 import { useProjectActions } from "@/hooks/use-context-actions";
@@ -98,6 +99,7 @@ export function ProjectDetailRoute() {
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [sessionWorkspaceMap, setSessionWorkspaceMap] = useState(readSessionWorkspaceMap);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [tab, setTab] = useState<"overview" | "board">("overview");
   const actions = useProjectActions();
 
   useEffect(() => {
@@ -255,6 +257,24 @@ export function ProjectDetailRoute() {
           </div>
         </section>
 
+        <PageTabs
+          aria-label="项目内容"
+          value={tab}
+          onValueChange={setTab}
+          items={[
+            { value: "overview", label: "概览" },
+            { value: "board", label: "看板" },
+          ]}
+        />
+
+        {tab === "board" ? (
+          <section className={s.sec}>
+            <BoardView projectPath={project.path} />
+          </section>
+        ) : null}
+
+        {tab === "overview" ? (
+          <>
         <section className={s.statGrid}>
           <div className={s.statCard}>
             <div className={s.statLabel}>累计会话</div>
@@ -359,6 +379,8 @@ export function ProjectDetailRoute() {
             </div>
           )}
         </section>
+          </>
+        ) : null}
       </div>
     </main>
   );

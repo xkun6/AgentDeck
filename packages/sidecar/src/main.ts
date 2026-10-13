@@ -8,6 +8,8 @@ import packageJson from "../package.json" with { type: "json" };
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
 import { createLogger, type Logger } from "./logger.js";
+import { BoardService } from "./kanban/board-service.js";
+import { BoardStore } from "./kanban/store.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { Scheduler } from "./scheduler/scheduler.js";
@@ -96,6 +98,7 @@ async function main(): Promise<void> {
   let registry: ProviderRegistry | null = null;
   let manager: AgentManager | null = null;
   let scheduler: Scheduler | null = null;
+  let board: BoardService | null = null;
   let server: RpcServer | null = null;
   let parentTimer: NodeJS.Timeout | null = null;
   let shuttingDown = false;
@@ -113,6 +116,7 @@ async function main(): Promise<void> {
       await withTimeout(
         (async () => {
           await scheduler?.stop();
+          await board?.stop();
           // manager.shutdown 先落盘、再关闭会话、最后再落盘一次
           await manager?.shutdown();
           await registry?.shutdown();
@@ -228,6 +232,18 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error("启动调度器失败：%s", String(error));
   }
+  // 看板（design.md 4.28）：补判重启前仍在 running 的任务、检查自动派发；启动失败只记日志
+  board = new BoardService({
+    manager,
+    store: new BoardStore({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) }),
+    logger,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+  });
+  try {
+    await board.start();
+  } catch (error) {
+    logger.error("启动看板服务失败：%s", String(error));
+  }
   server = new RpcServer({
     token: config.token,
     version: SIDECAR_VERSION,
@@ -238,6 +254,7 @@ async function main(): Promise<void> {
     settings,
     snapshots,
     scheduler,
+    board,
     mcp: new McpInteropEndpoint({
       manager,
       registry,

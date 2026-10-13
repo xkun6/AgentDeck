@@ -141,6 +141,7 @@ sidecar 入口：
 | `agent.tasks.update` | `{ agentId, tasks: AgentBackgroundTask[] }`（后台任务整表，见 4.15） |
 | `schedule.changed` | `{ schedules: Schedule[], paused }`（调度表 / 运行记录变化，见 4.25） |
 | `schedule.notice` | `ScheduleNotice`（目标循环结束 / 定时任务失败，前端转系统通知，见 4.25） |
+| `board.changed` | `{ projectPath, board: Board }`（看板整张替换，见 4.28） |
 
 `seq` 每个 agent 从 1 自增；`epoch` 是 sidecar 进程启动时生成的随机串，用来让前端识别 sidecar 重启。断线重连后前端调用 `agent.timeline { sinceSeq }` 补齐。
 
@@ -949,6 +950,16 @@ interface BoardTask {
 **RPC**：`board.get { projectPath }` → `{ board }`（不存在则返回空看板）；`board.updateSettings { projectPath, settings }`；`board.upsertTask { projectPath, task }`；`board.deleteTask { projectPath, taskId, removeWorktree?: boolean }`；`board.moveTask { projectPath, taskId, status, order? }`；`board.merge { projectPath, taskId, removeWorktree: boolean }` → `{ ok, conflicts?: string[] }`；通知 `board.changed { projectPath, board }`。
 
 **前端**：项目详情页新增「看板」标签：五列（待办 / 运行中 / 待评审 / 完成 / 阻塞），卡片可拖拽（列间移动与列内排序）、显示指派的 Agent 与会话实时状态；点击卡片打开详情抽屉（编辑标题描述、指派、依赖、查看会话、查看 diff、合并）；看板设置（worktree、自动派发、并发上限、默认指派）。
+
+**实现补充（落地时确定）**：
+- 模块：`kanban/store.ts`（`boards/<sha1(规范化路径) 前 16 位>.json` 原子写入，坏文件 / 结构非法备份为 `.bad` 后视为空，单条非法任务跳过；未设数据目录只在内存）、`kanban/board-service.ts`（派发 / 判定 / 合并）；`main.ts` 在会话恢复之后 `start()`，关闭时先于 AgentManager 停止。
+- 路径规范化（sidecar `normalizeProjectPath` 与前端 `lib/board-path.ts` 的 `boardPathKey` 等价）：去首尾空白、`\` 统一为 `/`、去尾部 `/`；盘符 / UNC 路径（Windows）一律转小写。看板内 `projectPath` 保留首次创建时的写法（去尾部分隔符），`board.changed` 带它；前端按规范化 key 索引。
+- RPC 返回：`board.get / updateSettings / moveTask` → `{ board }`；`upsertTask` → `{ board, task }`；`deleteTask` → `{ board, warning? }`（`removeWorktree` 清理失败不阻止删除，原因放 warning）；`merge` → `{ ok, conflicts?, board, warning? }`。`board.updateSettings` 的 `settings` 是补丁（只覆盖给出的字段）；`board.upsertTask` 入参 `BoardTaskDraft`（`id` / `title` 1–200 / `description` ≤ 20000 / `assignee`（null 清除）/ `dependsOn` / `maxAttempts` 1–10），状态只能经 `moveTask` 改变。依赖不存在、依赖自己、成环均为 `-32602`；任务不存在为 `TASK_NOT_FOUND`。`maxConcurrent` 1–16。看板默认值：`worktreePerTask` 取决于 projectPath 是否在 git 仓库内，`autoDispatch: false`，`maxConcurrent: 2`，`defaultAssignee: { provider: "claude" }`；不存在的看板 `board.get` 只返回默认值，不落盘（第一次修改才创建）。
+- 派发：同一看板的所有操作串行（按看板的互斥队列）。自动派发在每次看板变化后检查（任务增删改 / 移动 / 设置变化 / 回合结束 / 会话删除 / sidecar 启动），只数 running 状态的并发；依赖指向已不存在的任务视为已满足。worktree 目录 `<dataDir>/worktrees/task-<id>`、分支 `agentdeck/task-<id>`；未设数据目录或项目不在 git 仓库内时忽略 worktree 设置直接用 projectPath。任务已有 worktree（目录还在）时复用；任务的原会话仍存在且空闲时（review / blocked 再拖回 running）复用原会话重发提示，否则新建会话（`origin: "kanban"`，标题为任务标题）。`attempts` 每次进入 running 归零。**派发失败**（provider 不可用、建 worktree 失败等）不抛错：任务转 `blocked`，`blockedReason` 为「派发失败：…」，新建的 worktree 回滚。
+- 回合结束：只看 `turn_started.origin !== "background"` 的回合，末行（忽略末尾空行）去空白后精确等于 `TASK_DONE` 或以 `TASK_BLOCKED:` 开头；`turn_canceled`（用户在会话里中断）→ review（交人工判断）；任务不在 running（如已被拖走）的回合结束事件一律忽略，所以移出 running 时先改状态再中断。`maxAttempts` 到达时 `blockedReason` 为「执行失败（已尝试 N 次）：<错误>」。
+- `board.merge`：仅 review 且有 worktree 的任务可合并；先检查项目工作区**已跟踪文件**有无未提交改动（`status --porcelain --untracked-files=no`，有则拒绝并报「项目工作区有未提交改动…」，未跟踪文件交给 git 自己的冲突检测）；合并前若任务 worktree 里还有未提交改动，先自动 `git add -A && git commit`（Agent 通常不提交；本机无 git 身份时用 `AgentDeck <agentdeck@localhost>` 兜底重试）；然后 `git merge --no-ff --no-edit <分支>`，失败且有未合并文件 → `merge --abort` 返回 `{ ok: false, conflicts }`，无冲突文件的失败（如无 git 身份无法建合并提交）→ 中止后抛错。成功后任务 done；`removeWorktree` 时删 worktree 与分支并清掉 `task.worktree`，清理失败放 warning。
+- 会话被删除（`onRemoved`）：该会话的任务解除 `agentId`，running → todo（开启自动派发时会立即重新派发）。sidecar 重启（`start()`）：running 任务的会话不存在 → todo；会话在重启后一律 dormant，时间线末尾有未结束回合 → blocked（「sidecar 重启时任务回合尚未结束…」）；否则按最后一个已结束回合补判（规则同上，失败回合会计一次 attempts 并按需重发）；没有任何已结束回合同样 blocked。
+- 前端：`web/src/components/board/`（`board-view` 看板与原生 HTML5 拖拽——项目没有拖拽依赖，不新增；`task-drawer` 详情抽屉；`board-settings-dialog`；`assignee-picker` 复用 `AgentSessionPicker`，选择状态由调用方持有、不写新建会话的记忆，思考强度不属于指派）。落点规则：落在列上 = 追加到列尾，落在卡片上半 / 下半 = 排在其前 / 后，`order` 取邻居中点（`lib/board-display.ts` 的 `orderForDrop`）；运行中任务拖出 running 前先确认。看板 store `stores/boards.ts` 按规范化路径索引，`board.changed` 整张替换，进入看板与每次（重）连成功后 `board.get` 一次。抽屉里「查看 diff」复用 `ReviewTab`，`workspaceRoot` 指向任务 worktree（无 worktree 时指向项目目录）。项目详情页新增「概览 / 看板」标签。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

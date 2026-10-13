@@ -29,6 +29,11 @@ import type {
   SidecarSettings,
   SidecarSettingsPatch,
   SnapshotTurn,
+  Board,
+  BoardSettingsPatch,
+  BoardTask,
+  BoardTaskDraft,
+  BoardTaskStatus,
   Schedule,
   ScheduleDraft,
   ScheduleRun,
@@ -76,6 +81,7 @@ import {
 } from "@/stores/subagents";
 import { invalidateProviderQueries } from "@/lib/agent-query-keys";
 import { notifyFromSchedule } from "@/lib/notifications";
+import { replaceBoardAtom } from "@/stores/boards";
 import { replaceSchedulesAtom } from "@/stores/schedules";
 
 type JotaiStore = ReturnType<typeof createStore>;
@@ -272,6 +278,14 @@ export function bindSchedulesToStore(client: SidecarClient, store: JotaiStore): 
   return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
+/**
+ * 看板（design.md 4.28）：board.changed 把整张看板写入 store（按规范化项目路径索引）。
+ * 看板只在项目详情页打开时按需 board.get，不在连接时批量拉取。
+ */
+export function bindBoardsToStore(client: SidecarClient, store: JotaiStore): () => void {
+  return client.onBoardChanged((value) => store.set(replaceBoardAtom, value.board));
+}
+
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -280,11 +294,13 @@ export function useSidecarBridge(): void {
     const client = getSidecarClient();
     const unbind = bindSidecarToStore(client, store);
     const unbindSchedules = bindSchedulesToStore(client, store);
+    const unbindBoards = bindBoardsToStore(client, store);
     const unbindProviders = bindProviderChangesToQueries(client, queryClient);
     client.connect().catch(() => {});
     return () => {
       unbind();
       unbindSchedules();
+      unbindBoards();
       unbindProviders();
     };
   }, [queryClient, store]);
@@ -647,6 +663,72 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     async setSchedulesPaused(paused: boolean): Promise<boolean> {
       const result = await client.request("schedule.setPaused", { paused });
       return result.paused;
+    },
+
+    /** board.get：项目看板（不存在返回默认空看板），写入 store 并返回（design.md 4.28）。 */
+    async getBoard(projectPath: string): Promise<Board> {
+      const { board } = await client.request("board.get", { projectPath });
+      store.set(replaceBoardAtom, board);
+      return board;
+    },
+
+    async updateBoardSettings(projectPath: string, settings: BoardSettingsPatch): Promise<Board> {
+      const { board } = await client.request("board.updateSettings", { projectPath, settings });
+      store.set(replaceBoardAtom, board);
+      return board;
+    },
+
+    /** board.upsertTask：无 id 新建；依赖不存在 / 成环为 -32602。 */
+    async upsertBoardTask(projectPath: string, task: BoardTaskDraft): Promise<BoardTask> {
+      const result = await client.request("board.upsertTask", { projectPath, task });
+      store.set(replaceBoardAtom, result.board);
+      return result.task;
+    },
+
+    async deleteBoardTask(
+      projectPath: string,
+      taskId: string,
+      removeWorktree?: boolean,
+    ): Promise<{ warning?: string }> {
+      const result = await client.request("board.deleteTask", {
+        projectPath,
+        taskId,
+        ...(removeWorktree !== undefined ? { removeWorktree } : {}),
+      });
+      store.set(replaceBoardAtom, result.board);
+      return result.warning ? { warning: result.warning } : {};
+    },
+
+    /** board.moveTask：拖拽移动 / 列内排序（order 为排序键）；拖到 running 会派发。 */
+    async moveBoardTask(
+      projectPath: string,
+      taskId: string,
+      status: BoardTaskStatus,
+      order?: number,
+    ): Promise<Board> {
+      const { board } = await client.request("board.moveTask", {
+        projectPath,
+        taskId,
+        status,
+        ...(order !== undefined ? { order } : {}),
+      });
+      store.set(replaceBoardAtom, board);
+      return board;
+    },
+
+    /** board.merge：冲突时 ok=false 并带冲突文件；其它失败（如工作区有未提交改动）为业务错误。 */
+    async mergeBoardTask(
+      projectPath: string,
+      taskId: string,
+      removeWorktree: boolean,
+    ): Promise<{ ok: boolean; conflicts?: string[]; warning?: string }> {
+      const result = await client.request("board.merge", { projectPath, taskId, removeWorktree });
+      store.set(replaceBoardAtom, result.board);
+      return {
+        ok: result.ok,
+        ...(result.conflicts ? { conflicts: result.conflicts } : {}),
+        ...(result.warning ? { warning: result.warning } : {}),
+      };
     },
 
     /** agent.timeline：取会话全部时间线条目（dormant / closed 也可取，不恢复会话），供导出使用。 */
