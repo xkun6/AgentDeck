@@ -29,6 +29,8 @@ import type {
   SidecarSettings,
   SidecarSettingsPatch,
   SnapshotTurn,
+  AgentGroup,
+  GroupCreateParams,
   Schedule,
   ScheduleDraft,
   ScheduleRun,
@@ -77,6 +79,7 @@ import {
 import { invalidateProviderQueries } from "@/lib/agent-query-keys";
 import { notifyFromSchedule } from "@/lib/notifications";
 import { replaceSchedulesAtom } from "@/stores/schedules";
+import { removeGroupAtom, replaceGroupsAtom, upsertGroupAtom } from "@/stores/groups";
 
 type JotaiStore = ReturnType<typeof createStore>;
 
@@ -272,6 +275,23 @@ export function bindSchedulesToStore(client: SidecarClient, store: JotaiStore): 
   return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
+/**
+ * 并行协作组（design.md 4.27）：每次（重）连成功后拉一次 group.list，之后由 group.changed / group.removed 增量更新。
+ */
+export function bindGroupsToStore(client: SidecarClient, store: JotaiStore): () => void {
+  const unsubscribers = [
+    client.onGroupChanged((group) => store.set(upsertGroupAtom, group)),
+    client.onGroupRemoved((groupId) => store.set(removeGroupAtom, groupId)),
+    client.onAgents(() => {
+      client
+        .request("group.list")
+        .then(({ groups }) => store.set(replaceGroupsAtom, groups))
+        .catch(() => {});
+    }),
+  ];
+  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+}
+
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -280,11 +300,13 @@ export function useSidecarBridge(): void {
     const client = getSidecarClient();
     const unbind = bindSidecarToStore(client, store);
     const unbindSchedules = bindSchedulesToStore(client, store);
+    const unbindGroups = bindGroupsToStore(client, store);
     const unbindProviders = bindProviderChangesToQueries(client, queryClient);
     client.connect().catch(() => {});
     return () => {
       unbind();
       unbindSchedules();
+      unbindGroups();
       unbindProviders();
     };
   }, [queryClient, store]);
@@ -647,6 +669,20 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     async setSchedulesPaused(paused: boolean): Promise<boolean> {
       const result = await client.request("schedule.setPaused", { paused });
       return result.paused;
+    },
+
+    /** group.create：并行协作（design.md 4.27）。成员数 / 非 git 仓库的 per-member 为 -32602；结果同时写入 store。 */
+    async createGroup(params: GroupCreateParams): Promise<AgentGroup> {
+      const { group } = await client.request("group.create", params, { timeoutMs: 120_000 });
+      store.set(upsertGroupAtom, group);
+      return group;
+    },
+
+    /** group.delete：成员会话保留；removeWorktrees 时同时删除 worktree 与分支，失败项放在 warnings。 */
+    async deleteGroup(id: string, removeWorktrees: boolean): Promise<string[]> {
+      const result = await client.request("group.delete", { id, removeWorktrees }, { timeoutMs: 60_000 });
+      store.set(removeGroupAtom, id);
+      return result.warnings ?? [];
     },
 
     /** agent.timeline：取会话全部时间线条目（dormant / closed 也可取，不恢复会话），供导出使用。 */

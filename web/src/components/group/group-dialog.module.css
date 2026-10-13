@@ -1,0 +1,122 @@
+.dialog {
+  width: 640px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.title {
+  margin: 0;
+  color: var(--h-text);
+  font-size: var(--h-font-size-lg);
+  font-weight: 600;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--h-line-soft);
+}
+
+.footError {
+  margin-right: auto;
+  color: var(--h-color-danger-fg);
+  font-size: var(--h-font-size-sm);
+}
+
+.cwdRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cwdPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-mono);
+  font-size: var(--h-font-size-sm);
+}
+
+.cwdPath[data-empty="true"] {
+  color: var(--h-text-3);
+  font-family: var(--h-font-cn);
+}
+
+.memberList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.memberRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--h-line-soft);
+  background: var(--h-bg-soft);
+}
+
+.memberIndex {
+  flex: none;
+  width: 20px;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: var(--h-font-size-sm);
+  text-align: center;
+}
+
+.memberPicker {
+  flex: 1;
+  min-width: 0;
+}
+
+.chairPicker {
+  margin-top: 8px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--h-text-2);
+  font-size: var(--h-font-size-sm);
+}
+
+.hint {
+  margin: 4px 0 0;
+  color: var(--h-warn);
+  font-size: var(--h-font-size-xs);
+}

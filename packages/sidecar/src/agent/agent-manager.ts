@@ -94,6 +94,8 @@ export interface CreateAgentParams {
   id?: string;
   /** 父会话与来源（design.md 4.26 / 4.27 / 4.28）；缺省为用户直接创建 */
   parentAgentId?: string;
+  /** 并行协作组 id（design.md 4.27） */
+  groupId?: string;
   origin?: NonNullable<AgentSnapshot["origin"]>;
   provider: AgentProviderId;
   cwd: string;
@@ -259,6 +261,7 @@ export class AgentManager {
       ...(params.title !== undefined ? { title: params.title } : {}),
       ...(params.parentAgentId !== undefined ? { parentAgentId: params.parentAgentId } : {}),
       ...(params.origin !== undefined ? { origin: params.origin } : {}),
+      ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
       model: params.model ?? null,
       modeId: params.modeId ?? null,
       thinkingOptionId,
@@ -884,6 +887,18 @@ export class AgentManager {
     await this.persistNow(agent);
     this.emitState(agent);
     return cloneSnapshot(snapshot);
+  }
+
+  /** 解除（null）或设置并行协作组 id（design.md 4.27）：落盘并推 agent.state，不改 updatedAt */
+  async setGroupId(agentId: string, groupId: string | null): Promise<void> {
+    const agent = this.requireAgent(agentId);
+    if (groupId === null) {
+      delete agent.snapshot.groupId;
+    } else {
+      agent.snapshot.groupId = groupId;
+    }
+    await this.persistNow(agent);
+    this.emitState(agent);
   }
 
   /**

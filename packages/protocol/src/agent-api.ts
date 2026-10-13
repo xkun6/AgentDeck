@@ -704,6 +704,46 @@ export interface SnapshotTurn {
 }
 
 // ---------------------------------------------------------------------------
+// 4.27 界面发起的并行协作（扇出 + 汇总）
+// ---------------------------------------------------------------------------
+
+export type AgentGroupStatus = "running" | "chairing" | "done" | "failed";
+export type AgentGroupChairMode = "synthesize" | "review";
+
+export interface AgentGroupMember {
+  agentId: string;
+  provider: AgentProviderId;
+  model?: string | null;
+  worktree?: { path: string; branch: string };
+}
+
+export interface AgentGroup {
+  id: string;
+  title: string;
+  prompt: string;
+  cwd: string;
+  createdAt: number;
+  members: AgentGroupMember[];
+  chair?: { provider: AgentProviderId; model?: string | null; mode: AgentGroupChairMode; agentId?: string };
+  status: AgentGroupStatus;
+}
+
+export interface GroupCreateParams {
+  title?: string;
+  prompt: string;
+  cwd: string;
+  /** 2–6 个 */
+  members: Array<{
+    provider: AgentProviderId;
+    model?: string | null;
+    modeId?: string | null;
+    thinkingOptionId?: string | null;
+  }>;
+  worktree: "none" | "per-member";
+  chair?: { provider: AgentProviderId; model?: string | null; mode: AgentGroupChairMode };
+}
+
+// ---------------------------------------------------------------------------
 // 4.1 请求方法 / 4.2 通知：方法名常量与参数/返回映射
 // ---------------------------------------------------------------------------
 
@@ -741,6 +781,10 @@ export const AGENT_RPC_METHODS = {
   scheduleRunNow: "schedule.runNow",
   scheduleRuns: "schedule.runs",
   scheduleSetPaused: "schedule.setPaused",
+  groupCreate: "group.create",
+  groupList: "group.list",
+  groupGet: "group.get",
+  groupDelete: "group.delete",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
   agentCommands: "agent.commands",
@@ -765,6 +809,8 @@ export const AGENT_RPC_NOTIFICATIONS = {
   agentTasksUpdate: "agent.tasks.update",
   scheduleChanged: "schedule.changed",
   scheduleNotice: "schedule.notice",
+  groupChanged: "group.changed",
+  groupRemoved: "group.removed",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -864,6 +910,15 @@ export interface AgentRpcMethods {
   /** 默认 100，按时间倒序 */
   "schedule.runs": { params: { id?: string; limit?: number }; result: { runs: ScheduleRun[] } };
   "schedule.setPaused": { params: { paused: boolean }; result: { paused: boolean } };
+  /** 并行协作组（design.md 4.27）；成员数 2–6、per-member 但 cwd 不在 git 仓库内 → -32602 */
+  "group.create": { params: GroupCreateParams; result: { group: AgentGroup } };
+  "group.list": { params: AgentRpcEmptyParams; result: { groups: AgentGroup[] } };
+  "group.get": { params: { id: string }; result: { group: AgentGroup } };
+  /** 成员会话保留（解除 groupId）；removeWorktrees 失败的条目放进 warnings */
+  "group.delete": {
+    params: { id: string; removeWorktrees: boolean };
+    result: { warnings?: string[] };
+  };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };
     result: Record<string, never>;
@@ -963,6 +1018,10 @@ export interface AgentRpcNotifications {
   "schedule.changed": { schedules: Schedule[]; paused: boolean };
   /** 目标循环结束 / 定时任务失败（design.md 4.25），前端据此弹系统通知 */
   "schedule.notice": ScheduleNotice;
+  /** 协作组新建 / 状态 / 成员变化（design.md 4.27），向所有连接广播 */
+  "group.changed": { group: AgentGroup };
+  /** 协作组被删除（design.md 4.27 补记） */
+  "group.removed": { groupId: string };
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

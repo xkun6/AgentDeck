@@ -141,6 +141,8 @@ sidecar 入口：
 | `agent.tasks.update` | `{ agentId, tasks: AgentBackgroundTask[] }`（后台任务整表，见 4.15） |
 | `schedule.changed` | `{ schedules: Schedule[], paused }`（调度表 / 运行记录变化，见 4.25） |
 | `schedule.notice` | `ScheduleNotice`（目标循环结束 / 定时任务失败，前端转系统通知，见 4.25） |
+| `group.changed` | `{ group: AgentGroup }`（协作组新建 / 状态 / 成员变化，见 4.27） |
+| `group.removed` | `{ groupId }`（协作组被删除，见 4.27） |
 
 `seq` 每个 agent 从 1 自增；`epoch` 是 sidecar 进程启动时生成的随机串，用来让前端识别 sidecar 重启。断线重连后前端调用 `agent.timeline { sinceSeq }` 补齐。
 
@@ -926,6 +928,17 @@ interface AgentGroup {
 - `group.list {}`、`group.get { id }`、`group.delete { id, removeWorktrees: boolean }`（成员会话不删除，只解除 groupId；removeWorktrees 时 `git worktree remove --force` 并删分支）；通知 `group.changed { group }`。
 
 **前端**：新建会话页增加「并行协作」入口：多选 Agent（每个可选模型 / 模式）、是否每个成员独立 worktree、汇总设置；协作视图页：成员会话并排（每列复用只读时间线 + 状态，点击进入完整会话），底部汇总结果；per-member 时每列提供「查看 diff」（复用现有 git 审阅面板，cwd 指向成员 worktree）。侧边栏把同组会话聚在一个可折叠的协作组下。
+
+**实现补充（落地时确定）**：
+- 模块：`packages/sidecar/src/groups/`（`group-service.ts` 服务与汇总提示、`schema.ts` zod、`store.ts` 存储）；`AgentManager` 新增 `CreateAgentParams.groupId` 与 `setGroupId(agentId, null | id)`（落盘并推 `agent.state`）。`GroupService` 在 `main.ts` 于 `AgentManager.restore()` 之后启动，`RpcServer` 选项 `groups`（缺省时 `group.*` 返回 `NOT_SUPPORTED`）。
+- 协议：`AgentGroup` / `AgentGroupMember` / `GroupCreateParams` 见 `agent-api.ts`；除 `group.changed { group }` 外新增通知 `group.removed { groupId }`（协作组被删除，前端据此从 store 移除、协作视图回首页）；`group.delete` 返回 `{ warnings?: string[] }`（removeWorktrees 时个别 worktree 清理失败的中文说明，协作组本身照常删除）。
+- `group.create`：校验顺序为 zod（成员数 2–6、`worktree` 取值、`chair.mode`，失败 `-32602`）→ provider 存在且可用（`PROVIDER_NOT_FOUND` / `PROVIDER_UNAVAILABLE`，此时尚未建任何东西）→ per-member 要求 cwd 在 git 仓库内且设置了数据目录（否则 `-32602`「…要求工作目录位于 git 仓库内…」/ `NOT_SUPPORTED`）。groupId 取 uuid 前 8 位；worktree 路径 `<dataDir>/worktrees/<groupId>/<n>`、分支 `agentdeck/<groupId>/<n>`（n 从 1 起）。worktree 逐个建，任一失败回滚已建者并返回 `INTERNAL_ERROR`；成员会话并发创建，任一失败则删除已建会话与 worktree，沿用该错误码（非业务错误按 `INTERNAL_ERROR`）。成员 / 汇总会话标题为「<组标题> · 成员 n」/「<组标题> · 汇总」，组标题缺省取 prompt 前 30 字。prompt 以内部发送标记 `{ internal: true }` 并发发出；个别成员发送失败记为该成员失败，不使 `group.create` 失败。
+- 回合结束判定：只看成员 / 汇总会话收到的 `turn_completed` / `turn_failed` / `turn_canceled`（CLI 自发轮次 `origin: "background"` 不算），成员只取首个结局；`canceled` 与 `failed` 对汇总判断等同「已结束」，汇总提示里分别注明「回合失败：<错误>」/「回合被中断」。汇总提示结构：模板首句 →「# 原任务」→「# 各成员结果」，每个成员一节（标题含序号 / provider / 模型，助手回答、per-member 时附 worktree 路径 / 分支与 `diffStat`，回答与 diffStat 各上限 20000 字，超出截断并注明）。汇总会话 cwd 为组原 cwd，使用默认模式与默认思考强度。
+- 状态：`running` → `chairing`（全部成员有结局时，先落盘再建汇总会话）→ `done`（汇总回合 `completed`）/ `failed`（汇总回合失败 / 中断、建汇总会话或发送失败、汇总会话被删除）；无 chair 时全部成员结局即 `done`；成员被全部删除时直接 `done`。
+- 删除：`group.delete` 解除成员与汇总会话的 `groupId`（落盘），`removeWorktrees` 时先中断运行中的成员再 `removeWorktree`（删分支）；`agent.removed` 时该会话从组中移除（组保留，仅余成员全部结束时仍会触发汇总）；汇总会话被删则清除 `chair.agentId`，`chairing` 的组转 `failed`。
+- 重启恢复（`GroupService.start`，在会话恢复之后）：先剔除已不存在的成员 / 汇总会话；`running` 的组按各成员时间线的最后结局恢复，**没有结束回合的成员（重启时回合被打断，会话已是 dormant）记为失败**，全部有结局后继续推进（建汇总会话或完成）；`chairing` 的组：汇总会话尚未建出（`chair.agentId` 缺失）→ 重新建；汇总会话存在且时间线已有结束回合 → 按结局 `done` / `failed`；存在但没有结束回合 → 保持 `chairing` 等待它（用户在会话里手动续跑，其回合结束时据此收尾）。
+- 存储：`groups/<id>.json` 原子写入；加载时非法 JSON / 结构不合法的文件记日志后跳过（不改名）；未设置数据目录时只在内存。
+- 前端：`stores/groups.ts`（`bindGroupsToStore`：每次（重）连成功拉 `group.list`，之后 `group.changed` / `group.removed` 增量更新）；新建入口为首页「新任务」区右上角的「并行协作」按钮（`components/group/group-dialog.tsx`，每个成员复用 `AgentSessionPicker` 且各自拉取模型目录；是否 git 仓库复用 `useWorktrees(cwd).isRepo`，非仓库时「独立 worktree」禁用并提示）；协作视图路由 `/groups/:groupId`（`routes/group-view.tsx`，成员列复用 `MessageTimeline` 的 `compact` 密度，「查看 diff」复用预览栏的 `ReviewTab`，汇总区取 chair 会话最后一条助手消息经 `MessageText` 渲染）；侧栏用 `lib/session-list.ts` 的 `groupSessionRoots` 把同组根会话（连同其 4.26 子会话树）归入组节点，组内任一会话在运行则整组归入「进行中」，组节点折叠状态与子会话折叠共用同一集合（键 `group:<id>`）。历史页不改。
 
 ### 4.28 看板式任务分派
 

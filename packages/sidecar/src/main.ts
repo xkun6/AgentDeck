@@ -7,6 +7,8 @@
 import packageJson from "../package.json" with { type: "json" };
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
+import { GroupService } from "./groups/group-service.js";
+import { GroupStore } from "./groups/store.js";
 import { createLogger, type Logger } from "./logger.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
@@ -96,6 +98,7 @@ async function main(): Promise<void> {
   let registry: ProviderRegistry | null = null;
   let manager: AgentManager | null = null;
   let scheduler: Scheduler | null = null;
+  let groups: GroupService | null = null;
   let server: RpcServer | null = null;
   let parentTimer: NodeJS.Timeout | null = null;
   let shuttingDown = false;
@@ -113,6 +116,7 @@ async function main(): Promise<void> {
       await withTimeout(
         (async () => {
           await scheduler?.stop();
+          await groups?.stop();
           // manager.shutdown 先落盘、再关闭会话、最后再落盘一次
           await manager?.shutdown();
           await registry?.shutdown();
@@ -228,8 +232,22 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error("启动调度器失败：%s", String(error));
   }
+  // 并行协作组（design.md 4.27）：启动失败只记日志
+  groups = new GroupService({
+    manager,
+    registry,
+    store: new GroupStore({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) }),
+    logger,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+  });
+  try {
+    await groups.start();
+  } catch (error) {
+    logger.error("启动并行协作组服务失败：%s", String(error));
+  }
   server = new RpcServer({
     token: config.token,
+    groups,
     version: SIDECAR_VERSION,
     manager,
     registry,

@@ -32,6 +32,8 @@ import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
+import type { GroupService } from "../groups/group-service.js";
+import { groupCreateSchema } from "../groups/schema.js";
 import type { Scheduler } from "../scheduler/scheduler.js";
 import { scheduleDraftSchema } from "../scheduler/schema.js";
 import { UsageLedger } from "../usage/ledger.js";
@@ -66,6 +68,8 @@ export interface RpcServerOptions {
   snapshots?: SnapshotService;
   /** 调度器（design.md 4.25）；不传时 schedule.* 返回 NOT_SUPPORTED */
   scheduler?: Scheduler;
+  /** 并行协作组（design.md 4.27）；不传时 group.* 返回 NOT_SUPPORTED */
+  groups?: GroupService;
   /** 会话互通 MCP 端点（design.md 4.26）；不传时 /mcp 返回 404 */
   mcp?: McpInteropEndpoint;
   logger?: Logger;
@@ -223,7 +227,12 @@ export class RpcServer {
         this.broadcast(AGENT_RPC_NOTIFICATIONS.scheduleChanged, { schedules, paused }),
       onNotice: (notice) => this.broadcast(AGENT_RPC_NOTIFICATIONS.scheduleNotice, notice),
     });
+    const unsubscribeGroups = options.groups?.subscribe({
+      onChanged: (group) => this.broadcast(AGENT_RPC_NOTIFICATIONS.groupChanged, { group }),
+      onRemoved: (groupId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.groupRemoved, { groupId }),
+    });
     this.unsubscribeManager = () => {
+      unsubscribeGroups?.();
       unsubscribeManager();
       unsubscribeScheduler?.();
     };
@@ -277,6 +286,12 @@ export class RpcServer {
         throw new AgentRpcError("NOT_SUPPORTED", "未启用调度器");
       }
       return this.options.scheduler;
+    };
+    const requireGroups = (): GroupService => {
+      if (!this.options.groups) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用并行协作");
+      }
+      return this.options.groups;
     };
     const requireClient = (provider: string) => {
       const client = registry.get(provider);
@@ -548,6 +563,18 @@ export class RpcServer {
         AGENT_RPC_METHODS.scheduleSetPaused,
         z.object({ paused: z.boolean() }),
         (params) => ({ paused: requireScheduler().setPaused(params.paused) }),
+      ),
+      defineMethod(AGENT_RPC_METHODS.groupCreate, groupCreateSchema, async (params) => ({
+        group: await requireGroups().create(params),
+      })),
+      defineMethod(AGENT_RPC_METHODS.groupList, emptyParams, () => ({ groups: requireGroups().list() })),
+      defineMethod(AGENT_RPC_METHODS.groupGet, z.object({ id: z.string().min(1) }), (params) => ({
+        group: requireGroups().get(params.id),
+      })),
+      defineMethod(
+        AGENT_RPC_METHODS.groupDelete,
+        z.object({ id: z.string().min(1), removeWorktrees: z.boolean() }),
+        (params) => requireGroups().delete(params.id, params.removeWorktrees),
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
         await manager.deleteAgent(params.agentId);
