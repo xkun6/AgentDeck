@@ -27,6 +27,7 @@ import {
 } from "@/lib/workspaces";
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
 import { WorktreePanel } from "@/components/projects/worktree-panel";
+import { sessionTokens } from "@/components/panel/panel-session";
 import { useConfirm } from "@/lib/use-confirm";
 import s from "./project-detail.module.css";
 
@@ -34,10 +35,6 @@ const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 function lastActivitySec(session: AgentSnapshot): number {
   return session.updatedAt / 1000;
-}
-
-function sessionTokens(session: AgentSnapshot): number {
-  return (session.lastUsage?.inputTokens ?? 0) + (session.lastUsage?.outputTokens ?? 0);
 }
 
 function shortId(id: string): string {

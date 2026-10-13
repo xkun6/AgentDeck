@@ -9,6 +9,7 @@ import type {
   AgentStatus,
   AgentStreamEnvelope,
   AgentStreamEvent,
+  AgentUsage,
   ProviderSubagentDescriptor,
   ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
@@ -863,11 +864,15 @@ export class AgentManager {
         snapshot.lastError = null;
         agent.backgroundTurnId = event.origin === "background" ? event.turnId : null;
         return true;
-      case "turn_completed":
+      case "turn_completed": {
         if (event.usage) {
           snapshot.lastUsage = event.usage;
         }
-        return this.finishTurn(agent, event.turnId);
+        // 本轮用量累加进 totalUsage；重复的 turn_completed 不重复累加（design.md 4.4）
+        const counted =
+          !agent.finishedTurnIds.has(event.turnId) && addToTotalUsage(snapshot, event.usage);
+        return this.finishTurn(agent, event.turnId) || counted;
+      }
       case "turn_failed":
         snapshot.lastError = event.error;
         this.finishTurn(agent, event.turnId);
@@ -1044,6 +1049,25 @@ function newManagedAgent(
     removed: false,
     models: null,
   };
+}
+
+/** 把本轮 token 累加进 totalUsage（缺失的一项按 0）；两项都不是有限数字时不动，返回是否累加 */
+function addToTotalUsage(snapshot: AgentSnapshot, usage: AgentUsage | undefined): boolean {
+  const input = finiteOrNull(usage?.inputTokens);
+  const output = finiteOrNull(usage?.outputTokens);
+  if (input === null && output === null) {
+    return false;
+  }
+  const total = snapshot.totalUsage ?? { inputTokens: 0, outputTokens: 0 };
+  snapshot.totalUsage = {
+    inputTokens: total.inputTokens + (input ?? 0),
+    outputTokens: total.outputTokens + (output ?? 0),
+  };
+  return true;
+}
+
+function finiteOrNull(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /** meta.json：快照中除 pendingPermissions / activeTurnId 外的字段 */

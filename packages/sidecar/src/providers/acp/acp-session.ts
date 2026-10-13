@@ -722,7 +722,11 @@ export class AcpAgentSession implements AgentSession {
       return;
     }
     // end_turn / max_tokens / max_turn_requests：正常结束
-    const usage = Object.keys(this.usage).length > 0 ? { ...this.usage } : undefined;
+    // token 只取本轮应答带的用量，不沿用上一轮合并进 this.usage 的值（design.md 5.3）
+    const { inputTokens: _input, outputTokens: _output, cachedInputTokens: _cached, ...rest } =
+      this.usage;
+    const turnUsage = { ...rest, ...(response.usage ? fromAcpUsage(response.usage) : {}) };
+    const usage = Object.keys(turnUsage).length > 0 ? turnUsage : undefined;
     this.finishTurn(turn, { type: "turn_completed", turnId, ...(usage ? { usage } : {}) });
   }
 

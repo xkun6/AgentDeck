@@ -192,6 +192,76 @@ export function toAgentUsage(tokenUsage: unknown): AgentUsage | undefined {
   };
 }
 
+interface TokenPair {
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+/** 本轮 token 统计（design.md 5.3）：起点 = 本轮首条带 total 的更新的 total − last，latest 为本轮最新 total */
+export interface CodexTurnTokens {
+  start: TokenPair;
+  latest: TokenPair;
+}
+
+function readTokenPair(record: JsonRecord | null): TokenPair {
+  const inputTokens = finiteNumber(pick(record, "inputTokens", "input_tokens"));
+  const outputTokens = finiteNumber(pick(record, "outputTokens", "output_tokens"));
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+  };
+}
+
+/** 按一条 thread/tokenUsage/updated 更新本轮 token 统计；该条没有 total 时原样返回 */
+export function updateCodexTurnTokens(
+  tokens: CodexTurnTokens | undefined,
+  tokenUsage: unknown,
+): CodexTurnTokens | undefined {
+  const usage = asRecord(tokenUsage);
+  const total = readTokenPair(asRecord(pick(usage, "total", "total_token_usage")));
+  if (total.inputTokens === undefined && total.outputTokens === undefined) {
+    return tokens;
+  }
+  if (tokens) {
+    return { start: tokens.start, latest: total };
+  }
+  const last = readTokenPair(asRecord(pick(usage, "last", "last_token_usage")));
+  const startOf = (value: number | undefined, delta: number | undefined) =>
+    value === undefined ? undefined : value - (delta ?? 0);
+  const inputTokens = startOf(total.inputTokens, last.inputTokens);
+  const outputTokens = startOf(total.outputTokens, last.outputTokens);
+  return {
+    start: {
+      ...(inputTokens !== undefined ? { inputTokens } : {}),
+      ...(outputTokens !== undefined ? { outputTokens } : {}),
+    },
+    latest: total,
+  };
+}
+
+/**
+ * turn_completed 的 usage：token 数为本轮合计（最新 total − 起点），没有 total 时退回 last；
+ * 上下文窗口等其余字段仍取最近一次 last（design.md 5.3）
+ */
+export function codexTurnCompletedUsage(
+  usage: AgentUsage | undefined,
+  tokens: CodexTurnTokens | undefined,
+): AgentUsage | undefined {
+  if (!usage) return undefined;
+  const turnTotal = (key: keyof TokenPair): number | undefined => {
+    const latest = tokens?.latest[key];
+    const start = tokens?.start[key];
+    return latest !== undefined && start !== undefined ? latest - start : usage[key];
+  };
+  const inputTokens = turnTotal("inputTokens");
+  const outputTokens = turnTotal("outputTokens");
+  return {
+    ...usage,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+  };
+}
+
 /** turn/plan/updated → todo */
 export function planToTodoItems(plan: unknown): { text: string; completed: boolean }[] {
   if (!Array.isArray(plan)) return [];
@@ -546,7 +616,10 @@ interface ActiveTurn {
   nativeTurnId: string | null;
   nativeTurnIdWaiters: Array<(id: string | null) => void>;
   finished: boolean;
+  /** 最近一次 last 口径的用量（usage_updated 推送的就是它） */
   usage?: AgentUsage;
+  /** 本轮 token 起点与最新合计（design.md 5.3） */
+  tokens?: CodexTurnTokens;
   /** itemId → 已流式发出的 assistant 文本 */
   agentText: Map<string, string>;
   /** itemId → 已流式发出的 reasoning 文本与来源（summary / raw，先到者为准） */
@@ -1192,9 +1265,11 @@ export class CodexAgentSession implements AgentSession {
         return;
       }
       case "thread/tokenUsage/updated": {
-        const usage = toAgentUsage(pick(params, "tokenUsage", "token_usage"));
+        const tokenUsage = pick(params, "tokenUsage", "token_usage");
+        const usage = toAgentUsage(tokenUsage);
         if (usage) {
           turn.usage = usage;
+          turn.tokens = updateCodexTurnTokens(turn.tokens, tokenUsage);
           this.emit({ type: "usage_updated", usage });
         }
         return;
@@ -1324,10 +1399,11 @@ export class CodexAgentSession implements AgentSession {
       });
       return;
     }
+    const usage = codexTurnCompletedUsage(turn.usage, turn.tokens);
     this.finishTurn(turn, {
       type: "turn_completed",
       turnId: turn.turnId,
-      ...(turn.usage ? { usage: turn.usage } : {}),
+      ...(usage ? { usage } : {}),
     });
   }
 

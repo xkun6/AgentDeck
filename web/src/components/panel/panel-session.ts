@@ -12,6 +12,7 @@ export function shortId(id: string): string {
 }
 
 export function sessionTokens(agent: AgentSnapshot): number {
-  const usage = agent.lastUsage;
+  // 旧会话没有累计用量时退回最近一轮（design.md 4.4）
+  const usage = agent.totalUsage ?? agent.lastUsage;
   return (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
 }

@@ -2,10 +2,13 @@ import { describe, expect, test } from "vitest";
 
 import {
   buildPermissionDecision,
+  codexTurnCompletedUsage,
+  type CodexTurnTokens,
   planToTodoItems,
   toAgentUsage,
   toModelDefinition,
   toSandboxPolicy,
+  updateCodexTurnTokens,
 } from "../../../src/providers/codex/codex-agent.js";
 import { stripCwdPrefix } from "../../../src/providers/codex/tool-call-detail-parser.js";
 import {
@@ -227,6 +230,63 @@ describe("codex 协议小工具", () => {
       toAgentUsage({ last_token_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 }, model_context_window: 9 }),
     ).toEqual({ inputTokens: 1, outputTokens: 2, contextWindowMaxTokens: 9, contextWindowUsedTokens: 3 });
     expect(toAgentUsage(null)).toBeUndefined();
+  });
+
+  /** 按 Codex 的处理顺序跑一串 tokenUsage 更新，返回 turn_completed 的 usage */
+  function turnUsageOf(updates: unknown[]) {
+    let usage: ReturnType<typeof toAgentUsage>;
+    let tokens: CodexTurnTokens | undefined;
+    for (const update of updates) {
+      usage = toAgentUsage(update) ?? usage;
+      tokens = updateCodexTurnTokens(tokens, update);
+    }
+    return codexTurnCompletedUsage(usage, tokens);
+  }
+
+  test("turn_completed 的 token 为本轮合计：最新 total − 本轮起点（起点 = 首条 total − last）", () => {
+    expect(
+      turnUsageOf([
+        {
+          total: { inputTokens: 1100, outputTokens: 120 },
+          last: { totalTokens: 120, inputTokens: 100, outputTokens: 20 },
+          modelContextWindow: 1000,
+        },
+        {
+          total: { inputTokens: 1300, outputTokens: 150 },
+          last: { totalTokens: 230, inputTokens: 200, cachedInputTokens: 50, outputTokens: 30 },
+          modelContextWindow: 1000,
+        },
+      ]),
+    ).toEqual({
+      inputTokens: 300,
+      outputTokens: 50,
+      cachedInputTokens: 50,
+      contextWindowMaxTokens: 1000,
+      contextWindowUsedTokens: 230,
+    });
+    // snake_case：total_token_usage / last_token_usage
+    expect(
+      turnUsageOf([
+        {
+          total_token_usage: { input_tokens: 50, output_tokens: 5 },
+          last_token_usage: { input_tokens: 10, output_tokens: 1 },
+        },
+        {
+          total_token_usage: { input_tokens: 70, output_tokens: 9 },
+          last_token_usage: { input_tokens: 20, output_tokens: 4 },
+        },
+      ]),
+    ).toEqual({ inputTokens: 30, outputTokens: 5 });
+  });
+
+  test("没有 total 时 turn_completed 退回最近一次 last；没有更新时为 undefined", () => {
+    expect(
+      turnUsageOf([
+        { last: { inputTokens: 100, outputTokens: 20 } },
+        { last: { inputTokens: 200, outputTokens: 30 }, modelContextWindow: 9 },
+      ]),
+    ).toEqual({ inputTokens: 200, outputTokens: 30, contextWindowMaxTokens: 9 });
+    expect(turnUsageOf([])).toBeUndefined();
   });
 
   test("planToTodoItems / toModelDefinition / toSandboxPolicy", () => {

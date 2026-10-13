@@ -28,6 +28,7 @@ import {
   type WorkspaceProject,
 } from "@/lib/workspaces";
 import { useConfirm } from "@/lib/use-confirm";
+import { sessionTokens } from "@/components/panel/panel-session";
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
 import s from "./projects.module.css";
 
@@ -150,7 +151,7 @@ export function ProjectsRoute() {
         const activity = session.updatedAt / 1000;
         if (activity > lastActivity) lastActivity = activity;
         if (session.createdAt / 1000 >= nowSec - WEEK_SECONDS) weekSessions += 1;
-        totalTokens += (session.lastUsage?.inputTokens ?? 0) + (session.lastUsage?.outputTokens ?? 0);
+        totalTokens += sessionTokens(session);
       }
       return {
         project,

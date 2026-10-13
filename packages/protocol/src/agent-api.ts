@@ -288,6 +288,8 @@ export interface AgentSnapshot {
   activeTurnId?: string | null;
   pendingPermissions: AgentPermissionRequest[];
   lastUsage?: AgentUsage;
+  /** 会话累计 token：每次 turn_completed 按本轮用量累加；旧会话无此字段（design.md 4.4） */
+  totalUsage?: { inputTokens: number; outputTokens: number };
   lastError?: string | null;
   persistence?: AgentPersistenceHandle | null;
   /** 首条用户消息前 120 字（首尾空白去掉、换行压成空格） */

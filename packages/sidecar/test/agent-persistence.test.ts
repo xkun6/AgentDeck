@@ -216,6 +216,53 @@ describe("快照新字段：preview / lastSeq / resumable", () => {
   });
 });
 
+describe("会话累计用量 totalUsage（design.md 4.4）", () => {
+  test("多轮累加、重复 turn_completed 不重复累加、持久化后重启仍保留", async () => {
+    const dataDir = makeDataDir();
+    const first = fakeClient();
+    const one = createManager(first.client, dataDir);
+    const { manager, states } = one;
+    const agent = await manager.createAgent({ provider: "fake", cwd: "/w" });
+    expect(agent.totalUsage).toBeUndefined();
+
+    const turn1 = (await manager.sendPrompt(agent.id, "第一轮")).turnId;
+    first.sessions.at(-1)!.emit({
+      type: "turn_completed",
+      turnId: turn1,
+      usage: { inputTokens: 100, outputTokens: 10, contextWindowUsedTokens: 999 },
+    });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
+    expect(manager.getAgent(agent.id).totalUsage).toEqual({ inputTokens: 100, outputTokens: 10 });
+    expect(states.at(-1)?.totalUsage).toEqual({ inputTokens: 100, outputTokens: 10 });
+
+    // 同一 turn 的重复 turn_completed 不重复累加
+    first.sessions.at(-1)!.emit({
+      type: "turn_completed",
+      turnId: turn1,
+      usage: { inputTokens: 100, outputTokens: 10 },
+    });
+    // 缺失的一项按 0；没有 token 的 usage 不累加
+    const turn2 = (await manager.sendPrompt(agent.id, "第二轮")).turnId;
+    first.sessions.at(-1)!.emit({ type: "turn_completed", turnId: turn2, usage: { outputTokens: 5 } });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
+    const turn3 = (await manager.sendPrompt(agent.id, "第三轮")).turnId;
+    first.sessions.at(-1)!.emit({ type: "turn_completed", turnId: turn3, usage: { totalCostUsd: 1 } });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
+    expect(manager.getAgent(agent.id).totalUsage).toEqual({ inputTokens: 100, outputTokens: 15 });
+    await manager.shutdown();
+
+    const meta = JSON.parse(
+      readFileSync(path.join(dataDir, "agents", agent.id, "meta.json"), "utf8"),
+    ) as AgentSnapshot;
+    expect(meta.totalUsage).toEqual({ inputTokens: 100, outputTokens: 15 });
+
+    const second = fakeClient();
+    const two = createManager(second.client, dataDir);
+    await two.manager.restore();
+    expect(two.manager.getAgent(agent.id).totalUsage).toEqual({ inputTokens: 100, outputTokens: 15 });
+  });
+});
+
 describe("持久化与启动恢复", () => {
   test("shutdown 后重启：dormant、timeline 惰性读取、seq 续号、resume 后跑一轮", async () => {
     const seeded = await seedDormant();

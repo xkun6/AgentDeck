@@ -128,6 +128,20 @@ describe("AcpAgentSession 回合", () => {
     expect(events.filter((e) => e.type === "thread_started")).toHaveLength(1);
   });
 
+  test("本轮应答没带 usage 时 turn_completed 不沿用上一轮的 token（design.md 5.3）", async () => {
+    const { session, events } = await open();
+    await session.startTurn("你好");
+    await waitForTerminal(events);
+    const { turnId } = await session.startTurn("scenario:thought");
+    await waitForTerminal(events, 2);
+    expect(terminalEvents(events).at(-1)).toEqual({
+      type: "turn_completed",
+      turnId,
+      // 上下文窗口等非 token 字段仍沿用最新值
+      usage: { contextWindowMaxTokens: 200000, contextWindowUsedTokens: 1234, totalCostUsd: 0.01 },
+    });
+  });
+
   test("agent_thought_chunk → reasoning，带 messageId 的消息沿用原 id", async () => {
     const { session, events } = await open();
     await session.startTurn("scenario:thought");
