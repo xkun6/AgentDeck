@@ -131,6 +131,7 @@ function readSubAgent(value: unknown): ChatSubAgentInfo | undefined {
 
 function toolPartToToolEntry(part: AgentToolPart, message: AgentUIMessage): ChatToolItem {
   const subAgent = readSubAgent(part.subAgent);
+  const delegate = part.delegate as ChatToolItem["delegate"];
   const input = parseToolInput(part.input);
   const images = extractImagePartsFromUnknown(part.output).map(imagePartToEntry);
   return {
@@ -146,6 +147,7 @@ function toolPartToToolEntry(part: AgentToolPart, message: AgentUIMessage): Chat
     arguments: input.arguments,
     images: images.length ? images : undefined,
     ...(subAgent ? { subAgent } : {}),
+    ...(delegate ? { delegate } : {}),
   };
 }
 

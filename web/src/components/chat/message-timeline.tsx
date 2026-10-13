@@ -10,6 +10,7 @@ import { MessageImage } from "./message-image";
 import { findMessageIdForSeq } from "./focus-seq";
 import { MessageSkeleton } from "./message-skeleton";
 import { MessageText } from "./message-text";
+import { DelegateCard } from "./delegate-card";
 import { SubAgentToolDetail } from "./subagents/subagent-tool-detail";
 import { CopyButton } from "@/components/ui/copy-button";
 import s from "./message-timeline.module.css";
@@ -334,7 +335,12 @@ function formatToolElapsed(ms: number | undefined): string | null {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
+/** agentdeck 互通工具（design.md 4.26）渲染为委派卡片，其余工具走通用卡片 */
 function ToolCard({ tool }: { tool: ChatToolItem }) {
+  return tool.delegate ? <DelegateCard tool={tool} /> : <GenericToolCard tool={tool} />;
+}
+
+function GenericToolCard({ tool }: { tool: ChatToolItem }) {
   const [open, setOpen] = useState(tool.status === "error");
   const [elapsed, setElapsed] = useState(() =>
     tool.status === "running" ? Math.max(0, Date.now() - tool.startedAt) : 0,

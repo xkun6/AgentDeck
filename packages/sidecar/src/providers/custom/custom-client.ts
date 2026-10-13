@@ -21,6 +21,7 @@ import type {
 import type {
   AgentAvailability,
   AgentClient,
+  AgentResumeConfig,
   AgentSession,
   AgentSessionConfig,
   AgentSessionEvent,
@@ -273,7 +274,7 @@ export class CustomProviderClient implements AgentClient {
       : cfg;
   }
 
-  async resumeSession(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession> {
+  async resumeSession(handle: AgentPersistenceHandle, cfg: AgentResumeConfig): Promise<AgentSession> {
     const inner = this.inner;
     if (!inner.resumeSession) {
       throw new Error(`${this.label} 不支持恢复会话`);

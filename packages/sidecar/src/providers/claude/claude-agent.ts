@@ -37,12 +37,15 @@ import { dedupeSlashCommands } from "../../agent/slash-commands.js";
 import type {
   AgentAvailability,
   AgentClient,
+  AgentResumeConfig,
   AgentSession,
   AgentSessionConfig,
   AgentSessionEvent,
   ProviderSubagentInputEvent,
 } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
+import { redactInteropTokens } from "../../utils/redact-interop.js";
+import { claudeInteropArgs } from "../shared/interop.js";
 import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { createExternalProcessEnv } from "../../utils/process-env.js";
 import { withTimeout } from "../../utils/promise-timeout.js";
@@ -378,12 +381,15 @@ export class ClaudeAgentClient implements AgentClient {
 
   async resumeSession(
     handle: AgentPersistenceHandle,
-    cfg: { cwd: string },
+    cfg: AgentResumeConfig,
   ): Promise<AgentSession> {
     if (!handle.sessionId) {
       throw new Error("恢复 Claude 会话需要 sessionId");
     }
-    return this.openSession({ cwd: cfg.cwd }, handle.sessionId);
+    return this.openSession(
+      { cwd: cfg.cwd, ...(cfg.interop ? { interop: cfg.interop } : {}) },
+      handle.sessionId,
+    );
   }
 
   /**
@@ -421,11 +427,13 @@ export class ClaudeAgentClient implements AgentClient {
     if (!resolution.available) {
       throw new Error(resolution.reason);
     }
+    // 会话互通（design.md 4.26）：每次拉起 / 恢复 / 分叉都注入当前端口与 token（内联 JSON，shell:false 传参）
+    const extraArgs = [...this.extraArgs, ...(cfg.interop ? claudeInteropArgs(cfg.interop) : [])];
     return new ClaudeAgentSession({
       logger: this.logger,
       env: this.childEnv,
       providerId: this.provider,
-      ...(this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
+      ...(extraArgs.length > 0 ? { extraArgs } : {}),
       cliFactory: this.cliFactory,
       ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       executablePath: resolution.path,
@@ -2061,7 +2069,7 @@ export function mapClaudeMcpServers(response: ClaudeMcpStatusResponse): AgentMcp
     servers.push({
       name: entry.name,
       status,
-      ...(typeof entry.error === "string" && entry.error ? { error: entry.error } : {}),
+      ...(typeof entry.error === "string" && entry.error ? { error: redactInteropTokens(entry.error) } : {}),
       ...(typeof entry.scope === "string" && entry.scope ? { scope: entry.scope } : {}),
       ...(Array.isArray(entry.tools) ? { toolCount: entry.tools.length } : {}),
     });

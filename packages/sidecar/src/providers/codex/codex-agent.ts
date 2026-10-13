@@ -33,10 +33,14 @@ import packageJson from "../../../package.json" with { type: "json" };
 import type {
   AgentAvailability,
   AgentClient,
+  AgentResumeConfig,
   AgentSession,
   AgentSessionConfig,
   AgentSessionEvent,
+  InteropEndpoint,
 } from "../../agent/types.js";
+import { redactInteropTokens } from "../../utils/redact-interop.js";
+import { codexInteropConfig } from "../shared/interop.js";
 import { buildMcpSection, buildRows, formatResetsIn, formatWindowLabel } from "../../agent/status-sections.js";
 import type { Logger } from "../../logger.js";
 import { execCommand, spawnProcess } from "../../utils/spawn.js";
@@ -118,7 +122,7 @@ export function mapCodexMcpServer(entry: unknown): AgentMcpServer | null {
   return {
     name,
     status: toMcpServerStatus(record.runtimeStatus),
-    ...(error ? { error } : {}),
+    ...(error ? { error: redactInteropTokens(error) } : {}),
     ...(tools ? { toolCount: Object.keys(tools).length } : {}),
   };
 }
@@ -691,6 +695,7 @@ export class CodexAgentClient implements AgentClient {
       modeId,
       thinkingOptionId: cfg.thinkingOptionId ?? null,
       threadId: null,
+      ...(cfg.interop ? { interop: cfg.interop } : {}),
     });
     this.sessions.add(session);
     try {
@@ -702,13 +707,14 @@ export class CodexAgentClient implements AgentClient {
     return session;
   }
 
-  async resumeSession(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession> {
+  async resumeSession(handle: AgentPersistenceHandle, cfg: AgentResumeConfig): Promise<AgentSession> {
     const session = new CodexAgentSession({
       ...(await this.sessionBaseDeps()),
       cwd: cfg.cwd,
       model: null,
       modeId: DEFAULT_CODEX_MODE_ID,
       threadId: handle.sessionId,
+      ...(cfg.interop ? { interop: cfg.interop } : {}),
     });
     this.sessions.add(session);
     try {
@@ -735,6 +741,7 @@ export class CodexAgentClient implements AgentClient {
       thinkingOptionId: cfg.thinkingOptionId ?? null,
       threadId: null,
       forkFrom: { threadId: handle.sessionId, ...(cfg.nativeRef ? { lastTurnId: cfg.nativeRef } : {}) },
+      ...(cfg.interop ? { interop: cfg.interop } : {}),
     });
     this.sessions.add(session);
     try {
@@ -799,6 +806,8 @@ interface CodexSessionDeps {
   threadId: string | null;
   /** 分叉来源（design.md 4.23）：threadId 为 null 时首次加载线程用 thread/fork 代替 thread/start */
   forkFrom?: { threadId: string; lastTurnId?: string };
+  /** 会话互通 MCP 端点（design.md 4.26）：合并进 thread/start、resume、fork 的 config.mcp_servers */
+  interop?: InteropEndpoint;
   onClosed?: (session: CodexAgentSession) => void;
 }
 
@@ -1323,6 +1332,19 @@ export class CodexAgentSession implements AgentSession {
     return this.threadLoading;
   }
 
+  /** thread/start | resume | fork 的 `config`：自定义中转配置 + 会话互通 MCP 服务器（design.md 4.7 / 4.26） */
+  private threadConfigParam(fullAccess: boolean): { config?: JsonRecord } {
+    const config: JsonRecord = this.deps.threadConfig ? structuredClone(this.deps.threadConfig) : {};
+    if (this.deps.interop) {
+      const interop = codexInteropConfig(this.deps.interop, { fullAccess });
+      config.mcp_servers = {
+        ...(asRecord(config.mcp_servers) ?? {}),
+        ...(interop.mcp_servers as JsonRecord),
+      };
+    }
+    return Object.keys(config).length > 0 ? { config } : {};
+  }
+
   private async loadThread(): Promise<void> {
     const client = await this.ensureClient();
     if (this.threadLoaded) {
@@ -1335,7 +1357,7 @@ export class CodexAgentSession implements AgentSession {
       sandbox: preset.sandbox,
       ...(this.model ? { model: this.model } : {}),
       // 自定义中转：model_provider / model_providers 等配置覆盖（codex 0.162.1 thread/start、thread/resume 均支持 config）
-      ...(this.deps.threadConfig ? { config: structuredClone(this.deps.threadConfig) } : {}),
+      ...this.threadConfigParam(preset.approvalPolicy === "never"),
     };
     if (this.threadId) {
       await client.request(

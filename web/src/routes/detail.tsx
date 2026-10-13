@@ -60,6 +60,7 @@ import { TopBar, TopBarActionButton, TopBarActions } from "@/components/top-bar/
 import { GooseComposer } from "@/components/chat/goose-composer";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { ContextUsageIndicator } from "@/components/chat/context-usage-indicator";
+import { DelegatedFromLink } from "@/components/chat/delegated-from";
 import { McpServersDialog } from "@/components/chat/mcp-servers-dialog";
 import { StatusDialog } from "@/components/chat/status-dialog";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
@@ -528,9 +529,18 @@ export function DetailRoute() {
     || firstUserText(runtime.messages)
     || (providerLabel ? `${providerLabel} 会话` : "会话详情");
   const model = snapshot?.model ?? "";
-  const sub = snapshot
+  const subText = snapshot
     ? [providerLabel, model ? `模型 ${model}` : "", snapshot.cwd].filter(Boolean).join(" · ")
     : undefined;
+  // 由其它会话委派创建的子会话：顶部显示「由 <父会话> 委派」链接（design.md 4.26）
+  const sub = snapshot?.parentAgentId ? (
+    <>
+      <DelegatedFromLink parentAgentId={snapshot.parentAgentId} />
+      {subText ? ` · ${subText}` : null}
+    </>
+  ) : (
+    subText
+  );
   // dormant / closed 下 sidecar 拒绝权限应答（AGENT_CLOSED），不展示审批
   const pendingApproval = inactive ? null : runtime.pendingApprovals[0] ?? null;
   const notFound = timelineState.id === taskId && Boolean(timelineState.error) && !snapshot;

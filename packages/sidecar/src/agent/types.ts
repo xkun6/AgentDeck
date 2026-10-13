@@ -61,12 +61,32 @@ export type AgentSessionEvent =
   | ProviderSubagentStreamEvent
   | ProviderBackgroundTasksStreamEvent;
 
+/**
+ * 会话互通 MCP 端点（design.md 4.26）：AgentManager 在每次拉起 / 恢复 / 分叉会话进程时填入当前端口与
+ * 该会话专属 token；缺省 = 不注入（互通关闭或 sidecar 未监听）。
+ */
+export interface InteropEndpoint {
+  /** `http://127.0.0.1:<port>/mcp` */
+  url: string;
+  /** `Authorization: Bearer <token>` 中的 token */
+  token: string;
+}
+
 export interface AgentSessionConfig {
   cwd: string;
   model?: string;
   modeId?: string;
   /** 思考强度档位；null / 缺省 = 跟随 CLI 自身设置（design.md 4.10） */
   thinkingOptionId?: string | null;
+  /** 会话互通 MCP 端点（design.md 4.26） */
+  interop?: InteropEndpoint;
+}
+
+/** resumeSession 的配置 */
+export interface AgentResumeConfig {
+  cwd: string;
+  /** 会话互通 MCP 端点（design.md 4.26）：重启后端口 / token 都会变，恢复时重新注入 */
+  interop?: InteropEndpoint;
 }
 
 /**
@@ -150,7 +170,7 @@ export interface AgentClient {
     commands?: AgentSlashCommand[];
   }>;
   createSession(cfg: AgentSessionConfig): Promise<AgentSession>;
-  resumeSession?(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession>;
+  resumeSession?(handle: AgentPersistenceHandle, cfg: AgentResumeConfig): Promise<AgentSession>;
   /**
    * 原生分叉（design.md 4.23）：基于原会话的 persistence 句柄派生新会话，原会话不受影响。
    * nativeRef 缺省 = 分叉整个会话，给出时只保留到该回合（取自 turn_completed.nativeRef）。

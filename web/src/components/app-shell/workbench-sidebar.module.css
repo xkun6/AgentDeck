@@ -206,7 +206,7 @@
 
 .sessionRow {
   position: relative;
-  padding: 8px 16px 8px 20px;
+  padding: 8px 16px 8px calc(20px + var(--session-depth, 0) * 16px);
   border-left: 1px solid transparent;
   cursor: pointer;
   background: transparent;
@@ -391,4 +391,33 @@
   font-size: 11px;
   color: var(--h-text-3);
   font-family: var(--h-font-mono);
+}
+
+/* 子会话（design.md 4.26）：缩进由 --session-depth 控制（每级 16px），父会话行带折叠按钮 */
+.rowToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--h-button-height-xs);
+  height: var(--h-button-height-xs);
+  margin: -4px -4px -4px -8px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+}
+
+.rowToggle:hover {
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+}
+
+.rowChildCount {
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+  font-family: var(--h-font-mono);
+  font-size: 10px;
 }

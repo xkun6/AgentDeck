@@ -20,6 +20,7 @@ export const SETTINGS_ROUTES = [
   "/coding-agents",
   "/env",
   "/snapshots",
+  "/interop",
   "/debug",
   "/about",
   "/advanced",

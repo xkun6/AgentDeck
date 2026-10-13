@@ -12,6 +12,8 @@ import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { Scheduler } from "./scheduler/scheduler.js";
 import { ScheduleStore } from "./scheduler/store.js";
+import { InteropService } from "./server/interop-service.js";
+import { McpInteropEndpoint } from "./server/mcp-interop.js";
 import { RpcServer } from "./server/rpc-server.js";
 import { SettingsStore } from "./settings/sidecar-settings.js";
 import { SnapshotService } from "./snapshots/snapshot-service.js";
@@ -199,7 +201,17 @@ async function main(): Promise<void> {
     listAgents: () => manager?.listAgents().map((agent) => ({ id: agent.id, cwd: agent.cwd })) ?? [],
     isCwdBusy: (cwd) => manager?.isCwdBusy(cwd) ?? false,
   });
-  manager = new AgentManager({ registry, logger, usage, snapshots, ...(store ? { store } : {}) });
+  // 会话互通（design.md 4.26）：每会话 token 与 /mcp 端点；端口在监听后告知
+  const interop = new InteropService({ settings: () => settings.get().interop });
+  manager = new AgentManager({
+    registry,
+    logger,
+    usage,
+    snapshots,
+    interop,
+    ...(store ? { store } : {}),
+  });
+  manager.subscribe({ onRemoved: (agentId) => interop.forget(agentId) });
   try {
     await manager.restore();
   } catch (error) {
@@ -226,10 +238,18 @@ async function main(): Promise<void> {
     settings,
     snapshots,
     scheduler,
+    mcp: new McpInteropEndpoint({
+      manager,
+      registry,
+      interop,
+      logger,
+      ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+    }),
     logger,
   });
 
   const port = await server.listen(config.port, "127.0.0.1");
+  interop.setPort(port);
   if (shuttingDown) {
     return;
   }
