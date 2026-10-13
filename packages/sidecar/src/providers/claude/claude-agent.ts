@@ -4,6 +4,7 @@
 // 去掉了 paseo 的 steer、rewind、历史回放、快速模式、思考预算等功能；子代理按 paseo 的 task 协议 + sidechain
 // 移植（design.md 4.11），但不做子代理 effort hooks 与磁盘回放；
 // 思考强度（--effort / --thinking disabled）按 paseo 的做法在切换后标记重启，下一轮以 --resume 重新拉起。
+// CLI 自发轮次（后台任务完成后 CLI 自行续写）按 paseo 的 autonomous turn 处理，以 init 为起点识别（design.md 4.12）。
 // AgentDeck 改动：不再依赖 Anthropic 的 Agent SDK，直接 spawn 用户本机安装的 claude 可执行文件。
 import { randomUUID } from "node:crypto";
 import os from "node:os";
@@ -68,6 +69,7 @@ import type {
   ClaudePermissionResult,
   ClaudeResultMessage,
   ClaudeStreamEvent,
+  ClaudeTaskSystemMessage,
   ClaudeUserContentBlock,
   ClaudeUserInput,
   ClaudeUserOutputMessage,
@@ -392,8 +394,17 @@ export interface ClaudeAgentSessionOptions {
 
 interface ActiveTurn {
   turnId: string;
-  /** 本轮用户消息的 uuid；CLI 在 result.user_message_uuid 中回显，用于识别过期 result */
-  userMessageUuid: string;
+  /**
+   * 本轮用户消息的 uuid；CLI 在 result.user_message_uuid 中回显，用于识别过期 result。
+   * null 表示 CLI 自发轮次（design.md 4.12）：没有对应的用户消息，收到任意 result 即结束。
+   */
+  userMessageUuid: string | null;
+  /**
+   * 本轮接管了一个还没收到 result 的自发轮次：用户消息在 CLI 里排在那一轮之后，
+   * 先到的那条不带 user_message_uuid 的 result 属于被接管的自发轮次，跳过一次
+   * （尚未见过 CLI 回显 uuid 时的兜底，见 cliEchoesUserMessageUuid）。
+   */
+  skipSupersededResult: boolean;
 }
 
 interface PendingPermission {
@@ -439,6 +450,18 @@ export class ClaudeAgentSession implements AgentSession {
   private cli: ClaudeCliHandle | null = null;
 
   private activeTurn: ActiveTurn | null = null;
+  /** 没有进行中的回合时到达的后台任务完成提示，下一轮开始后再发（design.md 4.12） */
+  private pendingNotices: AgentTimelineItem[] = [];
+  /**
+   * 没有我方回合时 CLI 发了 init，即自行开始了一轮；等它真正产出内容才开自发回合
+   * （CLI 偶尔会跑只有 init + 空 result 的空轮，不该显示成一个回合），收到 result 时清除。
+   */
+  private backgroundRunPending = false;
+  /**
+   * CLI 会在用户回合的 result 里回显 user_message_uuid（2.1.296 实测，含本地斜杠命令）；见过一次后，
+   * 用户回合里不带 uuid 的 result 一律属于 CLI 自发轮次，不结束用户回合。
+   */
+  private cliEchoesUserMessageUuid = false;
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly toolUses = new Map<string, ToolUseEntry>();
@@ -489,19 +512,35 @@ export class ClaudeAgentSession implements AgentSession {
     if (this.closed) {
       throw new Error("Claude 会话已关闭");
     }
-    if (this.activeTurn) {
+    const background = this.activeTurn;
+    if (background && background.userMessageUuid !== null) {
       throw new Error("Claude 会话正在执行中");
     }
-    if (this.cliRestartNeeded) {
+    if (background) {
+      // 自发轮次进行中（参照 paseo startTurn → completeAutonomousTurn）：先结束它，用户消息照常写入 stdin，
+      // 由 CLI 排在当前这一轮之后处理（2.1.296 实测），这一轮剩余的输出并入新回合。仍挂起的审批作废，
+      // 否则 CLI 卡在审批上、用户消息永远轮不到。不清 streamed 集合与运行中的工具：它们的后续帧还会到达。
+      this.activeTurn = null;
+      this.denyAllPendingPermissions("用户发送了新消息，已取消该请求");
+      this.emit({ type: "turn_completed", turnId: background.turnId });
+    } else if (this.cliRestartNeeded) {
       // 思考强度变了：结束旧进程，下面 ensureCli 以 --resume 带新参数重新拉起
+      // （接管自发轮次时不重启，免得杀掉正在进行的那一轮，留到之后的回合）
       this.cliRestartNeeded = false;
       await this.teardownCli();
     }
     const turnId = randomUUID();
     const message = toClaudeUserInput(prompt, this.sessionId);
-    const turn: ActiveTurn = { turnId, userMessageUuid: message.uuid };
+    const turn: ActiveTurn = {
+      turnId,
+      userMessageUuid: message.uuid,
+      // CLI 正在跑一轮自发的（不论是否已显示成回合）：它的 result 先到
+      skipSupersededResult: background !== null || this.backgroundRunPending,
+    };
+    this.backgroundRunPending = false;
     this.activeTurn = turn;
     this.emit({ type: "turn_started", turnId });
+    this.flushPendingNotices(turn);
 
     try {
       this.ensureCli().sendUserMessage(message);
@@ -564,6 +603,7 @@ export class ClaudeAgentSession implements AgentSession {
       return;
     }
     this.activeTurn = null;
+    this.backgroundRunPending = false;
     this.denyAllPendingPermissions("回合已取消");
     this.cancelRunningTools(turn.turnId);
     // 回合取消：前台子代理随之结束（已转入后台的不动）
@@ -746,6 +786,7 @@ export class ClaudeAgentSession implements AgentSession {
       return; // 已被 teardown / 重建
     }
     this.cli = null;
+    this.backgroundRunPending = false;
     // 进程已退出：仍走一遍 close，确保残留的子进程树被清理
     void cli.close().catch(() => undefined);
     if (this.closed) {
@@ -772,6 +813,7 @@ export class ClaudeAgentSession implements AgentSession {
   private async teardownCli(): Promise<void> {
     const cli = this.cli;
     this.cli = null;
+    this.backgroundRunPending = false;
     if (cli) {
       await cli.close().catch((error: unknown) => {
         this.logger.warn("结束 Claude Code 进程失败：%s", errorMessage(error));
@@ -795,10 +837,20 @@ export class ClaudeAgentSession implements AgentSession {
       this.handleSidechainFrame(message, parentToolUseId);
       return;
     }
+    if (message.type === "stream_event" || message.type === "assistant" || message.type === "user") {
+      this.startPendingBackgroundTurn();
+    }
     switch (message.type) {
       case "system":
         if (message.subtype === "init") {
           this.captureSession(message.session_id);
+          // CLI 每开始一轮都先发 init；此时没有我方回合，说明是 CLI 自发的（后台任务完成后的续写等）
+          if (!this.activeTurn) {
+            this.backgroundRunPending = true;
+          }
+        } else if (message.subtype === "status" && (message as { status?: unknown }).status === "requesting") {
+          // 已经在请求模型：不是空轮，尽早显示「运行中」
+          this.startPendingBackgroundTurn();
         }
         this.handleTaskAnnouncement(message);
         return;
@@ -1010,13 +1062,26 @@ export class ClaudeAgentSession implements AgentSession {
 
   private handleResult(message: ClaudeResultMessage): void {
     const turn = this.activeTurn;
-    if (!turn) {
-      return; // 已中断的回合或自发回合的 result
-    }
+    // 任何 result 都意味着 CLI 当前这一轮结束了
+    this.backgroundRunPending = false;
     const echoedUuid = message.user_message_uuid;
-    if (echoedUuid && echoedUuid !== turn.userMessageUuid) {
-      this.logger.debug("忽略非当前回合的 Claude result（uuid=%s）", echoedUuid);
-      return;
+    if (echoedUuid) {
+      this.cliEchoesUserMessageUuid = true;
+    }
+    if (!turn) {
+      return; // 已中断回合的过期 result，或没有任何输出的空自发轮次
+    }
+    if (turn.userMessageUuid !== null) {
+      if (echoedUuid && echoedUuid !== turn.userMessageUuid) {
+        this.logger.debug("忽略非当前回合的 Claude result（uuid=%s）", echoedUuid);
+        return;
+      }
+      // 不带 uuid 的 result 属于排在用户消息之前的 CLI 自发轮次（含只有 init + result 的空轮）
+      if (!echoedUuid && (this.cliEchoesUserMessageUuid || turn.skipSupersededResult)) {
+        turn.skipSupersededResult = false;
+        this.logger.debug("忽略 CLI 自发轮次的 Claude result（当前为用户回合）");
+        return;
+      }
     }
     this.captureSession(message.session_id);
 
@@ -1073,7 +1138,7 @@ export class ClaudeAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   private readonly handleCanUseTool: ClaudeCanUseTool = async (toolName, input, options) => {
-    const turn = this.activeTurn;
+    const turn = this.closed ? null : this.startPendingBackgroundTurn();
     if (this.closed || !turn) {
       return { behavior: "deny", message: "当前没有进行中的回合" };
     }
@@ -1161,6 +1226,32 @@ export class ClaudeAgentSession implements AgentSession {
     this.emit(event);
   }
 
+  /** CLI 自发的一轮（design.md 4.12）产出第一条内容时开回合：没有用户消息，result 到达时照常结束 */
+  private startPendingBackgroundTurn(): ActiveTurn | null {
+    if (this.activeTurn || !this.backgroundRunPending) {
+      return this.activeTurn;
+    }
+    this.backgroundRunPending = false;
+    const turn: ActiveTurn = {
+      turnId: randomUUID(),
+      userMessageUuid: null,
+      skipSupersededResult: false,
+    };
+    this.activeTurn = turn;
+    this.logger.info("Claude Code 自行开始了一轮（后台任务完成等），turnId=%s", turn.turnId);
+    this.emit({ type: "turn_started", turnId: turn.turnId, origin: "background" });
+    this.flushPendingNotices(turn);
+    return turn;
+  }
+
+  private flushPendingNotices(turn: ActiveTurn): void {
+    const notices = this.pendingNotices;
+    this.pendingNotices = [];
+    for (const item of notices) {
+      this.emitTimeline(turn, item);
+    }
+  }
+
   private emitTimeline(turn: ActiveTurn | null, item: AgentTimelineItem): void {
     const merged = item.type === "tool_call" ? this.mergeSubAgentCard(item) : item;
     this.emit({ type: "timeline", ...(turn ? { turnId: turn.turnId } : {}), item: merged });
@@ -1172,6 +1263,9 @@ export class ClaudeAgentSession implements AgentSession {
 
   /** task_started / task_updated / task_progress / task_notification */
   private handleTaskAnnouncement(message: ClaudeOutputMessage): void {
+    if (message.type === "system" && message.subtype === "task_notification") {
+      this.handleNonSubagentTaskNotification(message as ClaudeTaskSystemMessage);
+    }
     const observations = this.taskProtocolSource.observe(message);
     if (observations.length === 0) {
       return;
@@ -1196,6 +1290,27 @@ export class ClaudeAgentSession implements AgentSession {
           actions: [],
         },
       });
+    }
+  }
+
+  /**
+   * 非子代理任务（后台命令等）的完成通知 → 一张已结束的 `task_notification` 卡片（参照 paseo
+   * appendTaskNotificationEvents）。子代理任务的完成已由子代理卡片与状态表达，不重复；子代理发起的任务
+   * 进该子代理的时间线；没有进行中的回合时先暂存，下一轮（通常就是 CLI 随即自发的那一轮）开始后再发。
+   */
+  private handleNonSubagentTaskNotification(message: ClaudeTaskSystemMessage): void {
+    const taskId = typeof message.task_id === "string" && message.task_id ? message.task_id : null;
+    const toolUseId = typeof message.tool_use_id === "string" ? message.tool_use_id : null;
+    if (taskId && this.taskProtocolSource.isDeclaredTask(taskId)) return;
+    if (toolUseId && this.subagentToolInputs.has(toolUseId)) return;
+    const item = mapTaskNotificationToToolCall(message, taskId);
+    const owner = taskId ? this.taskProtocolSource.resolveTaskOwner(taskId) : undefined;
+    if (owner) {
+      this.emitSubagentEvents([{ type: "timeline", id: owner, item }]);
+    } else if (this.activeTurn) {
+      this.emitTimeline(this.activeTurn, item);
+    } else {
+      this.pendingNotices.push(item);
     }
   }
 
@@ -1393,6 +1508,42 @@ export function toClaudeUserInput(
     parent_tool_use_id: null,
     uuid: randomUUID(),
     session_id: sessionId ?? "",
+  };
+}
+
+/** 后台任务完成通知 → 已结束的工具卡片（参照 paseo task-notification-tool-call.ts） */
+function mapTaskNotificationToToolCall(
+  message: ClaudeTaskSystemMessage,
+  taskId: string | null,
+): ToolCallTimelineItem {
+  const summary = typeof message.summary === "string" ? message.summary.trim() : "";
+  const outputFile = typeof message.output_file === "string" ? message.output_file.trim() : "";
+  const rawStatus = typeof message.status === "string" ? message.status.toLowerCase() : "";
+  let status: ToolCallTimelineItem["status"] = "completed";
+  if (rawStatus === "failed" || rawStatus === "error") {
+    status = "failed";
+  } else if (rawStatus === "stopped" || rawStatus === "killed") {
+    status = "canceled";
+  }
+  const fallbackLabel =
+    status === "failed" ? "后台任务失败" : status === "canceled" ? "后台任务已停止" : "后台任务已完成";
+  const label = summary || fallbackLabel;
+  return {
+    type: "tool_call",
+    callId: `task_notification_${taskId ?? randomUUID()}`,
+    name: "task_notification",
+    status,
+    error: status === "failed" ? label : null,
+    detail: {
+      type: "plain_text",
+      label,
+      ...(outputFile ? { text: `输出文件：${outputFile}` } : {}),
+    },
+    metadata: {
+      source: "claude_task_notification",
+      ...(taskId ? { taskId } : {}),
+      ...(rawStatus ? { status: rawStatus } : {}),
+    },
   };
 }
 

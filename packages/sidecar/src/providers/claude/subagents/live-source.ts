@@ -126,6 +126,16 @@ export class ClaudeTaskProtocolSource {
     return this.declaredIds.has(subagentId);
   }
 
+  /** 该 task 被声明为子代理（其完成由子代理卡片与状态表达） */
+  isDeclaredTask(taskId: string): boolean {
+    return this.subagentIdByTaskId.has(taskId);
+  }
+
+  /** 由子代理发起的 task（如子代理的后台命令）→ 该子代理 id */
+  resolveTaskOwner(taskId: string): string | undefined {
+    return this.ownerSubagentIdByTaskId.get(taskId);
+  }
+
   /** Claude tool id → 拥有其状态与时间线的子代理 id */
   resolveSubagentId(toolUseId: string): string | undefined {
     const canonicalId = this.canonicalIdByToolUseId.get(toolUseId);

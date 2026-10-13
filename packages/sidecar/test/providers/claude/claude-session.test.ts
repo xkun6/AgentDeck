@@ -1082,6 +1082,111 @@ describe("ClaudeAgentSession", () => {
     expect(h.clis).toHaveLength(1);
   });
 
+  test("CLI 自发轮次：可中断；中断后的过期输出与 result 不再开新回合", async () => {
+    const h = createHarness();
+    h.setup((q) => (q.onUser = (user) => q.emit(msg.init(), msg.result(user.uuid))));
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("x");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    const cli = h.clis[0]!;
+
+    // 无输入地自行开始一轮（以 init 开头），工具权限照常走审批
+    cli.emit(msg.init(), msg.streamStart("bg-1"), msg.textDelta("后台"));
+    await waitUntil(() => events.some((e) => e.type === "timeline" && e.item.type === "assistant_message"));
+    const started = events.find((e) => e.type === "turn_started" && e.origin === "background");
+    expect(started).toBeDefined();
+    const bgTurnId = started!.type === "turn_started" ? started!.turnId : "";
+    const decision = canUseTool(cli, "Bash", { command: "ls" });
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    expect(events.find((e) => e.type === "permission_requested")).toMatchObject({ turnId: bgTurnId });
+
+    await session.interrupt();
+    expect(cli.calls.interrupt).toBe(1);
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+    expect(terminalEvents(events).at(-1)).toEqual({ type: "turn_canceled", turnId: bgTurnId, reason: "interrupted" });
+
+    // 被中断那一轮的尾巴：没有 init，不开新回合
+    const before = events.length;
+    cli.emit(msg.assistant("bg-1", [{ type: "text", text: "后台尾巴" }]), msg.result(undefined, { subtype: "error_during_execution", isError: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events.slice(before)).toEqual([]);
+  });
+
+  test("CLI 自发轮次中 startTurn：挂起的审批作废，先结束自发轮次再开新回合；被接管轮次的 result 跳过一次", async () => {
+    const h = createHarness();
+    h.setup((q) => (q.onUser = (user) => {
+      if (q.received.length === 1) q.emit(msg.init(), msg.result(user.uuid));
+    }));
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("x");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    const cli = h.clis[0]!;
+    // 只有 init + 空 result 的空轮（真实 CLI 偶尔会有）：不显示成回合
+    cli.emit(msg.init(), msg.result(undefined, { result: "" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(events.filter((e) => e.type === "turn_started")).toHaveLength(1);
+
+    // 自发轮次第一件事就是请求工具权限：此时才开回合
+    cli.emit(msg.init());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const decision = canUseTool(cli, "Bash", { command: "ls" });
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const started = events.find((e) => e.type === "turn_started" && e.origin === "background");
+    expect(events.find((e) => e.type === "permission_requested")).toMatchObject({
+      turnId: started?.type === "turn_started" ? started.turnId : "?",
+    });
+
+    const { turnId } = await session.startTurn("插话");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny", message: "用户发送了新消息，已取消该请求" });
+    const types = events.map((e) => e.type);
+    expect(types.slice(types.indexOf("permission_requested"))).toEqual([
+      "permission_requested",
+      "permission_resolved",
+      "turn_completed",
+      "turn_started",
+    ]);
+    expect(events.at(-1)).toEqual({ type: "turn_started", turnId });
+    // 用户消息照常写入 stdin，由 CLI 排队
+    expect(cli.received).toHaveLength(2);
+
+    // 先到的是被接管自发轮次的 result（不带 uuid）：跳过；之后用户消息那一轮的 result 才结束本回合
+    cli.emit(msg.result(undefined));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(terminalEvents(events)).toHaveLength(2);
+    cli.emit(msg.init(), msg.result(cli.received[1]!.uuid));
+    await waitUntil(() => terminalEvents(events).length === 3);
+    expect(terminalEvents(events).at(-1)).toMatchObject({ type: "turn_completed", turnId });
+    expect(events.filter((e) => e.type === "turn_started")).toHaveLength(3);
+  });
+
+  test("CLI 刚发 init、还没输出时用户发送：不开自发回合，那一轮的 result 跳过一次", async () => {
+    const h = createHarness();
+    h.setup((q) => (q.onUser = (user) => {
+      if (q.received.length === 1) q.emit(msg.init(), msg.result(user.uuid));
+    }));
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("x");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    const cli = h.clis[0]!;
+    cli.emit(msg.init());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const { turnId } = await session.startTurn("y");
+    // 自发那一轮的输出与 result 先到：输出并入本回合，result 跳过
+    cli.emit(msg.assistant("bg", [{ type: "text", text: "后台" }]), msg.result(undefined));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(terminalEvents(events)).toHaveLength(1);
+    cli.emit(msg.init(), msg.result(cli.received[1]!.uuid));
+    await waitUntil(() => terminalEvents(events).length === 2);
+    expect(events.filter((e) => e.type === "turn_started")).toEqual([
+      expect.objectContaining({ type: "turn_started" }),
+      { type: "turn_started", turnId },
+    ]);
+    expect(events.find((e) => e.type === "timeline" && e.item.type === "assistant_message")).toMatchObject({ turnId });
+  });
+
   test("interrupt 超时（3 秒）后结束 claude 进程，下一轮以 --resume 重建", async () => {
     const h = createHarness();
     let created = 0;

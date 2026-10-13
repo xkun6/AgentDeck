@@ -8,6 +8,11 @@
 //   noisy        → 先输出一行非 JSON，再按 hello 回复
 //   subagent     → Agent 工具派出子代理：task_* 公告 + 带 parent_tool_use_id 的 sidechain 帧，
 //                  另有一个应被过滤的 local_bash task 及其帧，最后父消息回 tool_result 并 result
+//   background   → 派出后台子代理并启动一条后台命令，回复「已派出」并 result；稍后无输入地自行开始一轮
+//                  （CLI 自发轮次，design.md 4.12）：task_notification（子代理 + 后台命令）→ init → 文本 → 不带
+//                  user_message_uuid 的 result，随后一个 init + 空 result 的空轮。自发轮次进行中收到的用户消息排队，
+//                  等这一轮结束后再处理（同真实 CLI）
+//   background-race → 同上，但自发轮次输出第一段文本后停住，直到收到下一条用户消息才结束
 // 环境变量 FAKE_CLAUDE_SILENT=1 时忽略所有控制请求（用于测试超时）。
 import readline from "node:readline";
 
@@ -18,6 +23,11 @@ const pendingResponses = new Map();
 let initSent = false;
 let hangingUuid = null;
 let counter = 0;
+/** 自发轮次进行中：用户消息排队 */
+let backgroundBusy = false;
+const queuedUsers = [];
+/** background-race：自发轮次等用户消息到达后再结束 */
+let resumeBackground = null;
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -105,6 +115,68 @@ function subagentScenario(uuid) {
   reply(uuid, "子代理回报 name 是 demo");
 }
 
+function backgroundScenario(uuid, race) {
+  const base = { session_id: SESSION_ID };
+  send({
+    ...base,
+    type: "assistant",
+    parent_tool_use_id: null,
+    message: {
+      id: "msg_bg_launch",
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "toolu_bg_agent", name: "Agent", input: { subagent_type: "general-purpose", description: "读 package.json", prompt: "读取 name", run_in_background: true } },
+        { type: "tool_use", id: "toolu_bg_bash", name: "Bash", input: { command: "sleep 1", run_in_background: true } },
+      ],
+    },
+  });
+  send({ ...base, type: "system", subtype: "task_started", task_id: "task_bg_agent", tool_use_id: "toolu_bg_agent", description: "读 package.json", subagent_type: "general-purpose", task_type: "local_agent", is_backgrounded: true, prompt: "读取 name" });
+  send({ ...base, type: "system", subtype: "task_started", task_id: "task_bg_bash", tool_use_id: "toolu_bg_bash", description: "sleep 1", task_type: "local_bash" });
+  send({
+    ...base,
+    type: "user",
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "toolu_bg_agent", content: [{ type: "text", text: "Async agent launched successfully." }] },
+        { type: "tool_result", tool_use_id: "toolu_bg_bash", content: "Command running in background with ID: task_bg_bash" },
+      ],
+    },
+  });
+  reply(uuid, "已派出");
+  setTimeout(() => {
+    backgroundBusy = true;
+    send({ ...base, type: "system", subtype: "task_updated", task_id: "task_bg_agent", patch: { status: "completed" } });
+    send({ ...base, type: "system", subtype: "task_notification", task_id: "task_bg_agent", tool_use_id: "toolu_bg_agent", status: "completed", summary: "name 是 demo", usage: { total_tokens: 500 } });
+    send({ ...base, type: "system", subtype: "task_notification", task_id: "task_bg_bash", tool_use_id: "toolu_bg_bash", status: "completed", summary: 'Background command "sleep 1" completed (exit code 0)', output_file: "C:\\tmp\\task_bg_bash.output" });
+    // 真实 CLI 每开始一轮都先发 init
+    send({ type: "system", subtype: "init", session_id: SESSION_ID, model: "fake", permissionMode: "default" });
+    const id = `msg_${++counter}`;
+    send({ ...base, type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id, usage: { input_tokens: 1 } } } });
+    send({ ...base, type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "子代理回报：" } } });
+    const finish = () => {
+      send({ ...base, type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "name 是 demo" } } });
+      send({ ...base, type: "assistant", parent_tool_use_id: null, message: { id, role: "assistant", content: [{ type: "text", text: "子代理回报：name 是 demo" }] } });
+      // 自发轮次没有对应的用户消息：result 不带 user_message_uuid
+      send({ type: "result", subtype: "success", is_error: false, result: "子代理回报：name 是 demo", session_id: SESSION_ID, total_cost_usd: 0.002, usage: { input_tokens: 1, output_tokens: 4 } });
+      // 真实 CLI 常紧跟一个只有 init + 空 result 的空轮（2.1.296 实测），排队的用户消息在它之后才处理
+      send({ type: "system", subtype: "init", session_id: SESSION_ID, model: "fake", permissionMode: "default" });
+      send({ type: "result", subtype: "success", is_error: false, result: "", session_id: SESSION_ID, usage: {} });
+      backgroundBusy = false;
+      for (const queued of queuedUsers.splice(0)) {
+        send({ type: "system", subtype: "init", session_id: SESSION_ID, model: "fake", permissionMode: "default" });
+        void handleUser(queued);
+      }
+    };
+    if (race) {
+      resumeBackground = finish;
+    } else {
+      finish();
+    }
+  }, 50);
+}
+
 function requestPermission(requestId, toolName, cancel) {
   return new Promise((resolve) => {
     pendingResponses.set(requestId, resolve);
@@ -144,6 +216,10 @@ async function handleUser(message) {
   }
   if (text === "subagent") {
     subagentScenario(uuid);
+    return;
+  }
+  if (text === "background" || text === "background-race") {
+    backgroundScenario(uuid, text === "background-race");
     return;
   }
   if (text.startsWith("perm:") || text === "cancel-perm") {
@@ -203,7 +279,14 @@ lines.on("line", (line) => {
     pendingResponses.delete(message.response.request_id);
     resolve?.(message.response);
   } else if (message.type === "user") {
-    void handleUser(message);
+    if (backgroundBusy) {
+      queuedUsers.push(message);
+      const resume = resumeBackground;
+      resumeBackground = null;
+      resume?.();
+    } else {
+      void handleUser(message);
+    }
   }
 });
 lines.on("close", () => process.exit(0));

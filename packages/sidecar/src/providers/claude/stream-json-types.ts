@@ -87,6 +87,10 @@ export interface ClaudeTaskSystemMessage extends ClaudeSystemMessage {
   patch?: { status?: unknown; is_backgrounded?: unknown };
   /** task_notification */
   status?: unknown;
+  /** task_notification：如 `Background command "…" completed (exit code 0)` */
+  summary?: unknown;
+  /** task_notification：任务输出文件 */
+  output_file?: unknown;
   /** task_progress / task_notification */
   usage?: { total_tokens?: unknown };
 }

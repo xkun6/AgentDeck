@@ -110,7 +110,7 @@ sidecar 入口：
 | `agent.subagents.list` | `{ agentId }` | `{ subagents: ProviderSubagentDescriptor[] }`（见 4.11） |
 | `agent.subagents.timeline` | `{ agentId, subagentId, direction?, cursorSeq?, limit? }` | `{ rows, hasOlder, hasNewer }`（见 4.11） |
 
-同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。
+同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
 ### 4.2 通知
 
@@ -191,7 +191,7 @@ export type AgentPermissionResponse =
 
 export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string }
-  | { type: "turn_started"; turnId: string }
+  | { type: "turn_started"; turnId: string; origin?: AgentTurnOrigin }   // AgentTurnOrigin = "background"（4.12）
   | { type: "turn_completed"; turnId: string; usage?: AgentUsage }
   | { type: "turn_failed"; turnId: string; error: string; code?: string }
   | { type: "turn_canceled"; turnId: string; reason: string }
@@ -449,6 +449,25 @@ interface ProviderProfile {
 - 子代理面板：右侧分栏（与预览面板同位置，打开时替代预览面板），只读时间线（复用主时间线渲染，无输入框、无审批卡片），顶部「加载更早记录」按 before 分页；面板内也有本层级的子代理药丸，可进入孙代理并返回上一级。
 - 数据：进入会话时 `agent.subagents.list` 拉一次（重连后重拉），之后由 `agent.subagents.update` 增量维护；打开面板时 `agent.subagents.timeline` 拉 tail，之后实时 timeline 行按 seq 追加去重。
 
+### 4.12 CLI 自发轮次（origin: "background"）
+
+Claude Code 的后台子代理（`Agent` 工具 `run_in_background`）与后台命令（`Bash` `run_in_background`）完成后，CLI 会把 `<task-notification>` 注入为一条内部 user 消息并**自行开始新的一轮**，不需要 AgentDeck 发 prompt。参照 paseo 的 autonomous turn（`providers/claude/agent.ts` 的 `startAutonomousTurn` / `completeAutonomousTurn`）。
+
+**协议**：
+- `AgentTurnOrigin = "background"`；`turn_started` 增加可选 `origin`，缺省 = 由 `agent.send` 发起，`"background"` = provider 在没有 startTurn 的情况下自行开始的轮次。之后的 timeline / 权限 / usage 与普通回合相同，结束时同样只发一次 `turn_completed` / `turn_failed` / `turn_canceled`。
+- AgentManager：自发轮次同样置 `status: "running"`、`activeTurnId`，结束恢复 `idle`（与普通回合同一套快照、落盘与 agent.state 推送）；不写 `user_message`。自发轮次进行中 `agent.send` **不**返回 `TURN_IN_PROGRESS`，交给 provider 的 startTurn 接管（见下）；普通回合进行中仍返回。`agent.cancel` 对自发轮次同样有效。
+- 前端：没有前置用户消息的 `turn_started` 另起一条助手消息（回放同理），运行态显示「运行中」，结束后恢复；输入框在运行中照常禁用、可中断。
+
+**Claude（2.1.296 实测 stream-json 线上格式）**：
+- 自发轮次的输出顺序：`system task_notification`（子代理 / 后台命令完成）→ `system init` → `status requesting` → `stream_event` / `assistant` … → `result`（**不带** `user_message_uuid`）；之后常紧跟一个只有 `init` + 空 `result`（同样不带 uuid）的空轮。被注入的 `<task-notification>` user 消息**不会**出现在 stdout，因此不存在「把注入消息显示成用户消息」的问题（provider 本来也不发 `user_message`）。用户发起的每一轮（含 `/cost`、`/compact` 等本地斜杠命令）的 result 都回显 `user_message_uuid`。
+- 识别：CLI 每开始一轮都先发 `system init`。收到 init 时没有进行中的回合 → 记「CLI 正在自发跑一轮」，等它真正有内容（`status requesting`、主线程 `stream_event` / `assistant` / `user`，或工具权限请求）时才开自发轮次（发 `turn_started { origin: "background" }`），之后照常翻译，收到任意 result 结束（success → `turn_completed`，否则 `turn_failed`）；只有 init + result 的空轮不显示。与 paseo 用 assistant / stream_event 等「像输出的消息」直接触发不同，这里以 init 为前提：中断后 CLI 还会吐出被中断那一轮的尾巴（没有 init），不会被误开成新回合，也就不需要 paseo 的 pendingInterruptAbort 抑制。
+- 后台任务完成提示（参照 paseo `task-notification-tool-call.ts` / `appendTaskNotificationEvents`）：非子代理任务（如后台命令 `local_bash`）的 `task_notification` 转成一张已结束的工具卡片：`name: "task_notification"`，`callId: "task_notification_<task_id>"`，detail `plain_text`（label = `summary`，如 `Background command "…" completed (exit code 0)`，缺省为「后台任务已完成 / 失败 / 已停止」；有 `output_file` 时 text 为「输出文件：…」），status completed / failed（failed / error）/ canceled（stopped / killed），`metadata.source = "claude_task_notification"`。子代理任务的完成已由子代理卡片与状态表达，不出卡片；子代理发起的任务进该子代理的时间线。没有进行中的回合时先暂存，下一轮（通常就是紧随其后的自发轮次）`turn_started` 之后再发。
+- 竞态（自发轮次中用户发送，参照 paseo `startTurn` 先 `completeAutonomousTurn`）：startTurn 先作废仍挂起的审批（否则 CLI 卡在审批上、用户消息永远轮不到），发自发轮次的 `turn_completed`，再发新回合的 `turn_started`，用户消息照常写入 stdin——CLI 把它排在当前这一轮之后（实测 `command_lifecycle` 为 queued，自发轮次的 result 之后才 started，并有自己带 uuid 的 result）。自发轮次剩余的输出（以及紧随的空轮）并入新回合（不丢）；用户回合里不带 uuid 的 result 都属于排在用户消息之前的自发轮次，一律跳过（会话里见过一次 uuid 回显后生效；此前作为兜底只跳过一次），新回合以回显自己 uuid 的 result 结束。CLI 刚发 init、自发轮次还没显示时用户发送，同样按「先到的无 uuid result 不属于本回合」处理。接管时若有「思考强度切换待重启」，推迟到之后的回合，免得杀掉正在进行的那一轮。
+- 中断：`interrupt()` 对自发轮次同样发 interrupt 控制请求并 `turn_canceled`；之后的过期 result 因没有进行中的回合而丢弃。
+- 已知局限：用户在「接管后的新回合」里中断时，CLI 中断的是仍在跑的自发那一轮，已排队的用户消息仍可能随后执行；它以 init 开头，会作为新的自发轮次显示，不会丢失或卡住。
+
+**Codex**（codex-cli 0.162.1 实测，主线程派出子代理后不 wait 直接结束回合）：子线程跑完后主线程只收到一条 `item/started` / `item/completed`（`subAgentActivity`，kind `completed`，turnId 为**已结束**的父回合），180 秒内主线程没有新的 `turn/started`——app-server 不会在没有 `turn/start` 的情况下自行开始主线程回合，无需处理。该条 subAgentActivity 因 turnId 属于已结束回合而被忽略，父卡片的完成状态由子线程的 `turn/completed` 路由更新（4.11）。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -527,6 +546,7 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 - 同一 callId 的 `tool_call` 先推 running，再推 completed / failed / canceled，后者覆盖前者；中断或关闭时仍在运行的工具补推 `canceled`。
 - `assistant_message` 一轮内可能有多条（不同 `messageId`），前端按 messageId 分段拼接；`reasoning` 不带 messageId。
 - 首轮 `thread_started` 与 `turn_started` 的先后不固定（Claude、ACP 先 thread_started，Codex 先 turn_started），前端不得依赖二者顺序。
+- `turn_started` 之前不一定有 `user_message`：CLI 自发轮次（4.12）只有 `turn_started { origin: "background" }`。
 
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。

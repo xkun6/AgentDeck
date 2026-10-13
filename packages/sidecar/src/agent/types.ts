@@ -60,6 +60,8 @@ export interface AgentSessionConfig {
  * 事件约定（AgentManager 依赖）：
  * - `startTurn` 生成 turnId，并发出 `turn_started`（可在 resolve 前或后），turn 结束时发且只发一次
  *   `turn_completed` / `turn_failed` / `turn_canceled`；
+ * - CLI 自行开始的轮次（没有 startTurn）发 `turn_started { origin: "background" }`，同样以一个结束事件收尾；
+ *   该轮进行中仍可调用 `startTurn`（provider 先结束自发轮次再开新轮，design.md 4.12）；
  * - `user_message` 由 AgentManager 统一记录，provider **不要**再发；
  * - `respondToPermission` 应在 resolve 前发出 `permission_resolved`（manager 有兜底补发）；
  * - `setModel` / `setMode` / `setThinking` 应发出 `model_changed` / `mode_changed` /

@@ -436,4 +436,123 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
       await session.close();
     }
   });
+
+  /** 事件的简写：turn_* 带来源，timeline 带类型与 turnId 归属 */
+  function describeEvents(events: AgentStreamEvent[], turnIds: string[]): string[] {
+    const label = (turnId: string | undefined) => (turnId ? `T${turnIds.indexOf(turnId) + 1}` : "-");
+    return events.flatMap((e) => {
+      switch (e.type) {
+        case "turn_started":
+          if (!turnIds.includes(e.turnId)) turnIds.push(e.turnId);
+          return [`turn_started:${label(e.turnId)}${e.origin ? `:${e.origin}` : ""}`];
+        case "turn_completed":
+        case "turn_failed":
+        case "turn_canceled":
+          return [`${e.type}:${label(e.turnId)}`];
+        case "timeline":
+          return [
+            `timeline:${e.item.type === "tool_call" ? `tool:${e.item.name}:${e.item.status}` : e.item.type}:${label(e.turnId)}`,
+          ];
+        default:
+          return [];
+      }
+    });
+  }
+
+  test("CLI 自发轮次：后台子代理完成后 CLI 自行开一轮 → turn_started(background) → 时间线 → turn_completed", async () => {
+    const session = await createClient().createSession({ cwd });
+    const events: AgentStreamEvent[] = [];
+    const subagentEvents: ProviderSubagentInputEvent[] = [];
+    session.subscribe((event) => {
+      if (event.type === "provider_subagent") subagentEvents.push(event.event);
+      else events.push(event);
+    });
+    try {
+      const { turnId } = await session.startTurn("background");
+      await waitTerminal(events, 2);
+      // 之后的空轮（init + 空 result）不显示成回合
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const turnIds = [turnId];
+      const sequence = describeEvents(events, turnIds);
+      expect(sequence.slice(0, 1)).toEqual(["turn_started:T1"]);
+      // 第一轮正常结束；之后 CLI 自发的一轮：后台命令的完成提示 + 文本，最后 turn_completed
+      expect(sequence.slice(sequence.indexOf("turn_completed:T1"))).toEqual([
+        "turn_completed:T1",
+        "turn_started:T2:background",
+        "timeline:tool:task_notification:completed:T2",
+        "timeline:assistant_message:T2",
+        "timeline:assistant_message:T2",
+        "turn_completed:T2",
+      ]);
+      const bgText = events
+        .slice(events.findIndex((e) => e.type === "turn_started" && e.origin === "background"))
+        .flatMap((e) => (e.type === "timeline" && e.item.type === "assistant_message" ? [e.item.text] : []))
+        .join("");
+      expect(bgText).toBe("子代理回报：name 是 demo");
+      const notice = events.find(
+        (e) => e.type === "timeline" && e.item.type === "tool_call" && e.item.name === "task_notification",
+      );
+      expect(notice).toMatchObject({
+        item: {
+          callId: "task_notification_task_bg_bash",
+          detail: {
+            type: "plain_text",
+            label: 'Background command "sleep 1" completed (exit code 0)',
+            text: "输出文件：C:\\tmp\\task_bg_bash.output",
+          },
+        },
+      });
+      // 后台子代理以 task_notification 收尾，不另出提示卡片
+      const statuses = subagentEvents.flatMap((e) => (e.type === "upsert" && e.status ? [e.status] : []));
+      expect(statuses.at(-1)).toBe("completed");
+      expect(events.filter((e) => e.type === "turn_started")).toHaveLength(2);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("CLI 自发轮次进行中用户发送：先结束自发轮次再开新回合，消息由 CLI 排队，事件不丢、不重复", async () => {
+    const session = await createClient().createSession({ cwd });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => {
+      if (event.type !== "provider_subagent") events.push(event);
+    });
+    try {
+      const { turnId } = await session.startTurn("background-race");
+      // 等自发轮次开始并已有输出
+      await waitUntil(() =>
+        events.some((e) => e.type === "timeline" && e.item.type === "assistant_message" && e.item.text === "子代理回报："),
+      );
+      const second = await session.startTurn("hello");
+      await waitTerminal(events, 3);
+      // 被接管的自发轮次的 result 被跳过，新回合以自己的 result 结束
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const turnIds = [turnId];
+      const sequence = describeEvents(events, turnIds);
+      expect(turnIds[2]).toBe(second.turnId);
+      expect(sequence.slice(sequence.indexOf("turn_completed:T1"))).toEqual([
+        "turn_completed:T1",
+        "turn_started:T2:background",
+        "timeline:tool:task_notification:completed:T2",
+        "timeline:assistant_message:T2",
+        "turn_completed:T2",
+        "turn_started:T3",
+        // 自发轮次剩余的输出并入新回合（不丢；已流式输出过的完整消息不重复）
+        "timeline:assistant_message:T3",
+        // 排队的用户消息：Hello 分两段增量
+        "timeline:assistant_message:T3",
+        "timeline:assistant_message:T3",
+        "turn_completed:T3",
+      ]);
+      const t3Text = events
+        .flatMap((e) =>
+          e.type === "timeline" && e.turnId === second.turnId && e.item.type === "assistant_message" ? [e.item.text] : [],
+        )
+        .join("");
+      expect(t3Text).toBe("name 是 demoHello");
+      expect(events.filter((e) => e.type === "turn_started")).toHaveLength(3);
+    } finally {
+      await session.close();
+    }
+  });
 });

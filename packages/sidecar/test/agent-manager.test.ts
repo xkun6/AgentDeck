@@ -214,6 +214,45 @@ describe("AgentManager", () => {
     await expect(manager.sendPrompt(agent.id, "second")).rejects.toBeInstanceOf(AgentRpcError);
   });
 
+  test("CLI 自发轮次：无 send 的 turn_started(origin background) → running，结束后恢复 idle", async () => {
+    const { manager, agent, session, streams, states } = await setup();
+    session.emit({ type: "turn_started", turnId: "bg-1", origin: "background" });
+    await vi.waitFor(() =>
+      expect(manager.getAgent(agent.id)).toMatchObject({ status: "running", activeTurnId: "bg-1" }),
+    );
+    expect(states.at(-1)).toMatchObject({ status: "running", activeTurnId: "bg-1" });
+    session.emit({ type: "timeline", item: { type: "tool_call", callId: "c1", name: "Read", status: "running", detail: { type: "read", filePath: "a" } } });
+    session.emit({ type: "turn_completed", turnId: "bg-1" });
+    await vi.waitFor(() =>
+      expect(manager.getAgent(agent.id)).toMatchObject({ status: "idle", activeTurnId: null }),
+    );
+    expect(streams.map((s) => s.event)).toEqual([
+      { type: "turn_started", turnId: "bg-1", origin: "background" },
+      expect.objectContaining({ type: "timeline", turnId: "bg-1" }),
+      { type: "turn_completed", turnId: "bg-1" },
+    ]);
+  });
+
+  test("CLI 自发轮次进行中允许 send（由 provider 接管）；普通回合进行中仍 TURN_IN_PROGRESS", async () => {
+    const { manager, agent, session, streams } = await setup();
+    session.emit({ type: "turn_started", turnId: "bg-1", origin: "background" });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("running"));
+    // provider 接管：先结束自发轮次再开新回合（与 Claude provider 的 startTurn 一致）
+    session.onStartTurn = (turnId) => {
+      session.emit({ type: "turn_completed", turnId: "bg-1" });
+      session.emit({ type: "turn_started", turnId });
+    };
+    const { turnId } = await manager.sendPrompt(agent.id, "插话", "c-1");
+    expect(manager.getAgent(agent.id)).toMatchObject({ status: "running", activeTurnId: turnId });
+    expect(streams.map((s) => s.event.type)).toEqual([
+      "turn_started",
+      "timeline",
+      "turn_completed",
+      "turn_started",
+    ]);
+    await expect(manager.sendPrompt(agent.id, "再来")).rejects.toMatchObject({ code: "TURN_IN_PROGRESS" });
+  });
+
   test("permission_requested / permission_resolved 维护 pendingPermissions", async () => {
     const { manager, agent, session, states } = await setup();
     const { turnId } = await manager.sendPrompt(agent.id, "hi");

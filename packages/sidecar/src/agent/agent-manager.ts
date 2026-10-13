@@ -84,6 +84,8 @@ interface ManagedAgent {
   /** agent.send 已受理（含恢复会话）、startTurn 尚未返回 */
   sending: boolean;
   finishedTurnIds: Set<string>;
+  /** 当前进行中的 CLI 自发轮次（turn_started.origin 为 background，design.md 4.12）；agent.send 可接管 */
+  backgroundTurnId: string | null;
   /** 没有可用会话（关闭中 / 已关闭 / dormant） */
   closed: boolean;
   /** 进行中的恢复 */
@@ -266,8 +268,12 @@ export class AgentManager {
     clientMessageId?: string,
   ): Promise<{ turnId: string }> {
     const agent = this.requireAgent(agentId);
-    // 恢复期间也持有 sending：并发 send 只触发一次恢复，其余按单 turn 约束返回 TURN_IN_PROGRESS
-    if (agent.sending || agent.snapshot.status === "running" || agent.snapshot.activeTurnId) {
+    // 恢复期间也持有 sending：并发 send 只触发一次恢复，其余按单 turn 约束返回 TURN_IN_PROGRESS。
+    // CLI 自发轮次例外：由 provider 的 startTurn 结束它并开始新回合（design.md 4.12）
+    const busy = agent.snapshot.status === "running" || Boolean(agent.snapshot.activeTurnId);
+    const inBackgroundTurn =
+      agent.backgroundTurnId !== null && agent.snapshot.activeTurnId === agent.backgroundTurnId;
+    if (agent.sending || (busy && !inBackgroundTurn)) {
       throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束或先取消");
     }
     if (agent.session === null) {
@@ -837,6 +843,7 @@ export class AgentManager {
         snapshot.status = "running";
         snapshot.activeTurnId = event.turnId;
         snapshot.lastError = null;
+        agent.backgroundTurnId = event.origin === "background" ? event.turnId : null;
         return true;
       case "turn_completed":
         if (event.usage) {
@@ -885,6 +892,9 @@ export class AgentManager {
 
   private finishTurn(agent: ManagedAgent, turnId: string): boolean {
     agent.finishedTurnIds.add(turnId);
+    if (agent.backgroundTurnId === turnId) {
+      agent.backgroundTurnId = null;
+    }
     const snapshot = agent.snapshot;
     if (snapshot.activeTurnId && snapshot.activeTurnId !== turnId) {
       this.logger.warn(
@@ -1009,6 +1019,7 @@ function newManagedAgent(
     unsubscribe: () => undefined,
     sending: false,
     finishedTurnIds: new Set(),
+    backgroundTurnId: null,
     closed: true,
     resuming: null,
     closing: null,

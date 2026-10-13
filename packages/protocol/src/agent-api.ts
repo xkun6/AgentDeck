@@ -197,9 +197,13 @@ export type AgentPermissionResponse =
   | { behavior: "allow"; selectedActionId?: string; updatedInput?: Record<string, unknown> }
   | { behavior: "deny"; selectedActionId?: string; message?: string; interrupt?: boolean };
 
+/** 轮次来源：`background` 表示 CLI 在没有 agent.send 的情况下自行开始的轮次（如后台子代理完成后的续写） */
+export type AgentTurnOrigin = "background";
+
 export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string }
-  | { type: "turn_started"; turnId: string }
+  /** origin 缺省 = 由 agent.send 发起；"background" = CLI 自发轮次（design.md 4.12） */
+  | { type: "turn_started"; turnId: string; origin?: AgentTurnOrigin }
   | { type: "turn_completed"; turnId: string; usage?: AgentUsage }
   | { type: "turn_failed"; turnId: string; error: string; code?: string }
   | { type: "turn_canceled"; turnId: string; reason: string }
