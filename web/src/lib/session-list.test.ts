@@ -17,6 +17,16 @@ describe("sidebarSessions", () => {
   });
 });
 
+describe("隐藏的评判会话（origin: judge）", () => {
+  it("侧栏与历史页（两个视图）都不显示", () => {
+    const agents = [{ id: "a" }, { id: "j", origin: "judge" as const }, { id: "s", origin: "schedule" as const }];
+    expect(sidebarSessions(agents).map((agent) => agent.id)).toEqual(["a", "s"]);
+    expect(inHistoryView({ origin: "judge" }, "all")).toBe(false);
+    expect(inHistoryView({ origin: "judge", archived: true }, "archived")).toBe(false);
+    expect(inHistoryView({ origin: "schedule" }, "all")).toBe(true);
+  });
+});
+
 describe("历史页视图", () => {
   it("inHistoryView：默认视图不含归档，已归档视图只含归档", () => {
     expect(inHistoryView({}, "all")).toBe(true);

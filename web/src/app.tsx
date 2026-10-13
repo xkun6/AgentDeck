@@ -8,6 +8,7 @@ import { installNativeContextMenuBlocker } from "@/lib/block-native-context-menu
 import { ErrorBoundary } from "@/components/error-boundary";
 import { AppShell } from "@/components/app-shell/app-shell";
 import { CommandPalette } from "@/components/command-palette";
+import { ScheduleDialogHost } from "@/components/automation/schedule-dialog";
 
 // ---------------------------------------------------------------------------
 // Route-level code splitting.
@@ -24,6 +25,7 @@ const ProjectsRoute = lazy(() => import("@/routes/projects").then((m) => ({ defa
 const ProjectDetailRoute = lazy(() => import("@/routes/project-detail").then((m) => ({ default: m.ProjectDetailRoute })));
 const ConsoleRoute = lazy(() => import("@/routes/console").then((m) => ({ default: m.ConsoleRoute })));
 const UsageRoute = lazy(() => import("@/routes/usage").then((m) => ({ default: m.UsageRoute })));
+const AutomationRoute = lazy(() => import("@/routes/automation").then((m) => ({ default: m.AutomationRoute })));
 const ThemeRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.ThemeRoute })));
 const AdvancedRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.AdvancedRoute })));
 const CodingAgentsRoute = lazy(() => import("@/routes/coding-agents").then((m) => ({ default: m.CodingAgentsRoute })));
@@ -63,6 +65,7 @@ function MainApp() {
             <Route path="/projects/:workspacePath" element={withBoundary(<ProjectDetailRoute />)} />
             <Route path="/console" element={withBoundary(<ConsoleRoute />)} />
             <Route path="/usage" element={withBoundary(<UsageRoute />)} />
+            <Route path="/automation" element={withBoundary(<AutomationRoute />)} />
             <Route path="/theme" element={withBoundary(<ThemeRoute />)} />
             <Route path="/common" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/notifications" element={withBoundary(<AdvancedRoute />)} />
@@ -79,6 +82,7 @@ function MainApp() {
         </Suspense>
       </AppShell>
       <CommandPalette />
+      <ScheduleDialogHost />
     </>
   );
 }

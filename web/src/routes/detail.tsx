@@ -75,6 +75,7 @@ import type { ComposerSubmitPayload } from "@/components/chat/composer-types";
 import { MessageTimeline } from "@/components/chat/message-timeline";
 import { parseFocusSeq } from "@/components/chat/focus-seq";
 import { StallNotice } from "@/components/chat/stall-notice";
+import { AutomationStatusBar } from "@/components/chat/automation-status-bar";
 import { PreviewRail } from "@/components/chat/preview-rail/preview-rail";
 import { SubagentTrack } from "@/components/chat/subagents/subagent-track";
 import { BackgroundTaskTrack } from "@/components/chat/background-tasks/background-task-track";
@@ -736,6 +737,7 @@ export function DetailRoute() {
                 activeTaskId={openTaskId}
               />
             ) : null}
+            <AutomationStatusBar agentId={taskId} />
             <QueuePanel
               entries={queuedPrompts}
               busy={runtimeIsBusy}

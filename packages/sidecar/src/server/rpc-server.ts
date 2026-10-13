@@ -32,6 +32,8 @@ import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
+import type { Scheduler } from "../scheduler/scheduler.js";
+import { scheduleDraftSchema } from "../scheduler/schema.js";
 import { UsageLedger } from "../usage/ledger.js";
 import { summarizeUsage } from "../usage/summary.js";
 
@@ -60,6 +62,8 @@ export interface RpcServerOptions {
   settings?: SettingsStore;
   /** 按回合文件快照（design.md 4.24）；不传时 snapshot.* 返回 NOT_SUPPORTED（list / storage 返回空） */
   snapshots?: SnapshotService;
+  /** 调度器（design.md 4.25）；不传时 schedule.* 返回 NOT_SUPPORTED */
+  scheduler?: Scheduler;
   logger?: Logger;
 }
 
@@ -198,7 +202,7 @@ export class RpcServer {
     this.http.on("upgrade", (req, socket, head) => this.handleUpgrade(req, socket, head));
     this.wss.on("connection", (ws) => this.handleConnection(ws));
 
-    this.unsubscribeManager = options.manager.subscribe({
+    const unsubscribeManager = options.manager.subscribe({
       onStream: (envelope) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentStream, envelope),
       onState: (agent) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentState, { agent }),
       onRemoved: (agentId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentRemoved, { agentId }),
@@ -210,6 +214,15 @@ export class RpcServer {
       options.settings?.subscribe((settings) =>
         this.broadcast(AGENT_RPC_NOTIFICATIONS.settingsChanged, { settings }),
       ) ?? (() => undefined);
+    const unsubscribeScheduler = options.scheduler?.subscribe({
+      onChanged: (schedules, paused) =>
+        this.broadcast(AGENT_RPC_NOTIFICATIONS.scheduleChanged, { schedules, paused }),
+      onNotice: (notice) => this.broadcast(AGENT_RPC_NOTIFICATIONS.scheduleNotice, notice),
+    });
+    this.unsubscribeManager = () => {
+      unsubscribeManager();
+      unsubscribeScheduler?.();
+    };
   }
 
   /** 监听并返回实际端口 */
@@ -254,6 +267,12 @@ export class RpcServer {
         throw new AgentRpcError("NOT_SUPPORTED", "未启用文件快照");
       }
       return snapshots;
+    };
+    const requireScheduler = (): Scheduler => {
+      if (!this.options.scheduler) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用调度器");
+      }
+      return this.options.scheduler;
     };
     const requireClient = (provider: string) => {
       const client = registry.get(provider);
@@ -491,6 +510,35 @@ export class RpcServer {
           await requireSnapshots().prune(params.cwd);
           return {};
         },
+      ),
+      defineMethod(AGENT_RPC_METHODS.scheduleList, emptyParams, () => requireScheduler().list()),
+      defineMethod(
+        AGENT_RPC_METHODS.scheduleUpsert,
+        z.object({ schedule: scheduleDraftSchema }),
+        (params) => ({ schedule: requireScheduler().upsert(params.schedule) }),
+      ),
+      defineMethod(AGENT_RPC_METHODS.scheduleDelete, z.object({ id: z.string().min(1) }), (params) => {
+        requireScheduler().delete(params.id);
+        return {};
+      }),
+      defineMethod(AGENT_RPC_METHODS.scheduleRunNow, z.object({ id: z.string().min(1) }), (params) => {
+        const scheduler = requireScheduler();
+        scheduler.get(params.id);
+        // 不等待发送完成（onBusy = wait 最长 30 分钟），结果见运行记录
+        void scheduler.runNow(params.id).catch((error: unknown) => {
+          this.logger.warn("schedule.runNow %s 失败：%s", params.id, String(error));
+        });
+        return {};
+      }),
+      defineMethod(
+        AGENT_RPC_METHODS.scheduleRuns,
+        z.object({ id: z.string().min(1).optional(), limit: z.number().int().optional() }),
+        async (params) => ({ runs: await requireScheduler().runs(params.id, params.limit) }),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.scheduleSetPaused,
+        z.object({ paused: z.boolean() }),
+        (params) => ({ paused: requireScheduler().setPaused(params.paused) }),
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
         await manager.deleteAgent(params.agentId);

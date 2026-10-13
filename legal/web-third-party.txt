@@ -3,7 +3,7 @@ AgentDeck 前端（web bundle，安装后内嵌于主程序）第三方组件许
 清单来源：pnpm --filter @agentdeck/web --filter @agentdeck/protocol --filter @agentdeck/shared-ui licenses list --prod --json
 范围：前端及其引用的 workspace 包（@agentdeck/protocol、@agentdeck/shared-ui）的全部生产依赖（含传递依赖）。
 这是依赖树层面的清单，可能多于经 Vite tree-shaking 后实际打进 bundle 的代码。
-共 372 个包版本。
+共 373 个包版本。
 
 一、包清单（包名@版本 — 许可证）
 
@@ -164,6 +164,7 @@ AgentDeck 前端（web bundle，安装后内嵌于主程序）第三方组件许
   - cookie@1.1.1 — MIT
   - cose-base@1.0.3 — MIT
   - cose-base@2.2.0 — MIT
+  - croner@10.0.1 — MIT
   - csstype@3.2.3 — MIT
   - cytoscape@3.33.3 — MIT
   - cytoscape-cose-bilkent@4.1.0 — MIT
@@ -2278,6 +2279,32 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 MIT License
 
 Copyright (c) 2019 - present, iVis@Bilkent.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+==============================================================================
+适用于：
+  - croner@10.0.1（MIT）
+==============================================================================
+The MIT License (MIT)
+
+Copyright (c) 2015-2021 Hexagon <github.com/Hexagon>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
