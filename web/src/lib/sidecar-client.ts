@@ -23,6 +23,7 @@ import {
   type AgentRpcResult,
   type AgentSnapshot,
   type AgentStreamEnvelope,
+  type AgentBackgroundTask,
   type ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
 import { createGatewaySocket } from "./gateway-socket-path";
@@ -156,6 +157,7 @@ export class SidecarClient {
   private epochListeners = new Set<Listener<{ epoch: string | null; previous: string | null }>>();
   private providerChangedListeners = new Set<Listener<void>>();
   private subagentListeners = new Set<Listener<ProviderSubagentUpdate>>();
+  private tasksListeners = new Set<Listener<{ agentId: string; tasks: AgentBackgroundTask[] }>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -224,6 +226,11 @@ export class SidecarClient {
   /** `agent.subagents.update` 通知（provider 子代理描述 / 时间线变化，design.md 4.11）。 */
   onSubagentUpdate(listener: Listener<ProviderSubagentUpdate>): () => void {
     return subscribe(this.subagentListeners, listener);
+  }
+
+  /** `agent.tasks.update` 通知（后台任务整表，design.md 4.15）。 */
+  onTasksUpdate(listener: Listener<{ agentId: string; tasks: AgentBackgroundTask[] }>): () => void {
+    return subscribe(this.tasksListeners, listener);
   }
 
   /** sidecar 重启（epoch 变化）。`epoch` 为 null 表示已知 agent 全部消失但新 epoch 尚未得知。 */
@@ -522,6 +529,10 @@ export class SidecarClient {
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.agentSubagentsUpdate && record.params) {
       emitTo(this.subagentListeners, record.params as ProviderSubagentUpdate);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.agentTasksUpdate && record.params) {
+      emitTo(this.tasksListeners, record.params as { agentId: string; tasks: AgentBackgroundTask[] });
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.providerChanged) {

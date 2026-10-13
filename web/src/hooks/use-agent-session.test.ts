@@ -1,7 +1,7 @@
 // 持久化会话相关的动作层：dormant / closed 发送的错误映射、恢复提示、删除与 agent.removed 绑定。
 import { describe, expect, it, vi } from "vitest";
 import { createStore } from "jotai";
-import type { AgentSnapshot } from "@agentdeck/protocol";
+import type { AgentBackgroundTask, AgentSnapshot } from "@agentdeck/protocol";
 import { SidecarRpcError, type SidecarClient } from "@/lib/sidecar-client";
 import {
   AgentSendError,
@@ -16,6 +16,7 @@ import {
 } from "./use-agent-session";
 import { AGENT_RESUMING_PROGRESS, agentPendingAssistantId, chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentSnapshotsAtom, lastRemovedAgentAtom, upsertAgentSnapshotAtom } from "@/stores/agents";
+import { backgroundTasksByAgentAtom } from "@/stores/background-tasks";
 
 const AGENT = "agent-d";
 
@@ -188,6 +189,71 @@ describe("思考强度（design.md 4.10）", () => {
   });
 });
 
+describe("后台任务（design.md 4.15）", () => {
+  const task: AgentBackgroundTask = {
+    taskId: "t1",
+    kind: "command",
+    description: "pnpm build",
+    status: "running",
+    startedAt: 1,
+  };
+
+  it("listBackgroundTasks 调 agent.tasks.list 并写入 store", async () => {
+    const store = createStore();
+    const client = fakeClient(async () => ({ tasks: [task] }));
+    await expect(createAgentSessionActions(client, store).listBackgroundTasks(AGENT)).resolves.toEqual([task]);
+    expect(client.request).toHaveBeenCalledWith("agent.tasks.list", { agentId: AGENT });
+    expect(store.get(backgroundTasksByAgentAtom)[AGENT]).toEqual([task]);
+  });
+
+  it("stopBackgroundTask / backgroundTaskOutput 调对应 RPC，maxBytes 缺省时不带", async () => {
+    const store = createStore();
+    const client = fakeClient(async () => ({ text: "x", truncated: false, size: 1 }));
+    const actions = createAgentSessionActions(client, store);
+    await actions.stopBackgroundTask(AGENT, "t1");
+    expect(client.request).toHaveBeenLastCalledWith("agent.tasks.stop", { agentId: AGENT, taskId: "t1" });
+    await actions.backgroundTaskOutput(AGENT, "t1");
+    expect(client.request).toHaveBeenLastCalledWith("agent.tasks.output", { agentId: AGENT, taskId: "t1" });
+    await actions.backgroundTaskOutput(AGENT, "t1", 1024);
+    expect(client.request).toHaveBeenLastCalledWith("agent.tasks.output", {
+      agentId: AGENT,
+      taskId: "t1",
+      maxBytes: 1024,
+    });
+  });
+
+  it("bindSidecarToStore：agent.tasks.update 整表替换，agent.removed 清掉该会话的任务", () => {
+    const store = createStore();
+    let tasksListener: ((update: { agentId: string; tasks: AgentBackgroundTask[] }) => void) | null = null;
+    let removedListener: ((agentId: string) => void) | null = null;
+    const noop = () => () => {};
+    const client = {
+      onState: noop,
+      onStream: noop,
+      onAgentState: noop,
+      onAgents: noop,
+      onEpochChange: noop,
+      onSubagentUpdate: noop,
+      onTasksUpdate: (listener: typeof tasksListener) => {
+        tasksListener = listener;
+        return () => {};
+      },
+      onAgentRemoved: (listener: (agentId: string) => void) => {
+        removedListener = listener;
+        return () => {};
+      },
+    } as unknown as SidecarClient;
+    const unbind = bindSidecarToStore(client, store);
+    tasksListener!({ agentId: AGENT, tasks: [task] });
+    expect(store.get(backgroundTasksByAgentAtom)[AGENT]).toEqual([task]);
+    tasksListener!({ agentId: AGENT, tasks: [{ ...task, status: "completed" }] });
+    expect(store.get(backgroundTasksByAgentAtom)[AGENT]?.[0]?.status).toBe("completed");
+    removedListener!(AGENT);
+    expect(store.get(backgroundTasksByAgentAtom)[AGENT]).toBeUndefined();
+    unbind();
+  });
+});
+
 describe("删除会话", () => {
   it("deleteSession 调 agent.delete 并从 store 移除", async () => {
     const store = createStore();
@@ -211,6 +277,7 @@ describe("删除会话", () => {
       onAgents: noop,
       onEpochChange: noop,
       onSubagentUpdate: noop,
+      onTasksUpdate: noop,
       onAgentRemoved: (listener: (agentId: string) => void) => {
         removedListener = listener;
         return () => {};

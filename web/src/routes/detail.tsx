@@ -28,6 +28,7 @@ import {
   SESSION_PROVIDER_DISABLED_MESSAGE,
   SESSION_UNRECOVERABLE_MESSAGE,
   useAgentSession,
+  useBackgroundTasks,
   useProviderSubagents,
 } from "@/hooks/use-agent-session";
 import { useAgentCatalog, useAgentCommands, useAgentProviders } from "@/hooks/use-agent-catalog";
@@ -65,6 +66,7 @@ import { MessageTimeline } from "@/components/chat/message-timeline";
 import { StallNotice } from "@/components/chat/stall-notice";
 import { PreviewRail } from "@/components/chat/preview-rail/preview-rail";
 import { SubagentTrack } from "@/components/chat/subagents/subagent-track";
+import { BackgroundTaskTrack } from "@/components/chat/background-tasks/background-task-track";
 import { SubagentPanel } from "@/components/chat/subagents/subagent-panel";
 import { PREVIEW_PANEL_QUERY_KEY } from "@/lib/preview-rail";
 import { ConversationWidthControl } from "@/components/chat/conversation-width-control";
@@ -99,6 +101,8 @@ export function DetailRoute() {
   const taskId = activeSessionId ?? urlTaskId;
   // provider 子代理（design.md 4.11）：输入框上方药丸 + 右侧只读面板（打开时替代预览面板）
   const subagents = useProviderSubagents(taskId);
+  // 后台任务（design.md 4.15）：仅 Claude 会有；药丸紧邻子代理药丸
+  const backgroundTasks = useBackgroundTasks(taskId);
   const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
   useEffect(() => setOpenSubagentId(null), [taskId]);
 
@@ -594,6 +598,7 @@ export function DetailRoute() {
               onOpen={setOpenSubagentId}
               activeSubagentId={openSubagentId}
             />
+            {taskId ? <BackgroundTaskTrack key={taskId} agentId={taskId} tasks={backgroundTasks} /> : null}
             <QueuePanel
               entries={queuedPrompts}
               busy={runtimeIsBusy}

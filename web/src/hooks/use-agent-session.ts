@@ -12,6 +12,8 @@ import type {
   AgentPermissionResponse,
   AgentPromptInput,
   AgentSnapshot,
+  AgentBackgroundTask,
+  AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
   AgentModelDefinition,
   AgentMode,
@@ -47,6 +49,11 @@ import {
   sidecarConnectionAtom,
   upsertAgentSnapshotAtom,
 } from "@/stores/agents";
+import {
+  backgroundTasksByAgentAtom,
+  removeAgentBackgroundTasksAtom,
+  replaceBackgroundTasksAtom,
+} from "@/stores/background-tasks";
 import {
   applySubagentUpdateAtom,
   removeAgentSubagentsAtom,
@@ -212,8 +219,10 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
     client.onAgentRemoved((agentId) => {
       store.set(removeAgentAtom, agentId);
       store.set(removeAgentSubagentsAtom, agentId);
+      store.set(removeAgentBackgroundTasksAtom, agentId);
     }),
     client.onSubagentUpdate((update) => store.set(applySubagentUpdateAtom, update)),
+    client.onTasksUpdate((update) => store.set(replaceBackgroundTasksAtom, update)),
     client.onAgents((agents) => {
       store.set(replaceAgentSnapshotsAtom, agents);
       store.set(reconcileAgentRuntimesAtom, agents);
@@ -252,6 +261,7 @@ export function useSidecarBridge(): void {
 const SUBAGENT_TIMELINE_PAGE = 200;
 const EMPTY_SUBAGENTS: Record<string, ProviderSubagentDescriptor> = {};
 const EMPTY_ROWS: ProviderSubagentTimelineRow[] = [];
+const EMPTY_TASKS: AgentBackgroundTask[] = [];
 
 export function createAgentSessionActions(client: SidecarClient, store: JotaiStore) {
   return {
@@ -425,11 +435,36 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       return client.request("agent.mcp.reconnect", serverName ? { agentId, serverName } : { agentId });
     },
 
+    /** agent.tasks.list：该会话的后台任务（design.md 4.15），写入 store 并返回；非 Claude 会话恒为空。 */
+    async listBackgroundTasks(agentId: string): Promise<AgentBackgroundTask[]> {
+      const { tasks } = await client.request("agent.tasks.list", { agentId });
+      store.set(replaceBackgroundTasksAtom, { agentId, tasks });
+      return tasks;
+    },
+
+    /** agent.tasks.stop：请求停止单个后台任务；终态由 agent.tasks.update 带回。 */
+    async stopBackgroundTask(agentId: string, taskId: string): Promise<void> {
+      await client.request("agent.tasks.stop", { agentId, taskId });
+    },
+
+    /** agent.tasks.output：后台命令输出文件的尾部。 */
+    async backgroundTaskOutput(
+      agentId: string,
+      taskId: string,
+      maxBytes?: number,
+    ): Promise<AgentBackgroundTaskOutput> {
+      return client.request(
+        "agent.tasks.output",
+        maxBytes === undefined ? { agentId, taskId } : { agentId, taskId, maxBytes },
+      );
+    },
+
     /** agent.delete：sidecar 关闭并删除会话（含磁盘目录），随后本地移除（agent.removed 也会触发同样处理）。 */
     async deleteSession(agentId: string): Promise<void> {
       await client.request("agent.delete", { agentId });
       store.set(removeAgentAtom, agentId);
       store.set(removeAgentSubagentsAtom, agentId);
+      store.set(removeAgentBackgroundTasksAtom, agentId);
     },
   };
 }
@@ -458,6 +493,21 @@ export function useProviderSubagents(agentId: string | null | undefined): Provid
     () => Object.values(map).sort((a, b) => a.createdAt - b.createdAt),
     [map],
   );
+}
+
+/**
+ * 某会话的后台任务（design.md 4.15）：进入会话与每次重连成功后拉一次 agent.tasks.list，
+ * 之后由 agent.tasks.update 整表替换。
+ */
+export function useBackgroundTasks(agentId: string | null | undefined): AgentBackgroundTask[] {
+  const actions = useAgentSession();
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const byAgent = useAtomValue(backgroundTasksByAgentAtom);
+  useEffect(() => {
+    if (!agentId || connection !== "open") return;
+    actions.listBackgroundTasks(agentId).catch(() => {});
+  }, [actions, agentId, connection]);
+  return agentId ? byAgent[agentId] ?? EMPTY_TASKS : EMPTY_TASKS;
 }
 
 export interface SubagentTimelineState extends SubagentTimelineCache {

@@ -337,6 +337,19 @@ describe("SidecarClient", () => {
     expect(updates).toEqual([update]);
   });
 
+  it("agent.tasks.update 通知：原样分发给订阅方", async () => {
+    const { client, current } = setup(server());
+    const updates: unknown[] = [];
+    client.onTasksUpdate((update) => updates.push(update));
+    await client.connect();
+    const params = {
+      agentId: "a1",
+      tasks: [{ taskId: "t1", kind: "command", description: "pnpm build", status: "running", startedAt: 1 }],
+    };
+    current().push({ jsonrpc: "2.0", method: "agent.tasks.update", params });
+    expect(updates).toEqual([params]);
+  });
+
   it("provider.changed 通知：通知订阅方，经 bindProviderChangesToQueries 让 provider 相关查询失效", async () => {
     const { client, current } = setup(server());
     const queryClient = new QueryClient();
