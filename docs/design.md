@@ -732,7 +732,7 @@ interface UsageSummary {
   - 若 CLI 把它排到当前回合之后单独执行（单独出带其 uuid 的 result），则 Claude 的 `capabilities.steer` 为 false（前端改用排队），并在本节补记实测结论。
   - **实测结论（2.1.296，stream-json，两次复测一致）：被吸收，`capabilities.steer = true`。** 第一条 user（uuid U1）让它跑 `ping -n 8 127.0.0.1` 再总结；工具执行期间写入第二条（uuid U2，「另外请在回答最后加一句：插话已收到」）。事件顺序：`command_lifecycle(U1) queued → started` → `init` → `assistant`（thinking / 文字 / PowerShell tool_use）→ 写入 U2 → `command_lifecycle(U2) queued` → 工具结果 `user` → `command_lifecycle(U2) started`（此刻工具刚结束，U2 并入当前回合）→ `assistant`（总结末尾带「插话已收到」）→ `command_lifecycle(U2) completed` → **`result` 只有一条，`user_message_uuid` 为 U1** → `command_lifecycle(U1) completed`。之后 150 秒内没有再出现带 U2 的 `result`，U2 的 `user` 消息也不会回显到 stdout。因此 Claude 的 `steer` 实现 = 向 stdin 再写一条带新 uuid 的 user 消息，回合仍以 U1 的 result 结束；`handleResult` 对 uuid 与当前回合不符的 result 本就忽略，未被吸收的兜底（排到回合之后单独执行）时其 result 不会提前结束新回合。仅用户回合支持；CLI 自发轮次进行中 `agent.steer` 返回 `NOT_SUPPORTED`（「CLI 自发轮次进行中不支持插话，请直接发送消息」）。探针与原始输出摘要见 `tmp/steer-probe.mjs`、`tmp/steer-probe-result.txt`（不入库）。
 - ACP：不支持。
-- 前端：回合运行中，输入框发送区显示「排队」（现有队列，默认 Enter）与「插话」（Ctrl+Enter），provider 不支持插话时只显示排队。插话的用户消息在当前助手消息流中以内联气泡显示（标注「插话」）。
+- 前端：回合运行中，输入框发送区显示「排队」与「插话」按钮；键位：Ctrl+Enter = 插话，Ctrl+Shift+Enter = 排队，用户发送快捷键设为 Enter 时 Enter = 排队，provider 不支持插话时只显示排队。插话的用户消息在当前助手消息流中以内联气泡显示（标注「插话」）。
 
 ### 4.23 会话分叉（fork）
 
