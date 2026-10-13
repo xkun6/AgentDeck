@@ -284,6 +284,23 @@ async function handleRequest(msg) {
       }
       return;
     }
+    case "account/read":
+      // FAKE_CODEX_ACCOUNT=none：未登录；error：读取失败
+      if (process.env.FAKE_CODEX_ACCOUNT === "error") { respondError(id, -32000, "boom"); return; }
+      respond(id, process.env.FAKE_CODEX_ACCOUNT === "none"
+        ? { account: null, requiresOpenaiAuth: true }
+        : { account: { type: "chatgpt", email: "dev@example.com", planType: "plus" }, requiresOpenaiAuth: true });
+      return;
+    case "account/rateLimits/read":
+      if (process.env.FAKE_CODEX_ACCOUNT === "error") { respondError(id, -32000, "boom"); return; }
+      respond(id, {
+        rateLimits: {
+          limitId: "codex", limitName: null,
+          primary: { usedPercent: 23.4, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 7200 },
+          secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: null },
+        },
+      });
+      return;
     case "config/mcpServer/reload":
       respond(id, {});
       return;

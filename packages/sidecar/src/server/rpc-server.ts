@@ -345,6 +345,9 @@ export class RpcServer {
       defineMethod(AGENT_RPC_METHODS.agentMcpStatus, agentIdParams, (params) =>
         manager.getMcpStatus(params.agentId),
       ),
+      defineMethod(AGENT_RPC_METHODS.agentStatus, agentIdParams, (params) =>
+        manager.getStatus(params.agentId),
+      ),
       defineMethod(
         AGENT_RPC_METHODS.agentMcpReconnect,
         z.object({ agentId: z.string().min(1), serverName: z.string().min(1).optional() }),

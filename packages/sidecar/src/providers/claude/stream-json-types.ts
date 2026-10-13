@@ -243,6 +243,10 @@ export interface ClaudeInitializeResponse {
   current_permission_mode?: unknown;
   /** 可用的斜杠命令（内置命令、skill、项目 / 用户命令；可能重名，design.md 4.14） */
   commands?: ClaudeSlashCommandEntry[];
+  /** 当前输出风格名（/status 展示用） */
+  output_style?: unknown;
+  /** 登录账户信息（SDK AccountInfo：email / organization / subscriptionType / tokenSource / apiKeySource / apiProvider） */
+  account?: unknown;
 }
 
 // ---------------------------------------------------------------------------

@@ -446,6 +446,44 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(received().filter((m) => m.method === "thread/start")).toHaveLength(1);
   });
 
+  test("getStatus：会话 / 账户 / 用量限制 / MCP 四个分组", async () => {
+    const session = await newSession(makeClient(), "read-only");
+    const sections = await session.getStatus!();
+    expect(sections.map((s) => s.title)).toEqual(["会话", "账户", "用量限制", "MCP"]);
+    expect(sections[0]!.rows).toEqual([
+      { label: "线程 ID", value: "thr_fake" },
+      { label: "工作目录", value: tmpDir },
+      { label: "模型", value: "默认（跟随设置）" },
+      { label: "模式", value: "只读（read-only）" },
+    ]);
+    expect(sections[1]!.rows).toEqual([
+      { label: "登录方式", value: "ChatGPT 账号" },
+      { label: "邮箱", value: "dev@example.com" },
+      { label: "套餐", value: "plus" },
+    ]);
+    expect(sections[2]!.rows[0]).toMatchObject({ label: "5 小时窗口" });
+    expect(sections[2]!.rows[0]!.value).toMatch(/^已用 23%，约 (1 小时 5\d 分钟|2 小时)后重置$/);
+    expect(sections[2]!.rows[1]).toEqual({ label: "每周窗口", value: "已用 60%" });
+    expect(sections[3]!.rows[0]).toEqual({
+      label: "概览",
+      value: "4 个服务器：1 已连接，1 失败，1 需要认证，1 连接中",
+    });
+  });
+
+  test("getStatus：未登录显示未登录；account / 用量读取失败时跳过对应分组", async () => {
+    const none = await newSession(makeClient({ FAKE_CODEX_ACCOUNT: "none" }));
+    const noneSections = await none.getStatus!();
+    expect(noneSections[1]).toEqual({
+      title: "账户",
+      rows: [
+        { label: "登录方式", value: "未登录" },
+        { label: "需要 OpenAI 认证", value: "是" },
+      ],
+    });
+    const failing = await newSession(makeClient({ FAKE_CODEX_ACCOUNT: "error" }));
+    expect((await failing.getStatus!()).map((s) => s.title)).toEqual(["会话", "MCP"]);
+  });
+
   test("interrupt → turn/interrupt { threadId, turnId } 并发 turn_canceled", async () => {
     const session = await newSession();
     const events = collect(session);

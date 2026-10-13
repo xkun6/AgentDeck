@@ -15,6 +15,7 @@ import type {
   AgentBackgroundTask,
   AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
+  AgentStatusSection,
   AgentModelDefinition,
   AgentMode,
   AgentSlashCommand,
@@ -428,6 +429,12 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     /** agent.mcp.status：MCP 服务器状态（休眠会话会先自动恢复；不支持时 NOT_SUPPORTED）。 */
     async mcpStatus(agentId: string): Promise<AgentMcpStatusResult> {
       return client.request("agent.mcp.status", { agentId });
+    },
+
+    /** agent.status：AgentDeck 本地 /status 的分组内容（休眠会话会先自动恢复；不支持时 NOT_SUPPORTED）。 */
+    async status(agentId: string): Promise<AgentStatusSection[]> {
+      const { sections } = await client.request("agent.status", { agentId });
+      return sections;
     },
 
     /** agent.mcp.reconnect：重连后返回最新状态；Codex 忽略 serverName 整体重新加载。可能耗时数十秒。 */

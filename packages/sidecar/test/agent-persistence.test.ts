@@ -632,6 +632,28 @@ describe("斜杠命令与 MCP（design.md 4.14）", () => {
     expect(resumeCalls).toHaveLength(1);
   });
 
+  test("agent.status：dormant 先自动恢复再取状态；会话未实现返回 NOT_SUPPORTED", async () => {
+    class StatusSession extends FakeSession {
+      async getStatus() {
+        return [{ title: "会话", rows: [{ label: "会话 ID", value: "s1" }] }];
+      }
+    }
+    const { manager, agentId, resumeCalls } = await seedDormant({
+      resume: async (handle) => new StatusSession(handle.sessionId),
+    });
+    await expect(manager.getStatus(agentId)).resolves.toEqual({
+      sections: [{ title: "会话", rows: [{ label: "会话 ID", value: "s1" }] }],
+    });
+    expect(resumeCalls).toHaveLength(1);
+
+    const plain = await seedDormant();
+    await expect(plain.manager.getStatus(plain.agentId)).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: "该 Agent 不支持查看状态",
+    });
+    await expect(plain.manager.getStatus("missing")).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+  });
+
   test("agent.mcp.*：会话未实现返回 NOT_SUPPORTED；不可恢复按原规则报错", async () => {
     const seeded = await seedDormant();
     await expect(seeded.manager.getMcpStatus(seeded.agentId)).rejects.toMatchObject({

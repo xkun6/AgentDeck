@@ -12,6 +12,7 @@ import type {
   AgentPromptInput,
   AgentProviderId,
   AgentProviderKind,
+  AgentStatusSection,
   AgentSlashCommand,
   AgentStreamEvent,
   AgentTimelineItem,
@@ -106,6 +107,8 @@ export interface AgentSession {
   listCommands?(): Promise<AgentSlashCommand[]>;
   /** MCP 服务器状态（design.md 4.14） */
   getMcpStatus?(): Promise<AgentMcpStatusResult>;
+  /** AgentDeck 本地 /status 的分组内容（design.md 4.14）；未实现时 agent.status 返回 NOT_SUPPORTED */
+  getStatus?(): Promise<AgentStatusSection[]>;
   /** 重连 MCP：作用域为 server 时重连 serverName，为 all 时忽略 serverName、整体重新加载 */
   reconnectMcp?(serverName?: string): Promise<void>;
   /** 后台任务（仅 Claude，design.md 4.15）：当前任务表；任务变化通过 `provider_background_tasks` 事件推送 */

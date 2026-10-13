@@ -159,6 +159,11 @@ export interface AgentMcpStatusResult {
   servers: AgentMcpServer[];
   reconnect: AgentMcpReconnectScope;
 }
+/** agent.status 的一个分组：标题 + 标签 / 值行（值为已格式化的中文文本） */
+export interface AgentStatusSection {
+  title: string;
+  rows: Array<{ label: string; value: string }>;
+}
 
 export type AgentPromptInput =
   | string
@@ -450,6 +455,7 @@ export const AGENT_RPC_METHODS = {
   agentCommands: "agent.commands",
   agentMcpStatus: "agent.mcp.status",
   agentMcpReconnect: "agent.mcp.reconnect",
+  agentStatus: "agent.status",
   agentTasksList: "agent.tasks.list",
   agentTasksStop: "agent.tasks.stop",
   agentTasksOutput: "agent.tasks.output",
@@ -538,6 +544,8 @@ export interface AgentRpcMethods {
   "agent.commands": { params: { agentId: string }; result: { commands: AgentSlashCommand[] } };
   /** MCP 服务器状态；dormant / closed 且可恢复时先自动恢复会话（design.md 4.14） */
   "agent.mcp.status": { params: { agentId: string }; result: AgentMcpStatusResult };
+  /** AgentDeck 本地 /status：会话 / 账户 / 用量限制 / MCP 分组；会话处理同 agent.mcp.status（design.md 4.14） */
+  "agent.status": { params: { agentId: string }; result: { sections: AgentStatusSection[] } };
   /**
    * 重连 MCP 并返回重连后的最新状态（design.md 4.14）。
    * reconnect 为 server（Claude）时必须带 serverName；all（Codex）忽略 serverName，整体重新加载。

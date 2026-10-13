@@ -392,6 +392,10 @@ describe("mock 会话", () => {
     expect(reconnect.error.data?.code).toBe("NOT_SUPPORTED");
     const invalid = await client.request("agent.mcp.reconnect", { agentId: agent.id, serverName: "" });
     expect(invalid.error?.code).toBe(-32602);
+    const noStatus = await expectRpcError(client.call("agent.status", { agentId: agent.id }));
+    expect(noStatus.error.data?.code).toBe("NOT_SUPPORTED");
+    const badStatus = await client.request("agent.status", {});
+    expect(badStatus.error?.code).toBe(-32602);
     const missing = await expectRpcError(client.call("agent.commands", { agentId: "missing" }));
     expect(missing.error.data?.code).toBe("AGENT_NOT_FOUND");
   });

@@ -6,6 +6,7 @@ import type {
   AgentBackgroundTask,
   AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
+  AgentStatusSection,
   AgentMode,
   AgentModelDefinition,
   AgentPermissionRequest,
@@ -305,6 +306,7 @@ class RedactingSession implements AgentSession {
   listCommands?: () => Promise<AgentSlashCommand[]>;
   getMcpStatus?: () => Promise<AgentMcpStatusResult>;
   reconnectMcp?: (serverName?: string) => Promise<void>;
+  getStatus?: () => Promise<AgentStatusSection[]>;
   listBackgroundTasks?: () => AgentBackgroundTask[];
   stopBackgroundTask?: (taskId: string) => Promise<void>;
   readBackgroundTaskOutput?: (taskId: string, maxBytes: number) => Promise<AgentBackgroundTaskOutput>;
@@ -337,6 +339,16 @@ class RedactingSession implements AgentSession {
             ),
           };
         });
+    }
+    if (inner.getStatus) {
+      // 状态值（账户 / MCP 错误等）可能带上中转地址里的密钥：逐行脱敏
+      this.getStatus = () =>
+        this.guard(async () =>
+          (await inner.getStatus!()).map((section) => ({
+            ...section,
+            rows: section.rows.map((row) => ({ ...row, value: redactText(row.value, secrets) })),
+          })),
+        );
     }
     if (inner.reconnectMcp) {
       this.reconnectMcp = (serverName) => this.guard(() => inner.reconnectMcp!(serverName));

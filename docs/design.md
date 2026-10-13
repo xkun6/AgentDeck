@@ -113,6 +113,7 @@ sidecar 入口：
 | `agent.commands` | `{ agentId }` | `{ commands: AgentSlashCommand[] }`（见 4.14） |
 | `agent.mcp.status` | `{ agentId }` | `AgentMcpStatusResult`（见 4.14） |
 | `agent.mcp.reconnect` | `{ agentId, serverName? }` | `AgentMcpStatusResult`（重连后的最新状态，见 4.14） |
+| `agent.status` | `{ agentId }` | `{ sections: AgentStatusSection[] }`（AgentDeck 本地 `/status`，见 4.14） |
 | `agent.tasks.list` | `{ agentId }` | `{ tasks: AgentBackgroundTask[] }`（见 4.15） |
 | `agent.tasks.stop` | `{ agentId, taskId }` | `{}`（见 4.15） |
 | `agent.tasks.output` | `{ agentId, taskId, maxBytes? }` | `{ text, truncated, size }`（见 4.15） |
@@ -503,11 +504,13 @@ Claude Code 的后台子代理（`Agent` 工具 `run_in_background`）与后台�
 export interface AgentSlashCommand { name: string; description?: string; argumentHint?: string; aliases?: string[] }   // name 不带前导 /
 export type AgentMcpServerStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
 export interface AgentMcpServer { name: string; status: AgentMcpServerStatus; error?: string; scope?: string; toolCount?: number }
+export interface AgentStatusSection { title: string; rows: Array<{ label: string; value: string }> }   // value 为已格式化的中文文本
 export type AgentMcpReconnectScope = "server" | "all";   // server = 可按服务器单独重连（Claude）；all = 只能整体重新加载（Codex）
 export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: AgentMcpReconnectScope }
 ```
 
 **RPC**：
+- `agent.status { agentId }` → `{ sections: AgentStatusSection[] }`：AgentDeck 本地 `/status`（Claude 无头模式没有该命令，initialize 的命令列表里也没有）。会话处理与 `agent.mcp.status` 完全一致（dormant / closed 且可恢复时先自动恢复，不受单 turn 约束，不可恢复按 4.5 报错），会话没实现 `getStatus` → `NOT_SUPPORTED`（「该 Agent 不支持查看状态」）。分组与行都是「缺的项跳过」，MCP 查询失败只在 MCP 分组显示「读取失败：…」，不让整体失败。自定义中转的 `getStatus` 逐行值按 4.7 规则脱敏。
 - `agent.commands { agentId }` → `{ commands }`：结果按 name 去重（保留第一次出现）。有活会话且 provider 实现了 `listCommands` 时用它（失败记日志后退回目录）；否则（dormant / closed / 未实现）取 `client.fetchCatalog({ cwd })` 的 `commands`，没有则 `[]`。**不为此恢复会话**。agent 不存在 → `AGENT_NOT_FOUND`。
 - `agent.mcp.status { agentId }` → `AgentMcpStatusResult`；`agent.mcp.reconnect { agentId, serverName? }` → 重连后再查一次的最新状态。需要活会话：dormant / closed 且可恢复时按 4.5 的规则先自动恢复（与 `agent.send` 共用同一次恢复，并发调用只恢复一次）；不可恢复按 4.5 返回 `NOT_SUPPORTED`（dormant）/ `AGENT_CLOSED`（closed）。会话没实现 → `NOT_SUPPORTED`（「该 Agent 不支持查看 MCP 服务器」/「该 Agent 不支持重连 MCP 服务器」）。**不受单 turn 约束**：回合进行中也可查询 / 重连。`serverName` 传空字符串为 `-32602`。
 - `AgentClient.fetchCatalog` 的返回值增加可选 `commands`（sidecar 内部）；`provider.listModels` 的结果**不含** commands，保持 `{ models, modes }`。
@@ -526,12 +529,18 @@ export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: Ag
 - `getMcpStatus`：`mcpServerStatus/list { threadId, detail: "toolsAndAuthOnly", cursor? }`，有 `nextCursor` 就继续翻页（最多 20 页）汇总；线程尚不存在时先建线程（与回合并发时共用同一次 thread/start）。runtimeStatus 映射：connected → connected、authenticationRequired → needs-auth、failed / cancelled → failed、disabled → disabled、其余（notStarted / starting / null）→ pending；error 取 `toolsError`；toolCount = tools 的键数；`reconnect: "all"`。
 - `reconnectMcp`：忽略 serverName，调 `config/mcpServer/reload`（无 params，→ `{}`）：从磁盘重载 MCP 配置并整体生效，没有按服务器重连。
 
+**`/status` 内容**（`AgentSession.getStatus?(): Promise<AgentStatusSection[]>`）：
+- Claude：「会话」= Claude Code 版本（`claude --version` 探测结果）/ 会话 ID / 工作目录 / 模型（快照 model，null 显示「默认（跟随设置）」）/ 权限模式 / 输出风格（initialize 应答 `output_style`）；「账户」= initialize 应答 `account`（SDK AccountInfo：email / organization / subscriptionType / apiProvider / tokenSource / apiKeySource，没有任何字段时整组省略）；「MCP」= 调现有 `getMcpStatus` 汇总，如「3 个服务器：1 已连接，1 失败，1 需要认证」，未连接的服务器逐个列出并带错误。需要活进程（未启动时先拉起，同 MCP）。
+- Codex：「会话」= 线程 ID（尚无线程时跳过）/ 工作目录 / 模型 / 模式；「账户」= `account/read { refreshToken: false }`（apiKey / chatgpt（邮箱、套餐）/ amazonBedrock / null → 「未登录」），读取失败跳过；「用量限制」= `account/rateLimits/read` 的 `rateLimits.primary` / `secondary` 窗口，显示「已用 N%，约 X 后重置」，窗口名由 `windowDurationMins` 推出（300 → 「5 小时窗口」、10080 → 「每周窗口」，未知为「主要 / 次要窗口」），读不到跳过；「MCP」同上。
+- ACP 不实现（`NOT_SUPPORTED`）。
+
 **ACP**：sessionUpdate `available_commands_update { availableCommands: Array<{ name; description; input?: { hint } }> }` 缓存为 `AgentSlashCommand[]`（argumentHint = input.hint，按 name 去重；loadSession 重放期间收到的同样记录），`listCommands` 返回缓存（没收到过为 `[]`）。ACP 不实现 MCP 方法（`NOT_SUPPORTED`）。ACP 的 `fetchCatalog` 不带 commands。
 
 **自定义中转**（4.7）：会话包装层转发 `listCommands` / `getMcpStatus` / `reconnectMcp`，MCP 的 error 文本按 4.7 规则脱敏。基于 claude 且配了静态 `models` 的中转，`fetchCatalog` 不起探测进程，因此会话未加载时 `agent.commands` 为空（会话运行后照常有命令）。
 
 **前端约定**：
 - Claude / Codex 会话中输入 `/mcp` 在前端本地拦截，打开 MCP 面板（`agent.mcp.status` / `agent.mcp.reconnect`），**不发给 Agent**；面板按 `reconnect` 决定是逐个服务器「重连」（server）还是一个「重新加载全部」（all）。
+- Claude / Codex 会话中输入 `/status`（文本 trim 后恰为 `/status` 且无附件）同样本地拦截，不发送、不排队，打开状态对话框（`agent.status`）：按分组显示两列键值表，值可选中复制、长值换行，有加载中 / 错误态与「刷新」按钮。斜杠命令补全里本地 `mcp`、`status` 依次置顶（badge「AgentDeck」，status 描述「查看会话、账户与 MCP 状态」）。
 - 手动压缩 = 发送 `/compact`（Claude 由 CLI 处理，Codex 由 sidecar 拦截为 `thread/compact/start`）。
 
 ### 4.15 后台任务（仅 Claude；Codex / ACP 不支持）

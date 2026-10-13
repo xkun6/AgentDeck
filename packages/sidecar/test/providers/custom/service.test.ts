@@ -226,6 +226,44 @@ describe("CustomProviderClient 包装", () => {
     await expect(wrapped.interrupt()).rejects.toThrow("interrupt failed for ***");
     expect(wrapped.setModel).toBeUndefined();
   });
+
+  test("getStatus 透传并对行值脱敏；内层没有 getStatus 时不暴露", async () => {
+    const secret = "sk-relay-secret";
+    const base = {
+      provider: "custom:relay",
+      id: null,
+      startTurn: async () => ({ turnId: "t1" }),
+      subscribe: () => () => undefined,
+      getPendingPermissions: () => [],
+      respondToPermission: async () => undefined,
+      interrupt: async () => undefined,
+      close: async () => undefined,
+      describePersistence: () => null,
+    };
+    const make = (session: AgentSession) =>
+      createCustomProviderClient(profile(), {
+        logger: createSilentLogger(),
+        env: {},
+        createInner: () =>
+          ({
+            provider: "custom:relay",
+            kind: "claude",
+            label: "x",
+            isAvailable: async () => ({ available: true }),
+            fetchCatalog: async () => ({ models: [], modes: [] }),
+            createSession: async () => session,
+          }) as AgentClient,
+      });
+    const withStatus = await make({
+      ...base,
+      getStatus: async () => [{ title: "MCP", rows: [{ label: "bad", value: `失败：401 ${secret}` }] }],
+    }).createSession({ cwd: "/w" });
+    await expect(withStatus.getStatus!()).resolves.toEqual([
+      { title: "MCP", rows: [{ label: "bad", value: "失败：401 ***" }] },
+    ]);
+    const without = await make(base).createSession({ cwd: "/w" });
+    expect(without.getStatus).toBeUndefined();
+  });
 });
 
 describe("CustomProviderService + AgentManager", () => {

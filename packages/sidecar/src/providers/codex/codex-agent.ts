@@ -22,6 +22,7 @@ import type {
   AgentPersistenceHandle,
   AgentPromptInput,
   AgentSlashCommand,
+  AgentStatusSection,
   AgentStreamEvent,
   AgentUsage,
   ToolCallDetail,
@@ -36,6 +37,7 @@ import type {
   AgentSessionConfig,
   AgentSessionEvent,
 } from "../../agent/types.js";
+import { buildMcpSection, buildRows, formatResetsIn, formatWindowLabel } from "../../agent/status-sections.js";
 import type { Logger } from "../../logger.js";
 import { execCommand, spawnProcess } from "../../utils/spawn.js";
 import {
@@ -119,6 +121,59 @@ export function mapCodexMcpServer(entry: unknown): AgentMcpServer | null {
     ...(error ? { error } : {}),
     ...(tools ? { toolCount: Object.keys(tools).length } : {}),
   };
+}
+
+/** account/read → 「账户」分组；形状不认识返回 null */
+export function buildCodexAccountSection(response: unknown): AgentStatusSection | null {
+  const record = asRecord(response);
+  if (!record) return null;
+  const account = asRecord(record.account);
+  if (!account) {
+    return {
+      title: "账户",
+      rows: buildRows([
+        ["登录方式", "未登录"],
+        ["需要 OpenAI 认证", record.requiresOpenaiAuth === true ? "是" : null],
+      ]),
+    };
+  }
+  switch (account.type) {
+    case "apiKey":
+      return { title: "账户", rows: [{ label: "登录方式", value: "API Key" }] };
+    case "chatgpt":
+      return {
+        title: "账户",
+        rows: buildRows([
+          ["登录方式", "ChatGPT 账号"],
+          ["邮箱", str(account.email)],
+          ["套餐", str(account.planType)],
+        ]),
+      };
+    case "amazonBedrock":
+      return { title: "账户", rows: [{ label: "登录方式", value: "Amazon Bedrock" }] };
+    default:
+      return null;
+  }
+}
+
+/** account/rateLimits/read → 「用量限制」分组：主要 / 次要窗口的已用百分比与重置时间；没有窗口返回 null */
+export function buildCodexRateLimitSection(response: unknown, now = Date.now()): AgentStatusSection | null {
+  const snapshot = asRecord(asRecord(response)?.rateLimits);
+  if (!snapshot) return null;
+  const rows: AgentStatusSection["rows"] = [];
+  for (const key of ["primary", "secondary"] as const) {
+    const window = asRecord(snapshot[key]);
+    const used = window?.usedPercent;
+    if (!window || typeof used !== "number" || !Number.isFinite(used)) continue;
+    const minutes = typeof window.windowDurationMins === "number" ? window.windowDurationMins : null;
+    const reset = formatResetsIn(typeof window.resetsAt === "number" ? window.resetsAt : null, now);
+    const label = formatWindowLabel(minutes);
+    rows.push({
+      label: label === "用量" ? (key === "primary" ? "主要窗口" : "次要窗口") : `${label}窗口`,
+      value: `已用 ${Math.round(used)}%${reset ? `，${reset}` : ""}`,
+    });
+  }
+  return rows.length > 0 ? { title: "用量限制", rows } : null;
 }
 
 export const DEFAULT_CODEX_MODE_ID = "auto";
@@ -1040,6 +1095,43 @@ export class CodexAgentSession implements AgentSession {
       }
     }
     return { servers, reconnect: "all" };
+  }
+
+  /**
+   * AgentDeck 本地 /status（design.md 4.14）：会话 / 账户 / 用量限制 / MCP。
+   * account/read、account/rateLimits/read 读不到就跳过该分组；MCP 失败只在该分组显示错误。
+   */
+  async getStatus(): Promise<AgentStatusSection[]> {
+    const client = await this.ensureClient();
+    const [account, limits, mcp] = await Promise.all([
+      client.request("account/read", { refreshToken: false }, MODEL_LIST_TIMEOUT_MS).catch((error: unknown) => {
+        this.deps.logger.debug("[codex] account/read 失败：%s", errorMessage(error));
+        return null;
+      }),
+      client.request("account/rateLimits/read", undefined, MODEL_LIST_TIMEOUT_MS).catch((error: unknown) => {
+        this.deps.logger.debug("[codex] account/rateLimits/read 失败：%s", errorMessage(error));
+        return null;
+      }),
+      buildMcpSection(() => this.getMcpStatus()),
+    ]);
+    const modeLabel = CODEX_MODES.find((m) => m.id === this.modeId)?.label;
+    const sections: AgentStatusSection[] = [
+      {
+        title: "会话",
+        rows: buildRows([
+          ["线程 ID", this.threadId],
+          ["工作目录", this.deps.cwd],
+          ["模型", this.model ?? "默认（跟随设置）"],
+          ["模式", modeLabel ? `${modeLabel}（${this.modeId}）` : this.modeId],
+        ]),
+      },
+    ];
+    const accountSection = buildCodexAccountSection(account);
+    if (accountSection) sections.push(accountSection);
+    const limitSection = buildCodexRateLimitSection(limits);
+    if (limitSection) sections.push(limitSection);
+    sections.push(mcp);
+    return sections;
   }
 
   /** config/mcpServer/reload：从磁盘重载 MCP 配置并整体生效；没有按服务器重连，忽略 serverName */

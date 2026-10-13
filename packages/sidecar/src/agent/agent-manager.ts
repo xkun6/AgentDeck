@@ -4,6 +4,7 @@ import type {
   AgentBackgroundTask,
   AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
+  AgentStatusSection,
   AgentModelDefinition,
   AgentPermissionResponse,
   AgentPromptInput,
@@ -379,6 +380,15 @@ export class AgentManager {
       throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持查看 MCP 服务器");
     }
     return session.getMcpStatus();
+  }
+
+  /** design.md 4.14：AgentDeck 本地 /status；会话处理同 getMcpStatus */
+  async getStatus(agentId: string): Promise<{ sections: AgentStatusSection[] }> {
+    const session = await this.ensureSession(this.requireAgent(agentId));
+    if (!session.getStatus) {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持查看状态");
+    }
+    return { sections: await session.getStatus() };
   }
 
   /** design.md 4.14：重连 MCP 后返回最新状态；会话处理同 getMcpStatus */

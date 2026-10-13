@@ -39,7 +39,7 @@ import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
 import { agentProviderLabel } from "@/lib/agent-session-display";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
-import { isLocalMcpCommand, mergeSlashCommands, supportsLocalMcpCommand } from "@/lib/slash-commands";
+import { isLocalMcpCommand, isLocalStatusCommand, mergeSlashCommands, supportsLocalMcpCommand } from "@/lib/slash-commands";
 import { applyAgentSelectionChange, type AgentSelection } from "@/lib/agent-selection";
 import {
   composerDraftStorageKey,
@@ -52,6 +52,7 @@ import { GooseComposer } from "@/components/chat/goose-composer";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { ContextUsageIndicator } from "@/components/chat/context-usage-indicator";
 import { McpServersDialog } from "@/components/chat/mcp-servers-dialog";
+import { StatusDialog } from "@/components/chat/status-dialog";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
 import { QueuePanel } from "@/components/composer/queue-panel";
 import {
@@ -120,6 +121,7 @@ export function DetailRoute() {
   const catalogQuery = useAgentCatalog(snapshot?.provider ?? null, snapshot?.cwd ?? "");
   const commandsQuery = useAgentCommands(taskId, snapshot?.status);
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const runtimeIsBusy = isRuntimeRunning(runtime) || snapshot?.status === "running";
   // dormant（sidecar 重启后的历史会话）/ closed：发送时自动恢复；starting：恢复进行中
   const inactive = isInactiveAgent(snapshot);
@@ -270,6 +272,11 @@ export function DetailRoute() {
       setMcpDialogOpen(true);
       return;
     }
+    // `/status`：同样本地拦截，打开状态面板
+    if (isLocalStatusCommand(payload, providerKind)) {
+      setStatusDialogOpen(true);
+      return;
+    }
     // Agent 正忙时先排队，空闲后自动发出。
     if (runtimeIsBusy) {
       enqueueQueuedPrompt(taskId, { text: payload.text, attachments: payload.attachments }, Date.now());
@@ -342,6 +349,7 @@ export function DetailRoute() {
     setSendUnrecoverable(null);
     setRecreateState({ pending: false });
     setMcpDialogOpen(false);
+    setStatusDialogOpen(false);
   }, [taskId]);
 
   const onStop = useCallback(async () => {
@@ -667,7 +675,10 @@ export function DetailRoute() {
         ) : null}
       </div>
       {taskId ? (
-        <McpServersDialog open={mcpDialogOpen} agentId={taskId} onClose={() => setMcpDialogOpen(false)} />
+        <>
+          <McpServersDialog open={mcpDialogOpen} agentId={taskId} onClose={() => setMcpDialogOpen(false)} />
+          <StatusDialog open={statusDialogOpen} agentId={taskId} onClose={() => setStatusDialogOpen(false)} />
+        </>
       ) : null}
     </div>
   );

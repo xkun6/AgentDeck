@@ -23,6 +23,7 @@ import type {
   AgentPersistenceHandle,
   AgentPromptInput,
   AgentSlashCommand,
+  AgentStatusSection,
   AgentStreamEvent,
   AgentTimelineItem,
   AgentUsage,
@@ -31,6 +32,7 @@ import type {
 } from "@agentdeck/protocol";
 
 import { AgentRpcError } from "../../agent/errors.js";
+import { buildMcpSection, buildRows, presentText } from "../../agent/status-sections.js";
 import { dedupeSlashCommands } from "../../agent/slash-commands.js";
 import type {
   AgentAvailability,
@@ -406,6 +408,7 @@ export class ClaudeAgentClient implements AgentClient {
       cliFactory: this.cliFactory,
       ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       executablePath: resolution.path,
+      cliVersion: resolution.version,
       cwd: cfg.cwd,
       model: cfg.model ?? null,
       modeId,
@@ -461,6 +464,8 @@ export interface ClaudeAgentSessionOptions {
   cliFactory?: ClaudeCliFactory;
   terminateProcess?: ProcessTerminator;
   executablePath: string;
+  /** `claude --version` 的输出，/status 展示用 */
+  cliVersion?: string;
   cwd: string;
   model: string | null;
   /** null 表示跟随用户设置（不传 --permission-mode） */
@@ -512,6 +517,7 @@ export class ClaudeAgentSession implements AgentSession {
   private readonly cliFactory: ClaudeCliFactory;
   private readonly terminateProcess: ProcessTerminator | undefined;
   private readonly executablePath: string;
+  private readonly cliVersion: string | undefined;
   private readonly cwd: string;
   private readonly loadCatalogCommands: (() => Promise<AgentSlashCommand[]>) | undefined;
 
@@ -588,6 +594,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.cliFactory = options.cliFactory ?? createClaudeCliSession;
     this.terminateProcess = options.terminateProcess;
     this.executablePath = options.executablePath;
+    this.cliVersion = options.cliVersion;
     this.cwd = options.cwd;
     this.model = options.model;
     this.mode = options.modeId;
@@ -842,6 +849,44 @@ export class ClaudeAgentSession implements AgentSession {
   async getMcpStatus(): Promise<AgentMcpStatusResult> {
     const response = await this.requireLiveCli().mcpStatus();
     return { servers: mapClaudeMcpServers(response), reconnect: "server" };
+  }
+
+  /** AgentDeck 本地 /status（design.md 4.14）：会话 / 账户 / MCP；缺的项跳过，MCP 失败只在该分组显示 */
+  async getStatus(): Promise<AgentStatusSection[]> {
+    const cli = this.requireLiveCli();
+    const [init, mcp] = await Promise.all([
+      cli.initialized.catch(() => null),
+      buildMcpSection(() => this.getMcpStatus()),
+    ]);
+    const modeId = this.mode ?? this.baseMode;
+    const modeLabel = modeId ? (CLAUDE_MODES.find((m) => m.id === modeId)?.label ?? modeId) : null;
+    const account = isRecord(init?.account) ? init.account : null;
+    const sections: AgentStatusSection[] = [
+      {
+        title: "会话",
+        rows: buildRows([
+          ["Claude Code 版本", presentText(this.cliVersion)],
+          ["会话 ID", this.sessionId],
+          ["工作目录", this.cwd],
+          ["模型", this.model ?? "默认（跟随设置）"],
+          ["权限模式", modeLabel ? `${modeLabel}（${modeId}）` : null],
+          ["输出风格", presentText(init?.output_style)],
+        ]),
+      },
+    ];
+    const accountRows = buildRows([
+      ["邮箱", presentText(account?.email)],
+      ["组织", presentText(account?.organization)],
+      ["订阅类型", presentText(account?.subscriptionType)],
+      ["API 服务", presentText(account?.apiProvider)],
+      ["令牌来源", presentText(account?.tokenSource)],
+      ["API Key 来源", presentText(account?.apiKeySource)],
+    ]);
+    if (accountRows.length > 0) {
+      sections.push({ title: "账户", rows: accountRows });
+    }
+    sections.push(mcp);
+    return sections;
   }
 
   /** Claude 可按服务器单独重连，必须指定 serverName */

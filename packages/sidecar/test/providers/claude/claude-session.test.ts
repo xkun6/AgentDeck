@@ -1763,6 +1763,68 @@ describe("斜杠命令与 MCP（design.md 4.14）", () => {
     expect(h.clis).toHaveLength(1);
   });
 
+  test("getStatus：会话 / 账户 / MCP 汇总；缺的项跳过", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.initialized = Promise.resolve({
+        current_permission_mode: "acceptEdits",
+        output_style: "default",
+        account: { email: "dev@example.com", subscriptionType: "max", apiProvider: "firstParty", organization: "" },
+      });
+      cli.mcpStatusResponse = {
+        mcpServers: [
+          { name: "fs", status: "connected" },
+          { name: "gh", status: "needs-auth" },
+          { name: "bad", status: "failed", error: "spawn ENOENT" },
+        ],
+      };
+    });
+    const session = await h.client.createSession({ cwd: "J:\\work" });
+    const sections = await session.getStatus!();
+    expect(sections).toEqual([
+      {
+        title: "会话",
+        rows: [
+          { label: "Claude Code 版本", value: "2.1.296 (Claude Code)" },
+          { label: "工作目录", value: "J:\\work" },
+          { label: "模型", value: "默认（跟随设置）" },
+          { label: "权限模式", value: "自动接受编辑（acceptEdits）" },
+          { label: "输出风格", value: "default" },
+        ],
+      },
+      {
+        title: "账户",
+        rows: [
+          { label: "邮箱", value: "dev@example.com" },
+          { label: "订阅类型", value: "max" },
+          { label: "API 服务", value: "firstParty" },
+        ],
+      },
+      {
+        title: "MCP",
+        rows: [
+          { label: "概览", value: "3 个服务器：1 已连接，1 失败，1 需要认证" },
+          { label: "gh", value: "需要认证" },
+          { label: "bad", value: "失败：spawn ENOENT" },
+        ],
+      },
+    ]);
+  });
+
+  test("getStatus：MCP 查询失败只降级该分组；没有账户信息时不出现「账户」", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.mcpStatus = async () => {
+        throw new Error("mcp 超时");
+      };
+    });
+    const session = await h.client.createSession({ cwd: ".", model: "opus" });
+    const sections = await session.getStatus!();
+    expect(sections.map((s) => s.title)).toEqual(["会话", "MCP"]);
+    expect(sections[0]!.rows).toContainEqual({ label: "模型", value: "opus" });
+    expect(sections[1]!.rows).toEqual([{ label: "状态", value: "读取失败：mcp 超时" }]);
+  });
+
   test("reconnectMcp：发 mcp_reconnect 带 serverName；缺 serverName 返回 NOT_SUPPORTED", async () => {
     const h = createHarness();
     const session = await h.client.createSession({ cwd: "." });
