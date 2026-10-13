@@ -80,6 +80,17 @@ export interface CreateAgentParams {
   title?: string;
 }
 
+interface SentTurn {
+  prompt: AgentPromptInput;
+  clientMessageId?: string;
+  /** startTurn 返回后才有 */
+  turnId: string | null;
+  /** 已收到本轮首个 timeline / permission_requested 输出 */
+  hasOutput: boolean;
+  /** 已写入 user_message_retracted */
+  retracted: boolean;
+}
+
 interface ManagedAgent {
   id: string;
   /** 历史会话的 provider 可能已不存在 */
@@ -98,6 +109,8 @@ interface ManagedAgent {
   finishedTurnIds: Set<string>;
   /** 当前进行中的 CLI 自发轮次（turn_started.origin 为 background，design.md 4.12）；agent.send 可接管 */
   backgroundTurnId: string | null;
+  /** 当前 agent.send 发起的回合（供撤回，design.md 4.16）；回合结束 / 撤回完成后清空 */
+  sentTurn: SentTurn | null;
   /** 没有可用会话（关闭中 / 已关闭 / dormant） */
   closed: boolean;
   /** 进行中的恢复 */
@@ -294,6 +307,14 @@ export class AgentManager {
     agent.sending = true;
     try {
       const session = await this.ensureSession(agent);
+      const sentTurn: SentTurn = {
+        prompt,
+        ...(clientMessageId !== undefined ? { clientMessageId } : {}),
+        turnId: null,
+        hasOutput: false,
+        retracted: false,
+      };
+      agent.sentTurn = sentTurn;
       // user_message 先在事件链中占位（排在 startTurn 期间 provider 发出的事件之前），
       // startTurn 成功返回后才写入；失败则不写，避免留下没有回合的用户消息（design.md 4.4）
       let settleUserMessage!: (sent: boolean) => void;
@@ -321,13 +342,20 @@ export class AgentManager {
         ));
       } catch (error) {
         settleUserMessage(false);
+        if (agent.sentTurn === sentTurn) {
+          agent.sentTurn = null;
+        }
         throw error;
       }
+      sentTurn.turnId = turnId;
       settleUserMessage(true);
       // 放进尾链：session 在 startTurn 返回前发出的事件都已排在前面，
       // 若 turn 已结束（finishedTurnIds）则不再标记 running。
       this.runInChain(agent, () => {
         if (agent.closed || agent.finishedTurnIds.has(turnId)) {
+          if (agent.sentTurn === sentTurn) {
+            agent.sentTurn = null;
+          }
           return;
         }
         if (agent.snapshot.status !== "running" || agent.snapshot.activeTurnId !== turnId) {
@@ -452,6 +480,56 @@ export class AgentManager {
     }
     await agent.session?.interrupt();
     await agent.tail;
+  }
+
+  /**
+   * design.md 4.16：Agent 首次响应前撤回本轮用户消息。校验与写入 user_message_retracted
+   * 在同一事件链任务内完成（与输出事件串行，避免竞态），随后走与 cancel 相同的中断路径。
+   */
+  async retract(agentId: string): Promise<{ prompt: AgentPromptInput; clientMessageId?: string }> {
+    const agent = this.requireAgent(agentId);
+    // 先等已到达的事件处理完，hasOutput 才准确
+    await agent.tail;
+    const turn = agent.sentTurn;
+    const unavailable = (message: string) => new AgentRpcError("RETRACT_UNAVAILABLE", message);
+    if (
+      agent.closed ||
+      !turn ||
+      turn.turnId === null ||
+      turn.retracted ||
+      agent.snapshot.activeTurnId !== turn.turnId ||
+      agent.backgroundTurnId === turn.turnId
+    ) {
+      throw unavailable("当前没有可撤回的回合");
+    }
+    if (turn.hasOutput) {
+      throw unavailable("Agent 已开始响应，无法撤回");
+    }
+    // 先占住，防并发重复撤回；链内再校验一次输出
+    turn.retracted = true;
+    const turnId = turn.turnId;
+    let written = false;
+    this.runInChain(agent, () => {
+      if (turn.hasOutput || agent.sentTurn !== turn) {
+        return;
+      }
+      written = true;
+      this.processEvent(agent, {
+        type: "user_message_retracted",
+        turnId,
+        ...(turn.clientMessageId !== undefined ? { clientMessageId: turn.clientMessageId } : {}),
+      });
+    });
+    await agent.tail;
+    if (!written) {
+      turn.retracted = false;
+      throw unavailable("Agent 已开始响应，无法撤回");
+    }
+    await this.cancel(agentId);
+    return {
+      prompt: turn.prompt,
+      ...(turn.clientMessageId !== undefined ? { clientMessageId: turn.clientMessageId } : {}),
+    };
   }
 
   async respondToPermission(
@@ -907,6 +985,21 @@ export class AgentManager {
       return;
     }
     const event = this.attachTurnId(agent, rawEvent);
+    const sentTurn = agent.sentTurn;
+    if (sentTurn) {
+      if (sentTurn.retracted && event.type === "timeline") {
+        // 撤回后到中断生效前 provider 可能仍吐出内容：丢弃，避免出现在已隐藏的回合之外
+        return;
+      }
+      if (
+        !sentTurn.hasOutput &&
+        !sentTurn.retracted &&
+        ((event.type === "timeline" && event.item.type !== "user_message") ||
+          event.type === "permission_requested")
+      ) {
+        sentTurn.hasOutput = true;
+      }
+    }
     if (this.isDuplicate(agent, event)) {
       return;
     }
@@ -1001,6 +1094,8 @@ export class AgentManager {
         return true;
       case "turn_canceled":
         return this.finishTurn(agent, event.turnId);
+      case "user_message_retracted":
+        return false;
       case "permission_requested":
         if (!snapshot.pendingPermissions.some((request) => request.id === event.request.id)) {
           snapshot.pendingPermissions = [...snapshot.pendingPermissions, event.request];
@@ -1038,6 +1133,9 @@ export class AgentManager {
 
   private finishTurn(agent: ManagedAgent, turnId: string): boolean {
     agent.finishedTurnIds.add(turnId);
+    if (agent.sentTurn?.turnId === turnId) {
+      agent.sentTurn = null;
+    }
     if (agent.backgroundTurnId === turnId) {
       agent.backgroundTurnId = null;
     }
@@ -1176,6 +1274,7 @@ function newManagedAgent(
     sending: false,
     finishedTurnIds: new Set(),
     backgroundTurnId: null,
+    sentTurn: null,
     closed: true,
     resuming: null,
     closing: null,

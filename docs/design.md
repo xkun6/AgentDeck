@@ -89,7 +89,7 @@ sidecar 入口：
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
 - `GET /health`（无需 token）→ `{ "ok": true, "version": "..." }`
 - 每个 WS 文本帧是一个 JSON-RPC 2.0 对象。客户端发请求，服务端回响应；服务端主动推送用**通知**（无 id）。
-- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
+- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
 
 ### 4.1 请求方法
 
@@ -102,6 +102,7 @@ sidecar 入口：
 | `agent.list` | — | `{ agents: AgentSnapshot[] }` |
 | `agent.send` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{ turnId }` |
 | `agent.cancel` | `{ agentId }` | `{}` |
+| `agent.retract` | `{ agentId }` | `{ prompt: AgentPromptInput, clientMessageId? }`（首次响应前撤回，见 4.16） |
 | `agent.permission.respond` | `{ agentId, requestId, response: AgentPermissionResponse }` | `{}` |
 | `agent.setModel` | `{ agentId, modelId: string \| null }` | `{ agent: AgentSnapshot }` |
 | `agent.setMode` | `{ agentId, modeId }` | `{ agent: AgentSnapshot }` |
@@ -596,6 +597,19 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 - 输入框上方、子代理药丸旁的「后台任务」药丸：有运行中显示「后台任务 N 运行中」，否则「N 个已结束」，没有任务不渲染；展开列出每个任务，**整行是可选中的 button**（`data-active` 高亮当前打开项，样式同子代理药丸的行）：Terminal 图标、描述（无描述时取命令首行）、状态文字、耗时、运行中时的「停止」小按钮（点击不触发选中）。「清除已结束」只在前端隐藏。
 - 点选一行 → 在**右侧面板**（与子代理面板同一区域、同一布局）打开该任务；后台任务面板与子代理面板互斥，打开一个关闭另一个。面板内容：标题（描述）、状态 + 耗时 + 退出码、完整命令（等宽、可选中复制、长命令换行）、输出区、运行中的「停止」按钮、关闭按钮。
 - 输出区：等宽字体显示尾部，任务运行中每 2 秒刷新并保持滚动在底部（用户上滚暂停），`truncated` 时提示「已截断，仅显示最后 N KB」，任务结束后再拉一次最终输出便停止轮询，保留最后输出。
+
+### 4.16 首次响应前撤回用户消息
+
+用户发送后、Agent 还没有任何输出时，可撤回这条消息：中止本轮、消息从对话移除、原文（含图片）回到输入框。
+
+**协议**：
+- RPC `agent.retract { agentId }` → `{ prompt: AgentPromptInput; clientMessageId? }`（本轮原始 prompt，含图片 base64）。
+- 新事件 `{ type: "user_message_retracted"; turnId; clientMessageId? }`：照常分配 seq、写入时间线并落盘。前端据此（含回放）隐藏对应用户消息（按 clientMessageId，缺省则取该 turn 前最近的用户消息）与本轮空的助手占位，随后的 `turn_canceled` 不再显示「已中断」提示。
+- 业务错误码 `RETRACT_UNAVAILABLE`：没有进行中的回合、回合为 CLI 自发（origin background）、本轮已有任何 provider 输出（timeline 任意条目或 `permission_requested`；`usage_updated`、`thread_started` 等不算）、或撤回已在进行中（重复调用）。message 如「Agent 已开始响应，无法撤回」。
+
+**AgentManager**：为 `agent.send` 发起的回合记录原始 prompt、clientMessageId 与「是否已有输出」。retract 先等已到达事件处理完，再在事件链内校验并写 `user_message_retracted`（与输出事件串行，无竞态），然后走与 `agent.cancel` 相同的 interrupt 路径，回合随后以 `turn_canceled` 结束。撤回事件写入后到中断生效前 provider 仍吐出的 timeline 事件被丢弃。provider 无需改动。
+
+**限制**：Claude 等 CLI 自身的历史（transcript）里仍会留下这条被中断的用户消息（CLI 无法删除）；只有 AgentDeck 自己的时间线把它隐藏。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

@@ -277,6 +277,9 @@ export class RpcServer {
         await manager.cancel(params.agentId);
         return {};
       }),
+      defineMethod(AGENT_RPC_METHODS.agentRetract, agentIdParams, (params) =>
+        manager.retract(params.agentId),
+      ),
       defineMethod(
         AGENT_RPC_METHODS.agentPermissionRespond,
         z.object({

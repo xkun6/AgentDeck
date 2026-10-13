@@ -290,6 +290,8 @@ export type AgentStreamEvent =
   | { type: "turn_completed"; turnId: string; usage?: AgentUsage }
   | { type: "turn_failed"; turnId: string; error: string; code?: string }
   | { type: "turn_canceled"; turnId: string; reason: string }
+  /** 用户在 Agent 首次响应前撤回了本轮消息（design.md 4.16）；回放时据此隐藏该用户消息与本轮 */
+  | { type: "user_message_retracted"; turnId: string; clientMessageId?: string }
   | { type: "timeline"; turnId?: string; item: AgentTimelineItem }
   | { type: "permission_requested"; turnId?: string; request: AgentPermissionRequest }
   | { type: "permission_resolved"; requestId: string; response: AgentPermissionResponse }
@@ -433,6 +435,7 @@ export type AgentRpcBusinessErrorCode =
   | "PERMISSION_NOT_FOUND"
   | "NOT_SUPPORTED"
   | "TASK_NOT_FOUND"
+  | "RETRACT_UNAVAILABLE"
   | "INTERNAL_ERROR";
 
 // ---------------------------------------------------------------------------
@@ -447,6 +450,7 @@ export const AGENT_RPC_METHODS = {
   agentList: "agent.list",
   agentSend: "agent.send",
   agentCancel: "agent.cancel",
+  agentRetract: "agent.retract",
   agentPermissionRespond: "agent.permission.respond",
   agentSetModel: "agent.setModel",
   agentSetMode: "agent.setMode",
@@ -505,6 +509,11 @@ export interface AgentRpcMethods {
     result: { turnId: string };
   };
   "agent.cancel": { params: { agentId: string }; result: Record<string, never> };
+  /** 首次响应前撤回本轮用户消息（design.md 4.16）；返回原始 prompt 供回填输入框 */
+  "agent.retract": {
+    params: { agentId: string };
+    result: { prompt: AgentPromptInput; clientMessageId?: string };
+  };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };
     result: Record<string, never>;
