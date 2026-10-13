@@ -105,6 +105,7 @@ export async function syncDesktopVersion({ version, write = true } = {}) {
     "web/package.json",
     "packages/protocol/package.json",
     "packages/shared-ui/package.json",
+    "packages/sidecar/package.json",
   ]) {
     updateJson(relativePath, (pkg) => {
       pkg.version = desktopVersion;
