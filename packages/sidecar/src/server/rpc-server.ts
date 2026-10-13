@@ -33,6 +33,8 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
 import type { BoardService } from "../kanban/board-service.js";
+import type { GroupService } from "../groups/group-service.js";
+import { groupCreateSchema } from "../groups/schema.js";
 import type { Scheduler } from "../scheduler/scheduler.js";
 import { scheduleDraftSchema } from "../scheduler/schema.js";
 import { UsageLedger } from "../usage/ledger.js";
@@ -69,6 +71,8 @@ export interface RpcServerOptions {
   scheduler?: Scheduler;
   /** 看板式任务分派（design.md 4.28）；不传时 board.* 返回 NOT_SUPPORTED */
   board?: BoardService;
+  /** 并行协作组（design.md 4.27）；不传时 group.* 返回 NOT_SUPPORTED */
+  groups?: GroupService;
   /** 会话互通 MCP 端点（design.md 4.26）；不传时 /mcp 返回 404 */
   mcp?: McpInteropEndpoint;
   logger?: Logger;
@@ -253,7 +257,12 @@ export class RpcServer {
       onChanged: (projectPath, board) =>
         this.broadcast(AGENT_RPC_NOTIFICATIONS.boardChanged, { projectPath, board }),
     });
+    const unsubscribeGroups = options.groups?.subscribe({
+      onChanged: (group) => this.broadcast(AGENT_RPC_NOTIFICATIONS.groupChanged, { group }),
+      onRemoved: (groupId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.groupRemoved, { groupId }),
+    });
     this.unsubscribeManager = () => {
+      unsubscribeGroups?.();
       unsubscribeManager();
       unsubscribeScheduler?.();
       unsubscribeBoard?.();
@@ -314,6 +323,12 @@ export class RpcServer {
         throw new AgentRpcError("NOT_SUPPORTED", "未启用看板");
       }
       return this.options.board;
+    };
+    const requireGroups = (): GroupService => {
+      if (!this.options.groups) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用并行协作");
+      }
+      return this.options.groups;
     };
     const requireClient = (provider: string) => {
       const client = registry.get(provider);
@@ -630,6 +645,18 @@ export class RpcServer {
           removeWorktree: z.boolean(),
         }),
         (params) => requireBoard().merge(params.projectPath, params.taskId, params.removeWorktree),
+      ),
+      defineMethod(AGENT_RPC_METHODS.groupCreate, groupCreateSchema, async (params) => ({
+        group: await requireGroups().create(params),
+      })),
+      defineMethod(AGENT_RPC_METHODS.groupList, emptyParams, () => ({ groups: requireGroups().list() })),
+      defineMethod(AGENT_RPC_METHODS.groupGet, z.object({ id: z.string().min(1) }), (params) => ({
+        group: requireGroups().get(params.id),
+      })),
+      defineMethod(
+        AGENT_RPC_METHODS.groupDelete,
+        z.object({ id: z.string().min(1), removeWorktrees: z.boolean() }),
+        (params) => requireGroups().delete(params.id, params.removeWorktrees),
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
         await manager.deleteAgent(params.agentId);

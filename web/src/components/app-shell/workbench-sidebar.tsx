@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useAtomValue } from "jotai";
 import { useNavigate, useLocation } from "react-router-dom";
 import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
-import type { AgentSnapshot } from "@agentdeck/protocol";
+import type { AgentGroup, AgentSnapshot } from "@agentdeck/protocol";
 import {
   BarChart3,
   CalendarClock,
@@ -13,12 +13,16 @@ import {
   Plus,
   TerminalSquare,
   Trash2,
+  Users,
 } from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom } from "@/stores/agents";
+import { groupListAtom } from "@/stores/groups";
+import { GROUP_STATUS_LABELS } from "@/lib/group-display";
 import {
   buildSessionTree,
   flattenSessionTree,
+  groupSessionRoots,
   sidebarSessions,
   treeSome,
   type SessionTreeRow,
@@ -154,6 +158,82 @@ function SessionRow({
   );
 }
 
+type SidebarItem =
+  | { kind: "rows"; rows: SessionTreeRow<AgentSnapshot>[] }
+  | {
+      kind: "group";
+      group: AgentGroup;
+      memberCount: number;
+      collapsed: boolean;
+      /** 组内会话行（depth 已整体加 1） */
+      rows: SessionTreeRow<AgentSnapshot>[];
+    };
+
+function groupCollapseKey(groupId: string): string {
+  return `group:${groupId}`;
+}
+
+function groupTone(group: AgentGroup): StatusDotTone | null {
+  if (group.status === "running" || group.status === "chairing") return "success";
+  if (group.status === "failed") return "danger";
+  return null;
+}
+
+interface GroupRowProps {
+  title: string;
+  meta: string;
+  tone: StatusDotTone | null;
+  active: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
+  onClick: () => void;
+}
+
+/** 协作组节点（design.md 4.27）：点击进入协作视图，左侧箭头折叠 / 展开组内会话。 */
+function GroupRow({ title, meta, tone, active, collapsed, onToggle, onClick }: GroupRowProps) {
+  return (
+    <div
+      className={s.sessionRow}
+      data-active={active ? "true" : undefined}
+      data-group="true"
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      title={`${title}\n${meta}`}
+    >
+      <div className={s.rowMain}>
+        <div className={s.ttl}>
+          <button
+            type="button"
+            className={s.rowToggle}
+            aria-label={collapsed ? `展开协作组：${title}` : `折叠协作组：${title}`}
+            aria-expanded={!collapsed}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle();
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            {collapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+          </button>
+          {tone ? <StatusDot tone={tone} size="xs" /> : <span className={s.dotPlaceholder} />}
+          <Users size={12} aria-hidden="true" />
+          <span className={s.ttlText}>{title}</span>
+        </div>
+        <div className={s.meta}>
+          <span className={s.metaText}>{meta}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WorkbenchSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -188,15 +268,33 @@ export function WorkbenchSidebar() {
       return next;
     });
   }, []);
+  // 协作组（design.md 4.27）：同组会话聚在一个可折叠节点下（组节点的折叠状态以 `group:<id>` 记在同一个集合里），
+  // 与子会话树兼容——根会话带着它的子会话一起进组；组内任一会话在运行则整组归入进行中。
+  const groups = useAtomValue(groupListAtom);
   const { active, recent } = useMemo(() => {
-    const activeRows: SessionTreeRow<AgentSnapshot>[] = [];
-    const recentRows: SessionTreeRow<AgentSnapshot>[] = [];
-    for (const root of buildSessionTree(sidebarSessions(agents))) {
-      const running = treeSome(root, (agent) => isAgentRunning(agent, runtimeBySession[agent.id]));
-      (running ? activeRows : recentRows).push(...flattenSessionTree(root, (agent) => agent.id, collapsedIds));
+    const groupById = new Map(groups.map((group) => [group.id, group]));
+    const activeItems: SidebarItem[] = [];
+    const recentItems: SidebarItem[] = [];
+    const blocks = groupSessionRoots(buildSessionTree(sidebarSessions(agents)), new Set(groupById.keys()));
+    for (const block of blocks) {
+      const running = block.roots.some((root) =>
+        treeSome(root, (agent) => isAgentRunning(agent, runtimeBySession[agent.id])),
+      );
+      const rows = block.roots.flatMap((root) => flattenSessionTree(root, (agent) => agent.id, collapsedIds));
+      const group = block.groupId !== null ? groupById.get(block.groupId) : undefined;
+      const item: SidebarItem = group
+        ? {
+            kind: "group",
+            group,
+            memberCount: block.roots.length,
+            collapsed: collapsedIds.has(groupCollapseKey(group.id)),
+            rows: rows.map((row) => ({ ...row, depth: row.depth + 1 })),
+          }
+        : { kind: "rows", rows };
+      (running ? activeItems : recentItems).push(item);
     }
-    return { active: activeRows, recent: recentRows };
-  }, [agents, collapsedIds, runtimeBySession]);
+    return { active: activeItems, recent: recentItems };
+  }, [agents, collapsedIds, groups, runtimeBySession]);
 
   const pinnedProjects = useMemo(
     () => {
@@ -249,6 +347,26 @@ export function WorkbenchSidebar() {
         onDelete={() => void deleteSession(agent, title)}
         menuItems={() => sessionActions.buildMenu(agent, title)}
       />
+    );
+  };
+
+  const renderItem = (item: SidebarItem) => {
+    if (item.kind === "rows") return item.rows.map(renderRow);
+    const { group } = item;
+    const target = `/groups/${encodeURIComponent(group.id)}`;
+    return (
+      <Fragment key={`group:${group.id}`}>
+        <GroupRow
+          title={group.title}
+          meta={`协作组 · ${GROUP_STATUS_LABELS[group.status]} · ${item.memberCount} 个会话`}
+          tone={groupTone(group)}
+          active={location.pathname === target}
+          collapsed={item.collapsed}
+          onToggle={() => toggleCollapsed(groupCollapseKey(group.id))}
+          onClick={() => navigate(target)}
+        />
+        {item.collapsed ? null : item.rows.map(renderRow)}
+      </Fragment>
     );
   };
 
@@ -335,7 +453,7 @@ export function WorkbenchSidebar() {
           {active.length === 0 ? (
             <div className={s.empty}>暂无运行任务</div>
           ) : (
-            active.map(renderRow)
+            active.map(renderItem)
           )}
         </section>
 
@@ -386,7 +504,7 @@ export function WorkbenchSidebar() {
           {recent.length === 0 ? (
             <div className={s.empty}>暂无最近会话</div>
           ) : (
-            recent.map(renderRow)
+            recent.map(renderItem)
           )}
         </section>
       </div>

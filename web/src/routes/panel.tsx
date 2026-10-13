@@ -1,7 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useNavigate } from "react-router-dom";
-import { LoadingState } from "@agentdeck/shared-ui";
+import { Users } from "lucide-react";
+import { Button, LoadingState } from "@agentdeck/shared-ui";
+import { GroupDialog } from "@/components/group/group-dialog";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { activeSessionIdAtom } from "@/stores/ui";
@@ -55,6 +57,7 @@ export function PanelRoute() {
   const connection = useAtomValue(sidecarConnectionAtom);
   const { data: providers } = useAgentProviders();
   const navigate = useNavigate();
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
 
   const sessions = useMemo<PanelSession[]>(
     () =>
@@ -99,9 +102,20 @@ export function PanelRoute() {
           needsAttention={todayStats.needsAttention}
         />
 
-        <Section num="01" tag="开始" title="新任务">
+        <Section
+          num="01"
+          tag="开始"
+          title="新任务"
+          meta={
+            <Button variant="outline" onClick={() => setGroupDialogOpen(true)}>
+              <Users size={16} aria-hidden="true" />
+              并行协作
+            </Button>
+          }
+        >
           <PanelComposer />
         </Section>
+        <GroupDialog open={groupDialogOpen} onClose={() => setGroupDialogOpen(false)} />
 
         {!loaded && connection !== "error" && connection !== "closed" ? (
           <LoadingState variant="block" label="正在连接 Agent 服务…" />

@@ -25,6 +25,7 @@ import {
   type AgentStreamEnvelope,
   type AgentBackgroundTask,
   type ProviderSubagentUpdate,
+  type AgentGroup,
   type Schedule,
   type ScheduleNotice,
   type Board,
@@ -165,6 +166,8 @@ export class SidecarClient {
   private scheduleChangedListeners = new Set<Listener<{ schedules: Schedule[]; paused: boolean }>>();
   private scheduleNoticeListeners = new Set<Listener<ScheduleNotice>>();
   private boardChangedListeners = new Set<Listener<{ projectPath: string; board: Board }>>();
+  private groupChangedListeners = new Set<Listener<AgentGroup>>();
+  private groupRemovedListeners = new Set<Listener<string>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -248,6 +251,16 @@ export class SidecarClient {
   /** `schedule.notice` 通知（目标循环结束 / 定时任务失败，前端转系统通知，design.md 4.25）。 */
   onScheduleNotice(listener: Listener<ScheduleNotice>): () => void {
     return subscribe(this.scheduleNoticeListeners, listener);
+  }
+
+  /** `group.changed` 通知（协作组新建 / 状态 / 成员变化，design.md 4.27）。 */
+  onGroupChanged(listener: Listener<AgentGroup>): () => void {
+    return subscribe(this.groupChangedListeners, listener);
+  }
+
+  /** `group.removed` 通知（协作组被删除，参数为 groupId）。 */
+  onGroupRemoved(listener: Listener<string>): () => void {
+    return subscribe(this.groupRemovedListeners, listener);
   }
 
   /** `agent.tasks.update` 通知（后台任务整表，design.md 4.15）。 */
@@ -596,6 +609,16 @@ export class SidecarClient {
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.boardChanged && record.params) {
       emitTo(this.boardChangedListeners, record.params as { projectPath: string; board: Board });
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.groupChanged && record.params) {
+      const group = (record.params as { group?: AgentGroup }).group;
+      if (group) emitTo(this.groupChangedListeners, group);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.groupRemoved && record.params) {
+      const groupId = (record.params as { groupId?: unknown }).groupId;
+      if (typeof groupId === "string") emitTo(this.groupRemovedListeners, groupId);
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.providerChanged) {

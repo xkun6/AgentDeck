@@ -121,3 +121,40 @@ export function flattenSessionTree<T>(
 export function treeSome<T>(node: SessionTreeNode<T>, predicate: (agent: T) => boolean): boolean {
   return predicate(node.agent) || node.children.some((child) => treeSome(child, predicate));
 }
+
+// ---------------------------------------------------------------------------
+// 协作组（design.md 4.27）：同组会话聚在侧栏一个可折叠的「协作组」节点下
+// ---------------------------------------------------------------------------
+
+export interface SessionBlock<T> {
+  /** null = 不属于任何已知协作组（单棵会话树） */
+  groupId: string | null;
+  roots: SessionTreeNode<T>[];
+}
+
+/**
+ * 把会话森林的根按协作组归并：根会话的 groupId 属于 `knownGroupIds` 时，同组的根合并成一个块（位置取该组首个成员，
+ * 保持传入顺序）；其余根各自一块。子会话树（4.26）随根一起留在块内；groupId 未知（组已删除）的会话按普通会话处理。
+ */
+export function groupSessionRoots<T extends Pick<AgentSnapshot, "groupId">>(
+  roots: SessionTreeNode<T>[],
+  knownGroupIds: ReadonlySet<string>,
+): SessionBlock<T>[] {
+  const blocks: SessionBlock<T>[] = [];
+  const byGroup = new Map<string, SessionBlock<T>>();
+  for (const root of roots) {
+    const groupId = root.agent.groupId;
+    if (groupId === undefined || !knownGroupIds.has(groupId)) {
+      blocks.push({ groupId: null, roots: [root] });
+      continue;
+    }
+    let block = byGroup.get(groupId);
+    if (!block) {
+      block = { groupId, roots: [] };
+      byGroup.set(groupId, block);
+      blocks.push(block);
+    }
+    block.roots.push(root);
+  }
+  return blocks;
+}

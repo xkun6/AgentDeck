@@ -25,6 +25,7 @@ const ProjectsRoute = lazy(() => import("@/routes/projects").then((m) => ({ defa
 const ProjectDetailRoute = lazy(() => import("@/routes/project-detail").then((m) => ({ default: m.ProjectDetailRoute })));
 const ConsoleRoute = lazy(() => import("@/routes/console").then((m) => ({ default: m.ConsoleRoute })));
 const UsageRoute = lazy(() => import("@/routes/usage").then((m) => ({ default: m.UsageRoute })));
+const GroupViewRoute = lazy(() => import("@/routes/group-view").then((m) => ({ default: m.GroupViewRoute })));
 const AutomationRoute = lazy(() => import("@/routes/automation").then((m) => ({ default: m.AutomationRoute })));
 const ThemeRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.ThemeRoute })));
 const AdvancedRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.AdvancedRoute })));
@@ -60,7 +61,8 @@ function MainApp() {
             <Route path="/" element={withBoundary(<PanelRoute />)} />
             <Route path="/new" element={<NewTaskRedirect />} />
             <Route path="/tasks/:taskId" element={withBoundary(<DetailRoute />)} />
-            <Route path="/history" element={withBoundary(<HistoryRoute />)} />
+            <Route path="/groups/:groupId" element={withBoundary(<GroupViewRoute />)} />
+            <Route path="/history"element={withBoundary(<HistoryRoute />)} />
             <Route path="/projects" element={withBoundary(<ProjectsRoute />)} />
             <Route path="/projects/:workspacePath" element={withBoundary(<ProjectDetailRoute />)} />
             <Route path="/console" element={withBoundary(<ConsoleRoute />)} />
