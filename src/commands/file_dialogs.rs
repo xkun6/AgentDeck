@@ -89,43 +89,6 @@ pub async fn pick_directory(app: tauri::AppHandle) -> AppResult<FilePickerResult
     rx.await.map_err(|e| AppError::Internal(e.to_string()))
 }
 
-#[tauri::command]
-pub fn create_workspace_project() -> AppResult<FilePickerResult> {
-    let documents = dirs::document_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let base_name = "NewProject";
-    let mut path = documents.join(base_name);
-
-    for i in 0..100 {
-        if i > 0 {
-            path = documents.join(format!("{} {}", base_name, i + 1));
-        }
-        if !path.exists() {
-            break;
-        }
-    }
-
-    if path.exists() {
-        path = documents.join(format!(
-            "{} {}",
-            base_name,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
-    }
-
-    fs::create_dir_all(&path)?;
-
-    Ok(FilePickerResult {
-        canceled: false,
-        paths: vec![path.to_string_lossy().to_string()],
-    })
-}
-
 /// Returns true when `s` looks like a `scheme://...` URL. A Windows drive path
 /// such as `C:\Users\x` is intentionally NOT a URL (it has `:\`, not `://`).
 fn looks_like_url(s: &str) -> bool {

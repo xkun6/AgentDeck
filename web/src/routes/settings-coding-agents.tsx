@@ -140,8 +140,8 @@ export function AgentPathField({ agent, onSave }: {
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   useEffect(() => setDraft(configured), [configured]);
 
-  const canSave = typeof window !== "undefined" && Boolean(window.hermesDesktop?.codingAgentPathsSet);
-  const canBrowse = typeof window !== "undefined" && Boolean(window.hermesDesktop?.pickExecutableFile);
+  const canSave = typeof window !== "undefined" && Boolean(window.agentdeckDesktop?.codingAgentPathsSet);
+  const canBrowse = typeof window !== "undefined" && Boolean(window.agentdeckDesktop?.pickExecutableFile);
   const trimmed = draft.trim();
 
   const save = async (value: string | null) => {
@@ -158,7 +158,7 @@ export function AgentPathField({ agent, onSave }: {
   };
 
   const browse = async () => {
-    const result = await window.hermesDesktop?.pickExecutableFile?.({ title: `选择 ${agent.label} 可执行文件` })
+    const result = await window.agentdeckDesktop?.pickExecutableFile?.({ title: `选择 ${agent.label} 可执行文件` })
       .catch(() => null);
     const picked = result && !result.canceled ? result.paths[0] : undefined;
     if (picked) setDraft(picked);
@@ -286,7 +286,7 @@ function AgentCard({ agent, onOpenPath, onSavePath }: {
           ) : null}
         </div>
 
-        {agent.installed && agent.path && window.hermesDesktop?.openWorkspacePath ? (
+        {agent.installed && agent.path && window.agentdeckDesktop?.openWorkspacePath ? (
           <button
             className={[s.btn, s.envOpenPathButton].join(" ")}
             type="button"
@@ -307,7 +307,7 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
   const query = useCodingAgentsCheck();
   const savePath = useSaveCodingAgentPath();
   const data = query.data;
-  const hasBridge = typeof window !== "undefined" && Boolean(window.hermesDesktop?.codingAgentsCheck);
+  const hasBridge = typeof window !== "undefined" && Boolean(window.agentdeckDesktop?.codingAgentsCheck);
 
   const readyCount = (data?.agents ?? []).filter(
     (agent) => agent.installed && agent.loginState !== "expired" && agent.loginState !== "not_logged_in",
@@ -316,8 +316,8 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
   const allReady = data ? readyCount === total : false;
 
   const openPath = async (path: string | undefined) => {
-    if (!path || !window.hermesDesktop?.openWorkspacePath) return;
-    await window.hermesDesktop.openWorkspacePath({ path }).catch(() => undefined);
+    if (!path || !window.agentdeckDesktop?.openWorkspacePath) return;
+    await window.agentdeckDesktop.openWorkspacePath({ path }).catch(() => undefined);
   };
 
   const diagnostics = () =>

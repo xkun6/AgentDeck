@@ -35,23 +35,23 @@ function checkResult(): EnvironmentCheckResult {
   return { generatedAtMs: 1, platform: "windows", arch: "x86_64", dataDir: "C:\\data", logDir: "C:\\data\\logs", items: ITEMS };
 }
 
-const previousBridge = window.hermesDesktop;
-const previousRuntime = window.__HERMES_RUNTIME__;
+const previousBridge = window.agentdeckDesktop;
+const previousRuntime = window.__AGENTDECK_RUNTIME__;
 let environmentCheck: Mock<() => Promise<EnvironmentCheckResult>>;
 let environmentInstall: Mock<(id: string) => Promise<EnvironmentInstallResult>>;
 
 beforeEach(() => {
   environmentCheck = vi.fn(async () => checkResult());
   environmentInstall = vi.fn(async (_id: string): Promise<EnvironmentInstallResult> => ({ ok: true, exitCode: 0, output: "done" }));
-  window.__HERMES_RUNTIME__ = { platform: "tauri" };
-  window.hermesDesktop = { windowType: "tauri", environmentCheck, environmentInstall };
+  window.__AGENTDECK_RUNTIME__ = { platform: "tauri" };
+  window.agentdeckDesktop = { windowType: "tauri", environmentCheck, environmentInstall };
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  window.hermesDesktop = previousBridge;
-  window.__HERMES_RUNTIME__ = previousRuntime;
+  window.agentdeckDesktop = previousBridge;
+  window.__AGENTDECK_RUNTIME__ = previousRuntime;
 });
 
 function renderSection() {

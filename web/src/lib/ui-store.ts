@@ -1,4 +1,4 @@
-import type { HermesMessageMetadata } from "@agentdeck/protocol";
+import type { AgentMessageMetadata } from "@agentdeck/protocol";
 
 export interface UiStoreSnapshot {
   kv: Record<string, unknown>;
@@ -12,7 +12,7 @@ export interface UiTurnStats {
   backendMessageId?: number;
   turnIndex?: number;
   contentHash?: string;
-  metadata?: HermesMessageMetadata;
+  metadata?: AgentMessageMetadata;
   model?: string;
   provider?: string;
   startedAt?: number;
@@ -48,7 +48,7 @@ export interface UiEventInput {
 
 type Listener = () => void;
 
-const UI_STORE_BACKUP_KEY = "hermes_ui_backup";
+const UI_STORE_BACKUP_KEY = "agentdeck_ui_backup";
 
 const listeners = new Set<Listener>();
 let kvCache: Record<string, unknown> = {};
@@ -60,7 +60,7 @@ function notify(): void {
 }
 
 function bridge() {
-  return typeof window === "undefined" ? undefined : window.hermesDesktop;
+  return typeof window === "undefined" ? undefined : window.agentdeckDesktop;
 }
 
 function clone<T>(value: T): T {
@@ -157,7 +157,7 @@ export function __resetUiStoreForTests(seed: Record<string, unknown> = {}): void
 }
 
 function installGlobalUiStoreBridge(): void {
-  (globalThis as any).__HERMES_UI_STORE__ = {
+  (globalThis as any).__AGENTDECK_UI_STORE__ = {
     get: readUiValue,
     set: writeUiValue,
     remove: removeUiValue,

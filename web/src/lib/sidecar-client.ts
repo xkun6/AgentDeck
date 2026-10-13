@@ -2,7 +2,7 @@
 //
 // 传输层改造自 gateway-client.ts：同样的请求/响应匹配、1→15s 指数退避重连、
 // 唤醒（online / visibility / 系统 resume / 时钟跳变）触发重连；socket 载体沿用
-// gateway-socket-path.ts 的原生 WS / Rust 中继自动回退（两条路径线协议相同）。
+// sidecar-socket-path.ts 的原生 WS / Rust 中继自动回退（两条路径线协议相同）。
 //
 // 在此之上额外负责 agent 事件流的「连续、去重」：
 // - 每个 agent 记录已投递的最后一个 seq；重复（seq <= lastSeq）直接丢弃；
@@ -26,7 +26,7 @@ import {
   type AgentBackgroundTask,
   type ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
-import { createGatewaySocket } from "./gateway-socket-path";
+import { createSidecarSocket } from "./sidecar-socket-path";
 
 export type SidecarConnectionState = "idle" | "connecting" | "open" | "closed" | "error";
 
@@ -423,7 +423,7 @@ export class SidecarClient {
 
     // AgentDeck 的 Rust 外壳目前不发系统唤醒事件，时钟跳变 watchdog 始终开启；
     // 若桥提供了 onSystemResume 也一并订阅。断线重连后有 timeline 补齐，误触发代价很小。
-    const desktop = window.hermesDesktop;
+    const desktop = window.agentdeckDesktop;
     if (typeof desktop?.onSystemResume === "function") {
       this.unsubscribeSystemResume = desktop.onSystemResume(() => this.handleWake(true));
     }
@@ -696,7 +696,7 @@ export function buildSidecarSocketUrl(wsUrl: string, token: string): string {
 
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" &&
-    (window.__HERMES_RUNTIME__?.platform === "tauri" || Boolean(window.__TAURI_INTERNALS__));
+    (window.__AGENTDECK_RUNTIME__?.platform === "tauri" || Boolean(window.__TAURI_INTERNALS__));
 }
 
 /** 解析当前 sidecar 的 ws 地址：Tauri 下取 `get_sidecar_config`，浏览器开发模式取环境变量。 */
@@ -735,7 +735,7 @@ export function getSidecarClient(): SidecarClient {
   if (instance) return instance;
   instance = new SidecarClient({
     resolveUrl: resolveSidecarUrl,
-    socketFactory: createGatewaySocket,
+    socketFactory: createSidecarSocket,
   });
   instance.enableAutoReconnect();
   if (isTauriRuntime()) {

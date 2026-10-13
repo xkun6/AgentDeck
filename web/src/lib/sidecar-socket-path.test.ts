@@ -23,12 +23,12 @@ class FakeRelaySocket {
   close() {}
 }
 
-vi.mock("./gateway-relay-socket", () => ({
-  GatewayRelaySocket: FakeRelaySocket,
+vi.mock("./sidecar-relay-socket", () => ({
+  SidecarRelaySocket: FakeRelaySocket,
 }));
 
-// addEventListener-capable native WebSocket mock (gateway-socket-path observes
-// attempts via addEventListener so it coexists with GatewayClient's on*).
+// addEventListener-capable native WebSocket mock (sidecar-socket-path observes
+// attempts via addEventListener so it coexists with SidecarClient's on*).
 class MockNativeSocket {
   static instances: MockNativeSocket[] = [];
   static throwOnConstruct = false;
@@ -76,7 +76,7 @@ async function loadModule(seed: Record<string, unknown> = {}) {
   vi.resetModules();
   const uiStore = await import("@/lib/ui-store");
   uiStore.__resetUiStoreForTests(seed);
-  const mod = await import("./gateway-socket-path");
+  const mod = await import("./sidecar-socket-path");
   mod.__resetSocketPathForTests();
   return { mod, uiStore };
 }
@@ -104,65 +104,65 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
-describe("createGatewaySocket path selection", () => {
+describe("createSidecarSocket path selection", () => {
   it("defaults to the native WebSocket on Tauri", async () => {
     const { mod } = await loadModule();
-    const socket = mod.createGatewaySocket(URL);
+    const socket = mod.createSidecarSocket(URL);
     expect(socket).toBeInstanceOf(MockNativeSocket);
     expect(mod.getActiveSocketPath()).toBe("native");
   });
 
   it("always uses native WebSocket off Tauri, even with a learned relay preference", async () => {
     delete fakeWindow.__TAURI_INTERNALS__;
-    const { mod } = await loadModule({ HERMES_WS_PATH_LEARNED: "relay" });
-    const socket = mod.createGatewaySocket(URL);
+    const { mod } = await loadModule({ AGENTDECK_WS_PATH_LEARNED: "relay" });
+    const socket = mod.createSidecarSocket(URL);
     expect(socket).toBeInstanceOf(MockNativeSocket);
   });
 
   it("starts on relay when a previous probe learned it", async () => {
-    const { mod } = await loadModule({ HERMES_WS_PATH_LEARNED: "relay" });
-    const socket = mod.createGatewaySocket(URL);
+    const { mod } = await loadModule({ AGENTDECK_WS_PATH_LEARNED: "relay" });
+    const socket = mod.createSidecarSocket(URL);
     expect(socket).toBeInstanceOf(FakeRelaySocket);
   });
 
   it("?wspath=relay forces relay without persisting it", async () => {
     fakeWindow.location.search = "?wspath=relay";
     const { mod, uiStore } = await loadModule();
-    const socket = mod.createGatewaySocket(URL) as unknown as FakeRelaySocket;
+    const socket = mod.createSidecarSocket(URL) as unknown as FakeRelaySocket;
     expect(socket).toBeInstanceOf(FakeRelaySocket);
     await flushMicrotasks();
     socket.open();
-    expect(uiStore.readUiValue("HERMES_WS_PATH_LEARNED", "unset")).toBe("unset");
+    expect(uiStore.readUiValue("AGENTDECK_WS_PATH_LEARNED", "unset")).toBe("unset");
   });
 
   it("flips to relay within the same attempt on a synchronous constructor throw", async () => {
     MockNativeSocket.throwOnConstruct = true;
     const { mod, uiStore } = await loadModule();
-    const socket = mod.createGatewaySocket(URL);
+    const socket = mod.createSidecarSocket(URL);
     expect(socket).toBeInstanceOf(FakeRelaySocket);
     expect(mod.getActiveSocketPath()).toBe("relay");
-    expect(uiStore.readUiValue("HERMES_WS_PATH_LEARNED", "unset")).toBe("relay");
+    expect(uiStore.readUiValue("AGENTDECK_WS_PATH_LEARNED", "unset")).toBe("relay");
   });
 
   it("flips to relay after two consecutive async pre-open failures", async () => {
     const { mod } = await loadModule();
 
-    const first = mod.createGatewaySocket(URL) as unknown as MockNativeSocket;
+    const first = mod.createSidecarSocket(URL) as unknown as MockNativeSocket;
     first.failBeforeOpen();
     expect(mod.getActiveSocketPath()).toBe("native");
 
-    const second = mod.createGatewaySocket(URL) as unknown as MockNativeSocket;
+    const second = mod.createSidecarSocket(URL) as unknown as MockNativeSocket;
     second.failBeforeOpen();
     expect(mod.getActiveSocketPath()).toBe("relay");
 
-    const third = mod.createGatewaySocket(URL);
+    const third = mod.createSidecarSocket(URL);
     expect(third).toBeInstanceOf(FakeRelaySocket);
   });
 
   it("does not count post-open closes toward the relay flip", async () => {
     const { mod } = await loadModule();
     for (let i = 0; i < 4; i++) {
-      const ws = mod.createGatewaySocket(URL) as unknown as MockNativeSocket;
+      const ws = mod.createSidecarSocket(URL) as unknown as MockNativeSocket;
       ws.open();
       ws.closeAfterOpen();
     }
@@ -171,33 +171,33 @@ describe("createGatewaySocket path selection", () => {
 
   it("a successful native open resets the failure streak and learns native", async () => {
     const { mod, uiStore } = await loadModule();
-    const first = mod.createGatewaySocket(URL) as unknown as MockNativeSocket;
+    const first = mod.createSidecarSocket(URL) as unknown as MockNativeSocket;
     first.failBeforeOpen();
 
-    const second = mod.createGatewaySocket(URL) as unknown as MockNativeSocket;
+    const second = mod.createSidecarSocket(URL) as unknown as MockNativeSocket;
     second.open();
-    expect(uiStore.readUiValue("HERMES_WS_PATH_LEARNED", "unset")).toBe("native");
+    expect(uiStore.readUiValue("AGENTDECK_WS_PATH_LEARNED", "unset")).toBe("native");
 
     // The streak restarted: one more failure must NOT flip.
     second.closeAfterOpen();
-    const third = mod.createGatewaySocket(URL) as unknown as MockNativeSocket;
+    const third = mod.createSidecarSocket(URL) as unknown as MockNativeSocket;
     third.failBeforeOpen();
     expect(mod.getActiveSocketPath()).toBe("native");
   });
 
   it("clears the learned value and reverts to native when the relay keeps failing", async () => {
-    const { mod, uiStore } = await loadModule({ HERMES_WS_PATH_LEARNED: "relay" });
+    const { mod, uiStore } = await loadModule({ AGENTDECK_WS_PATH_LEARNED: "relay" });
 
-    const first = mod.createGatewaySocket(URL) as unknown as FakeRelaySocket;
+    const first = mod.createSidecarSocket(URL) as unknown as FakeRelaySocket;
     await flushMicrotasks();
     first.failBeforeOpen();
     expect(mod.getActiveSocketPath()).toBe("relay");
 
-    const second = mod.createGatewaySocket(URL) as unknown as FakeRelaySocket;
+    const second = mod.createSidecarSocket(URL) as unknown as FakeRelaySocket;
     await flushMicrotasks();
     second.failBeforeOpen();
 
     expect(mod.getActiveSocketPath()).toBe("native");
-    expect(uiStore.readUiValue("HERMES_WS_PATH_LEARNED", "unset")).toBe("unset");
+    expect(uiStore.readUiValue("AGENTDECK_WS_PATH_LEARNED", "unset")).toBe("unset");
   });
 });

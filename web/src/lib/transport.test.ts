@@ -17,13 +17,13 @@ afterAll(() => {
 
 describe("transport", () => {
   afterEach(() => {
-    delete window.__HERMES_RUNTIME__;
-    delete window.hermesDesktop;
+    delete window.__AGENTDECK_RUNTIME__;
+    delete window.agentdeckDesktop;
   });
 
   it("fetchMediaDataUrl 通过桌面桥读取本机图片", async () => {
     const readFileDataUrl = vi.fn(async () => "data:image/png;base64,REVT");
-    window.hermesDesktop = { windowType: "tauri", readFileDataUrl };
+    window.agentdeckDesktop = { windowType: "tauri", readFileDataUrl };
 
     await expect(fetchMediaDataUrl("C:/Users/me/out.png")).resolves.toBe("data:image/png;base64,REVT");
     expect(readFileDataUrl).toHaveBeenCalledWith("C:/Users/me/out.png");
@@ -31,7 +31,7 @@ describe("transport", () => {
 
   it("fetchMediaDataUrl 在没有桌面桥或结果不是图片时报错", async () => {
     await expect(fetchMediaDataUrl("/tmp/a.png")).rejects.toThrow(/无法读取/);
-    window.hermesDesktop = { windowType: "tauri", readFileDataUrl: vi.fn(async () => "https://example.com/a.png") };
+    window.agentdeckDesktop = { windowType: "tauri", readFileDataUrl: vi.fn(async () => "https://example.com/a.png") };
     await expect(fetchMediaDataUrl("/tmp/a.png")).rejects.toThrow(/data URL/);
   });
 

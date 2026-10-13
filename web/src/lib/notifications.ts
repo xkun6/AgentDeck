@@ -204,7 +204,7 @@ export function notifyFromAgentEvent(
   sessionTitle?: string,
 ): void {
   try {
-    const bridge = window.hermesDesktop;
+    const bridge = window.agentdeckDesktop;
     if (typeof bridge?.desktopNotify !== "function") return;
     const settings = readNotificationSettings();
     const action = decideNotification({

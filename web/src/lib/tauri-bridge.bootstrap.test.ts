@@ -31,7 +31,7 @@ beforeEach(() => {
   mockInvoke.mockReset();
   mockListen.mockClear();
   statusHandler = null;
-  delete window.__HERMES_RUNTIME__;
+  delete window.__AGENTDECK_RUNTIME__;
   document.body.innerHTML = "";
 });
 
@@ -57,10 +57,10 @@ describe("installTauriBridge 启动遮罩", () => {
     });
     await flush(10);
 
-    const overlay = document.getElementById("hermes-bootstrap-overlay");
+    const overlay = document.getElementById("agentdeck-bootstrap-overlay");
     expect(overlay).not.toBeNull();
-    expect(document.getElementById("hermes-bootstrap-error-text")?.textContent).toContain("找不到 node 可执行文件");
-    const retry = document.getElementById("hermes-bootstrap-retry") as HTMLButtonElement;
+    expect(document.getElementById("agentdeck-bootstrap-error-text")?.textContent).toContain("找不到 node 可执行文件");
+    const retry = document.getElementById("agentdeck-bootstrap-retry") as HTMLButtonElement;
     expect(retry.style.display).not.toBe("none");
     expect(done).toBe(false);
 
@@ -68,8 +68,8 @@ describe("installTauriBridge 启动遮罩", () => {
     await installing;
 
     expect(mockInvoke).toHaveBeenCalledWith("restart_sidecar", undefined);
-    expect(document.getElementById("hermes-bootstrap-overlay")).toBeNull();
-    expect(window.__HERMES_RUNTIME__).toMatchObject({ platform: "tauri" });
+    expect(document.getElementById("agentdeck-bootstrap-overlay")).toBeNull();
+    expect(window.__AGENTDECK_RUNTIME__).toMatchObject({ platform: "tauri" });
   });
 
   it("starting 状态等待 sidecar-status 的 ready 事件", async () => {

@@ -48,12 +48,12 @@ describe("applyThemeToDOM interface scaling", () => {
 
   afterEach(() => {
     delete (globalThis as { document?: unknown }).document;
-    delete (globalThis as { hermesDesktop?: unknown }).hermesDesktop;
+    delete (globalThis as { agentdeckDesktop?: unknown }).agentdeckDesktop;
   });
 
   it("drives the native webview page zoom (not CSS zoom) when the desktop bridge is present", () => {
     const zooms: number[] = [];
-    (globalThis as { hermesDesktop?: unknown }).hermesDesktop = {
+    (globalThis as { agentdeckDesktop?: unknown }).agentdeckDesktop = {
       setUiZoom: (factor: number) => zooms.push(factor),
     };
 

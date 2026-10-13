@@ -15,11 +15,11 @@ describe("debugBus", () => {
 
   it("snapshot returns a stable reference between writes", () => {
     debugBus.clear();
-    debugBus.push({ type: "gateway", level: "info", summary: "hello" });
+    debugBus.push({ type: "sidecar", level: "info", summary: "hello" });
     const a = debugBus.snapshot();
     const b = debugBus.snapshot();
     expect(b).toBe(a);
-    debugBus.push({ type: "gateway", level: "info", summary: "world" });
+    debugBus.push({ type: "sidecar", level: "info", summary: "world" });
     const c = debugBus.snapshot();
     expect(c).not.toBe(a);
     expect(c.length).toBe(2);

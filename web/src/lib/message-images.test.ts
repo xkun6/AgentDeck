@@ -10,12 +10,12 @@ import {
 describe("message image extraction", () => {
   it("extracts Markdown image paths that contain spaces", () => {
     const parts = extractMarkdownImageParts(
-      "结果：![预览](/Users/enzo/Library/Application Support/cn.org.hermesagent.desktop/runtime/hermes-home/images/out.png)",
+      "结果：![预览](/Users/enzo/Library/Application Support/local.agentdeck.desktop/runtime/agentdeck-home/images/out.png)",
     );
 
     expect(parts).toEqual([{
       type: "image",
-      url: "/Users/enzo/Library/Application Support/cn.org.hermesagent.desktop/runtime/hermes-home/images/out.png",
+      url: "/Users/enzo/Library/Application Support/local.agentdeck.desktop/runtime/agentdeck-home/images/out.png",
       alt: "预览",
       name: "预览",
     }]);
@@ -23,11 +23,11 @@ describe("message image extraction", () => {
 
   it("extracts bare local image paths that contain spaces", () => {
     const parts = extractImagePartsFromUnknown(
-      "图片保存在 /Users/enzo/Library/Application Support/cn.org.hermesagent.desktop/runtime/hermes-home/images/out.png",
+      "图片保存在 /Users/enzo/Library/Application Support/local.agentdeck.desktop/runtime/agentdeck-home/images/out.png",
     );
 
     expect(parts[0]?.url).toBe(
-      "/Users/enzo/Library/Application Support/cn.org.hermesagent.desktop/runtime/hermes-home/images/out.png",
+      "/Users/enzo/Library/Application Support/local.agentdeck.desktop/runtime/agentdeck-home/images/out.png",
     );
   });
 
@@ -37,7 +37,7 @@ describe("message image extraction", () => {
   });
 
   it("recognizes POSIX-style Windows drive paths as local file paths", () => {
-    expect(isLikelyLocalFilePath("/D:/Hermes-CN-Desktop/e2e/.runtime/hermes-home/images/model output.png")).toBe(true);
+    expect(isLikelyLocalFilePath("/D:/AgentDeck/e2e/.runtime/agentdeck-home/images/model output.png")).toBe(true);
     expect(isLikelyLocalFilePath("/D:/data/shot.png")).toBe(true);
     expect(isLikelyLocalFilePath("/Users/enzo/Downloads/chart.png")).toBe(true);
     expect(isLikelyLocalFilePath("/about")).toBe(false);
@@ -46,14 +46,14 @@ describe("message image extraction", () => {
   it("keeps POSIX-style Windows drive paths out of the browser-safe src bucket", () => {
     // These are local filesystem paths (rendered by MessageImage through the
     // media bridge), not web-relative URLs, so safeImageSrc must reject them.
-    expect(safeImageSrc("/D:/Hermes-CN-Desktop/e2e/.runtime/hermes-home/images/model output.png")).toBeUndefined();
+    expect(safeImageSrc("/D:/AgentDeck/e2e/.runtime/agentdeck-home/images/model output.png")).toBeUndefined();
     expect(safeImageSrc("/D:/data/shot.png")).toBeUndefined();
   });
 
   it("maps POSIX-style Windows drive paths back to the real filesystem path", () => {
     expect(
-      normalizeLocalFilePath("/D:/Hermes-CN-Desktop/e2e/.runtime/hermes-home/images/generated%20previews/model%20output.png"),
-    ).toBe("D:/Hermes-CN-Desktop/e2e/.runtime/hermes-home/images/generated previews/model output.png");
+      normalizeLocalFilePath("/D:/AgentDeck/e2e/.runtime/agentdeck-home/images/generated%20previews/model%20output.png"),
+    ).toBe("D:/AgentDeck/e2e/.runtime/agentdeck-home/images/generated previews/model output.png");
     expect(normalizeLocalFilePath("/D:/data/shot.png")).toBe("D:/data/shot.png");
   });
 });

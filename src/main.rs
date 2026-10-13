@@ -38,7 +38,7 @@ fn shutdown(app: &tauri::AppHandle) {
     use tauri::Manager;
 
     if let Ok(mut inner) = app.state::<AppState>().inner.lock() {
-        if let Some(relay) = inner.gateway_ws.take() {
+        if let Some(relay) = inner.sidecar_ws.take() {
             relay.abort.store(true, Ordering::Relaxed);
             relay.notify.notify_waiters();
         }
@@ -154,10 +154,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::sidecar::get_sidecar_config,
             commands::sidecar::restart_sidecar,
-            commands::fatal_error::fatal_error_and_exit,
             commands::file_dialogs::pick_files,
             commands::file_dialogs::pick_directory,
-            commands::file_dialogs::create_workspace_project,
             commands::file_dialogs::open_workspace_path,
             commands::file_dialogs::open_external_url,
             commands::fs::fs_list,
@@ -169,12 +167,10 @@ fn main() {
             commands::coding_agents::coding_agents_check,
             commands::coding_agents::coding_agent_paths_get,
             commands::coding_agents::coding_agent_paths_set,
-            commands::api_proxy::external_request,
-            commands::api_proxy::download_external_image,
             commands::notify::desktop_notify,
-            commands::ws_proxy::gateway_ws_open,
-            commands::ws_proxy::gateway_ws_send,
-            commands::ws_proxy::gateway_ws_close,
+            commands::ws_proxy::sidecar_ws_open,
+            commands::ws_proxy::sidecar_ws_send,
+            commands::ws_proxy::sidecar_ws_close,
             commands::ui_store::ui_store_snapshot,
             commands::ui_store::ui_store_set_kv,
             commands::ui_store::ui_store_remove_kv,
@@ -197,9 +193,7 @@ fn main() {
             commands::git::git_review_stage,
             commands::git::git_review_unstage,
             commands::git::git_review_revert,
-            commands::git::git_review_rev_parse,
             commands::git::git_review_commit,
-            commands::git::git_review_commit_context,
             commands::git::git_review_push,
             commands::git::git_review_ship_info,
             commands::git::git_review_create_pr,

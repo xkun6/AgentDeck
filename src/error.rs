@@ -10,8 +10,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AppError {
     // --- Sidecar WebSocket relay ---
-    #[error("Gateway WebSocket error: {0}")]
-    GatewayWs(String),
+    #[error("Sidecar WebSocket error: {0}")]
+    SidecarWs(String),
 
     // --- Requests ---
     #[error("Invalid API request: {0}")]
@@ -51,7 +51,7 @@ struct AppErrorIpc {
 impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
-            AppError::GatewayWs(_) => "gateway_ws",
+            AppError::SidecarWs(_) => "sidecar_ws",
             AppError::InvalidRequest(_) => "invalid_request",
             AppError::ProxyError(_) => "proxy_error",
             AppError::OriginViolation(_) => "origin_violation",
@@ -64,7 +64,7 @@ impl AppError {
 
     pub fn kind(&self) -> &'static str {
         match self {
-            AppError::GatewayWs(_) => "gateway_ws",
+            AppError::SidecarWs(_) => "sidecar_ws",
             AppError::InvalidRequest(_)
             | AppError::ProxyError(_)
             | AppError::OriginViolation(_) => "api_proxy",
@@ -94,17 +94,6 @@ impl Serialize for AppError {
 impl<T> From<std::sync::PoisonError<T>> for AppError {
     fn from(_: std::sync::PoisonError<T>) -> Self {
         AppError::StateLockPoisoned
-    }
-}
-
-// Convenience: convert reqwest errors
-impl From<reqwest::Error> for AppError {
-    fn from(e: reqwest::Error) -> Self {
-        if e.is_timeout() {
-            AppError::ProxyError(format!("Request timed out: {}", e))
-        } else {
-            AppError::ProxyError(e.to_string())
-        }
     }
 }
 
@@ -164,14 +153,14 @@ mod tests {
 
     #[test]
     fn serialize_emits_structured_ipc_error() {
-        let err = AppError::GatewayWs("boom".to_string());
+        let err = AppError::SidecarWs("boom".to_string());
         let json: serde_json::Value = serde_json::to_value(&err).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
-                "code": "gateway_ws",
-                "kind": "gateway_ws",
-                "message": "Gateway WebSocket error: boom"
+                "code": "sidecar_ws",
+                "kind": "sidecar_ws",
+                "message": "Sidecar WebSocket error: boom"
             })
         );
     }

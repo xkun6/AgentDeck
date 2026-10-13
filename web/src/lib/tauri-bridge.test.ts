@@ -82,8 +82,8 @@ describe("tauri bridge", () => {
     expect(mockInvoke).not.toHaveBeenCalledWith("runtime_info", undefined);
     expect(mockInvoke).not.toHaveBeenCalledWith("api_request", expect.anything());
     expect(mockListen).not.toHaveBeenCalledWith("runtime-status", expect.anything());
-    expect(window.__HERMES_RUNTIME__).toEqual({ platform: "tauri" });
-    expect(window.hermesDesktop?.windowType).toBe("tauri");
+    expect(window.__AGENTDECK_RUNTIME__).toEqual({ platform: "tauri" });
+    expect(window.agentdeckDesktop?.windowType).toBe("tauri");
   });
 
   it("isSidecarReady 只在 ready 且有 wsUrl 时为真", () => {
@@ -95,7 +95,7 @@ describe("tauri bridge", () => {
 
   it("桥上只暴露 Rust 已注册的命令", async () => {
     await installTauriBridge();
-    const bridge = window.hermesDesktop as Record<string, unknown>;
+    const bridge = window.agentdeckDesktop as Record<string, unknown>;
     for (const removed of ["request", "uploadFile", "getRuntimeInfo", "switchProfile", "readMemory", "getYoloMode"]) {
       expect(bridge[removed]).toBeUndefined();
     }
@@ -104,7 +104,7 @@ describe("tauri bridge", () => {
   it("exposes log snapshot export through Tauri IPC", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.exportLogSnapshot?.({
+    await window.agentdeckDesktop?.exportLogSnapshot?.({
       fileName: "agentdeck-logs.log",
       content: "hello\n",
       format: "log",
@@ -122,7 +122,7 @@ describe("tauri bridge", () => {
   it("exposes external URL opening through Tauri IPC", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.openExternalUrl?.({ url: "https://example.com" });
+    await window.agentdeckDesktop?.openExternalUrl?.({ url: "https://example.com" });
 
     expect(mockInvoke).toHaveBeenCalledWith("open_external_url", {
       input: { url: "https://example.com" },
@@ -132,7 +132,7 @@ describe("tauri bridge", () => {
   it("exposes external terminal opening through Tauri IPC", async () => {
     await installTauriBridge();
 
-    await window.hermesDesktop?.terminalOpenExternal?.({ cwd: "C:/repo" });
+    await window.agentdeckDesktop?.terminalOpenExternal?.({ cwd: "C:/repo" });
 
     expect(mockInvoke).toHaveBeenCalledWith("terminal_open_external", {
       input: { cwd: "C:/repo" },
@@ -143,7 +143,7 @@ describe("tauri bridge", () => {
     await installTauriBridge();
 
     const received: unknown[] = [];
-    const unsubscribe = window.hermesDesktop?.onFileDrop?.((payload) => {
+    const unsubscribe = window.agentdeckDesktop?.onFileDrop?.((payload) => {
       received.push(payload);
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -199,7 +199,7 @@ describe("tauri bridge", () => {
 describe("tauri bridge fs_list", () => {
   it("fsList 按仓库惯例把参数包在 input 里调 fs_list", async () => {
     await installTauriBridge();
-    await window.hermesDesktop?.fsList?.({ path: "", showHidden: false });
+    await window.agentdeckDesktop?.fsList?.({ path: "", showHidden: false });
     expect(mockInvoke).toHaveBeenCalledWith("fs_list", { input: { path: "", showHidden: false } });
   });
 });

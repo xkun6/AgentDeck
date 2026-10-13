@@ -81,7 +81,7 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
   const data = query.data;
   const summary = summarizeEnvironmentItems(data?.items ?? []);
   const grouped = useMemo(() => groupItems(data?.items ?? []), [data?.items]);
-  const hasBridge = typeof window !== "undefined" && Boolean(window.hermesDesktop?.environmentCheck);
+  const hasBridge = typeof window !== "undefined" && Boolean(window.agentdeckDesktop?.environmentCheck);
   const healthy = summary.requiredErrors === 0 && summary.errors === 0;
   const { confirm } = useConfirm();
   const installTool = useEnvironmentInstall();
@@ -89,8 +89,8 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
   const [installOutcomes, setInstallOutcomes] = useState<Record<string, InstallOutcome>>({});
 
   const openPath = async (path: string | undefined) => {
-    if (!path || !window.hermesDesktop?.openWorkspacePath) return;
-    await window.hermesDesktop.openWorkspacePath({ path }).catch(() => undefined);
+    if (!path || !window.agentdeckDesktop?.openWorkspacePath) return;
+    await window.agentdeckDesktop.openWorkspacePath({ path }).catch(() => undefined);
   };
 
   const setOutcome = (id: string, outcome: InstallOutcome | null) => {
@@ -178,7 +178,7 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
           size="md"
           type="button"
           onClick={() => void openPath(data?.dataDir)}
-          disabled={!data?.dataDir || !window.hermesDesktop?.openWorkspacePath}
+          disabled={!data?.dataDir || !window.agentdeckDesktop?.openWorkspacePath}
           leadingIcon={<FolderOpen size={12} />}
         >
           打开数据目录
@@ -188,7 +188,7 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
           size="md"
           type="button"
           onClick={() => void openPath(data?.logDir)}
-          disabled={!data?.logDir || !window.hermesDesktop?.openWorkspacePath}
+          disabled={!data?.logDir || !window.agentdeckDesktop?.openWorkspacePath}
           leadingIcon={<FolderOpen size={12} />}
         >
           打开日志目录
@@ -305,7 +305,7 @@ function EnvironmentItemRow({ item, onOpenPath, installing, installBusy, install
           )}
         </div>
       )}
-      {item.path && window.hermesDesktop?.openWorkspacePath && (
+      {item.path && window.agentdeckDesktop?.openWorkspacePath && (
         <button className={[s.btn, s.envOpenPathButton].join(" ")} type="button" onClick={() => void onOpenPath(item.path)}>
           <FolderOpen size={12} />
           打开路径

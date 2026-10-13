@@ -136,10 +136,10 @@
 }
 
 .dot[data-tone="live"]::before {
-  animation: hermesStatusPulse 1.6s ease-in-out infinite;
+  animation: agentdeckStatusPulse 1.6s ease-in-out infinite;
 }
 
-@keyframes hermesStatusPulse {
+@keyframes agentdeckStatusPulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }

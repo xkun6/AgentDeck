@@ -63,13 +63,13 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
         const term = terminalRef.current;
         if (!id || !term) return;
         term.focus();
-        void window.hermesDesktop?.terminalWrite?.({ terminalId: id, data: `${command}\r` });
+        void window.agentdeckDesktop?.terminalWrite?.({ terminalId: id, data: `${command}\r` });
       },
       close: () => {
         const id = terminalIdRef.current;
         if (!id) return;
         terminalIdRef.current = null;
-        void window.hermesDesktop?.terminalClose?.({ terminalId: id });
+        void window.agentdeckDesktop?.terminalClose?.({ terminalId: id });
         setStatus("closed");
       },
       hasTerminal: () => terminalIdRef.current !== null,
@@ -84,7 +84,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
     useEffect(() => {
       if (!armed || !containerRef.current) return;
 
-      if (!window.hermesDesktop?.terminalStart) {
+      if (!window.agentdeckDesktop?.terminalStart) {
         setStatus("unsupported");
         onError?.("终端需要在桌面端中打开。");
         return;
@@ -160,11 +160,11 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
         }
       };
 
-      const unlisten = window.hermesDesktop?.onTerminalOutput?.(writeEvent);
+      const unlisten = window.agentdeckDesktop?.onTerminalOutput?.(writeEvent);
       const disposable = term.onData((data) => {
         const id = terminalIdRef.current;
         if (!id) return;
-        void window.hermesDesktop?.terminalWrite?.({ terminalId: id, data }).catch((err) => {
+        void window.agentdeckDesktop?.terminalWrite?.({ terminalId: id, data }).catch((err) => {
           onError?.(err instanceof Error ? err.message : String(err));
           setStatus("error");
         });
@@ -176,7 +176,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
           fit.fit();
           const id = terminalIdRef.current;
           if (id) {
-            void window.hermesDesktop?.terminalResize?.({ terminalId: id, cols: term.cols, rows: term.rows });
+            void window.agentdeckDesktop?.terminalResize?.({ terminalId: id, cols: term.cols, rows: term.rows });
           }
         } catch {
           // xterm fit may throw while the container is hidden; the next resize fixes it.
@@ -193,7 +193,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
       observer.observe(containerRef.current);
       scheduleResize();
 
-      window.hermesDesktop
+      window.agentdeckDesktop
         ?.terminalStart?.({ cwd: cwd || undefined, cols: term.cols, rows: term.rows })
         .then((result) => {
           if (disposed) return;
@@ -219,7 +219,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
         unlisten?.();
         const id = terminalIdRef.current;
         terminalIdRef.current = null;
-        if (id) void window.hermesDesktop?.terminalClose?.({ terminalId: id });
+        if (id) void window.agentdeckDesktop?.terminalClose?.({ terminalId: id });
         term.dispose();
         terminalRef.current = null;
       };

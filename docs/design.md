@@ -82,7 +82,7 @@ sidecar 入口：
 - 自动重启本身拉起失败（未就绪）时，下一个轮询周期继续重试，与「进程退出」共用同一连续计数与上限（相邻两次自动重启间隔 < 60 秒计为连续，超过 5 次暂停）；手动 `restart_sidecar` 清零连续计数与待重试标记。
 - sidecar 未就绪时 `wsUrl` 为空字符串；`starting` 状态已带 token。
 - 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`（Windows 为 `%APPDATA%local.agentdeck.desktop`）；WebView2 数据在设置了 `AGENTDECK_HOME` 时为 `<home>webview2`，否则为 `%LOCALAPPDATA%local.agentdeck.desktopEBWebView`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
-- WS 中继沿用命令 `gateway_ws_open/send/close` 与事件 `gateway-ws-message` / `gateway-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
+- WS 中继沿用命令 `sidecar_ws_open/send/close` 与事件 `sidecar-ws-message` / `sidecar-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
 
 ## 4. 前端 ↔ sidecar 协议（JSON-RPC 2.0 over WebSocket）
 
@@ -725,11 +725,11 @@ ACP：
 
 ## 6. 前端接缝（P4）
 
-保留 Hermes 的渲染层：`ChatSessionRuntime` / `HermesUIMessage` / `ChatMessage` / `MessageTimeline` / `GooseComposer` / `PreviewRail`。替换三处：
-1. **事件入口**：`stores/chat.ts` 新增 `reduceAgentEvent(runtime, envelope)` 与 `applyAgentEventAtom`，把 `AgentStreamEvent` 翻译成 `HermesUIMessage.parts`（assistant_message→text、reasoning→reasoning、tool_call→tool part、error→notice）。
+保留 Hermes 的渲染层：`ChatSessionRuntime` / `AgentUIMessage` / `ChatMessage` / `MessageTimeline` / `GooseComposer` / `PreviewRail`。替换三处：
+1. **事件入口**：`stores/chat.ts` 新增 `reduceAgentEvent(runtime, envelope)` 与 `applyAgentEventAtom`，把 `AgentStreamEvent` 翻译成 `AgentUIMessage.parts`（assistant_message→text、reasoning→reasoning、tool_call→tool part、error→notice）。
 2. **动作 hook**：新增 `hooks/use-agent-session.ts` 替换 `useGateway()` 的调用方，方法：`createSession`、`sendPrompt`、`interrupt`、`closeSession`、`respondPermission`、`setModel`、`setMode`、`listProviders`、`listModels`。
 3. **历史**：`detail.tsx` 从 `agent.timeline` 重建消息，替代 Hermes REST 历史。
-4. **传输**：新增 `lib/sidecar-client.ts`，复用 `gateway-client.ts` 的 JSON-RPC 与重连/退避逻辑以及 `gateway-socket-path.ts` 的原生 WS / Rust 中继回退；地址与 token 来自 `get_sidecar_config`，订阅 `sidecar-status` 事件。
+4. **传输**：新增 `lib/sidecar-client.ts`，复用 `gateway-client.ts` 的 JSON-RPC 与重连/退避逻辑以及 `sidecar-socket-path.ts` 的原生 WS / Rust 中继回退；地址与 token 来自 `get_sidecar_config`，订阅 `sidecar-status` 事件。
 5. **审批**：`ApprovalDialog` 抽到 `components/chat/`，按 `AgentPermissionRequest.actions` 渲染多按钮。
 6. **新建会话**：composer 上的模型选择器改为「Agent（provider）+ 模型 + 模式」，工作目录沿用 workspace picker。
 

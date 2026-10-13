@@ -31,7 +31,7 @@ import {
 const ICON = 12;
 
 export function isDesktopAvailable(): boolean {
-  return typeof window !== "undefined" && !!window.hermesDesktop;
+  return typeof window !== "undefined" && !!window.agentdeckDesktop;
 }
 
 async function copyText(text: string): Promise<void> {
@@ -44,8 +44,8 @@ async function copyText(text: string): Promise<void> {
 
 async function openPathInExplorer(path: string): Promise<void> {
   try {
-    if (window.hermesDesktop?.openWorkspacePath) {
-      const result = await window.hermesDesktop.openWorkspacePath({ path });
+    if (window.agentdeckDesktop?.openWorkspacePath) {
+      const result = await window.agentdeckDesktop.openWorkspacePath({ path });
       if (!result.ok) console.error("Failed to open project:", result.body);
     }
   } catch (error) {

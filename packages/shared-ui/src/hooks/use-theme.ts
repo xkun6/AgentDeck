@@ -77,7 +77,7 @@ export const themeWriteAtom = atom(null, (_get, set, update: Partial<ThemeConfig
   set(themeAtom, (prev) => {
     const next = normalizeThemeConfig({ ...prev, ...update });
     try {
-      (globalThis as any).__HERMES_UI_STORE__?.set?.("hermes-theme", next);
+      (globalThis as any).__AGENTDECK_UI_STORE__?.set?.("agentdeck-theme", next);
     } catch {}
     applyThemeToDOM(next);
     return next;
@@ -95,8 +95,8 @@ export function applyThemeToDOM(config: ThemeConfig) {
   root.setAttribute("data-scale", config.scale);
 
   const factor = SCALE_FACTORS[config.scale] ?? 1;
-  const desktop = (globalThis as unknown as { hermesDesktop?: DesktopZoomBridge })
-    .hermesDesktop;
+  const desktop = (globalThis as unknown as { agentdeckDesktop?: DesktopZoomBridge })
+    .agentdeckDesktop;
 
   // Prefer the native webview page zoom on the desktop. Page zoom reflows the
   // layout AND shrinks the layout viewport, so `100vw`/`100vh` keep tracking the

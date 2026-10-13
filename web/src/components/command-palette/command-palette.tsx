@@ -187,9 +187,9 @@ export function CommandPalette() {
     }
 
     let opened = false;
-    if (window.hermesDesktop?.openWorkspacePath) {
+    if (window.agentdeckDesktop?.openWorkspacePath) {
       try {
-        const result = await window.hermesDesktop.openWorkspacePath({ path: action.path });
+        const result = await window.agentdeckDesktop.openWorkspacePath({ path: action.path });
         opened = result.ok;
       } catch (error) {
         console.error("Failed to open command palette path:", error);

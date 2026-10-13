@@ -144,7 +144,7 @@ export function ProjectDetailRoute() {
     };
   }, [projectSessions]);
 
-  const desktopAvailable = typeof window !== "undefined" && !!window.hermesDesktop;
+  const desktopAvailable = typeof window !== "undefined" && !!window.agentdeckDesktop;
 
   const goNewTask = useCallback(() => {
     if (!project) return;

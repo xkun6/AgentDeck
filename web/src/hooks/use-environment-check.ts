@@ -9,13 +9,13 @@ const ENVIRONMENT_CHECK_KEY = ["desktop-environment-check"] as const;
 function hasEnvironmentBridge(): boolean {
   return typeof window !== "undefined" &&
     runtime.platform !== "web" &&
-    Boolean(window.hermesDesktop?.environmentCheck);
+    Boolean(window.agentdeckDesktop?.environmentCheck);
 }
 
 export function useEnvironmentCheck() {
   return useQuery<EnvironmentCheckResult>({
     queryKey: ENVIRONMENT_CHECK_KEY,
-    queryFn: ({ signal }) => raceAbort(window.hermesDesktop!.environmentCheck!(), signal),
+    queryFn: ({ signal }) => raceAbort(window.agentdeckDesktop!.environmentCheck!(), signal),
     enabled: hasEnvironmentBridge(),
     staleTime: 10_000,
     refetchInterval: 60_000,
@@ -30,7 +30,7 @@ export function useEnvironmentInstall() {
   const queryClient = useQueryClient();
   const refreshCodingAgents = useRefreshCodingAgents();
   return async (id: string): Promise<EnvironmentInstallResult> => {
-    const install = window.hermesDesktop?.environmentInstall;
+    const install = window.agentdeckDesktop?.environmentInstall;
     if (!install) throw new Error("当前运行环境不支持一键安装（需要桌面端）");
     const result = await install(id);
     if (result.ok) {

@@ -45,11 +45,11 @@ describe("workspace persistence helpers", () => {
 
   it("ignores malformed persisted workspace values from older builds", () => {
     __resetUiStoreForTests({
-      "hermes-cn-ui.workspaceProjects": [
+      "agentdeck-cn-ui.workspaceProjects": [
         { path: ["/Users/claw/OldA", "/Users/claw/OldB"], name: { label: "old" } },
         { path: "/Users/claw/Project", name: 42, createdAt: "bad", updatedAt: null },
       ],
-      "hermes-cn-ui.sessionWorkspaces": {
+      "agentdeck-cn-ui.sessionWorkspaces": {
         "session-1": ["/Users/claw/OldA"],
         "session-2": "/Users/claw/Project",
       },

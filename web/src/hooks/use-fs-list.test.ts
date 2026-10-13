@@ -42,7 +42,7 @@ describe("listDirectory", () => {
       home: "/home/me",
       entries: [{ name: "C:\\", path: "C:\\", isDir: true }],
     }));
-    (globalThis as { window?: unknown }).window = { hermesDesktop: { windowType: "tauri", fsList } };
+    (globalThis as { window?: unknown }).window = { agentdeckDesktop: { windowType: "tauri", fsList } };
 
     const home = await listDirectory(null);
     expect(fsList).toHaveBeenLastCalledWith({ showHidden: false });

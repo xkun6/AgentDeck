@@ -7,7 +7,7 @@
 //   node scripts/cdp-eval.mjs '<javascript expression>'
 //
 // Example:
-//   node scripts/cdp-eval.mjs 'window.__hermesDebugMessages'
+//   node scripts/cdp-eval.mjs 'window.__agentdeckDebugMessages'
 //   node scripts/cdp-eval.mjs 'document.querySelectorAll("[data-role=assistant]").length'
 
 const port = process.env.CDP_PORT || 9222;
@@ -18,10 +18,10 @@ if (!expr) {
 }
 
 const pages = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json());
-// Pick the Hermes page — its title contains "Hermes" or the URL points at
+// Pick the AgentDeck page — its title contains "AgentDeck" or the URL points at
 // localhost:9545 (dev) / tauri.localhost (prod).
 const target =
-  pages.find((p) => /hermes/i.test(p.title)) ||
+  pages.find((p) => /agentdeck/i.test(p.title)) ||
   pages.find((p) => /localhost:9545|tauri\.localhost/.test(p.url ?? "")) ||
   pages.find((p) => p.type === "page");
 if (!target) {

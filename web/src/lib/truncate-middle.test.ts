@@ -14,7 +14,7 @@ describe("truncateMiddle", () => {
   });
 
   it("preserves both ends with ellipsis in the middle", () => {
-    const path = "/Users/claw/Documents/GithubProjects/hermes/hermes-agent-cn-ui-v2/apps/web/src/lib";
+    const path = "/Users/claw/Documents/GithubProjects/agentdeck/agentdeck-agent-cn-ui-v2/apps/web/src/lib";
     const out = truncateMiddle(path, 30);
     expect(out.length).toBe(30);
     expect(out).toContain("…");

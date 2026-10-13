@@ -342,7 +342,7 @@ export function GooseComposer({
   }, [appendAttachmentDrafts]);
 
   useEffect(() => {
-    const onFileDrop = window.hermesDesktop?.onFileDrop;
+    const onFileDrop = window.agentdeckDesktop?.onFileDrop;
     if (!onFileDrop) return;
 
     return onFileDrop((payload) => {
@@ -379,8 +379,8 @@ export function GooseComposer({
     if (controlsDisabled) return;
     setSubmitError("");
     try {
-      if (window.hermesDesktop?.pickFiles) {
-        const result = await window.hermesDesktop.pickFiles();
+      if (window.agentdeckDesktop?.pickFiles) {
+        const result = await window.agentdeckDesktop.pickFiles();
         if (!result.canceled) addPathAttachments(result.paths);
         return;
       }
@@ -432,8 +432,8 @@ export function GooseComposer({
     if (controlsDisabled) return;
     setSubmitError("");
     try {
-      if (window.hermesDesktop?.pickDirectory) {
-        const result = await window.hermesDesktop.pickDirectory();
+      if (window.agentdeckDesktop?.pickDirectory) {
+        const result = await window.agentdeckDesktop.pickDirectory();
         if (!result.canceled) applyWorkspacePath(result.paths[0] ?? "");
         return;
       }

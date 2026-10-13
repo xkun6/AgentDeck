@@ -1,6 +1,6 @@
 import type {
-  HermesMessagePart,
-  HermesUIMessage,
+  AgentMessagePart,
+  AgentUIMessage,
 } from "@agentdeck/protocol";
 import {
   normalizeCliThinkingProgress,
@@ -16,8 +16,8 @@ import type {
   ChatToolItem,
 } from "./chat-types";
 
-type HermesToolPart = Extract<HermesMessagePart, { type: "tool" }>;
-type HermesImagePart = Extract<HermesMessagePart, { type: "image" }>;
+type AgentToolPart = Extract<AgentMessagePart, { type: "tool" }>;
+type AgentImagePart = Extract<AgentMessagePart, { type: "image" }>;
 
 function normalizeContent(value: string | null | undefined): string | undefined {
   const text = value?.trim();
@@ -34,7 +34,7 @@ function displayUnknown(value: unknown): string | undefined {
   }
 }
 
-function imagePartToEntry(part: HermesImagePart): ChatImageItem {
+function imagePartToEntry(part: AgentImagePart): ChatImageItem {
   const record = part as Record<string, unknown>;
   const url =
     part.url ||
@@ -129,7 +129,7 @@ function readSubAgent(value: unknown): ChatSubAgentInfo | undefined {
   };
 }
 
-function toolPartToToolEntry(part: HermesToolPart, message: HermesUIMessage): ChatToolItem {
+function toolPartToToolEntry(part: AgentToolPart, message: AgentUIMessage): ChatToolItem {
   const subAgent = readSubAgent(part.subAgent);
   const input = parseToolInput(part.input);
   const images = extractImagePartsFromUnknown(part.output).map(imagePartToEntry);
@@ -150,7 +150,7 @@ function toolPartToToolEntry(part: HermesToolPart, message: HermesUIMessage): Ch
 }
 
 function partsToBlocks(
-  message: HermesUIMessage,
+  message: AgentUIMessage,
   options: { includeProgress?: boolean } = {},
 ): AssistantTurnBlock[] | undefined {
   const blocks: AssistantTurnBlock[] = [];
@@ -194,42 +194,42 @@ function partsToBlocks(
   return normalizeAssistantBlocks(blocks, options);
 }
 
-function textFromParts(parts: HermesMessagePart[]): string | undefined {
+function textFromParts(parts: AgentMessagePart[]): string | undefined {
   const text = parts
-    .filter((part): part is Extract<HermesMessagePart, { type: "text" }> => part.type === "text")
+    .filter((part): part is Extract<AgentMessagePart, { type: "text" }> => part.type === "text")
     .map((part) => part.text)
     .join("");
   return normalizeContent(text);
 }
 
-function reasoningFromParts(parts: HermesMessagePart[]): string | undefined {
+function reasoningFromParts(parts: AgentMessagePart[]): string | undefined {
   const reasoning = parts
-    .filter((part): part is Extract<HermesMessagePart, { type: "reasoning" }> => part.type === "reasoning")
+    .filter((part): part is Extract<AgentMessagePart, { type: "reasoning" }> => part.type === "reasoning")
     .map((part) => part.text)
     .join("");
   return normalizeContent(normalizeReasoningText(reasoning));
 }
 
-function noticeTextFromParts(parts: HermesMessagePart[]): string | undefined {
+function noticeTextFromParts(parts: AgentMessagePart[]): string | undefined {
   const text = parts
-    .filter((part): part is Extract<HermesMessagePart, { type: "notice" }> => part.type === "notice")
+    .filter((part): part is Extract<AgentMessagePart, { type: "notice" }> => part.type === "notice")
     .map((part) => part.text)
     .join("\n\n");
   return normalizeContent(text);
 }
 
-function imagesFromParts(parts: HermesMessagePart[]): ChatImageItem[] | undefined {
+function imagesFromParts(parts: AgentMessagePart[]): ChatImageItem[] | undefined {
   const images = parts
-    .filter((part): part is HermesImagePart => part.type === "image")
+    .filter((part): part is AgentImagePart => part.type === "image")
     .map(imagePartToEntry);
   return images.length ? images : undefined;
 }
 
-function messageHasErrorNotice(message: HermesUIMessage): boolean {
+function messageHasErrorNotice(message: AgentUIMessage): boolean {
   return message.parts.some((part) => part.type === "notice" && part.level === "error");
 }
 
-export function deriveAssistantStats(msg: HermesUIMessage): AssistantMessageStats | undefined {
+export function deriveAssistantStats(msg: AgentUIMessage): AssistantMessageStats | undefined {
   if (msg.role !== "assistant") return undefined;
 
   const usage = msg.metadata?.usage;
@@ -309,7 +309,7 @@ export function deriveAssistantStats(msg: HermesUIMessage): AssistantMessageStat
   return hasAny ? stats : undefined;
 }
 
-export function hermesUIMessageToChatMessage(msg: HermesUIMessage): ChatMessage | null {
+export function agentUIMessageToChatMessage(msg: AgentUIMessage): ChatMessage | null {
   const includeProgress = msg.status === "streaming";
   const text = msg.role === "system"
     ? noticeTextFromParts(msg.parts) ?? textFromParts(msg.parts)
@@ -340,8 +340,8 @@ export function hermesUIMessageToChatMessage(msg: HermesUIMessage): ChatMessage 
   };
 }
 
-export function hermesUIMessagesToChatMessages(messages: HermesUIMessage[]): ChatMessage[] {
+export function agentUIMessagesToChatMessages(messages: AgentUIMessage[]): ChatMessage[] {
   return messages
-    .map(hermesUIMessageToChatMessage)
+    .map(agentUIMessageToChatMessage)
     .filter((message): message is ChatMessage => message !== null);
 }

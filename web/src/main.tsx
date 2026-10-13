@@ -16,12 +16,12 @@ applyPlatformToDOM(runtime.platform);
 applyHostOSToDOM();
 
 async function bootstrap() {
-  if (!window.__TAURI_INTERNALS__ && !window.__HERMES_RUNTIME__) {
+  if (!window.__TAURI_INTERNALS__ && !window.__AGENTDECK_RUNTIME__) {
     // 浏览器开发模式：直连 sidecar（VITE_AGENTDECK_SIDECAR_URL / VITE_AGENTDECK_SIDECAR_TOKEN）。
-    window.__HERMES_RUNTIME__ = { platform: "web" };
+    window.__AGENTDECK_RUNTIME__ = { platform: "web" };
   }
 
-  if (window.__TAURI_INTERNALS__ && !window.__HERMES_RUNTIME__) {
+  if (window.__TAURI_INTERNALS__ && !window.__AGENTDECK_RUNTIME__) {
     const { installTauriBridge } = await import("./lib/tauri-bridge");
     await installTauriBridge();
   }
@@ -29,7 +29,7 @@ async function bootstrap() {
   installExternalLinkHandling();
   await initUiStore();
 
-  const initialTheme = normalizeThemeConfig(readUiValue<Partial<ThemeConfig>>("hermes-theme", DEFAULT_THEME_CONFIG));
+  const initialTheme = normalizeThemeConfig(readUiValue<Partial<ThemeConfig>>("agentdeck-theme", DEFAULT_THEME_CONFIG));
   applyThemeToDOM(initialTheme);
   // Seed the shared jotai store so `useTheme()` (and the appearance controls)
   // start from the persisted theme/density/scale instead of the defaults.

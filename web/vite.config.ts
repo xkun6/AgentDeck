@@ -88,7 +88,7 @@ function resolveDevServerPort(): number {
 }
 
 function gitShortCommit(): string {
-  if (process.env.HERMES_BUILD_COMMIT) return process.env.HERMES_BUILD_COMMIT;
+  if (process.env.AGENTDECK_BUILD_COMMIT) return process.env.AGENTDECK_BUILD_COMMIT;
   try {
     return execSync("git rev-parse --short=12 HEAD", {
       cwd: resolve(__dirname, ".."),
@@ -101,7 +101,7 @@ function gitShortCommit(): string {
 }
 
 function gitCommitDate(): string {
-  if (process.env.HERMES_BUILD_DATE) return process.env.HERMES_BUILD_DATE;
+  if (process.env.AGENTDECK_BUILD_DATE) return process.env.AGENTDECK_BUILD_DATE;
   try {
     return execSync("git log -1 --format=%cI HEAD", {
       cwd: resolve(__dirname, ".."),
@@ -114,7 +114,7 @@ function gitCommitDate(): string {
 }
 
 function desktopAppVersion(): string {
-  if (process.env.HERMES_DESKTOP_APP_VERSION) return process.env.HERMES_DESKTOP_APP_VERSION;
+  if (process.env.AGENTDECK_DESKTOP_APP_VERSION) return process.env.AGENTDECK_DESKTOP_APP_VERSION;
   const pkgPath = resolve(__dirname, "..", "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: unknown };
   if (typeof pkg.version !== "string" || !pkg.version.trim()) {
@@ -129,9 +129,9 @@ export default defineConfig({
   base: "./",
   plugins: [react()],
   define: {
-    "import.meta.env.VITE_HERMES_BUILD_COMMIT": JSON.stringify(gitShortCommit()),
-    "import.meta.env.VITE_HERMES_BUILD_DATE": JSON.stringify(gitCommitDate()),
-    "import.meta.env.VITE_HERMES_DESKTOP_VERSION": JSON.stringify(desktopAppVersion()),
+    "import.meta.env.VITE_AGENTDECK_BUILD_COMMIT": JSON.stringify(gitShortCommit()),
+    "import.meta.env.VITE_AGENTDECK_BUILD_DATE": JSON.stringify(gitCommitDate()),
+    "import.meta.env.VITE_AGENTDECK_DESKTOP_VERSION": JSON.stringify(desktopAppVersion()),
   },
   resolve: {
     alias: {

@@ -1,9 +1,9 @@
-/* Hermes Community UI — Primitive values
+/* AgentDeck Community UI — Primitive values
    设计基线严格采用 PrimeAPP 的 4px 网格、扁平信息层级和直角几何。
    业务样式应消费 semantic/component token。 */
 
 :root {
-  /* Ink / bone palette kept for the warm Hermes themes. */
+  /* Ink / bone palette kept for the warm AgentDeck themes. */
   --h-color-ink-000: #050403;
   --h-color-ink-050: #0a0908;
   --h-color-ink-100: #11100e;

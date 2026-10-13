@@ -155,7 +155,7 @@ export function NotificationSection({ showHeading = true }: SettingsSectionProps
   const toggleOptions = [{ value: "off", label: "关闭" }, { value: "on", label: "开启" }];
 
   const handleTestNotification = async () => {
-    const bridge = window.hermesDesktop;
+    const bridge = window.agentdeckDesktop;
     if (typeof bridge?.desktopNotify !== "function") {
       setTestState({ phase: "error", message: "当前为 Web 模式，系统通知仅桌面端支持" });
       return;

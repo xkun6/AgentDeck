@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { HermesUIMessage } from "@agentdeck/protocol";
+import type { AgentUIMessage } from "@agentdeck/protocol";
 import {
   deriveAssistantStats,
-  hermesUIMessageToChatMessage,
+  agentUIMessageToChatMessage,
 } from "./message-adapter";
 
-function uiMessage(overrides: Partial<HermesUIMessage> = {}): HermesUIMessage {
+function uiMessage(overrides: Partial<AgentUIMessage> = {}): AgentUIMessage {
   return {
     id: "m1",
     sessionId: "s1",
@@ -19,7 +19,7 @@ function uiMessage(overrides: Partial<HermesUIMessage> = {}): HermesUIMessage {
 
 describe("message adapter", () => {
   it("keeps canonical progress as a streaming progress block", () => {
-    const message = hermesUIMessageToChatMessage(uiMessage({
+    const message = agentUIMessageToChatMessage(uiMessage({
       id: "live-assistant-1",
       status: "streaming",
       parts: [
@@ -36,14 +36,14 @@ describe("message adapter", () => {
   });
 
   it("保留文本 part 的 source:command 到 text block", () => {
-    const message = hermesUIMessageToChatMessage(uiMessage({
+    const message = agentUIMessageToChatMessage(uiMessage({
       parts: [{ type: "text", text: "a\nb", source: "command" }],
     }));
     expect(message?.blocks).toEqual([{ type: "text", text: "a\nb", source: "command" }]);
   });
 
   it("preserves structured image parts as renderable chat images", () => {
-    const message = hermesUIMessageToChatMessage(uiMessage({
+    const message = agentUIMessageToChatMessage(uiMessage({
       id: "assistant-image",
       parts: [
         { type: "text", text: "这是图片：" },
@@ -62,7 +62,7 @@ describe("message adapter", () => {
   });
 
   it("canonical conversion preserves stats, tool cards, reasoning, and copyable text blocks", () => {
-    const chat = hermesUIMessageToChatMessage(uiMessage({
+    const chat = agentUIMessageToChatMessage(uiMessage({
       id: "live-assistant-1",
       parts: [
         { type: "reasoning", text: "先分析。" },
@@ -212,7 +212,7 @@ describe("assistant stats derivation", () => {
   });
 
   it("attaches stats on canonical assistant messages", () => {
-    const chat = hermesUIMessageToChatMessage(uiMessage({
+    const chat = agentUIMessageToChatMessage(uiMessage({
       metadata: {
         timing: { startedAt: 0, firstTokenAt: 200, completedAt: 1_000 },
         usage: { tokensInput: 10, tokensOutput: 20, tokensTotal: 30 },

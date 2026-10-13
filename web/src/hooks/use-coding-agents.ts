@@ -11,7 +11,7 @@ function hasCodingAgentsBridge(): boolean {
   return (
     typeof window !== "undefined" &&
     runtime.platform !== "web" &&
-    Boolean(window.hermesDesktop?.codingAgentsCheck)
+    Boolean(window.agentdeckDesktop?.codingAgentsCheck)
   );
 }
 
@@ -19,7 +19,7 @@ function hasCodingAgentsBridge(): boolean {
 export function useCodingAgentsCheck() {
   return useQuery<CodingAgentsCheckResult>({
     queryKey: CODING_AGENTS_CHECK_KEY,
-    queryFn: ({ signal }) => raceAbort(window.hermesDesktop!.codingAgentsCheck!(), signal),
+    queryFn: ({ signal }) => raceAbort(window.agentdeckDesktop!.codingAgentsCheck!(), signal),
     enabled: hasCodingAgentsBridge(),
     staleTime: 10_000,
     refetchInterval: 60_000,
@@ -40,7 +40,7 @@ export type CodingAgentPathKey = keyof CodingAgentPaths;
 export function useSaveCodingAgentPath() {
   const queryClient = useQueryClient();
   return useCallback(async (key: CodingAgentPathKey, value: string | null): Promise<CodingAgentPaths> => {
-    const bridge = window.hermesDesktop;
+    const bridge = window.agentdeckDesktop;
     if (!bridge?.codingAgentPathsGet || !bridge.codingAgentPathsSet) {
       throw new Error("当前运行环境不支持配置路径（需要桌面端）");
     }

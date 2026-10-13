@@ -1,7 +1,7 @@
 // Tauri v2 IPC bridge.
 //
-// Wraps @tauri-apps/api/core::invoke() calls to match the hermesDesktop API
-// surface. On initialization, populates window.hermesDesktop so that ALL
+// Wraps @tauri-apps/api/core::invoke() calls to match the agentdeckDesktop API
+// surface. On initialization, populates window.agentdeckDesktop so that ALL
 // existing call sites (settings.tsx, projects.tsx, goose-composer.tsx, etc.)
 // work without any changes.
 //
@@ -20,9 +20,6 @@ import type {
   DesktopNotifyInput,
   DesktopNotifyResult,
   DesktopFileDropPayload,
-  DownloadExternalImageInput,
-  DownloadedImageResult,
-  ExternalRequestInput,
   ExternalRequestResult,
   FilePickerResult,
   FilePreview,
@@ -41,7 +38,7 @@ import type {
   WatchPreviewFileResult,
   WriteWorkspaceFileInput,
   WriteWorkspaceFileResult,
-  HermesGitBridge,
+  AgentGitBridge,
   DesktopWindowControls,
 } from "./runtime";
 import { detectHostOS } from "./runtime";
@@ -203,18 +200,6 @@ function normalizeFileDropPayload(payload: TauriFileDropEventPayload): DesktopFi
 const tauriBridge = {
   windowType: "tauri" as const,
 
-  async fatalErrorAndExit(input: { title: string; message: string }): Promise<never> {
-    return invokeCommand("fatal_error_and_exit", { input });
-  },
-
-  async externalRequest(input: ExternalRequestInput): Promise<ExternalRequestResult> {
-    return invokeCommand("external_request", { input });
-  },
-
-  async downloadExternalImage(input: DownloadExternalImageInput): Promise<DownloadedImageResult> {
-    return invokeCommand("download_external_image", { input });
-  },
-
   async pickFiles(): Promise<FilePickerResult> {
     return invokeCommand("pick_files");
   },
@@ -237,10 +222,6 @@ const tauriBridge = {
     });
     const paths = selected == null ? [] : Array.isArray(selected) ? selected : [selected];
     return { canceled: paths.length === 0, paths };
-  },
-
-  async createWorkspaceProject(): Promise<FilePickerResult> {
-    return invokeCommand("create_workspace_project");
   },
 
   onFileDrop(handler: (payload: DesktopFileDropPayload) => void): () => void {
@@ -392,7 +373,7 @@ const tauriBridge = {
     return invokeCommand("write_workspace_file", { input });
   },
   // Git ops backing the review pane (issue #328). Mirrors the upstream
-  // `window.hermesDesktop.git.review.*` shape so the ported review logic reads
+  // `window.agentdeckDesktop.git.review.*` shape so the ported review logic reads
   // naturally; each method forwards to a Rust command that shells `git`/`gh`.
   git: {
     review: {
@@ -401,9 +382,7 @@ const tauriBridge = {
       stage: (input) => invokeCommand("git_review_stage", { input }),
       unstage: (input) => invokeCommand("git_review_unstage", { input }),
       revert: (input) => invokeCommand("git_review_revert", { input }),
-      revParse: (input) => invokeCommand("git_review_rev_parse", { input }),
       commit: (input) => invokeCommand("git_review_commit", { input }),
-      commitContext: (input) => invokeCommand("git_review_commit_context", { input }),
       push: (input) => invokeCommand("git_review_push", { input }),
       shipInfo: (input) => invokeCommand("git_review_ship_info", { input }),
       createPr: (input) => invokeCommand("git_review_create_pr", { input }),
@@ -419,7 +398,7 @@ const tauriBridge = {
       switch: (input) => invokeCommand("git_branch_switch", { input }),
     },
     repoStatus: (input) => invokeCommand("git_repo_status", { input }),
-  } satisfies HermesGitBridge,
+  } satisfies AgentGitBridge,
 
   async watchPreviewFile(input: { path: string }): Promise<WatchPreviewFileResult> {
     return invokeCommand("watch_preview_file", { input });
@@ -546,7 +525,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
   let lastErrorMessage = "";
 
   const root = document.createElement("div");
-  root.id = "hermes-bootstrap-overlay";
+  root.id = "agentdeck-bootstrap-overlay";
   root.setAttribute(
     "style",
     "position:fixed;inset:0;background:#111111;" +
@@ -581,7 +560,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
   panel.appendChild(brand);
 
   const message = document.createElement("div");
-  message.id = "hermes-bootstrap-message";
+  message.id = "agentdeck-bootstrap-message";
   message.setAttribute(
     "style",
     "font-size:15px;color:rgba(251,250,246,0.9);max-width:620px;line-height:1.6;",
@@ -590,7 +569,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
   panel.appendChild(message);
 
   const detail = document.createElement("div");
-  detail.id = "hermes-bootstrap-error-detail";
+  detail.id = "agentdeck-bootstrap-error-detail";
   detail.setAttribute(
     "style",
     "display:none;width:100%;box-sizing:border-box;margin-top:4px;border:1px solid rgba(251,250,246,0.14);" +
@@ -626,7 +605,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
   detail.appendChild(detailHeader);
 
   const errorText = document.createElement("pre");
-  errorText.id = "hermes-bootstrap-error-text";
+  errorText.id = "agentdeck-bootstrap-error-text";
   errorText.tabIndex = 0;
   errorText.setAttribute(
     "style",
@@ -640,7 +619,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
 
   const retryButton = document.createElement("button");
   retryButton.type = "button";
-  retryButton.id = "hermes-bootstrap-retry";
+  retryButton.id = "agentdeck-bootstrap-retry";
   retryButton.setAttribute("style", `${buttonStyle}display:none;`);
   retryButton.textContent = "重试";
   retryButton.addEventListener("click", () => {
@@ -668,7 +647,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
   panel.appendChild(versionPanel);
 
   const sub = document.createElement("div");
-  sub.id = "hermes-bootstrap-sub";
+  sub.id = "agentdeck-bootstrap-sub";
   sub.setAttribute(
     "style",
     "font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;" +
@@ -861,7 +840,7 @@ export async function installTauriBridge(): Promise<void> {
 
   // Mount the bridge first so the fatal-error dialog and ui_store work while we
   // wait for the sidecar.
-  (window as any).hermesDesktop = tauriBridge;
+  (window as any).agentdeckDesktop = tauriBridge;
 
   const status = await invokeCommand<SidecarStatusPayload>("get_sidecar_config");
   if (!isSidecarReady(status)) {
@@ -869,9 +848,9 @@ export async function installTauriBridge(): Promise<void> {
   }
 
   const windowControls = await windowControlsReady;
-  if (windowControls && window.hermesDesktop) window.hermesDesktop.windowControls = windowControls;
+  if (windowControls && window.agentdeckDesktop) window.agentdeckDesktop.windowControls = windowControls;
 
-  window.__HERMES_RUNTIME__ = { platform: "tauri" };
+  window.__AGENTDECK_RUNTIME__ = { platform: "tauri" };
 
   registerDevtoolsShortcut();
 }

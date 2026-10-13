@@ -16,11 +16,11 @@ use crate::process::sidecar::SidecarStatusPayload;
 
 /// Handle to the live Rust→sidecar WebSocket relay (see commands/ws_proxy.rs).
 /// Holds only std/tokio types so this module stays decoupled from the WS crate.
-pub struct GatewayWsHandle {
+pub struct SidecarWsHandle {
     /// Per-connection id; relay events are tagged with it so a stale relay from
     /// a prior connection can't deliver into a freshly-opened socket's shim.
     pub connection_id: String,
-    /// Outbound text frames pushed by `gateway_ws_send` → the writer task.
+    /// Outbound text frames pushed by `sidecar_ws_send` → the writer task.
     pub tx: mpsc::UnboundedSender<String>,
     /// Set to stop the reader/writer tasks (checked at each loop iteration).
     pub abort: Arc<AtomicBool>,
@@ -47,7 +47,7 @@ pub struct AppStateInner {
     /// The live Rust→sidecar WS relay connection, when the webview is on the
     /// relay socket path. `None` on webview-direct WS or before the first
     /// relay connect.
-    pub gateway_ws: Option<GatewayWsHandle>,
+    pub sidecar_ws: Option<SidecarWsHandle>,
 }
 
 /// Thread-safe wrapper. Tauri manages this via `app.manage(AppState::new())`.
@@ -66,7 +66,7 @@ impl AppState {
                 sidecar_status: SidecarStatusPayload::stopped(),
                 sidecar_busy: false,
                 sidecar_restart_policy: crate::supervisor::RestartPolicy::default(),
-                gateway_ws: None,
+                sidecar_ws: None,
             }),
         }
     }

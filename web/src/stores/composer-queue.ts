@@ -14,7 +14,7 @@ export interface QueuedPromptEntry {
 
 export type QueueState = Record<string, QueuedPromptEntry[]>;
 
-const STORAGE_KEY = "hermes.desktop.composerQueue.v1";
+const STORAGE_KEY = "agentdeck.desktop.composerQueue.v1";
 const EMPTY: readonly QueuedPromptEntry[] = [];
 
 // ---- Pure reducers (unit-tested) -------------------------------------------

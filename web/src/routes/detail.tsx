@@ -79,7 +79,7 @@ import { BackgroundTaskPanel } from "@/components/chat/background-tasks/backgrou
 import { useSidePanelSelection } from "@/components/chat/use-side-panel-selection";
 import { PREVIEW_PANEL_QUERY_KEY } from "@/lib/preview-rail";
 import { ConversationWidthControl } from "@/components/chat/conversation-width-control";
-import { hermesUIMessagesToChatMessages } from "@/components/chat/message-adapter";
+import { agentUIMessagesToChatMessages } from "@/components/chat/message-adapter";
 import s from "./detail.module.css";
 
 interface ComposerPrefillState {
@@ -252,7 +252,7 @@ export function DetailRoute() {
   }, [taskId]);
 
   const chatMessages = useMemo(
-    () => hermesUIMessagesToChatMessages(runtime.messages),
+    () => agentUIMessagesToChatMessages(runtime.messages),
     [runtime.messages],
   );
 

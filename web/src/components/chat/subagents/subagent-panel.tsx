@@ -6,7 +6,7 @@ import { ArrowLeft, X } from "lucide-react";
 import type { ProviderSubagentDescriptor, ProviderSubagentTimelineRow } from "@agentdeck/protocol";
 import { useSubagentTimeline } from "@/hooks/use-agent-session";
 import { createEmptyChatRuntime, reduceAgentEvent, type ChatSessionRuntime } from "@/stores/chat";
-import { hermesUIMessagesToChatMessages } from "../message-adapter";
+import { agentUIMessagesToChatMessages } from "../message-adapter";
 import { MessageTimeline } from "../message-timeline";
 import { PanelResizeHandle, usePanelWidth } from "../panel-resize";
 import { subagentDotStatus, subagentRowLabel, subagentStatusText } from "./subagent-presentation";
@@ -100,7 +100,7 @@ function SubagentPanelBody({
   const running = descriptor?.status === "running";
   const messages = useMemo(
     () =>
-      hermesUIMessagesToChatMessages(
+      agentUIMessagesToChatMessages(
         buildSubagentRuntime(`${agentId}:${subagentId}`, timeline.rows, !running).messages,
       ),
     [agentId, running, subagentId, timeline.rows],

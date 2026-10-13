@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentStreamEnvelope, AgentStreamEvent, HermesUIMessage } from "@agentdeck/protocol";
+import type { AgentStreamEnvelope, AgentStreamEvent, AgentUIMessage } from "@agentdeck/protocol";
 import type { ChatSessionRuntime } from "@/stores/chat";
 import type { NotificationSettings } from "@/stores/ui";
 
@@ -33,7 +33,7 @@ function runtimeWith(partial: Partial<ChatSessionRuntime> = {}): ChatSessionRunt
   };
 }
 
-function userMessage(text: string): HermesUIMessage {
+function userMessage(text: string): AgentUIMessage {
   return {
     id: "u1",
     sessionId: "s1",
@@ -41,7 +41,7 @@ function userMessage(text: string): HermesUIMessage {
     createdAt: 0,
     status: "complete",
     parts: [{ type: "text", text }],
-  } as HermesUIMessage;
+  } as AgentUIMessage;
 }
 
 function envelopeOf(event: AgentStreamEvent, agentId = "s1"): AgentStreamEnvelope {
@@ -417,7 +417,7 @@ describe("notifyFromAgentEvent", () => {
     const desktopNotify = vi
       .fn()
       .mockResolvedValue({ delivered: true, focused: false, attentionRequested: true });
-    (globalThis as any).window = { hermesDesktop: { desktopNotify } };
+    (globalThis as any).window = { agentdeckDesktop: { desktopNotify } };
 
     notifyFromAgentEvent(approvalEvent(), runtimeWith());
     await flushAsync();
@@ -439,7 +439,7 @@ describe("notifyFromAgentEvent", () => {
     const desktopNotify = vi
       .fn()
       .mockResolvedValue({ delivered: true, focused: false, attentionRequested: false });
-    (globalThis as any).window = { hermesDesktop: { desktopNotify } };
+    (globalThis as any).window = { agentdeckDesktop: { desktopNotify } };
 
     notifyFromAgentEvent(approvalEvent(), runtimeWith());
     notifyFromAgentEvent(approvalEvent(), runtimeWith());
@@ -451,7 +451,7 @@ describe("notifyFromAgentEvent", () => {
   it("swallows bridge rejections", async () => {
     const { notifyFromAgentEvent } = await loadNotifications();
     const desktopNotify = vi.fn().mockRejectedValue(new Error("ipc down"));
-    (globalThis as any).window = { hermesDesktop: { desktopNotify } };
+    (globalThis as any).window = { agentdeckDesktop: { desktopNotify } };
 
     expect(() => notifyFromAgentEvent(approvalEvent(), runtimeWith())).not.toThrow();
     await flushAsync();
@@ -460,12 +460,12 @@ describe("notifyFromAgentEvent", () => {
 
   it("plays the WebAudio chime when system notifications are disabled", async () => {
     const { notifyFromAgentEvent } = await loadNotifications({
-      "hermes.notify-system": false,
+      "agentdeck.notify-system": false,
     });
     const desktopNotify = vi
       .fn()
       .mockResolvedValue({ delivered: false, focused: false, attentionRequested: true });
-    (globalThis as any).window = { hermesDesktop: { desktopNotify } };
+    (globalThis as any).window = { agentdeckDesktop: { desktopNotify } };
 
     notifyFromAgentEvent(approvalEvent(), runtimeWith());
     await flushAsync();
@@ -478,10 +478,10 @@ describe("notifyFromAgentEvent", () => {
 
   it("respects disabled event-type toggles end to end", async () => {
     const { notifyFromAgentEvent } = await loadNotifications({
-      "hermes.notify-on-approval": false,
+      "agentdeck.notify-on-approval": false,
     });
     const desktopNotify = vi.fn();
-    (globalThis as any).window = { hermesDesktop: { desktopNotify } };
+    (globalThis as any).window = { agentdeckDesktop: { desktopNotify } };
 
     notifyFromAgentEvent(approvalEvent(), runtimeWith());
     await flushAsync();
@@ -494,7 +494,7 @@ describe("notifyFromAgentEvent", () => {
     const desktopNotify = vi
       .fn()
       .mockResolvedValue({ delivered: true, focused: false, attentionRequested: false });
-    (globalThis as any).window = { hermesDesktop: { desktopNotify } };
+    (globalThis as any).window = { agentdeckDesktop: { desktopNotify } };
 
     notifyFromAgentEvent(approvalEvent(), runtimeWith(), "重构登录");
     await flushAsync();

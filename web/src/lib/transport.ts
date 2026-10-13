@@ -1,4 +1,4 @@
-// 桌面端本地能力的薄包装（Hermes REST 已删除）：
+// 桌面端本地能力的薄包装（AgentDeck REST 已删除）：
 // - raceAbort：让原生 IPC 调用可被 AbortSignal 取消；
 // - readFileDataUrl / fetchMediaDataUrl：经 Rust 读取本机图片为 data URL。
 
@@ -30,7 +30,7 @@ export async function raceAbort<T>(work: Promise<T>, signal?: AbortSignal | null
 
 /** 把本机图片路径读成 data URL（仅桌面端可用）。 */
 export async function fetchMediaDataUrl(path: string): Promise<string> {
-  const reader = window.hermesDesktop?.readFileDataUrl;
+  const reader = window.agentdeckDesktop?.readFileDataUrl;
   if (!reader) throw new Error("当前环境无法读取本机图片");
   const dataUrl = await reader(path);
   if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
@@ -40,7 +40,7 @@ export async function fetchMediaDataUrl(path: string): Promise<string> {
 }
 
 export async function readFileDataUrl(path: string): Promise<string | null> {
-  const reader = window.hermesDesktop?.readFileDataUrl;
+  const reader = window.agentdeckDesktop?.readFileDataUrl;
   if (!reader) return null;
   try {
     const dataUrl = await reader(path);

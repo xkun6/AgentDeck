@@ -16,7 +16,7 @@ export const Overlay = forwardRef<HTMLDivElement, OverlayProps>(
     <RadixDialog.Overlay ref={ref} className={cn(s.overlay, className)} {...rest} />
   ),
 );
-Overlay.displayName = "HermesDialog.Overlay";
+Overlay.displayName = "AgentDialog.Overlay";
 
 type ContentProps = React.ComponentPropsWithoutRef<typeof RadixDialog.Content>;
 export const Content = forwardRef<HTMLDivElement, ContentProps>(
@@ -24,4 +24,4 @@ export const Content = forwardRef<HTMLDivElement, ContentProps>(
     <RadixDialog.Content ref={ref} className={cn(s.content, className)} {...rest} />
   ),
 );
-Content.displayName = "HermesDialog.Content";
+Content.displayName = "AgentDialog.Content";

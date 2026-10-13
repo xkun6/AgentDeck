@@ -22,9 +22,9 @@ export function isRuntimeRunning(runtime: ChatSessionRuntime | undefined): boole
 /**
  * Default silence window (ms) after which a running turn is considered stalled.
  *
- * The connection-level heartbeat in `gateway-client.ts` only proves the
- * desktop↔gateway socket is alive — it cannot detect a turn wedged on a dead
- * model-provider call (the gateway keeps answering pings while the agent
+ * The connection-level heartbeat in `sidecar-client.ts` only proves the
+ * desktop↔sidecar socket is alive — it cannot detect a turn wedged on a dead
+ * model-provider call (the sidecar keeps answering pings while the agent
  * thread is blocked). This task-level watchdog covers that gap. The threshold
  * is deliberately generous: legitimate pre-first-token thinking on large
  * contexts can be tens of seconds, and the backend itself surfaces a live

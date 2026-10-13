@@ -51,7 +51,7 @@ export function ConsoleRoute() {
   const [externalOpening, setExternalOpening] = useState(false);
   const [externalOpened, setExternalOpened] = useState<string | null>(null);
 
-  const isExternalTerminalAvailable = Boolean(window.hermesDesktop?.terminalOpenExternal);
+  const isExternalTerminalAvailable = Boolean(window.agentdeckDesktop?.terminalOpenExternal);
 
   const statusText = useMemo(() => {
     if (status === "ready") return "已连接";
@@ -76,11 +76,11 @@ export function ConsoleRoute() {
   };
 
   const openExternalTerminal = () => {
-    if (!window.hermesDesktop?.terminalOpenExternal || externalOpening) return;
+    if (!window.agentdeckDesktop?.terminalOpenExternal || externalOpening) return;
     setExternalOpening(true);
     setExternalOpened(null);
     setError(null);
-    window.hermesDesktop
+    window.agentdeckDesktop
       .terminalOpenExternal({ cwd: session?.cwd || cwd || undefined })
       .then((result) => {
         setExternalOpened(`已在 ${result.terminal} 打开：${result.command}`);

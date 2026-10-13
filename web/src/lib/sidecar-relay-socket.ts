@@ -9,11 +9,11 @@
 // byte-identical between the native and relay paths.
 //
 // Wire contract (must match ws_proxy.rs):
-//   invoke gateway_ws_open  { connectionId }  → resolves on WS handshake success
-//   event  gateway-ws-message { connectionId, data }   → one inbound text frame
-//   event  gateway-ws-closed  { connectionId, message } → close/error/EOF
-//   invoke gateway_ws_send  { connectionId, data }
-//   invoke gateway_ws_close { connectionId }
+//   invoke sidecar_ws_open  { connectionId }  → resolves on WS handshake success
+//   event  sidecar-ws-message { connectionId, data }   → one inbound text frame
+//   event  sidecar-ws-closed  { connectionId, message } → close/error/EOF
+//   invoke sidecar_ws_send  { connectionId, data }
+//   invoke sidecar_ws_close { connectionId }
 // Every event is tagged with connectionId so a stale relay from a previous
 // connection can never deliver into this socket.
 
@@ -46,14 +46,14 @@ function nextConnectionId(): string {
   return `relay-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export class GatewayRelaySocket {
+export class SidecarRelaySocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
 
   readonly url: string;
-  readyState: number = GatewayRelaySocket.CONNECTING;
+  readyState: number = SidecarRelaySocket.CONNECTING;
 
   onopen: ((ev: unknown) => void) | null = null;
   onclose: ((ev: { code?: number; reason?: string }) => void) | null = null;
@@ -82,12 +82,12 @@ export class GatewayRelaySocket {
         import("@tauri-apps/api/event"),
       ]);
 
-      this.unlistenMessage = await listen<RelayMessagePayload>("gateway-ws-message", (event) => {
+      this.unlistenMessage = await listen<RelayMessagePayload>("sidecar-ws-message", (event) => {
         if (event.payload.connectionId !== this.connectionId) return;
-        if (this.readyState !== GatewayRelaySocket.OPEN) return;
+        if (this.readyState !== SidecarRelaySocket.OPEN) return;
         this.onmessage?.({ data: event.payload.data });
       });
-      this.unlistenClosed = await listen<RelayClosedPayload>("gateway-ws-closed", (event) => {
+      this.unlistenClosed = await listen<RelayClosedPayload>("sidecar-ws-closed", (event) => {
         if (event.payload.connectionId !== this.connectionId) return;
         this.settleClosed(event.payload.message, event.payload.code);
       });
@@ -98,20 +98,20 @@ export class GatewayRelaySocket {
         return;
       }
 
-      await invoke("gateway_ws_open", { input: { connectionId: this.connectionId } });
+      await invoke("sidecar_ws_open", { input: { connectionId: this.connectionId } });
 
       if (this.closedByUs) {
-        void invoke("gateway_ws_close", { input: { connectionId: this.connectionId } }).catch(() => {});
+        void invoke("sidecar_ws_close", { input: { connectionId: this.connectionId } }).catch(() => {});
         this.detachListeners();
         return;
       }
 
-      this.readyState = GatewayRelaySocket.OPEN;
+      this.readyState = SidecarRelaySocket.OPEN;
       this.onopen?.({});
     } catch (error) {
       this.onerror?.(error);
       const message = error instanceof Error ? error.message : String(error);
-      // A gateway_ws_open rejection carrying the auth-expired marker is an
+      // A sidecar_ws_open rejection carrying the auth-expired marker is an
       // authentication failure, not a transient drop — synthesize a 4401 so
       // the client stops blindly reconnecting and prompts re-login.
       const code = message.includes(AUTH_EXPIRED_PREFIX) ? 4401 : undefined;
@@ -120,13 +120,13 @@ export class GatewayRelaySocket {
   }
 
   send(data: string): void {
-    if (this.readyState !== GatewayRelaySocket.OPEN) {
+    if (this.readyState !== SidecarRelaySocket.OPEN) {
       // Native WebSocket throws on send-before-open; SidecarClient catches it.
       throw new Error("Relay socket is not open");
     }
     void import("@tauri-apps/api/core")
       .then(({ invoke }) =>
-        invoke("gateway_ws_send", { input: { connectionId: this.connectionId, data } }),
+        invoke("sidecar_ws_send", { input: { connectionId: this.connectionId, data } }),
       )
       .catch((error) => {
         // An async send failure means the relay died under us — surface it as
@@ -137,18 +137,18 @@ export class GatewayRelaySocket {
   }
 
   close(): void {
-    if (this.readyState === GatewayRelaySocket.CLOSED) return;
+    if (this.readyState === SidecarRelaySocket.CLOSED) return;
     this.closedByUs = true;
-    this.readyState = GatewayRelaySocket.CLOSING;
+    this.readyState = SidecarRelaySocket.CLOSING;
     void import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke("gateway_ws_close", { input: { connectionId: this.connectionId } }))
+      .then(({ invoke }) => invoke("sidecar_ws_close", { input: { connectionId: this.connectionId } }))
       .catch(() => {});
     this.settleClosed("closed");
   }
 
   private settleClosed(reason: string, code?: number): void {
-    if (this.readyState === GatewayRelaySocket.CLOSED) return;
-    this.readyState = GatewayRelaySocket.CLOSED;
+    if (this.readyState === SidecarRelaySocket.CLOSED) return;
+    this.readyState = SidecarRelaySocket.CLOSED;
     this.detachListeners();
     this.onclose?.({ reason, code });
   }

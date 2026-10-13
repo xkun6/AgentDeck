@@ -1,7 +1,7 @@
-import type { HermesImageSource, HermesMessagePart } from "@agentdeck/protocol";
+import type { AgentImageSource, AgentMessagePart } from "@agentdeck/protocol";
 import { fileNameFromPath, isImagePath } from "@/lib/composer-prompt";
 
-export type HermesImagePart = Extract<HermesMessagePart, { type: "image" }>;
+export type AgentImagePart = Extract<AgentMessagePart, { type: "image" }>;
 
 const MARKDOWN_IMAGE_RE = /!\[([^\]\n]*)\]\(\s*(?:<([^>\n]+)>|([^\n)]+))\s*\)/g;
 const BARE_IMAGE_RE = /(?:data:image\/[a-z0-9.+-]+;[^\s<>"')]+|https?:\/\/[^\s<>"')]+\.(?:apng|avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)(?:[?#][^\s<>"')]*)?|(?:\.{0,2}\/|\/|[A-Za-z]:[\\/]|\\\\|~[\\/])?[^\s<>"')]+\.(?:apng|avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)(?:[?#][^\s<>"')]*)?)/gi;
@@ -114,7 +114,7 @@ export function isImageReference(value: string): boolean {
   if (/^data:image\//i.test(trimmed)) return true;
   if (isImagePath(trimmed)) return true;
   try {
-    const parsed = new URL(trimmed, "http://hermes.local");
+    const parsed = new URL(trimmed, "http://agentdeck.local");
     return isImagePath(parsed.pathname);
   } catch {
     return false;
@@ -135,7 +135,7 @@ export function safeImageSrc(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function imagePartFromTrustedString(value: string, fallbackName?: string): HermesImagePart | null {
+function imagePartFromTrustedString(value: string, fallbackName?: string): AgentImagePart | null {
   const url = value.trim();
   if (!url) return null;
   const name = fallbackName?.trim() || (url.startsWith("data:") ? undefined : fileNameFromPath(url));
@@ -148,9 +148,9 @@ function imagePartFromTrustedString(value: string, fallbackName?: string): Herme
 }
 
 export function imagePartFromSource(
-  value: HermesImageSource | unknown,
+  value: AgentImageSource | unknown,
   fallbackName?: string,
-): HermesImagePart | null {
+): AgentImagePart | null {
   if (typeof value === "string") return imagePartFromTrustedString(value, fallbackName);
 
   const record = asRecord(value);
@@ -179,7 +179,7 @@ function recordLooksImageLike(record: Record<string, unknown>, url: string | und
   return Boolean(url && isImageReference(url));
 }
 
-export function imagePartFromPossibleImage(value: unknown, fallbackName?: string): HermesImagePart | null {
+export function imagePartFromPossibleImage(value: unknown, fallbackName?: string): AgentImagePart | null {
   if (typeof value === "string") {
     return isImageReference(value) ? imagePartFromTrustedString(value, fallbackName) : null;
   }
@@ -191,8 +191,8 @@ export function imagePartFromPossibleImage(value: unknown, fallbackName?: string
   return imagePartFromSource(record, fallbackName);
 }
 
-export function extractMarkdownImageParts(text: string): HermesImagePart[] {
-  const parts: HermesImagePart[] = [];
+export function extractMarkdownImageParts(text: string): AgentImagePart[] {
+  const parts: AgentImagePart[] = [];
   for (const match of text.matchAll(MARKDOWN_IMAGE_RE)) {
     const alt = match[1]?.trim();
     const rawUrl = (match[2] ?? match[3] ?? "").trim();
@@ -209,8 +209,8 @@ export function extractMarkdownImageParts(text: string): HermesImagePart[] {
   return dedupeImageParts(parts);
 }
 
-function extractBareImageParts(text: string): HermesImagePart[] {
-  const parts: HermesImagePart[] = [];
+function extractBareImageParts(text: string): AgentImagePart[] {
+  const parts: AgentImagePart[] = [];
   const localMatches = [...text.matchAll(LOCAL_IMAGE_WITH_SPACES_RE)];
   const localRanges = localMatches.map((match) => ({
     start: match.index ?? -1,
@@ -239,7 +239,7 @@ function extractBareImageParts(text: string): HermesImagePart[] {
   return dedupeImageParts(parts);
 }
 
-export function extractImagePartsFromUnknown(value: unknown, depth = 0): HermesImagePart[] {
+export function extractImagePartsFromUnknown(value: unknown, depth = 0): AgentImagePart[] {
   if (value == null || depth > 4) return [];
 
   if (typeof value === "string") {
@@ -265,9 +265,9 @@ export function extractImagePartsFromUnknown(value: unknown, depth = 0): HermesI
   return dedupeImageParts(direct ? [direct, ...nested] : nested);
 }
 
-export function dedupeImageParts(parts: HermesImagePart[]): HermesImagePart[] {
+export function dedupeImageParts(parts: AgentImagePart[]): AgentImagePart[] {
   const seen = new Set<string>();
-  const result: HermesImagePart[] = [];
+  const result: AgentImagePart[] = [];
   for (const part of parts) {
     const key = (part.url || part.path || part.name || part.alt || "").trim();
     if (!key || seen.has(key)) continue;

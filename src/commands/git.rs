@@ -21,10 +21,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
-/// Cap the diff handed to commit-message generation so the payload stays bounded.
-const COMMIT_CONTEXT_DIFF_MAX_CHARS: usize = 120_000;
-/// Cap the untracked-file list appended to that diff.
-const COMMIT_CONTEXT_UNTRACKED_MAX: usize = 80;
 /// Skip line-counting an untracked file larger than this (matches upstream).
 const UNTRACKED_LINE_COUNT_MAX_BYTES: u64 = 1024 * 1024;
 /// Hard deadline for a git/gh subprocess — a hung child (credential prompt that
@@ -60,13 +56,6 @@ pub struct ReviewList {
 #[derive(Debug, Serialize)]
 pub struct OkFlag {
     pub ok: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CommitContext {
-    pub diff: String,
-    pub recent: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,14 +109,6 @@ pub struct ReviewPathInput {
     /// `null` → whole tree (stage/unstage/revert all).
     #[serde(default)]
     pub file_path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewRevParseInput {
-    pub repo_path: String,
-    #[serde(default, rename = "ref")]
-    pub reference: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -501,15 +482,6 @@ fn fill_untracked_counts(cwd: &Path, files: &mut [ReviewFile]) {
     }
 }
 
-fn cap_text(text: &str, max_chars: usize, label: &str) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(max_chars).collect();
-    let omitted = text.chars().count() - max_chars;
-    format!("{kept}\n# {label}: {omitted} chars omitted\n")
-}
-
 /// Resolve the base ref for "all branch changes": merge-base with the remote
 /// default branch, falling back to common trunk names. Mirrors `branchBase`.
 fn branch_base(cwd: &Path) -> Option<String> {
@@ -714,54 +686,6 @@ fn review_diff_impl(
     run_git_capture(&cwd, &["diff", "--no-index", "--", "/dev/null", file_path])
 }
 
-fn commit_context_impl(repo_path: &str) -> CommitContext {
-    let Ok(cwd) = resolve_repo_dir(repo_path) else {
-        return CommitContext {
-            diff: String::new(),
-            recent: String::new(),
-        };
-    };
-
-    // What will land: staged changes if any, otherwise all tracked changes vs HEAD.
-    let raw_diff = if staged_count(&cwd) > 0 {
-        run_git_ok(&cwd, &["diff", "--cached"])
-    } else {
-        run_git_ok(&cwd, &["diff", "HEAD"])
-    };
-    let mut diff = cap_text(
-        &raw_diff,
-        COMMIT_CONTEXT_DIFF_MAX_CHARS,
-        "diff truncated for commit-message generation",
-    );
-
-    // Untracked files have no diff — list them so new files aren't invisible.
-    let untracked = untracked_paths(&cwd);
-    if !untracked.is_empty() {
-        let visible = untracked
-            .iter()
-            .take(COMMIT_CONTEXT_UNTRACKED_MAX)
-            .map(|p| format!("#   {p}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let omitted = untracked.len().saturating_sub(COMMIT_CONTEXT_UNTRACKED_MAX);
-        let mut note = format!("\n# New (untracked) files:\n{visible}\n");
-        if omitted > 0 {
-            note.push_str(&format!("#   ... {omitted} more omitted\n"));
-        }
-        diff = if diff.is_empty() {
-            note
-        } else {
-            format!("{diff}{note}")
-        };
-    }
-
-    let recent = run_git_ok(&cwd, &["log", "-n", "10", "--pretty=format:%s"])
-        .trim()
-        .to_string();
-
-    CommitContext { diff, recent }
-}
-
 fn ship_info_impl(repo_path: &str) -> ShipInfo {
     let Ok(cwd) = resolve_repo_dir(repo_path) else {
         return ShipInfo {
@@ -843,18 +767,6 @@ fn review_revert_impl(repo_path: &str, file_path: Option<&str>) -> AppResult<OkF
     Ok(OkFlag { ok: true })
 }
 
-fn review_rev_parse_impl(repo_path: &str, reference: Option<&str>) -> AppResult<Option<String>> {
-    let reference = reference.unwrap_or("HEAD");
-    ensure_safe_ref(reference)?;
-    let Ok(cwd) = resolve_repo_dir(repo_path) else {
-        return Ok(None);
-    };
-    let sha = run_git(&cwd, &["rev-parse", reference])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-    Ok(if sha.is_empty() { None } else { Some(sha) })
-}
-
 fn review_commit_impl(repo_path: &str, message: &str, push: bool) -> AppResult<OkFlag> {
     let cwd = resolve_repo_dir(repo_path)?;
     // Mirror VS Code: nothing staged → "commit all" (stage everything first).
@@ -915,18 +827,8 @@ pub async fn git_review_revert(input: ReviewPathInput) -> AppResult<OkFlag> {
 }
 
 #[tauri::command]
-pub async fn git_review_rev_parse(input: ReviewRevParseInput) -> AppResult<Option<String>> {
-    review_rev_parse_impl(&input.repo_path, input.reference.as_deref())
-}
-
-#[tauri::command]
 pub async fn git_review_commit(input: ReviewCommitInput) -> AppResult<OkFlag> {
     review_commit_impl(&input.repo_path, &input.message, input.push)
-}
-
-#[tauri::command]
-pub async fn git_review_commit_context(input: RepoPathInput) -> AppResult<CommitContext> {
-    Ok(commit_context_impl(&input.repo_path))
 }
 
 #[tauri::command]
@@ -1663,15 +1565,6 @@ mod tests {
     }
 
     #[test]
-    fn cap_text_truncates_with_a_note() {
-        assert_eq!(cap_text("short", 100, "x"), "short");
-        let capped = cap_text("abcdefgh", 4, "trimmed");
-        assert!(capped.starts_with("abcd"));
-        assert!(capped.contains("trimmed"));
-        assert!(capped.contains("4 chars omitted"));
-    }
-
-    #[test]
     fn untracked_insertions_counts_lines_and_skips_binary() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("two.txt"), "a\nb\n").unwrap();
@@ -1751,9 +1644,6 @@ mod tests {
 
         let list = review_list_impl(&repo, "uncommitted", None);
         assert!(list.files.is_empty(), "tree is clean after commit");
-        // The commit subject shows up in the commit context's recent log.
-        let ctx = commit_context_impl(&repo);
-        assert!(ctx.recent.contains("更新 README"));
     }
 
     #[test]
@@ -1798,20 +1688,7 @@ mod tests {
         let list = review_list_impl(&repo, "uncommitted", None);
         assert!(list.files.is_empty());
         assert!(!list.is_repo, "non-repo dir is flagged");
-        assert_eq!(commit_context_impl(&repo).diff, "");
         assert!(review_diff_impl(&repo, "x", "uncommitted", None, false).is_empty());
-    }
-
-    #[test]
-    fn rev_parse_resolves_head_and_returns_none_off_repo() {
-        let dir = init_repo();
-        let head = review_rev_parse_impl(&dir.path().to_string_lossy(), None).unwrap();
-        assert!(head.is_some());
-        assert_eq!(head.unwrap().len(), 40, "full sha");
-
-        let off_repo = tempfile::tempdir().unwrap();
-        let none = review_rev_parse_impl(&off_repo.path().to_string_lossy(), None).unwrap();
-        assert!(none.is_none());
     }
 
     #[test]
@@ -1937,11 +1814,6 @@ mod tests {
         assert!(ensure_safe_ref("--upload-pack=evil").is_err());
         assert!(ensure_safe_ref("-x").is_err());
         assert!(ensure_safe_ref("  --flag").is_err());
-
-        // The rev-parse command path refuses before touching git.
-        let dir = init_repo();
-        let err = review_rev_parse_impl(&dir.path().to_string_lossy(), Some("--verify"));
-        assert!(err.is_err(), "option-like ref must be rejected");
     }
 
     #[test]

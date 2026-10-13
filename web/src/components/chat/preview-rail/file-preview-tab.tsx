@@ -135,7 +135,7 @@ export function FilePreviewTab({ workspaceRoot, filePath, onSelectFile }: FilePr
     let debounce: number | null = null;
 
     const read = () => {
-      const bridge = window.hermesDesktop;
+      const bridge = window.agentdeckDesktop;
       if (!bridge?.readWorkspaceFile) {
         setLoadError("文件预览需要在桌面端中使用。");
         return;
@@ -161,17 +161,17 @@ export function FilePreviewTab({ workspaceRoot, filePath, onSelectFile }: FilePr
     read();
 
     // Live watch: re-read (debounced) on every change to the selected file.
-    void window.hermesDesktop?.watchPreviewFile?.({ path: filePath })
+    void window.agentdeckDesktop?.watchPreviewFile?.({ path: filePath })
       .then((res) => {
         if (cancelled) {
-          void window.hermesDesktop?.stopPreviewFileWatch?.({ watchId: res.watchId });
+          void window.agentdeckDesktop?.stopPreviewFileWatch?.({ watchId: res.watchId });
           return;
         }
         watchId = res.watchId;
       })
       .catch(() => {});
 
-    const unsubscribe = window.hermesDesktop?.onPreviewFileChanged?.((payload) => {
+    const unsubscribe = window.agentdeckDesktop?.onPreviewFileChanged?.((payload) => {
       if (payload.path !== filePath && payload.watchId !== watchId) return;
       if (debounce !== null) window.clearTimeout(debounce);
       debounce = window.setTimeout(read, RELOAD_DEBOUNCE_MS);
@@ -181,7 +181,7 @@ export function FilePreviewTab({ workspaceRoot, filePath, onSelectFile }: FilePr
       cancelled = true;
       if (debounce !== null) window.clearTimeout(debounce);
       unsubscribe?.();
-      if (watchId) void window.hermesDesktop?.stopPreviewFileWatch?.({ watchId });
+      if (watchId) void window.agentdeckDesktop?.stopPreviewFileWatch?.({ watchId });
     };
   }, [filePath, workspaceRoot, reloadTick]);
 
@@ -414,7 +414,7 @@ function FileViewer({
   // Editing is only offered for whole, readable text (see `canEditPreview`), and
   // needs the native write bridge (absent in the browser fallback).
   const canEdit =
-    canEditPreview(preview) && typeof window.hermesDesktop?.writeWorkspaceFile === "function";
+    canEditPreview(preview) && typeof window.agentdeckDesktop?.writeWorkspaceFile === "function";
 
   // Per-keystroke: update the draft ref (no render) and only flip `dirty` when
   // it actually changes, so a long typing run triggers a single re-render. Both
@@ -487,7 +487,7 @@ function FileViewer({
 
   const saveEdit = useCallback(
     async (force = false) => {
-      const bridge = window.hermesDesktop;
+      const bridge = window.agentdeckDesktop;
       if (saving || !bridge?.writeWorkspaceFile) return;
       setSaving(true);
       setSaveError(null);

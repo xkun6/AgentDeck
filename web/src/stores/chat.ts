@@ -4,9 +4,9 @@ import type {
   AgentStreamEnvelope,
   AgentTimelineItem,
   AgentUsage,
-  HermesMessageMetadata,
-  HermesMessagePart,
-  HermesUIMessage,
+  AgentMessageMetadata,
+  AgentMessagePart,
+  AgentUIMessage,
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 import { describePermissionCommand, describeToolCall } from "@/lib/agent-tool-detail";
@@ -56,7 +56,7 @@ export interface PendingApproval {
 export type StreamStatus = "idle" | "connecting" | "streaming" | "complete" | "error";
 
 export interface ChatSessionRuntime {
-  messages: HermesUIMessage[];
+  messages: AgentUIMessage[];
   streamStatus: StreamStatus;
   pendingApprovals: PendingApproval[];
   statusMessage: string;
@@ -93,7 +93,7 @@ export interface ChatSessionRuntime {
 
 export type ChatRuntimeBySession = Record<string, ChatSessionRuntime>;
 
-type HermesToolPart = Extract<HermesMessagePart, { type: "tool" }>;
+type AgentToolPart = Extract<AgentMessagePart, { type: "tool" }>;
 
 export const chatRuntimeBySessionAtom = atom<ChatRuntimeBySession>({});
 
@@ -124,11 +124,11 @@ function isStreamingStatus(status: StreamStatus): boolean {
   return status === "streaming" || status === "connecting";
 }
 
-function withoutProgressParts(parts: HermesMessagePart[]): HermesMessagePart[] {
+function withoutProgressParts(parts: AgentMessagePart[]): AgentMessagePart[] {
   return parts.filter((part) => part.type !== "progress");
 }
 
-function terminateRunningTools(parts: HermesMessagePart[]): HermesMessagePart[] {
+function terminateRunningTools(parts: AgentMessagePart[]): AgentMessagePart[] {
   let changed = false;
   const next = parts.map((part) => {
     if (part.type === "tool" && part.state === "running") {
@@ -141,10 +141,10 @@ function terminateRunningTools(parts: HermesMessagePart[]): HermesMessagePart[] 
 }
 
 function appendTextPart(
-  parts: HermesMessagePart[],
+  parts: AgentMessagePart[],
   text: string,
   source?: "command",
-): HermesMessagePart[] {
+): AgentMessagePart[] {
   if (!text) return parts;
   const next = withoutProgressParts(parts);
   const last = next[next.length - 1];
@@ -156,7 +156,7 @@ function appendTextPart(
   return next;
 }
 
-function appendReasoningPart(parts: HermesMessagePart[], text: string): HermesMessagePart[] {
+function appendReasoningPart(parts: AgentMessagePart[], text: string): AgentMessagePart[] {
   if (!text) return parts;
   const next = withoutProgressParts(parts);
   const last = next[next.length - 1];
@@ -168,7 +168,7 @@ function appendReasoningPart(parts: HermesMessagePart[], text: string): HermesMe
   return next;
 }
 
-function appendToolPart(parts: HermesMessagePart[], tool: HermesToolPart): HermesMessagePart[] {
+function appendToolPart(parts: AgentMessagePart[], tool: AgentToolPart): AgentMessagePart[] {
   const progressIndex = parts.findIndex((part) => part.type === "progress");
   if (progressIndex === -1) return [...parts, tool];
   return [
@@ -181,7 +181,7 @@ function appendToolPart(parts: HermesMessagePart[], tool: HermesToolPart): Herme
 function updateMessage(
   runtime: ChatSessionRuntime,
   id: string,
-  updater: (message: HermesUIMessage) => HermesUIMessage | null,
+  updater: (message: AgentUIMessage) => AgentUIMessage | null,
 ): ChatSessionRuntime {
   let changed = false;
   const messages = runtime.messages.flatMap((message) => {
@@ -309,7 +309,7 @@ function agentNoticeMessage(
   createdAt: number,
   text: string,
   level: AgentNoticeLevel,
-): HermesUIMessage {
+): AgentUIMessage {
   return {
     id,
     sessionId: agentId,
@@ -392,7 +392,7 @@ function withActiveAgentAssistant(
   runtime: ChatSessionRuntime,
   envelope: AgentStreamEnvelope,
   turnId: string | undefined,
-  updater: (message: HermesUIMessage) => HermesUIMessage | null,
+  updater: (message: AgentUIMessage) => AgentUIMessage | null,
 ): ChatSessionRuntime {
   const id = runtime.activeAssistantId ?? agentAssistantMessageId(turnId ?? runtime.activeTurnId, envelope.seq);
   const reconnecting = runtime.statusMessage === AGENT_RECONNECT_STATUS;
@@ -411,20 +411,20 @@ function withActiveAgentAssistant(
   return updateMessage(ensured, id, updater);
 }
 
-function agentToolState(status: ToolCallTimelineItem["status"]): HermesToolPart["state"] {
+function agentToolState(status: ToolCallTimelineItem["status"]): AgentToolPart["state"] {
   if (status === "running") return "running";
   if (status === "completed") return "done";
   return "error";
 }
 
 function upsertAgentToolPart(
-  parts: HermesMessagePart[],
+  parts: AgentMessagePart[],
   item: ToolCallTimelineItem,
   timestamp: number,
-): HermesMessagePart[] {
+): AgentMessagePart[] {
   const display = describeToolCall(item);
   const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === item.callId);
-  const existing = index === -1 ? undefined : parts[index] as HermesToolPart;
+  const existing = index === -1 ? undefined : parts[index] as AgentToolPart;
   const state = agentToolState(item.status);
   const errorText = item.error
     ? item.error
@@ -438,7 +438,7 @@ function upsertAgentToolPart(
         log: item.detail.log,
       }
     : undefined;
-  const tool: HermesToolPart = {
+  const tool: AgentToolPart = {
     type: "tool",
     toolCallId: item.callId,
     // 子代理卡片显示子代理类型（design.md 4.11），缺省 Task；Agent 提问显示为「提问」（4.13）
@@ -458,9 +458,9 @@ function upsertAgentToolPart(
   return next;
 }
 
-function agentUsageMetadata(usage: AgentUsage | undefined): HermesMessageMetadata["usage"] | undefined {
+function agentUsageMetadata(usage: AgentUsage | undefined): AgentMessageMetadata["usage"] | undefined {
   if (!usage) return undefined;
-  const next: NonNullable<HermesMessageMetadata["usage"]> = {};
+  const next: NonNullable<AgentMessageMetadata["usage"]> = {};
   if (typeof usage.inputTokens === "number") next.tokensInput = usage.inputTokens;
   if (typeof usage.outputTokens === "number") next.tokensOutput = usage.outputTokens;
   if (typeof usage.inputTokens === "number" || typeof usage.outputTokens === "number") {
@@ -476,8 +476,8 @@ function agentTurnMetadata(
   runtime: ChatSessionRuntime,
   completedAt: number,
   usage: AgentUsage | undefined,
-): HermesMessageMetadata {
-  const timing: NonNullable<HermesMessageMetadata["timing"]> = { completedAt };
+): AgentMessageMetadata {
+  const timing: NonNullable<AgentMessageMetadata["timing"]> = { completedAt };
   const startedAt = runtime.turnStartedAt;
   const firstTokenAt = runtime.turnFirstTokenAt;
   if (typeof startedAt === "number") {
@@ -488,7 +488,7 @@ function agentTurnMetadata(
     timing.firstTokenAt = firstTokenAt;
     if (typeof startedAt === "number" && firstTokenAt >= startedAt) timing.ttftMs = firstTokenAt - startedAt;
   }
-  const metadata: HermesMessageMetadata = { timing };
+  const metadata: AgentMessageMetadata = { timing };
   const usageMetadata = agentUsageMetadata(usage);
   if (usageMetadata) metadata.usage = usageMetadata;
   if (typeof usage?.totalCostUsd === "number") metadata.costUsd = usage.totalCostUsd;
@@ -865,7 +865,7 @@ export const startAgentPromptAtom = atom(
   ) => {
     const now = params.now ?? Date.now();
     const assistantId = agentPendingAssistantId(params.clientMessageId);
-    const userParts: HermesMessagePart[] = [];
+    const userParts: AgentMessagePart[] = [];
     if (params.text) userParts.push({ type: "text", text: params.text });
     for (const image of params.images ?? []) {
       const part = imagePartFromSource(image);

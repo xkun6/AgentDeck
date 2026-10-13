@@ -25,7 +25,7 @@ function basename(path: string): string {
 }
 
 function openInFinder(path: string): void {
-  void window.hermesDesktop?.openWorkspacePath?.({ path });
+  void window.agentdeckDesktop?.openWorkspacePath?.({ path });
 }
 
 // Backend-authoritative git worktree integration for a project (issue #327):
@@ -37,7 +37,7 @@ export function WorktreePanel({ repoPath }: WorktreePanelProps) {
   const { confirm } = useConfirm();
 
   // The git bridge only exists in the desktop shell; hide the panel in the browser.
-  if (typeof window === "undefined" || !window.hermesDesktop?.git) {
+  if (typeof window === "undefined" || !window.agentdeckDesktop?.git) {
     return null;
   }
 

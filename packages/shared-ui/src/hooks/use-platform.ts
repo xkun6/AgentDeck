@@ -3,11 +3,11 @@ import type { WindowType } from "@agentdeck/protocol";
 
 function readPlatform(): WindowType {
   if (typeof document === "undefined") return "web";
-  const runtime = (window as Window & { __HERMES_RUNTIME__?: { platform?: WindowType } })
-    .__HERMES_RUNTIME__;
+  const runtime = (window as Window & { __AGENTDECK_RUNTIME__?: { platform?: WindowType } })
+    .__AGENTDECK_RUNTIME__;
   return (
-    document.body?.dataset.hermesWindowType ||
-    document.documentElement.dataset.hermesWindowType ||
+    document.body?.dataset.agentdeckWindowType ||
+    document.documentElement.dataset.agentdeckWindowType ||
     runtime?.platform ||
     "web"
   ) as WindowType;
@@ -15,8 +15,8 @@ function readPlatform(): WindowType {
 
 export function applyPlatformToDOM(platform: WindowType): void {
   if (typeof document === "undefined") return;
-  document.documentElement.dataset.hermesWindowType = platform;
-  if (document.body) document.body.dataset.hermesWindowType = platform;
+  document.documentElement.dataset.agentdeckWindowType = platform;
+  if (document.body) document.body.dataset.agentdeckWindowType = platform;
 }
 
 export function usePlatform(): WindowType {
@@ -31,7 +31,7 @@ export function usePlatform(): WindowType {
     const observer = new MutationObserver(() => setPlatform(readPlatform()));
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["data-hermes-window-type"],
+      attributeFilter: ["data-agentdeck-window-type"],
     });
     return () => observer.disconnect();
   }, []);

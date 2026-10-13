@@ -9,7 +9,7 @@
 //
 // Selection precedence (highest first):
 //   1. URL query ?wspath=native|relay — ad-hoc QA override, not persisted
-//   2. learned value (HERMES_WS_PATH_LEARNED in the UI store) — sticky result
+//   2. learned value (AGENTDECK_WS_PATH_LEARNED in the UI store) — sticky result
 //      of a previous probe, skips re-probing on every launch
 //   3. default "native", with automatic runtime fallback (below)
 //
@@ -24,22 +24,22 @@
 // then fails pre-open repeatedly, the learned value is cleared and the path
 // reverts to native so the next attempts/launches re-probe (a down sidecar
 // fails both paths alike; whichever works first sticks).
-import { GatewayRelaySocket } from "./gateway-relay-socket";
+import { SidecarRelaySocket } from "./sidecar-relay-socket";
 import { runtime } from "./runtime";
 import { readUiValue, removeUiValue, writeUiValue } from "./ui-store";
 
-export type GatewaySocketPath = "native" | "relay";
+export type SidecarSocketPath = "native" | "relay";
 
-const LEARNED_KEY = "HERMES_WS_PATH_LEARNED";
+const LEARNED_KEY = "AGENTDECK_WS_PATH_LEARNED";
 const NATIVE_FAILURE_FLIP_THRESHOLD = 2;
 const RELAY_FAILURE_RESET_THRESHOLD = 2;
 
-let currentPath: GatewaySocketPath | null = null;
-let queryOverride: GatewaySocketPath | null | undefined;
+let currentPath: SidecarSocketPath | null = null;
+let queryOverride: SidecarSocketPath | null | undefined;
 let nativeFailureStreak = 0;
 let relayFailureStreak = 0;
 
-function readQueryOverride(): GatewaySocketPath | null {
+function readQueryOverride(): SidecarSocketPath | null {
   if (queryOverride !== undefined) return queryOverride;
   queryOverride = null;
   try {
@@ -51,7 +51,7 @@ function readQueryOverride(): GatewaySocketPath | null {
   return queryOverride;
 }
 
-function readLearnedPath(): GatewaySocketPath | null {
+function readLearnedPath(): SidecarSocketPath | null {
   try {
     const value = readUiValue<string | undefined>(LEARNED_KEY, undefined);
     if (value === "native" || value === "relay") return value;
@@ -59,7 +59,7 @@ function readLearnedPath(): GatewaySocketPath | null {
   return null;
 }
 
-function learn(path: GatewaySocketPath | null): void {
+function learn(path: SidecarSocketPath | null): void {
   // QA overrides must not poison the learned preference.
   if (readQueryOverride()) return;
   try {
@@ -69,7 +69,7 @@ function learn(path: GatewaySocketPath | null): void {
   } catch {}
 }
 
-export function getActiveSocketPath(): GatewaySocketPath {
+export function getActiveSocketPath(): SidecarSocketPath {
   if (currentPath) return currentPath;
   currentPath = readQueryOverride() ?? readLearnedPath() ?? "native";
   return currentPath;
@@ -78,14 +78,14 @@ export function getActiveSocketPath(): GatewaySocketPath {
 function flipToRelay(reason: string): void {
   // Surfaced in the webview console / debug bundle so the field can tell a
   // genuinely blocked webview from a misconfigured native path.
-  console.warn(`[gateway-socket-path] native WS unavailable (${reason}) — switching to Rust relay`);
+  console.warn(`[sidecar-socket-path] native WS unavailable (${reason}) — switching to Rust relay`);
   currentPath = "relay";
   relayFailureStreak = 0;
   learn("relay");
 }
 
 function resetToNative(): void {
-  console.warn("[gateway-socket-path] relay keeps failing pre-open — clearing learned path, re-probing native");
+  console.warn("[sidecar-socket-path] relay keeps failing pre-open — clearing learned path, re-probing native");
   currentPath = "native";
   nativeFailureStreak = 0;
   learn(null);
@@ -114,7 +114,7 @@ function watchNativeAttempt(ws: WebSocket): void {
   ws.addEventListener("close", onPreOpenFailure, { once: true });
 }
 
-function watchRelayAttempt(socket: GatewayRelaySocket): void {
+function watchRelayAttempt(socket: SidecarRelaySocket): void {
   // SidecarClient owns socket.on* — observe via a chained wrapper instead.
   let opened = false;
   const prevOnOpen = socket.onopen;
@@ -136,13 +136,13 @@ function watchRelayAttempt(socket: GatewayRelaySocket): void {
 // Socket factory passed to the SidecarClient singleton. Non-Tauri
 // platforms always use the native WebSocket (the relay commands only exist in
 // the Tauri shell).
-export function createGatewaySocket(url: string): WebSocket {
+export function createSidecarSocket(url: string): WebSocket {
   if (runtime.platform !== "tauri") {
     return new WebSocket(url);
   }
 
   if (getActiveSocketPath() === "relay") {
-    const socket = new GatewayRelaySocket(url);
+    const socket = new SidecarRelaySocket(url);
     queueMicrotask(() => watchRelayAttempt(socket));
     return socket as unknown as WebSocket;
   }
@@ -154,7 +154,7 @@ export function createGatewaySocket(url: string): WebSocket {
     // Synchronous SecurityError — the webview refuses ws:// from this origin.
     // Fall back within the SAME connect attempt so the user never waits.
     flipToRelay(`constructor threw: ${error instanceof Error ? error.message : String(error)}`);
-    const socket = new GatewayRelaySocket(url);
+    const socket = new SidecarRelaySocket(url);
     queueMicrotask(() => watchRelayAttempt(socket));
     return socket as unknown as WebSocket;
   }

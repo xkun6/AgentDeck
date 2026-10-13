@@ -1,6 +1,6 @@
 import { redact, redactSummary } from "./debug-redact";
 
-export type DebugEntryType = "gateway" | "rest" | "console" | "exception" | "backend";
+export type DebugEntryType = "sidecar" | "rest" | "console" | "exception" | "backend";
 export type DebugEntryLevel = "info" | "warn" | "error";
 
 export interface DebugEntry {

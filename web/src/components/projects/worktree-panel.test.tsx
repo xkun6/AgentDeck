@@ -41,7 +41,7 @@ afterEach(() => {
 
 beforeEach(() => {
   // The panel hides unless the desktop git bridge exists.
-  Object.defineProperty(window, "hermesDesktop", {
+  Object.defineProperty(window, "agentdeckDesktop", {
     configurable: true,
     value: {
       git: { listWorktrees: vi.fn() },

@@ -29,7 +29,7 @@ export async function listDirectory(
   path: string | null,
   options: { showHidden?: boolean } = {},
 ): Promise<FsListResponse> {
-  const fsList = typeof window !== "undefined" ? window.hermesDesktop?.fsList : undefined;
+  const fsList = typeof window !== "undefined" ? window.agentdeckDesktop?.fsList : undefined;
   if (typeof fsList !== "function") throw new Error(FS_LIST_UNAVAILABLE_MESSAGE);
   const result = await fsList({
     ...(path === null ? {} : { path }),

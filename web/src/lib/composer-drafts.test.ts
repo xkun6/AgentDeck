@@ -8,7 +8,7 @@ import { __resetUiStoreForTests } from "./ui-store";
 
 function setRuntime() {
   (globalThis as any).window = (globalThis as any).window ?? {};
-  window.__HERMES_RUNTIME__ = { platform: "tauri" };
+  window.__AGENTDECK_RUNTIME__ = { platform: "tauri" };
 }
 
 beforeEach(() => {

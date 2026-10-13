@@ -6,11 +6,11 @@
   border-radius: 0;
   outline: none;
   overflow: hidden;
-  animation: hermesPopoverIn 120ms ease-out;
+  animation: agentdeckPopoverIn 120ms ease-out;
   transform-origin: var(--radix-popover-content-transform-origin);
 }
 .content[data-state="closed"] {
-  animation: hermesPopoverOut 80ms ease-in;
+  animation: agentdeckPopoverOut 80ms ease-in;
 }
 
 .arrow {
@@ -19,11 +19,11 @@
   stroke-width: 1px;
 }
 
-@keyframes hermesPopoverIn {
+@keyframes agentdeckPopoverIn {
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
-@keyframes hermesPopoverOut {
+@keyframes agentdeckPopoverOut {
   from { opacity: 1; transform: scale(1); }
   to { opacity: 0; transform: scale(0.97); }
 }

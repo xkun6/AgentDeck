@@ -6,12 +6,12 @@ export interface WorkspaceProject {
   updatedAt: number;
 }
 
-export const WORKSPACE_STORAGE_KEY = "hermes-cn-ui.workspacePath";
+export const WORKSPACE_STORAGE_KEY = "agentdeck-cn-ui.workspacePath";
 
-const WORKSPACE_PROJECTS_STORAGE_KEY = "hermes-cn-ui.workspaceProjects";
-const SESSION_WORKSPACE_STORAGE_KEY = "hermes-cn-ui.sessionWorkspaces";
-const PINNED_WORKSPACE_PROJECTS_STORAGE_KEY = "hermes-cn-ui.pinnedWorkspaceProjects";
-const WORKSPACE_CHANGED_EVENT = "hermes-cn-ui.workspaces.changed";
+const WORKSPACE_PROJECTS_STORAGE_KEY = "agentdeck-cn-ui.workspaceProjects";
+const SESSION_WORKSPACE_STORAGE_KEY = "agentdeck-cn-ui.sessionWorkspaces";
+const PINNED_WORKSPACE_PROJECTS_STORAGE_KEY = "agentdeck-cn-ui.pinnedWorkspaceProjects";
+const WORKSPACE_CHANGED_EVENT = "agentdeck-cn-ui.workspaces.changed";
 
 export function normalizeWorkspacePath(path: unknown): string {
   return typeof path === "string" ? path.trim().replace(/\/+$/, "") : "";

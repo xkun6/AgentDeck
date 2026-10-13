@@ -8,12 +8,12 @@
 //! to/from the webview over Tauri events + commands. The wire protocol is
 //! unchanged; only the carrier differs.
 //!
-//! Wire contract with the JS shim (`web/src/lib/gateway-relay-socket.ts`):
-//!   - `gateway_ws_open { connectionId }`  → resolves once the WS handshake succeeds
-//!   - emits `gateway-ws-message { connectionId, data }` per inbound text frame
-//!   - emits `gateway-ws-closed  { connectionId, message }` on close/error/EOF
-//!   - `gateway_ws_send  { connectionId, data }` → write one text frame
-//!   - `gateway_ws_close { connectionId }`        → tear the connection down
+//! Wire contract with the JS shim (`web/src/lib/sidecar-relay-socket.ts`):
+//!   - `sidecar_ws_open { connectionId }`  → resolves once the WS handshake succeeds
+//!   - emits `sidecar-ws-message { connectionId, data }` per inbound text frame
+//!   - emits `sidecar-ws-closed  { connectionId, message }` on close/error/EOF
+//!   - `sidecar_ws_send  { connectionId, data }` → write one text frame
+//!   - `sidecar_ws_close { connectionId }`        → tear the connection down
 //!
 //! Every event is tagged with `connectionId` so a stale relay from a prior
 //! connection can never deliver into a freshly-opened socket's shim.
@@ -30,24 +30,24 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::error::AppError;
 use crate::process::sidecar::SidecarStatus;
-use crate::state::{AppState, GatewayWsHandle};
+use crate::state::{AppState, SidecarWsHandle};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GatewayWsOpenInput {
+pub struct SidecarWsOpenInput {
     pub connection_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GatewayWsSendInput {
+pub struct SidecarWsSendInput {
     pub connection_id: String,
     pub data: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GatewayWsCloseInput {
+pub struct SidecarWsCloseInput {
     pub connection_id: String,
 }
 
@@ -72,22 +72,22 @@ struct WsClosedPayload {
 /// Tear down whatever connection is currently active (if any). Caller holds no lock.
 fn shutdown_active(state: &State<'_, AppState>) -> Result<(), AppError> {
     let mut inner = state.inner.lock()?;
-    if let Some(prev) = inner.gateway_ws.take() {
+    if let Some(prev) = inner.sidecar_ws.take() {
         prev.abort.store(true, Ordering::Relaxed);
         prev.notify.notify_waiters();
     }
     Ok(())
 }
 
-pub type GatewayWebSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub type SidecarWebSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Open the current sidecar's JSON-RPC WebSocket (`wsUrl?token=...`).
-pub async fn connect_gateway_stream(state: &AppState) -> Result<GatewayWebSocket, AppError> {
+pub async fn connect_sidecar_stream(state: &AppState) -> Result<SidecarWebSocket, AppError> {
     let url = {
         let inner = state.inner.lock()?;
         let status = &inner.sidecar_status;
         if status.status != SidecarStatus::Ready || status.ws_url.is_empty() {
-            return Err(AppError::GatewayWs("sidecar 尚未就绪".to_string()));
+            return Err(AppError::SidecarWs("sidecar 尚未就绪".to_string()));
         }
         format!(
             "{}?token={}",
@@ -98,22 +98,22 @@ pub async fn connect_gateway_stream(state: &AppState) -> Result<GatewayWebSocket
     tokio_tungstenite::connect_async(url)
         .await
         .map(|(ws, _)| ws)
-        .map_err(|e| AppError::GatewayWs(e.to_string()))
+        .map_err(|e| AppError::SidecarWs(e.to_string()))
 }
 
 /// Open the sidecar WebSocket from Rust and start relaying frames.
 ///
 /// Resolves once the handshake completes; the JS shim treats that as `onopen`.
 #[tauri::command]
-pub async fn gateway_ws_open(
-    input: GatewayWsOpenInput,
+pub async fn sidecar_ws_open(
+    input: SidecarWsOpenInput,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
     let connection_id = input.connection_id;
     shutdown_active(&state)?;
 
-    let stream = connect_gateway_stream(&state).await?;
+    let stream = connect_sidecar_stream(&state).await?;
 
     let (mut sink, mut read) = stream.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
@@ -122,7 +122,7 @@ pub async fn gateway_ws_open(
 
     {
         let mut inner = state.inner.lock()?;
-        inner.gateway_ws = Some(GatewayWsHandle {
+        inner.sidecar_ws = Some(SidecarWsHandle {
             connection_id: connection_id.clone(),
             tx,
             abort: abort.clone(),
@@ -185,11 +185,11 @@ pub async fn gateway_ws_open(
                     item = read.next() => match item {
                         Some(Ok(Message::Text(t))) => {
                             let _ = app_r.emit(
-                                "gateway-ws-message",
+                                "sidecar-ws-message",
                                 WsMessagePayload { connection_id: cid.clone(), data: t.to_string() },
                             );
                         }
-                        // The JSON-RPC gateway speaks text frames only; ping/pong are
+                        // The JSON-RPC sidecar speaks text frames only; ping/pong are
                         // handled inside tungstenite, binary is unexpected — ignore both.
                         Some(Ok(Message::Binary(_))) | Some(Ok(Message::Ping(_)))
                         | Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
@@ -220,15 +220,15 @@ pub async fn gateway_ws_open(
             // Drop the handle if it is still ours (a newer open may have replaced it).
             if let Ok(mut inner) = app_r.state::<AppState>().inner.lock() {
                 if inner
-                    .gateway_ws
+                    .sidecar_ws
                     .as_ref()
                     .is_some_and(|h| h.connection_id == cid)
                 {
-                    inner.gateway_ws = None;
+                    inner.sidecar_ws = None;
                 }
             }
             let _ = app_r.emit(
-                "gateway-ws-closed",
+                "sidecar-ws-closed",
                 WsClosedPayload {
                     connection_id: cid,
                     message: reason,
@@ -242,33 +242,33 @@ pub async fn gateway_ws_open(
 }
 
 #[tauri::command]
-pub async fn gateway_ws_send(
-    input: GatewayWsSendInput,
+pub async fn sidecar_ws_send(
+    input: SidecarWsSendInput,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let inner = state.inner.lock()?;
-    match &inner.gateway_ws {
+    match &inner.sidecar_ws {
         Some(handle) if handle.connection_id == input.connection_id => handle
             .tx
             .send(input.data)
-            .map_err(|_| AppError::GatewayWs("relay send channel closed".to_string())),
-        _ => Err(AppError::GatewayWs(
+            .map_err(|_| AppError::SidecarWs("relay send channel closed".to_string())),
+        _ => Err(AppError::SidecarWs(
             "no active relay connection".to_string(),
         )),
     }
 }
 
 #[tauri::command]
-pub async fn gateway_ws_close(
-    input: GatewayWsCloseInput,
+pub async fn sidecar_ws_close(
+    input: SidecarWsCloseInput,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let mut inner = state.inner.lock()?;
-    if let Some(handle) = inner.gateway_ws.as_ref() {
+    if let Some(handle) = inner.sidecar_ws.as_ref() {
         if handle.connection_id == input.connection_id {
             handle.abort.store(true, Ordering::Relaxed);
             handle.notify.notify_waiters();
-            inner.gateway_ws = None;
+            inner.sidecar_ws = None;
         }
     }
     Ok(())

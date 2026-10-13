@@ -13,7 +13,7 @@ interface StallNoticeProps {
 /**
  * Shown when a running turn has received nothing from the backend for longer
  * than the stall threshold — the case the connection heartbeat can't see
- * (gateway alive, agent turn wedged on a dead provider call). Gives the user a
+ * (sidecar alive, agent turn wedged on a dead provider call). Gives the user a
  * truthful "no response for Ns" signal and a one-click interrupt instead of a
  * timer that ticks up forever with no progress.
  */

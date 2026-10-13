@@ -4,7 +4,7 @@
 
 .box {
   position: relative;
-  container: hermes-composer / inline-size;
+  container: agentdeck-composer / inline-size;
   width: 100%;
   border: 1px solid var(--h-line);
   border-radius: 0;
@@ -679,7 +679,7 @@
   flex: 0 0 auto;
 }
 
-@container hermes-composer (max-width: 640px) {
+@container agentdeck-composer (max-width: 640px) {
   .toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -692,7 +692,7 @@
   }
 }
 
-@container hermes-composer (max-width: 320px) {
+@container agentdeck-composer (max-width: 320px) {
   .toolButton span {
     display: none;
   }

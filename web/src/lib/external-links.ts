@@ -33,7 +33,7 @@ export async function openExternalUrl(
   const url = normalizeExternalUrl(raw);
   if (!url) return false;
 
-  const desktopOpen = typeof window !== "undefined" ? window.hermesDesktop?.openExternalUrl : undefined;
+  const desktopOpen = typeof window !== "undefined" ? window.agentdeckDesktop?.openExternalUrl : undefined;
   if (desktopOpen) {
     try {
       const result = await desktopOpen({ url });
@@ -55,25 +55,25 @@ function patchWindowOpen() {
   const original = getNativeWindowOpen();
   if (!original) return;
 
-  const current = window.open as NativeWindowOpen & { __hermesExternalLinkPatch?: boolean };
-  if (current.__hermesExternalLinkPatch) return;
+  const current = window.open as NativeWindowOpen & { __agentdeckExternalLinkPatch?: boolean };
+  if (current.__agentdeckExternalLinkPatch) return;
 
   const patched = ((url?: string | URL, target?: string, features?: string) => {
     const normalized = normalizeExternalUrl(url);
-    if (normalized && window.hermesDesktop?.openExternalUrl) {
+    if (normalized && window.agentdeckDesktop?.openExternalUrl) {
       void openExternalUrl(normalized, { nativeOpen: original });
       return null;
     }
     return original(url as string | URL | undefined, target, features);
-  }) as NativeWindowOpen & { __hermesExternalLinkPatch?: boolean };
+  }) as NativeWindowOpen & { __agentdeckExternalLinkPatch?: boolean };
 
-  patched.__hermesExternalLinkPatch = true;
+  patched.__agentdeckExternalLinkPatch = true;
   window.open = patched;
 }
 
 function handleExternalAnchorClick(event: MouseEvent) {
   if (event.defaultPrevented || event.button !== 0) return;
-  if (typeof window === "undefined" || !window.hermesDesktop?.openExternalUrl) return;
+  if (typeof window === "undefined" || !window.agentdeckDesktop?.openExternalUrl) return;
   if (!(event.target instanceof Element)) return;
 
   const anchor = event.target.closest("a[href]");

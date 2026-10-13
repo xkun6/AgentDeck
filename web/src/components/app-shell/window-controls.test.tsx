@@ -7,7 +7,7 @@ import { WindowControls } from "./window-controls";
 
 afterEach(() => {
   cleanup();
-  delete window.hermesDesktop;
+  delete window.agentdeckDesktop;
 });
 
 function Harness() {
@@ -42,7 +42,7 @@ describe("WindowControls", () => {
   it("按钮调用窗口 API，最大化图标随 resize 后的 isMaximized 切换", async () => {
     const maximized = { value: false };
     const { controls, fireResize } = fakeControls(maximized);
-    window.hermesDesktop = { windowType: "tauri", windowControls: controls };
+    window.agentdeckDesktop = { windowType: "tauri", windowControls: controls };
     render(<Harness />);
     await act(async () => {});
 

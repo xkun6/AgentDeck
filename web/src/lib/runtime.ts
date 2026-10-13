@@ -13,13 +13,6 @@ export type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
 export type RuntimePlatform = "web" | "electron" | "tauri";
 export type HostOS = "macos" | "windows" | "linux" | "unknown";
 
-export interface ExternalRequestInput {
-  path: string;
-  method?: string;
-  headers?: Record<string, string>;
-  body?: string | null;
-}
-
 export interface ExternalRequestResult {
   ok: boolean;
   status: number;
@@ -31,18 +24,6 @@ export interface ExternalRequestResult {
 export interface FilePickerResult {
   canceled: boolean;
   paths: string[];
-}
-
-export interface DownloadExternalImageInput {
-  url: string;
-}
-
-export interface DownloadedImageResult {
-  finalUrl: string;
-  filename: string;
-  mimeType: string;
-  dataBase64: string;
-  size: number;
 }
 
 export interface SimpleResult {
@@ -199,14 +180,9 @@ export interface ReviewShipInfo {
   pr: ReviewPrInfo | null;
 }
 
-export interface ReviewCommitContext {
-  diff: string;
-  recent: string;
-}
-
 /** Bridge to the Rust git commands backing the review pane. Reads degrade to
  *  empty/null on a non-repo / missing tool; mutations reject so the UI can toast. */
-export interface HermesGitReviewBridge {
+export interface AgentGitReviewBridge {
   list(input: { repoPath: string; scope: ReviewScope; baseRef: string | null }): Promise<ReviewList>;
   diff(input: {
     repoPath: string;
@@ -218,9 +194,7 @@ export interface HermesGitReviewBridge {
   stage(input: { repoPath: string; filePath: string | null }): Promise<{ ok: boolean }>;
   unstage(input: { repoPath: string; filePath: string | null }): Promise<{ ok: boolean }>;
   revert(input: { repoPath: string; filePath: string | null }): Promise<{ ok: boolean }>;
-  revParse(input: { repoPath: string; ref?: string | null }): Promise<string | null>;
   commit(input: { repoPath: string; message: string; push: boolean }): Promise<{ ok: boolean }>;
-  commitContext(input: { repoPath: string }): Promise<ReviewCommitContext>;
   push(input: { repoPath: string }): Promise<{ ok: boolean }>;
   shipInfo(input: { repoPath: string }): Promise<ReviewShipInfo>;
   createPr(input: { repoPath: string }): Promise<{ url: string }>;
@@ -264,7 +238,7 @@ export interface RepoStatus {
   removed: number;
 }
 
-export interface HermesGitWorktreeBridge {
+export interface AgentGitWorktreeBridge {
   list(input: { repoPath: string }): Promise<Worktree[]>;
   add(input: {
     repoPath: string;
@@ -278,15 +252,15 @@ export interface HermesGitWorktreeBridge {
   }>;
 }
 
-export interface HermesGitBranchBridge {
+export interface AgentGitBranchBridge {
   list(input: { repoPath: string }): Promise<GitBranch[]>;
   switch(input: { repoPath: string; branch: string }): Promise<{ branch: string }>;
 }
 
-export interface HermesGitBridge {
-  review: HermesGitReviewBridge;
-  worktree: HermesGitWorktreeBridge;
-  branch: HermesGitBranchBridge;
+export interface AgentGitBridge {
+  review: AgentGitReviewBridge;
+  worktree: AgentGitWorktreeBridge;
+  branch: AgentGitBranchBridge;
   repoStatus(input: { repoPath: string }): Promise<RepoStatus | null>;
 }
 
@@ -321,21 +295,17 @@ declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
     /** 启动时由 main.tsx / tauri-bridge 写入的运行环境信息。 */
-    __HERMES_RUNTIME__?: {
+    __AGENTDECK_RUNTIME__?: {
       platform?: RuntimePlatform;
     };
     /** Tauri 下由 lib/tauri-bridge.ts 挂载的本地能力桥（字段名沿用历史命名）。 */
-    hermesDesktop?: {
+    agentdeckDesktop?: {
       windowType: "electron" | "tauri";
       /** Fatal compatibility/error dialog + force-quit the app. */
-      fatalErrorAndExit?(input: { title: string; message: string }): Promise<never>;
-      externalRequest?(input: ExternalRequestInput): Promise<ExternalRequestResult>;
-      downloadExternalImage?(input: DownloadExternalImageInput): Promise<DownloadedImageResult>;
       pickFiles?(): Promise<FilePickerResult>;
       pickDirectory?(): Promise<FilePickerResult>;
       /** 选择单个可执行文件（Windows 过滤 .exe / .cmd） */
       pickExecutableFile?(input?: { title?: string }): Promise<FilePickerResult>;
-      createWorkspaceProject?(): Promise<FilePickerResult>;
       openWorkspacePath?(input: { path: string }): Promise<ExternalRequestResult>;
       openExternalUrl?(input: { url: string }): Promise<SimpleResult>;
       toggleDevtools?(): Promise<void>;
@@ -367,7 +337,7 @@ declare global {
       fsList?(input: FsListInput): Promise<FsListResult>;
       writeWorkspaceFile?(input: WriteWorkspaceFileInput): Promise<WriteWorkspaceFileResult>;
       /** Git ops backing the review pane (issue #328). */
-      git?: HermesGitBridge;
+      git?: AgentGitBridge;
       watchPreviewFile?(input: { path: string }): Promise<WatchPreviewFileResult>;
       stopPreviewFileWatch?(input: { watchId: string }): Promise<boolean>;
       onPreviewFileChanged?(handler: (payload: PreviewFileChangedPayload) => void): () => void;
@@ -396,13 +366,13 @@ export function detectHostOS(): HostOS {
 
 export function applyHostOSToDOM(os: HostOS = detectHostOS()): void {
   if (typeof document === "undefined") return;
-  document.documentElement.dataset.hermesHostOs = os;
-  if (document.body) document.body.dataset.hermesHostOs = os;
+  document.documentElement.dataset.agentdeckHostOs = os;
+  if (document.body) document.body.dataset.agentdeckHostOs = os;
 }
 
 export const runtime = {
   get platform(): RuntimePlatform {
-    if (window.__HERMES_RUNTIME__?.platform) return window.__HERMES_RUNTIME__.platform;
+    if (window.__AGENTDECK_RUNTIME__?.platform) return window.__AGENTDECK_RUNTIME__.platform;
     if (window.__TAURI_INTERNALS__) return "tauri";
     return "web";
   },

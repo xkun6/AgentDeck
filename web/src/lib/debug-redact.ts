@@ -3,7 +3,7 @@ const SENSITIVE_KEYS = [
   "apikey",
   "api-key",
   "authorization",
-  "x-hermes-session-token",
+  "x-agentdeck-session-token",
   "session_token",
   "sessiontoken",
   "session-token",

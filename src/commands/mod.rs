@@ -1,8 +1,6 @@
-pub mod api_proxy;
 pub mod coding_agents;
 pub mod devtools;
 pub mod environment;
-pub mod fatal_error;
 pub mod file_dialogs;
 pub mod fs;
 pub mod git;

@@ -21,7 +21,7 @@ export const Content = forwardRef<HTMLDivElement, ContentProps>(
     />
   ),
 );
-Content.displayName = "HermesPopover.Content";
+Content.displayName = "AgentPopover.Content";
 
 type ArrowProps = React.ComponentPropsWithoutRef<typeof RadixPopover.Arrow>;
 export const Arrow = forwardRef<SVGSVGElement, ArrowProps>(
@@ -29,4 +29,4 @@ export const Arrow = forwardRef<SVGSVGElement, ArrowProps>(
     <RadixPopover.Arrow ref={ref} className={cn(s.arrow, className)} {...rest} />
   ),
 );
-Arrow.displayName = "HermesPopover.Arrow";
+Arrow.displayName = "AgentPopover.Arrow";

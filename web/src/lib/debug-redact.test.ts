@@ -12,13 +12,13 @@ describe("redact", () => {
     const out = redact({
       headers: {
         Authorization: "Bearer secret123",
-        "X-Hermes-Session-Token": "tok",
+        "X-AgentDeck-Session-Token": "tok",
       },
       apiKey: "leak",
       payload: { session_token: "abc" },
     }) as Record<string, any>;
     expect(out.headers.Authorization).toBe("***");
-    expect(out.headers["X-Hermes-Session-Token"]).toBe("***");
+    expect(out.headers["X-AgentDeck-Session-Token"]).toBe("***");
     expect(out.apiKey).toBe("***");
     expect(out.payload.session_token).toBe("***");
   });

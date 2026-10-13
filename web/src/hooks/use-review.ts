@@ -1,6 +1,6 @@
 // Review pane state machine (issue #328). Ports the upstream `store/review.ts`
 // to a self-contained hook: the active session's workspace root is the repo, and
-// git is the source of truth. Scope is always "uncommitted" — Hermes' flow is
+// git is the source of truth. Scope is always "uncommitted" — AgentDeck' flow is
 // agent edits you review BEFORE committing, so branch/last-turn are almost always
 // empty here. Reads are sequence-guarded so a result that lands after the repo
 // moved on is dropped; mutations re-sync the list (+ the open diff) afterward.
@@ -11,8 +11,8 @@ import type { ReviewFile, ReviewShipInfo } from "@/lib/runtime";
 export type ReviewTreeMode = "list" | "tree";
 export type CommitAction = "commit" | "commitPush";
 
-const TREE_MODE_KEY = "hermes-cn.review.treeMode";
-const COMMIT_DEFAULT_KEY = "hermes-cn.review.commitDefault";
+const TREE_MODE_KEY = "agentdeck-cn.review.treeMode";
+const COMMIT_DEFAULT_KEY = "agentdeck-cn.review.commitDefault";
 
 function readStored<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
   try {
@@ -66,7 +66,7 @@ export interface UseReview {
 
 export function useReview(workspaceRoot: string, active: boolean): UseReview {
   const cwd = workspaceRoot?.trim() ?? "";
-  const bridge = typeof window !== "undefined" ? window.hermesDesktop?.git?.review : undefined;
+  const bridge = typeof window !== "undefined" ? window.agentdeckDesktop?.git?.review : undefined;
 
   const [files, setFiles] = useState<ReviewFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -266,7 +266,7 @@ export function useReview(workspaceRoot: string, active: boolean): UseReview {
     if (!bridge || !cwd || shipBusy) return;
     const existing = shipInfo.pr;
     if (existing?.url) {
-      void window.hermesDesktop?.openExternalUrl?.({ url: existing.url });
+      void window.agentdeckDesktop?.openExternalUrl?.({ url: existing.url });
       return;
     }
     setActionError(null);
@@ -274,7 +274,7 @@ export function useReview(workspaceRoot: string, active: boolean): UseReview {
     void bridge
       .createPr({ repoPath: cwd })
       .then(({ url }) => {
-        if (url) void window.hermesDesktop?.openExternalUrl?.({ url });
+        if (url) void window.agentdeckDesktop?.openExternalUrl?.({ url });
         void refreshShip();
       })
       .catch((err) => {

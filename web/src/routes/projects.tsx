@@ -127,7 +127,7 @@ export function ProjectsRoute() {
     });
   }, []);
 
-  const desktopAvailable = typeof window !== "undefined" && !!window.hermesDesktop;
+  const desktopAvailable = typeof window !== "undefined" && !!window.agentdeckDesktop;
 
   const aggregates = useMemo<ProjectAggregate[]>(() => {
     const byPath = new Map<string, AgentSnapshot[]>();
@@ -183,8 +183,8 @@ export function ProjectsRoute() {
   const handleAddProject = useCallback(async () => {
     try {
       let nextPath = "";
-      if (desktopAvailable && window.hermesDesktop?.pickDirectory) {
-        const result = await window.hermesDesktop.pickDirectory();
+      if (desktopAvailable && window.agentdeckDesktop?.pickDirectory) {
+        const result = await window.agentdeckDesktop.pickDirectory();
         if (!result.canceled) nextPath = result.paths[0] ?? "";
       } else {
         nextPath = (await prompt({

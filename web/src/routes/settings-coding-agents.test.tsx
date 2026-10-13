@@ -10,10 +10,10 @@ import { useSaveCodingAgentPath } from "@/hooks/use-coding-agents";
 import { AGENT_QUERY_KEYS } from "@/lib/agent-query-keys";
 import { AgentPathField, CodingAgentToolbar } from "./settings-coding-agents";
 
-const previousBridge = window.hermesDesktop;
+const previousBridge = window.agentdeckDesktop;
 afterEach(() => {
   cleanup();
-  window.hermesDesktop = previousBridge;
+  window.agentdeckDesktop = previousBridge;
 });
 
 describe("CodingAgentToolbar", () => {
@@ -58,7 +58,7 @@ function pathInput(): HTMLInputElement {
 describe("AgentPathField", () => {
   it("未配置：显示自动查找与当前生效路径，留空占位；浏览后保存去空白的路径", async () => {
     const pickExecutableFile = vi.fn(async () => ({ canceled: false, paths: ["  D:\\tools\\claude.exe "] }));
-    window.hermesDesktop = { windowType: "tauri", pickExecutableFile, codingAgentPathsSet: vi.fn() };
+    window.agentdeckDesktop = { windowType: "tauri", pickExecutableFile, codingAgentPathsSet: vi.fn() };
     const onSave = vi.fn(async () => undefined);
     render(<AgentPathField agent={agent()} onSave={onSave} />);
 
@@ -78,7 +78,7 @@ describe("AgentPathField", () => {
   });
 
   it("已手动配置：显示手动配置，恢复自动查找时以 null 保存；失败时就地显示中文错误", async () => {
-    window.hermesDesktop = { windowType: "tauri", codingAgentPathsSet: vi.fn() };
+    window.agentdeckDesktop = { windowType: "tauri", codingAgentPathsSet: vi.fn() };
     const onSave = vi.fn(async (value: string | null) => {
       if (value === null) throw new Error("写入配置失败：拒绝访问");
     });
@@ -103,7 +103,7 @@ describe("useSaveCodingAgentPath", () => {
   it("读出当前配置后整份写回，并让检测与 sidecar provider 查询失效", async () => {
     const codingAgentPathsGet = vi.fn(async () => ({ claude: "C:\\a\\claude.exe" }));
     const codingAgentPathsSet = vi.fn(async (paths: object) => paths);
-    window.hermesDesktop = { windowType: "tauri", codingAgentPathsGet, codingAgentPathsSet };
+    window.agentdeckDesktop = { windowType: "tauri", codingAgentPathsGet, codingAgentPathsSet };
     const queryClient = new QueryClient();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const wrapper = ({ children }: { children: ReactNode }) => (

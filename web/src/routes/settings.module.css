@@ -54,7 +54,7 @@
   user-select: none;
 }
 
-:global([data-hermes-platform="electron"]) .settingsTopBar {
+:global([data-agentdeck-platform="electron"]) .settingsTopBar {
   padding-left: 136px;
 }
 

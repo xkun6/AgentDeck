@@ -15,8 +15,8 @@ export interface StallState {
 /**
  * Task-level stall watchdog, independent of the connection heartbeat.
  *
- * The gateway WS heartbeat (`gateway-client.ts`) only proves the
- * desktop↔gateway socket is alive — it keeps getting pong-equivalent frames
+ * The sidecar WS heartbeat (`sidecar-client.ts`) only proves the
+ * desktop↔sidecar socket is alive — it keeps getting pong-equivalent frames
  * even while the agent turn is wedged on a dead model-provider call, so the
  * elapsed timer ticks up forever with no progress. This hook watches the time
  * since the backend last sent *anything* for the running turn and flips
@@ -24,7 +24,7 @@ export interface StallState {
  * and an interrupt/retry affordance.
  *
  * The clock resets automatically the moment any backend event arrives (every
- * applied gateway event bumps `runtime.lastActivityAt`), so a turn that
+ * applied sidecar event bumps `runtime.lastActivityAt`), so a turn that
  * recovers clears the stall on its own.
  */
 export function useStallWatchdog(

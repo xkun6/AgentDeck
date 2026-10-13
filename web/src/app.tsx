@@ -83,9 +83,9 @@ export function App() {
   const platform = usePlatform();
   const hydrateTheme = useSetAtom(hydrateThemeAtom);
   useEffect(() => {
-    hydrateTheme(readUiValue<Partial<ThemeConfig>>("hermes-theme", DEFAULT_THEME_CONFIG));
+    hydrateTheme(readUiValue<Partial<ThemeConfig>>("agentdeck-theme", DEFAULT_THEME_CONFIG));
   }, [hydrateTheme]);
   useEffect(() => installNativeContextMenuBlocker(), []);
 
-  return <div lang="zh-CN" data-hermes-platform={platform}><MainApp /></div>;
+  return <div lang="zh-CN" data-agentdeck-platform={platform}><MainApp /></div>;
 }

@@ -2,7 +2,7 @@
   display: block;
   flex: 0 0 auto;
   color: currentColor;
-  animation: hermes-loading-spin 800ms linear infinite;
+  animation: agentdeck-loading-spin 800ms linear infinite;
 }
 
 .indicator[data-size="xs"] {
@@ -78,7 +78,7 @@
   line-height: 20px;
 }
 
-@keyframes hermes-loading-spin {
+@keyframes agentdeck-loading-spin {
   to {
     transform: rotate(360deg);
   }

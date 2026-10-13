@@ -67,7 +67,7 @@ body {
 
 /* Grayscale antialiasing is a macOS preference; on Windows it disables ClearType
    (subpixel) and makes small CJK text look thinner/softer, so scope it to mac. */
-body[data-hermes-host-os="macos"] {
+body[data-agentdeck-host-os="macos"] {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -91,11 +91,11 @@ select {
   user-select: text;
 }
 
-body[data-hermes-window-type="electron"] [data-window-drag] {
+body[data-agentdeck-window-type="electron"] [data-window-drag] {
   -webkit-app-region: drag;
 }
 
-body[data-hermes-window-type="electron"] :where(button, input, textarea, select, a, [role="button"]) {
+body[data-agentdeck-window-type="electron"] :where(button, input, textarea, select, a, [role="button"]) {
   -webkit-app-region: no-drag;
 }
 

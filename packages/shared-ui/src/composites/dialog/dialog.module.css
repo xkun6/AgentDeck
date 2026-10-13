@@ -2,11 +2,11 @@
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--h-color-ink-000) 36%, transparent);
-  animation: hermesDialogFadeIn 120ms ease-out;
+  animation: agentdeckDialogFadeIn 120ms ease-out;
   z-index: var(--h-z-dialog-overlay);
 }
 .overlay[data-state="closed"] {
-  animation: hermesDialogFadeOut 100ms ease-in;
+  animation: agentdeckDialogFadeOut 100ms ease-in;
 }
 
 .content {
@@ -25,25 +25,25 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: hermesDialogContentIn 150ms ease-out;
+  animation: agentdeckDialogContentIn 150ms ease-out;
 }
 .content[data-state="closed"] {
-  animation: hermesDialogContentOut 100ms ease-in;
+  animation: agentdeckDialogContentOut 100ms ease-in;
 }
 
-@keyframes hermesDialogFadeIn {
+@keyframes agentdeckDialogFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-@keyframes hermesDialogFadeOut {
+@keyframes agentdeckDialogFadeOut {
   from { opacity: 1; }
   to { opacity: 0; }
 }
-@keyframes hermesDialogContentIn {
+@keyframes agentdeckDialogContentIn {
   from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
   to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
-@keyframes hermesDialogContentOut {
+@keyframes agentdeckDialogContentOut {
   from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   to { opacity: 0; transform: translate(-50%, -48%) scale(0.98); }
 }

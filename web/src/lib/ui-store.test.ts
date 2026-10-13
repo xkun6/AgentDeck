@@ -3,7 +3,7 @@ import type { UiStoreSnapshot } from "./runtime";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const BACKUP_KEY = "hermes_ui_backup";
+const BACKUP_KEY = "agentdeck_ui_backup";
 const EMPTY_SNAPSHOT: UiStoreSnapshot = { kv: {} };
 
 function fakeBridge(overrides: Partial<UiStoreSnapshot> = {}): UiStoreSnapshot {
@@ -33,12 +33,12 @@ function installBridge(snapshot?: UiStoreSnapshot): MockBridge {
     uiStoreSetKv: vi.fn().mockResolvedValue(true),
     uiStoreRemoveKv: vi.fn().mockResolvedValue(true),
   };
-  (window as any).hermesDesktop = bridge;
+  (window as any).agentdeckDesktop = bridge;
   return bridge;
 }
 
 function removeBridge(): void {
-  delete (window as any).hermesDesktop;
+  delete (window as any).agentdeckDesktop;
 }
 
 /** Clear all localStorage keys compatibly — jsdom may not implement .clear(). */
@@ -60,7 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete (globalThis as any).window?.hermesDesktop;
+  delete (globalThis as any).window?.agentdeckDesktop;
   vi.unstubAllGlobals();
 });
 
@@ -357,24 +357,24 @@ describe("write → initUiStore round-trip (web mode)", () => {
   });
 });
 
-describe("installGlobalUiStoreBridge (__HERMES_UI_STORE__)", () => {
+describe("installGlobalUiStoreBridge (__AGENTDECK_UI_STORE__)", () => {
   it("exposes readUiValue via get()", async () => {
     const { __resetUiStoreForTests } = await loadUiStore();
     __resetUiStoreForTests({ theme: "catppuccin-mocha" });
-    expect((globalThis as any).__HERMES_UI_STORE__.get("theme", "light")).toBe("catppuccin-mocha");
+    expect((globalThis as any).__AGENTDECK_UI_STORE__.get("theme", "light")).toBe("catppuccin-mocha");
   });
 
   it("exposes writeUiValue via set()", async () => {
     const { __resetUiStoreForTests } = await loadUiStore();
     __resetUiStoreForTests({});
-    (globalThis as any).__HERMES_UI_STORE__.set("theme", "dark");
-    expect((globalThis as any).__HERMES_UI_STORE__.get("theme", "light")).toBe("dark");
+    (globalThis as any).__AGENTDECK_UI_STORE__.set("theme", "dark");
+    expect((globalThis as any).__AGENTDECK_UI_STORE__.get("theme", "light")).toBe("dark");
   });
 
   it("exposes removeUiValue via remove()", async () => {
     const { __resetUiStoreForTests } = await loadUiStore();
     __resetUiStoreForTests({ theme: "dark" });
-    (globalThis as any).__HERMES_UI_STORE__.remove("theme");
-    expect((globalThis as any).__HERMES_UI_STORE__.get("theme", "light")).toBe("light");
+    (globalThis as any).__AGENTDECK_UI_STORE__.remove("theme");
+    expect((globalThis as any).__AGENTDECK_UI_STORE__.get("theme", "light")).toBe("light");
   });
 });

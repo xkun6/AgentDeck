@@ -10,7 +10,7 @@ export interface WindowControlsState {
 
 export function useWindowControls(): WindowControlsState | null {
   const [controls] = useState(() =>
-    typeof window === "undefined" ? undefined : window.hermesDesktop?.windowControls,
+    typeof window === "undefined" ? undefined : window.agentdeckDesktop?.windowControls,
   );
   const [maximized, setMaximized] = useState(false);
 

@@ -65,7 +65,7 @@ describe("MessageTimeline", () => {
         role: "assistant",
         createdAt: 1,
         status: "streaming",
-        blocks: [{ type: "progress", text: "正在唤醒Hermes..." }],
+        blocks: [{ type: "progress", text: "正在唤醒AgentDeck..." }],
       },
     ];
 
@@ -131,10 +131,10 @@ describe("MessageTimeline", () => {
 
   it("renders Obsidian deep links without the blocked indicator", () => {
     const html = ReactDOMServer.renderToStaticMarkup(
-      <MarkdownText text="[Twitter 时间线](obsidian://open?vault=Hermes&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF)" />,
+      <MarkdownText text="[Twitter 时间线](obsidian://open?vault=AgentDeck&file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF)" />,
     );
 
-    expect(html).toContain("href=\"obsidian://open?vault=Hermes&amp;file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF\"");
+    expect(html).toContain("href=\"obsidian://open?vault=AgentDeck&amp;file=Twitter%20%E6%97%B6%E9%97%B4%E7%BA%BF\"");
     expect(html).toContain("Twitter 时间线");
     expect(html).not.toContain("[blocked]");
   });
@@ -222,7 +222,7 @@ describe("MessageTimeline", () => {
   it("routes a Windows local-path Markdown image to the local preview instead of blocking it", () => {
     const html = ReactDOMServer.renderToStaticMarkup(
       <MarkdownText
-        text={"模型生成图片：![生成图](D:\\Hermes-CN-Desktop\\e2e\\.runtime\\hermes-home\\images\\generated previews\\model output.png)"}
+        text={"模型生成图片：![生成图](D:\\AgentDeck\\e2e\\.runtime\\agentdeck-home\\images\\generated previews\\model output.png)"}
       />,
     );
 
@@ -232,7 +232,7 @@ describe("MessageTimeline", () => {
     // loading placeholder in SSR), with the POSIX-style drive path mapped back.
     expect(html).toContain("图片加载中");
     expect(html).toContain("generated%20previews");
-    expect(html).toContain("/D:/Hermes-CN-Desktop/e2e/.runtime/hermes-home/images");
+    expect(html).toContain("/D:/AgentDeck/e2e/.runtime/agentdeck-home/images");
   });
 
   it("renders single-dollar inline LaTeX formulas", () => {

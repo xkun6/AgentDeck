@@ -27,7 +27,7 @@ export interface UseWorktrees {
 
 export function useWorktrees(repoPath: string): UseWorktrees {
   const cwd = repoPath?.trim() ?? "";
-  const bridge = typeof window !== "undefined" ? window.hermesDesktop?.git : undefined;
+  const bridge = typeof window !== "undefined" ? window.agentdeckDesktop?.git : undefined;
 
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [branches, setBranches] = useState<GitBranch[]>([]);

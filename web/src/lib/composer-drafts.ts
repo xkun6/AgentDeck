@@ -1,6 +1,6 @@
 import { readUiValue, removeUiValue, writeUiValue } from "@/lib/ui-store";
 
-const STORAGE_KEY_PREFIX = "hermes-cn-ui.composerDraft";
+const STORAGE_KEY_PREFIX = "agentdeck-cn-ui.composerDraft";
 
 export type ComposerDraftTarget =
   | { kind: "new"; profile?: string | null }

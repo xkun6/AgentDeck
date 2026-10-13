@@ -12,7 +12,7 @@ function persistedUiBaseAtom<T>(read: () => T) {
   return baseAtom;
 }
 
-const ACTIVE_SESSION_ID_KEY = "hermes.active-session-id";
+const ACTIVE_SESSION_ID_KEY = "agentdeck.active-session-id";
 
 const activeSessionIdBaseAtom = persistedUiBaseAtom<string | null>(
   () => readUiValue<string | null>(ACTIVE_SESSION_ID_KEY, null),
@@ -20,7 +20,7 @@ const activeSessionIdBaseAtom = persistedUiBaseAtom<string | null>(
 
 /**
  * Tracks the currently-active session ID across the UI (sidebar highlight,
- * detail route target, gateway resume). Persisted to the UI store so it
+ * detail route target, sidecar resume). Persisted to the UI store so it
  * survives page refresh (F5) on non-detail routes (e.g., the Panel page).
  *
  * On detail routes the URL (`/tasks/:taskId`) provides recovery, but the
@@ -43,7 +43,7 @@ export const activeSessionIdAtom = atom(
   },
 );
 
-const SIDEBAR_SEARCH_KEY = "hermes.sidebar-search";
+const SIDEBAR_SEARCH_KEY = "agentdeck.sidebar-search";
 
 function readSidebarSearch(): string {
   if (typeof sessionStorage === "undefined") return "";
@@ -76,7 +76,7 @@ export const sidebarSearchAtom = atom(
 );
 export const commandPaletteOpenAtom = atom(false);
 
-const APP_SIDEBAR_VISIBLE_KEY = "hermes.app-sidebar-visible";
+const APP_SIDEBAR_VISIBLE_KEY = "agentdeck.app-sidebar-visible";
 const appSidebarVisibleBaseAtom = persistedUiBaseAtom<boolean>(
   () => readUiValue<unknown>(APP_SIDEBAR_VISIBLE_KEY, true) !== false,
 );
@@ -111,15 +111,15 @@ export type ConversationFontSizeMode = typeof CONVERSATION_FONT_SIZE_OPTIONS[num
 /** 未自定义助手名称时存空串：展示时按会话所用 Agent 的名称显示，取不到时显示 ASSISTANT_FALLBACK_NAME。 */
 export const DEFAULT_ASSISTANT_DISPLAY_NAME = "";
 export const ASSISTANT_FALLBACK_NAME = "Agent";
-export const ASSISTANT_DISPLAY_NAME_KEY = "hermes.assistant-display-name";
-export const ASSISTANT_AVATAR_KEY = "hermes.assistant-avatar-data-url";
+export const ASSISTANT_DISPLAY_NAME_KEY = "agentdeck.assistant-display-name";
+export const ASSISTANT_AVATAR_KEY = "agentdeck.assistant-avatar-data-url";
 const MAX_ASSISTANT_DISPLAY_NAME_LENGTH = 40;
 
 const DEFAULT_CONVERSATION_WIDTH_MODE: ConversationWidthMode = "large";
-const CONVERSATION_WIDTH_KEY = "hermes.conversation-width";
+const CONVERSATION_WIDTH_KEY = "agentdeck.conversation-width";
 const CONVERSATION_WIDTH_VALUES = CONVERSATION_WIDTH_OPTIONS.map((option) => option.value);
 const DEFAULT_CONVERSATION_FONT_SIZE_MODE: ConversationFontSizeMode = "standard";
-const CONVERSATION_FONT_SIZE_KEY = "hermes.conversation-font-size";
+const CONVERSATION_FONT_SIZE_KEY = "agentdeck.conversation-font-size";
 const CONVERSATION_FONT_SIZE_VALUES = CONVERSATION_FONT_SIZE_OPTIONS.map((option) => option.value);
 
 export function normalizeConversationWidthMode(value: unknown): ConversationWidthMode {
@@ -209,20 +209,20 @@ export const assistantAvatarDataUrlAtom = atom(
 );
 
 const showReasoningBaseAtom = persistedUiBaseAtom<boolean>(
-  () => readUiValue("hermes.show-reasoning", false),
+  () => readUiValue("agentdeck.show-reasoning", false),
 );
 export const showReasoningAtom = atom(
   (get) => get(showReasoningBaseAtom),
   (_get, set, next: boolean) => {
     set(showReasoningBaseAtom, next);
-    writeUiValue("hermes.show-reasoning", next);
+    writeUiValue("agentdeck.show-reasoning", next);
   },
 );
 
 // Task-detail right rail (issue #233): rich preview panel visibility. Persisted
 // so the user's last choice survives reload; ⌘B toggles it. The active tab
 // lives in the `?panel=` query, not here (see lib/preview-rail.ts).
-const RIGHT_RAIL_VISIBLE_KEY = "hermes.right-rail-visible";
+const RIGHT_RAIL_VISIBLE_KEY = "agentdeck.right-rail-visible";
 const rightRailVisibleBaseAtom = persistedUiBaseAtom<boolean>(
   () => readUiValue<unknown>(RIGHT_RAIL_VISIBLE_KEY, false) === true,
 );
@@ -234,7 +234,7 @@ export const rightRailVisibleAtom = atom(
   },
 );
 
-const COMPOSER_SUBMIT_SHORTCUT_KEY = "hermes.composer-submit-shortcut";
+const COMPOSER_SUBMIT_SHORTCUT_KEY = "agentdeck.composer-submit-shortcut";
 
 function normalizeComposerSubmitShortcut(value: unknown): ComposerSubmitShortcut {
   return value === "ctrl-enter" ? "ctrl-enter" : "enter";
@@ -255,11 +255,11 @@ export const composerSubmitShortcutAtom = atom(
 // 桌面通知设置（issue #194）。触发链路（stores/chat.ts → lib/notifications.ts）
 // 不在 React 上下文里，直接通过 readNotificationSettings() 同步读 kv 缓存；
 // atoms 写入时 writeUiValue 同步写穿同一缓存，两边天然一致。
-const NOTIFY_SYSTEM_KEY = "hermes.notify-system";
-const NOTIFY_SOUND_KEY = "hermes.notify-sound";
-const NOTIFY_ON_COMPLETE_KEY = "hermes.notify-on-complete";
-const NOTIFY_ON_APPROVAL_KEY = "hermes.notify-on-approval";
-const NOTIFY_ONLY_BACKGROUND_KEY = "hermes.notify-only-background";
+const NOTIFY_SYSTEM_KEY = "agentdeck.notify-system";
+const NOTIFY_SOUND_KEY = "agentdeck.notify-sound";
+const NOTIFY_ON_COMPLETE_KEY = "agentdeck.notify-on-complete";
+const NOTIFY_ON_APPROVAL_KEY = "agentdeck.notify-on-approval";
+const NOTIFY_ONLY_BACKGROUND_KEY = "agentdeck.notify-only-background";
 
 function readNotifyFlag(key: string): boolean {
   return readUiValue<unknown>(key, true) !== false;
@@ -344,7 +344,7 @@ export function hydratePersistedUiAtoms(store: ReturnType<typeof import("jotai/v
   }
 
   // 6. Show reasoning
-  const showReasoning = readUiValue<unknown>("hermes.show-reasoning", undefined);
+  const showReasoning = readUiValue<unknown>("agentdeck.show-reasoning", undefined);
   if (showReasoning !== undefined) {
     const enabled = showReasoning === true;
     if (store.get(showReasoningBaseAtom) !== enabled) {

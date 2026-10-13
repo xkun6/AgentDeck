@@ -27,15 +27,15 @@ describe("activeSessionIdAtom", () => {
     const { activeSessionIdAtom, uiStore } = await loadUi();
     const store = createStore();
     store.set(activeSessionIdAtom, "session-xyz-456");
-    expect(uiStore.readUiValue("hermes.active-session-id", null)).toBe("session-xyz-456");
+    expect(uiStore.readUiValue("agentdeck.active-session-id", null)).toBe("session-xyz-456");
     store.set(activeSessionIdAtom, null);
-    expect(uiStore.readUiValue("hermes.active-session-id", "fallback")).toBe("fallback");
+    expect(uiStore.readUiValue("agentdeck.active-session-id", "fallback")).toBe("fallback");
   });
 
   it("restores a persisted active session id after a reload (F5)", async () => {
     const first = await loadUi();
     createStore().set(first.activeSessionIdAtom, "session-persisted-789");
-    const second = await loadUi({ "hermes.active-session-id": "session-persisted-789" });
+    const second = await loadUi({ "agentdeck.active-session-id": "session-persisted-789" });
     expect(createStore().get(second.activeSessionIdAtom)).toBe("session-persisted-789");
   });
 });
@@ -81,9 +81,9 @@ describe("sidebarSearchAtom", () => {
     const { sidebarSearchAtom } = await loadUi();
     const store = createStore();
     store.set(sidebarSearchAtom, "tavily research");
-    expect(sessionStorage.getItem("hermes.sidebar-search")).toBe("tavily research");
+    expect(sessionStorage.getItem("agentdeck.sidebar-search")).toBe("tavily research");
     store.set(sidebarSearchAtom, "");
-    expect(sessionStorage.getItem("hermes.sidebar-search")).toBeNull();
+    expect(sessionStorage.getItem("agentdeck.sidebar-search")).toBeNull();
   });
 
   it("restores the query from sessionStorage after a module reload (F5)", async () => {
@@ -100,7 +100,7 @@ describe("appSidebarVisibleAtom (persisted)", () => {
     const visibleUi = await loadUi();
     expect(createStore().get(visibleUi.appSidebarVisibleAtom)).toBe(true);
 
-    const hiddenUi = await loadUi({ "hermes.app-sidebar-visible": false });
+    const hiddenUi = await loadUi({ "agentdeck.app-sidebar-visible": false });
     expect(createStore().get(hiddenUi.appSidebarVisibleAtom)).toBe(false);
   });
 
@@ -109,10 +109,10 @@ describe("appSidebarVisibleAtom (persisted)", () => {
     const store = createStore();
     store.set(appSidebarVisibleAtom, false);
     expect(store.get(appSidebarVisibleAtom)).toBe(false);
-    expect(uiStore.readUiValue("hermes.app-sidebar-visible", true)).toBe(false);
+    expect(uiStore.readUiValue("agentdeck.app-sidebar-visible", true)).toBe(false);
 
     store.set(appSidebarVisibleAtom, true);
-    expect(uiStore.readUiValue("hermes.app-sidebar-visible", false)).toBe(true);
+    expect(uiStore.readUiValue("agentdeck.app-sidebar-visible", false)).toBe(true);
   });
 });
 
@@ -127,9 +127,9 @@ describe("showReasoningAtom (persisted)", () => {
     const { showReasoningAtom, uiStore } = await loadUi();
     const store = createStore();
     store.set(showReasoningAtom, true);
-    expect(uiStore.readUiValue("hermes.show-reasoning", false)).toBe(true);
+    expect(uiStore.readUiValue("agentdeck.show-reasoning", false)).toBe(true);
     store.set(showReasoningAtom, false);
-    expect(uiStore.readUiValue("hermes.show-reasoning", true)).toBe(false);
+    expect(uiStore.readUiValue("agentdeck.show-reasoning", true)).toBe(false);
   });
 });
 
@@ -142,7 +142,7 @@ describe("composerSubmitShortcutAtom (persisted)", () => {
 
   it("restores Ctrl+Enter submit from the UI store", async () => {
     const { composerSubmitShortcutAtom } = await loadUi({
-      "hermes.composer-submit-shortcut": "ctrl-enter",
+      "agentdeck.composer-submit-shortcut": "ctrl-enter",
     });
     const store = createStore();
     expect(store.get(composerSubmitShortcutAtom)).toBe("ctrl-enter");
@@ -152,11 +152,11 @@ describe("composerSubmitShortcutAtom (persisted)", () => {
     const { composerSubmitShortcutAtom, uiStore } = await loadUi();
     const store = createStore();
     store.set(composerSubmitShortcutAtom, "ctrl-enter");
-    expect(uiStore.readUiValue("hermes.composer-submit-shortcut", "")).toBe("ctrl-enter");
+    expect(uiStore.readUiValue("agentdeck.composer-submit-shortcut", "")).toBe("ctrl-enter");
 
     store.set(composerSubmitShortcutAtom, "shift-enter" as never);
     expect(store.get(composerSubmitShortcutAtom)).toBe("enter");
-    expect(uiStore.readUiValue("hermes.composer-submit-shortcut", "")).toBe("enter");
+    expect(uiStore.readUiValue("agentdeck.composer-submit-shortcut", "")).toBe("enter");
   });
 });
 
@@ -169,7 +169,7 @@ describe("conversationWidthModeAtom (persisted)", () => {
 
   it("restores a supported width from the UI store", async () => {
     const { conversationWidthModeAtom } = await loadUi({
-      "hermes.conversation-width": "large",
+      "agentdeck.conversation-width": "large",
     });
     const store = createStore();
     expect(store.get(conversationWidthModeAtom)).toBe("large");
@@ -177,17 +177,17 @@ describe("conversationWidthModeAtom (persisted)", () => {
 
   it("normalizes unsupported stored and written values back to large", async () => {
     const { conversationWidthModeAtom, uiStore } = await loadUi({
-      "hermes.conversation-width": "wide",
+      "agentdeck.conversation-width": "wide",
     });
     const store = createStore();
     expect(store.get(conversationWidthModeAtom)).toBe("large");
 
     store.set(conversationWidthModeAtom, "full");
-    expect(uiStore.readUiValue("hermes.conversation-width", "")).toBe("full");
+    expect(uiStore.readUiValue("agentdeck.conversation-width", "")).toBe("full");
 
     store.set(conversationWidthModeAtom, "tiny" as never);
     expect(store.get(conversationWidthModeAtom)).toBe("large");
-    expect(uiStore.readUiValue("hermes.conversation-width", "")).toBe("large");
+    expect(uiStore.readUiValue("agentdeck.conversation-width", "")).toBe("large");
   });
 
   it("maps the four width modes to concrete CSS max-width values", async () => {
@@ -208,7 +208,7 @@ describe("conversationFontSizeAtom (persisted)", () => {
 
   it("restores a supported font size from the UI store", async () => {
     const { conversationFontSizeAtom } = await loadUi({
-      "hermes.conversation-font-size": "large",
+      "agentdeck.conversation-font-size": "large",
     });
     const store = createStore();
     expect(store.get(conversationFontSizeAtom)).toBe("large");
@@ -216,17 +216,17 @@ describe("conversationFontSizeAtom (persisted)", () => {
 
   it("persists font size changes and normalizes unsupported values", async () => {
     const { conversationFontSizeAtom, uiStore } = await loadUi({
-      "hermes.conversation-font-size": "tiny",
+      "agentdeck.conversation-font-size": "tiny",
     });
     const store = createStore();
     expect(store.get(conversationFontSizeAtom)).toBe("standard");
 
     store.set(conversationFontSizeAtom, "small");
-    expect(uiStore.readUiValue("hermes.conversation-font-size", "")).toBe("small");
+    expect(uiStore.readUiValue("agentdeck.conversation-font-size", "")).toBe("small");
 
     store.set(conversationFontSizeAtom, "huge" as never);
     expect(store.get(conversationFontSizeAtom)).toBe("standard");
-    expect(uiStore.readUiValue("hermes.conversation-font-size", "")).toBe("standard");
+    expect(uiStore.readUiValue("agentdeck.conversation-font-size", "")).toBe("standard");
   });
 
   it("maps the three font size modes to concrete CSS variables", async () => {
@@ -239,11 +239,11 @@ describe("conversationFontSizeAtom (persisted)", () => {
 
 describe("notification settings atoms (persisted)", () => {
   const atomKeyPairs = [
-    ["notifySystemAtom", "hermes.notify-system"],
-    ["notifySoundAtom", "hermes.notify-sound"],
-    ["notifyOnCompleteAtom", "hermes.notify-on-complete"],
-    ["notifyOnApprovalAtom", "hermes.notify-on-approval"],
-    ["notifyOnlyBackgroundAtom", "hermes.notify-only-background"],
+    ["notifySystemAtom", "agentdeck.notify-system"],
+    ["notifySoundAtom", "agentdeck.notify-sound"],
+    ["notifyOnCompleteAtom", "agentdeck.notify-on-complete"],
+    ["notifyOnApprovalAtom", "agentdeck.notify-on-approval"],
+    ["notifyOnlyBackgroundAtom", "agentdeck.notify-only-background"],
   ] as const;
 
   it("all five toggles default to enabled", async () => {
@@ -254,7 +254,7 @@ describe("notification settings atoms (persisted)", () => {
     }
   });
 
-  it("persists toggles under their hermes.notify-* keys", async () => {
+  it("persists toggles under their agentdeck.notify-* keys", async () => {
     const ui = await loadUi();
     const store = createStore();
     for (const [atomName, key] of atomKeyPairs) {
@@ -267,8 +267,8 @@ describe("notification settings atoms (persisted)", () => {
 
   it("restores stored false values and treats non-boolean junk as enabled", async () => {
     const ui = await loadUi({
-      "hermes.notify-system": false,
-      "hermes.notify-sound": "yes",
+      "agentdeck.notify-system": false,
+      "agentdeck.notify-sound": "yes",
     });
     const store = createStore();
     expect(store.get(ui.notifySystemAtom)).toBe(false);
@@ -276,7 +276,7 @@ describe("notification settings atoms (persisted)", () => {
   });
 
   it("readNotificationSettings mirrors the persisted kv values", async () => {
-    const ui = await loadUi({ "hermes.notify-on-complete": false });
+    const ui = await loadUi({ "agentdeck.notify-on-complete": false });
     expect(ui.readNotificationSettings()).toEqual({
       system: true,
       sound: true,
@@ -299,9 +299,9 @@ describe("rightRailVisibleAtom (persisted)", () => {
     const first = await loadUi();
     const store = createStore();
     store.set(first.rightRailVisibleAtom, true);
-    expect(first.uiStore.readUiValue("hermes.right-rail-visible", false)).toBe(true);
+    expect(first.uiStore.readUiValue("agentdeck.right-rail-visible", false)).toBe(true);
 
-    const restored = await loadUi({ "hermes.right-rail-visible": true });
+    const restored = await loadUi({ "agentdeck.right-rail-visible": true });
     expect(createStore().get(restored.rightRailVisibleAtom)).toBe(true);
   });
 });
@@ -312,7 +312,7 @@ describe("assistant display profile atoms (persisted)", () => {
     const store = createStore();
     expect(store.get(assistantDisplayNameAtom)).toBe("");
 
-    const restored = await loadUi({ "hermes.assistant-display-name": "Claudia" });
+    const restored = await loadUi({ "agentdeck.assistant-display-name": "Claudia" });
     const restoredStore = createStore();
     expect(restoredStore.get(restored.assistantDisplayNameAtom)).toBe("Claudia");
   });
@@ -322,11 +322,11 @@ describe("assistant display profile atoms (persisted)", () => {
     const store = createStore();
     store.set(assistantDisplayNameAtom, "  Claudia   Agent  ");
     expect(store.get(assistantDisplayNameAtom)).toBe("Claudia Agent");
-    expect(uiStore.readUiValue("hermes.assistant-display-name", "")).toBe("Claudia Agent");
+    expect(uiStore.readUiValue("agentdeck.assistant-display-name", "")).toBe("Claudia Agent");
 
     store.set(assistantDisplayNameAtom, "");
     expect(store.get(assistantDisplayNameAtom)).toBe("");
-    expect(uiStore.readUiValue("hermes.assistant-display-name", "fallback")).toBe("");
+    expect(uiStore.readUiValue("agentdeck.assistant-display-name", "fallback")).toBe("");
   });
 
   it("accepts image data URLs and rejects non-image avatar values", async () => {
@@ -335,11 +335,11 @@ describe("assistant display profile atoms (persisted)", () => {
     const avatar = "data:image/png;base64,AAAA";
     store.set(assistantAvatarDataUrlAtom, avatar);
     expect(store.get(assistantAvatarDataUrlAtom)).toBe(avatar);
-    expect(uiStore.readUiValue("hermes.assistant-avatar-data-url", "")).toBe(avatar);
+    expect(uiStore.readUiValue("agentdeck.assistant-avatar-data-url", "")).toBe(avatar);
 
     store.set(assistantAvatarDataUrlAtom, "https://example.test/avatar.png");
     expect(store.get(assistantAvatarDataUrlAtom)).toBe("");
-    expect(uiStore.readUiValue("hermes.assistant-avatar-data-url", "fallback")).toBe("");
+    expect(uiStore.readUiValue("agentdeck.assistant-avatar-data-url", "fallback")).toBe("");
   });
 });
 
@@ -368,10 +368,10 @@ describe("persisted atoms follow late ui-store hydration (#480)", () => {
 
     const avatar = "data:image/png;base64,AAAA";
     uiStore.__resetUiStoreForTests({
-      "hermes.show-reasoning": true,
-      "hermes.composer-submit-shortcut": "ctrl-enter",
-      "hermes.assistant-display-name": "Claudia",
-      "hermes.assistant-avatar-data-url": avatar,
+      "agentdeck.show-reasoning": true,
+      "agentdeck.composer-submit-shortcut": "ctrl-enter",
+      "agentdeck.assistant-display-name": "Claudia",
+      "agentdeck.assistant-avatar-data-url": avatar,
     });
 
     expect(store.get(showReasoningAtom)).toBe(true);
@@ -384,8 +384,8 @@ describe("persisted atoms follow late ui-store hydration (#480)", () => {
   it("reads hydrated values on first mount without another notification", async () => {
     const { composerSubmitShortcutAtom, showReasoningAtom, uiStore } = await loadUi();
     uiStore.__resetUiStoreForTests({
-      "hermes.show-reasoning": true,
-      "hermes.composer-submit-shortcut": "ctrl-enter",
+      "agentdeck.show-reasoning": true,
+      "agentdeck.composer-submit-shortcut": "ctrl-enter",
     });
 
     const store = createStore();

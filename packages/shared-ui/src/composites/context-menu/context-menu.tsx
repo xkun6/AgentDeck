@@ -18,7 +18,7 @@ export const Content = forwardRef<HTMLDivElement, ContentProps>(
     />
   ),
 );
-Content.displayName = "HermesContextMenu.Content";
+Content.displayName = "AgentContextMenu.Content";
 
 type ItemProps = React.ComponentPropsWithoutRef<typeof RadixContextMenu.Item> & {
   /** 危险项（红色）。 */
@@ -34,7 +34,7 @@ export const Item = forwardRef<HTMLDivElement, ItemProps>(
     />
   ),
 );
-Item.displayName = "HermesContextMenu.Item";
+Item.displayName = "AgentContextMenu.Item";
 
 type SeparatorProps = React.ComponentPropsWithoutRef<typeof RadixContextMenu.Separator>;
 export const Separator = forwardRef<HTMLDivElement, SeparatorProps>(
@@ -42,4 +42,4 @@ export const Separator = forwardRef<HTMLDivElement, SeparatorProps>(
     <RadixContextMenu.Separator ref={ref} className={cn(s.separator, className)} {...rest} />
   ),
 );
-Separator.displayName = "HermesContextMenu.Separator";
+Separator.displayName = "AgentContextMenu.Separator";
