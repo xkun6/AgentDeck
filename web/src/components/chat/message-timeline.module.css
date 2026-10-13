@@ -1196,6 +1196,25 @@
   font-size: 12px;
 }
 
+/* 紧凑密度（子代理面板等窄容器）：头像列、助手名与轮次导航在 TSX 中不渲染；
+   这里收窄左右留白，滚动条只占一侧，嵌套工具明细缩进收小。 */
+.scroll[data-density="compact"] {
+  scrollbar-gutter: stable;
+}
+
+.scroll[data-density="compact"] .messages {
+  max-width: none;
+  padding: 12px 4px 16px;
+}
+
+.scroll[data-density="compact"] .messageRow {
+  gap: 0;
+}
+
+.scroll[data-density="compact"] .toolActivityDetails {
+  padding-left: 8px;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

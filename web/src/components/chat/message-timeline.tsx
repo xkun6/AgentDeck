@@ -36,6 +36,8 @@ interface MessageTimelineProps {
   progressModel?: string;
   /** 助手显示名（宿主按自定义名称 → 会话 Agent 名称解析），缺省为「Agent」。 */
   assistantName?: string;
+  /** compact：窄容器（子代理面板）用，不渲染头像列/助手名与轮次导航，收窄左右留白。 */
+  density?: "default" | "compact";
 }
 
 interface TurnAnchor {
@@ -746,9 +748,17 @@ interface MessageBubbleProps {
   sessionUsage?: SessionUsageResult | null;
   progressModel?: string;
   assistantName: string;
+  compact?: boolean;
 }
 
-function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, assistantName }: MessageBubbleProps) {
+function MessageBubble({
+  message,
+  turnStartedAt,
+  sessionUsage,
+  progressModel,
+  assistantName,
+  compact = false,
+}: MessageBubbleProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
   const assistantAvatarDataUrl = useAtomValue(assistantAvatarDataUrlAtom);
   const isUser = message.role === "user";
@@ -763,7 +773,7 @@ function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, as
     return (
       <div className={s.messageRow} data-role="assistant">
         {/* 与带头像的行保持左缘对齐的占位列。 */}
-        <div className={s.avatarCol} aria-hidden />
+        {compact ? null : <div className={s.avatarCol} aria-hidden />}
         <div className={s.messageContent}>
           <ToolChain tools={message.tools ?? []} />
         </div>
@@ -803,7 +813,7 @@ function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, as
     <div className={s.messageRow} data-role={isUser ? "user" : "assistant"}>
       {/* IM 式布局：助手头像独立于气泡左侧一列（点击弹资料卡）；用户侧
           不显示头像与昵称，气泡右贴。 */}
-      {!isUser ? (
+      {!isUser && !compact ? (
         <div className={s.avatarCol}>
           <AssistantProfileCard
             name={assistantName}
@@ -827,7 +837,7 @@ function MessageBubble({ message, turnStartedAt, sessionUsage, progressModel, as
         </div>
       ) : null}
       <div className={s.messageContent}>
-        {!isUser ? (
+        {!isUser && !compact ? (
           <div className={s.assistantName}>
             <span>{assistantName}</span>
           </div>
@@ -887,7 +897,9 @@ export function MessageTimeline({
   sessionUsage,
   progressModel,
   assistantName = ASSISTANT_FALLBACK_NAME,
+  density = "default",
 }: MessageTimelineProps) {
+  const compact = density === "compact";
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const turnAnchorRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -930,7 +942,7 @@ export function MessageTimeline({
     }
     return anchors;
   }, [visibleMessages]);
-  const showTurnRail = turnAnchors.length > 1;
+  const showTurnRail = !compact && turnAnchors.length > 1;
 
   const setTurnAnchorNode = useCallback((id: string, node: HTMLDivElement | null) => {
     if (node) {
@@ -1228,6 +1240,7 @@ export function MessageTimeline({
     <div
       ref={containerRef}
       className={s.scroll}
+      data-density={compact ? "compact" : undefined}
       onWheel={handleWheel}
       onScroll={handleScroll}
       role="log"
@@ -1281,6 +1294,7 @@ export function MessageTimeline({
                 sessionUsage={isLast ? sessionUsage : undefined}
                 progressModel={isLast ? progressModel : undefined}
                 assistantName={assistantName}
+                compact={compact}
               />
             </div>
           );

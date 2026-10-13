@@ -338,4 +338,30 @@ describe("MessageTimeline", () => {
     expect(html).toContain("<span>Claude Code</span>");
     expect(html).toContain("aria-label=\"Claude Code 头像\">C</span>");
   });
+
+  it("紧凑密度：根元素带 data-density，不渲染头像列、助手名与轮次导航；默认密度不受影响", () => {
+    const messages: ChatMessage[] = [
+      { id: "user-1", role: "user", createdAt: 1, text: "第一轮问题" },
+      { id: "assistant-1", role: "assistant", createdAt: 2, status: "complete", text: "第一轮回答" },
+      { id: "user-2", role: "user", createdAt: 3, text: "第二轮追问" },
+      { id: "assistant-2", role: "assistant", createdAt: 4, status: "complete", text: "第二轮回答" },
+    ];
+
+    const compact = renderTimeline(
+      <MessageTimeline messages={messages} assistantName="Explore" density="compact" />,
+    );
+    expect(compact).toMatch(/^<div[^>]*role="log"[^>]*>/);
+    expect(compact).toMatch(/^<div[^>]*data-density="compact"/);
+    expect(compact).not.toContain("Explore 头像");
+    expect(compact).not.toContain("查看 Explore 资料");
+    expect(compact).not.toContain("<span>Explore</span>");
+    expect(compact).not.toContain("对话轮次定位");
+    expect(compact).toContain("第二轮回答");
+
+    const normal = renderTimeline(<MessageTimeline messages={messages} assistantName="Explore" />);
+    expect(normal).not.toContain("data-density");
+    expect(normal).toContain("aria-label=\"Explore 头像\"");
+    expect(normal).toContain("<span>Explore</span>");
+    expect(normal).toContain("对话轮次定位");
+  });
 });

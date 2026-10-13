@@ -157,6 +157,7 @@ function SubagentPanelBody({
           loading={!timeline.loaded && timeline.loading}
           assistantName={title}
           turnStartedAt={running ? descriptor?.createdAt : undefined}
+          density="compact"
         />
       </div>
       <div className={s.footer}>

@@ -107,6 +107,9 @@ describe("SubagentPanel", () => {
     expect(panel.textContent).toContain("Read");
     expect(panel.querySelector("textarea")).toBeNull();
     expect(within(panel).queryByRole("button", { name: "返回上一级" })).toBeNull();
+    // 紧凑密度：时间线根元素带 data-density，不渲染头像列
+    expect(within(panel).getByRole("log").getAttribute("data-density")).toBe("compact");
+    expect(within(panel).queryByLabelText("Explore 头像")).toBeNull();
 
     fireEvent.click(within(panel).getByRole("button", { name: "加载更早记录" }));
     expect(loadOlder).toHaveBeenCalled();
