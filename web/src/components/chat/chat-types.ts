@@ -2,9 +2,17 @@ import type { AssistantTurnBlock, ImageEntry, ToolEntry } from "@/stores/chat";
 
 export type ChatRole = "user" | "assistant" | "system" | "tool";
 
+/** provider 子代理父卡片（sub_agent detail，design.md 4.11） */
+export interface ChatSubAgentInfo {
+  subAgentType?: string;
+  description?: string;
+  log: string;
+}
+
 export interface ChatToolItem extends ToolEntry {
   arguments?: Record<string, unknown>;
   images?: ChatImageItem[];
+  subAgent?: ChatSubAgentInfo;
 }
 
 export type ChatImageItem = ImageEntry;

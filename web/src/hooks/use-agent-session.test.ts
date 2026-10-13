@@ -210,6 +210,7 @@ describe("删除会话", () => {
       onAgentState: noop,
       onAgents: noop,
       onEpochChange: noop,
+      onSubagentUpdate: noop,
       onAgentRemoved: (listener: (agentId: string) => void) => {
         removedListener = listener;
         return () => {};

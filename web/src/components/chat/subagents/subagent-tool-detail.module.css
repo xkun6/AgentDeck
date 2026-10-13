@@ -1,0 +1,90 @@
+/* sub_agent 父卡片详情：类型 + 状态、任务描述、动作列表、其余日志。 */
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+  padding: 8px;
+  border: 1px solid var(--h-line-soft);
+  background: var(--h-bg-code);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.type {
+  color: var(--h-text);
+  font-weight: 600;
+}
+
+.status {
+  color: var(--h-text-3);
+  font-size: 11px;
+}
+
+.status[data-status="running"] {
+  color: var(--h-ok);
+}
+
+.status[data-status="error"] {
+  color: var(--h-err);
+}
+
+.description {
+  color: var(--h-text-2);
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.action {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+}
+
+.actionTool {
+  flex: 0 0 auto;
+  color: var(--h-text);
+  font-weight: 500;
+}
+
+.actionSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--h-text-3);
+}
+
+.log {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty {
+  color: var(--h-text-3);
+}

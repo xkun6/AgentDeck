@@ -363,10 +363,18 @@ function upsertAgentToolPart(
     : item.status === "canceled"
       ? "已取消"
       : undefined;
+  const subAgent = item.detail.type === "sub_agent"
+    ? {
+        ...(item.detail.subAgentType ? { subAgentType: item.detail.subAgentType } : {}),
+        ...(item.detail.description ? { description: item.detail.description } : {}),
+        log: item.detail.log,
+      }
+    : undefined;
   const tool: HermesToolPart = {
     type: "tool",
     toolCallId: item.callId,
-    name: item.name,
+    // 子代理卡片显示子代理类型（design.md 4.11），缺省 Task
+    name: subAgent ? subAgent.subAgentType ?? "Task" : item.name,
     state,
     input: display.context,
     preview: display.preview,
@@ -374,6 +382,7 @@ function upsertAgentToolPart(
     errorText,
     startedAt: existing?.startedAt ?? timestamp,
     completedAt: state === "running" ? undefined : existing?.completedAt ?? timestamp,
+    ...(subAgent ? { subAgent } : {}),
   };
   if (!existing) return appendToolPart(withoutProgressParts(parts), tool);
   const next = [...parts];
@@ -465,6 +474,17 @@ function todoStatusText(items: { text: string; completed: boolean }[]): string {
     : `计划进度 ${done}/${items.length}：全部完成`;
 }
 
+/** 从后往前找含该 callId 工具卡片的消息 id。 */
+function findToolOwnerMessageId(runtime: ChatSessionRuntime, callId: string): string | undefined {
+  for (let index = runtime.messages.length - 1; index >= 0; index -= 1) {
+    const message = runtime.messages[index]!;
+    if (message.parts.some((part) => part.type === "tool" && part.toolCallId === callId)) {
+      return message.id;
+    }
+  }
+  return undefined;
+}
+
 function reduceAgentTimelineItem(
   runtime: ChatSessionRuntime,
   envelope: AgentStreamEnvelope,
@@ -531,12 +551,21 @@ function reduceAgentTimelineItem(
       );
     }
 
-    case "tool_call":
+    case "tool_call": {
+      // 同 callId 的卡片可能在更早的消息里（子代理活动可能晚于回合结束，design.md 4.11）：原地更新
+      const ownerId = findToolOwnerMessageId(runtime, item.callId);
+      if (ownerId && ownerId !== runtime.activeAssistantId) {
+        return updateMessage(runtime, ownerId, (message) => ({
+          ...message,
+          parts: upsertAgentToolPart(message.parts, item, timestamp),
+        }));
+      }
       return withActiveAgentAssistant(runtime, envelope, turnId, (message) => ({
         ...message,
         status: "streaming",
         parts: upsertAgentToolPart(message.parts, item, timestamp),
       }));
+    }
 
     case "todo":
       return {

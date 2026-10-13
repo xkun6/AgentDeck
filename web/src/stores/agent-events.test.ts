@@ -241,3 +241,57 @@ describe("乐观发送与事件去重", () => {
     expect(runtime.streamStatus).toBe("complete");
   });
 });
+
+describe("reduceAgentEvent：子代理父卡片（design.md 4.11）", () => {
+  const subAgentCard = (status: "running" | "completed", log: string): AgentStreamEvent => ({
+    type: "timeline",
+    item: {
+      type: "tool_call",
+      callId: "task-1",
+      name: "Agent",
+      status,
+      detail: { type: "sub_agent", subAgentType: "Explore", description: "读 package.json", log },
+    },
+  });
+
+  it("sub_agent 卡片显示子代理类型并带 subAgent 字段", () => {
+    const runtime = replay([
+      { type: "turn_started", turnId: "t1" },
+      { ...subAgentCard("running", "[Read] package.json"), turnId: "t1" } as AgentStreamEvent,
+    ]);
+    const tool = assistant(runtime)[0]!.parts.find((part) => part.type === "tool")!;
+    expect(tool.name).toBe("Explore");
+    expect(tool.input).toBe("读 package.json");
+    expect(tool.subAgent).toEqual({ subAgentType: "Explore", description: "读 package.json", log: "[Read] package.json" });
+  });
+
+  it("回合结束后同 callId 的更新原地改到原消息，不新建助手消息", () => {
+    const runtime = replay([
+      { type: "turn_started", turnId: "t1" },
+      { ...subAgentCard("running", ""), turnId: "t1" } as AgentStreamEvent,
+      { type: "turn_completed", turnId: "t1" },
+      subAgentCard("completed", "[Read] package.json\n[Grep] name"),
+    ]);
+    const assistants = assistant(runtime);
+    expect(assistants).toHaveLength(1);
+    const tools = assistants[0]!.parts.filter((part) => part.type === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.state).toBe("done");
+    expect((tools[0]!.subAgent as { log: string }).log).toBe("[Read] package.json\n[Grep] name");
+    expect(assistants[0]!.status).toBe("complete");
+    expect(runtime.streamStatus).toBe("complete");
+  });
+
+  it("新一轮里更新上一轮的卡片：留在上一轮的消息里", () => {
+    const runtime = replay([
+      { type: "turn_started", turnId: "t1" },
+      { ...subAgentCard("running", ""), turnId: "t1" } as AgentStreamEvent,
+      { type: "turn_completed", turnId: "t1" },
+      { type: "turn_started", turnId: "t2" },
+      { ...subAgentCard("completed", "[Read] a"), turnId: "t2" } as AgentStreamEvent,
+    ]);
+    const assistants = assistant(runtime);
+    expect(assistants[0]!.parts.filter((part) => part.type === "tool")).toHaveLength(1);
+    expect(assistants.slice(1).every((message) => !message.parts.some((part) => part.type === "tool"))).toBe(true);
+  });
+});

@@ -8,6 +8,7 @@ import { AssistantProfileCard } from "./assistant-profile-card";
 import { MessageImage } from "./message-image";
 import { MessageSkeleton } from "./message-skeleton";
 import { MessageText } from "./message-text";
+import { SubAgentToolDetail } from "./subagents/subagent-tool-detail";
 import { CopyButton } from "@/components/ui/copy-button";
 import s from "./message-timeline.module.css";
 import { summarizeToolActivity } from "./tool-activity";
@@ -332,7 +333,8 @@ function ToolCard({ tool }: { tool: ChatToolItem }) {
   );
   const body = tool.error ?? tool.summary ?? tool.preview;
   const hasImages = Boolean(tool.images?.length);
-  const hasBody = Boolean(body || tool.arguments || hasImages);
+  const subAgent = tool.subAgent;
+  const hasBody = Boolean(subAgent || body || tool.arguments || hasImages);
 
   return (
     <div className={s.toolCard} data-status={tool.status}>
@@ -352,7 +354,13 @@ function ToolCard({ tool }: { tool: ChatToolItem }) {
         ) : null}
         {elapsedLabel ? <span className={s.toolElapsed}>{elapsedLabel}</span> : null}
       </button>
-      {open && hasBody ? (
+      {open && hasBody && subAgent ? (
+        <div className={s.toolBody}>
+          <SubAgentToolDetail info={subAgent} status={tool.status} />
+          {tool.error ? <pre data-error="true">{tool.error}</pre> : null}
+        </div>
+      ) : null}
+      {open && hasBody && !subAgent ? (
         <div className={s.toolBody}>
           {hasImages ? (
             <div className={s.toolImages}>

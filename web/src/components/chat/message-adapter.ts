@@ -8,7 +8,13 @@ import {
 } from "@/lib/reasoning-filter";
 import { extractImagePartsFromUnknown } from "@/lib/message-images";
 import type { AssistantTurnBlock } from "@/stores/chat";
-import type { AssistantMessageStats, ChatImageItem, ChatMessage, ChatToolItem } from "./chat-types";
+import type {
+  AssistantMessageStats,
+  ChatImageItem,
+  ChatMessage,
+  ChatSubAgentInfo,
+  ChatToolItem,
+} from "./chat-types";
 
 type HermesToolPart = Extract<HermesMessagePart, { type: "tool" }>;
 type HermesImagePart = Extract<HermesMessagePart, { type: "image" }>;
@@ -113,7 +119,18 @@ function parseToolInput(value: unknown): {
   };
 }
 
+function readSubAgent(value: unknown): ChatSubAgentInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    ...(typeof record.subAgentType === "string" ? { subAgentType: record.subAgentType } : {}),
+    ...(typeof record.description === "string" ? { description: record.description } : {}),
+    log: typeof record.log === "string" ? record.log : "",
+  };
+}
+
 function toolPartToToolEntry(part: HermesToolPart, message: HermesUIMessage): ChatToolItem {
+  const subAgent = readSubAgent(part.subAgent);
   const input = parseToolInput(part.input);
   const images = extractImagePartsFromUnknown(part.output).map(imagePartToEntry);
   return {
@@ -128,6 +145,7 @@ function toolPartToToolEntry(part: HermesToolPart, message: HermesUIMessage): Ch
     completedAt: part.completedAt,
     arguments: input.arguments,
     images: images.length ? images : undefined,
+    ...(subAgent ? { subAgent } : {}),
   };
 }
 

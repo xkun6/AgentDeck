@@ -28,6 +28,7 @@ import {
   SESSION_PROVIDER_DISABLED_MESSAGE,
   SESSION_UNRECOVERABLE_MESSAGE,
   useAgentSession,
+  useProviderSubagents,
 } from "@/hooks/use-agent-session";
 import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useProviderConfig } from "@/hooks/use-provider-config";
@@ -60,6 +61,8 @@ import type { ComposerSubmitPayload } from "@/components/chat/composer-types";
 import { MessageTimeline } from "@/components/chat/message-timeline";
 import { StallNotice } from "@/components/chat/stall-notice";
 import { PreviewRail } from "@/components/chat/preview-rail/preview-rail";
+import { SubagentTrack } from "@/components/chat/subagents/subagent-track";
+import { SubagentPanel } from "@/components/chat/subagents/subagent-panel";
 import { PREVIEW_PANEL_QUERY_KEY } from "@/lib/preview-rail";
 import { ConversationWidthControl } from "@/components/chat/conversation-width-control";
 import { hermesUIMessagesToChatMessages } from "@/components/chat/message-adapter";
@@ -91,6 +94,10 @@ export function DetailRoute() {
   const [rightRailVisible, setRightRailVisible] = useAtom(rightRailVisibleAtom);
   const [searchParams] = useSearchParams();
   const taskId = activeSessionId ?? urlTaskId;
+  // provider 子代理（design.md 4.11）：输入框上方药丸 + 右侧只读面板（打开时替代预览面板）
+  const subagents = useProviderSubagents(taskId);
+  const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
+  useEffect(() => setOpenSubagentId(null), [taskId]);
 
   const actions = useAgentSession();
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
@@ -542,6 +549,12 @@ export function DetailRoute() {
                 ) : null}
               </div>
             ) : null}
+            <SubagentTrack
+              subagents={subagents}
+              parentSubagentId={null}
+              onOpen={setOpenSubagentId}
+              activeSubagentId={openSubagentId}
+            />
             <QueuePanel
               entries={queuedPrompts}
               busy={runtimeIsBusy}
@@ -583,7 +596,14 @@ export function DetailRoute() {
             />
           </div>
         </div>
-        {rightRailVisible && taskId ? (
+        {openSubagentId && taskId ? (
+          <SubagentPanel
+            agentId={taskId}
+            subagents={subagents}
+            rootSubagentId={openSubagentId}
+            onClose={() => setOpenSubagentId(null)}
+          />
+        ) : rightRailVisible && taskId ? (
           <PreviewRail
             sessionId={taskId}
             workspaceRoot={sessionWorkspace}

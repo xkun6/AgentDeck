@@ -327,6 +327,16 @@ describe("SidecarClient", () => {
     expect(client.lastSeq("a1")).toBe(0);
   });
 
+  it("agent.subagents.update 通知：原样分发给订阅方", async () => {
+    const { client, current } = setup(server());
+    const updates: unknown[] = [];
+    client.onSubagentUpdate((update) => updates.push(update));
+    await client.connect();
+    const update = { kind: "remove", agentId: "a1", subagentId: "s1" };
+    current().push({ jsonrpc: "2.0", method: "agent.subagents.update", params: update });
+    expect(updates).toEqual([update]);
+  });
+
   it("provider.changed 通知：通知订阅方，经 bindProviderChangesToQueries 让 provider 相关查询失效", async () => {
     const { client, current } = setup(server());
     const queryClient = new QueryClient();

@@ -94,6 +94,8 @@ export function describeToolDetail(detail: ToolCallDetail | undefined): AgentToo
       return { context: detail.url, preview: detail.prompt, output: clip(detail.result) };
     case "plan":
       return { context: "计划", output: clip(detail.text) };
+    case "sub_agent":
+      return { context: detail.description, output: clip(detail.log || undefined) };
     case "plain_text":
       return { context: detail.label, output: clip(detail.text) };
     case "unknown": {

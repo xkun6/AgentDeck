@@ -3,8 +3,8 @@
 // - bindSidecarToStore：把连续去重后的事件流 / 快照 / 连接状态写进 jotai store；
 // - useSidecarBridge：在应用根部挂一次，负责绑定与首次连接；
 // - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式/思考强度、列表、历史、删除）。
-import { useEffect, useMemo } from "react";
-import { useStore } from "jotai";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAtomValue, useStore } from "jotai";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { createStore } from "jotai";
 import type {
@@ -15,6 +15,8 @@ import type {
   AgentMode,
   ProviderInfo,
   ProviderProfile,
+  ProviderSubagentDescriptor,
+  ProviderSubagentTimelineRow,
   ProviderTestResult,
 } from "@agentdeck/protocol";
 import {
@@ -42,6 +44,16 @@ import {
   sidecarConnectionAtom,
   upsertAgentSnapshotAtom,
 } from "@/stores/agents";
+import {
+  applySubagentUpdateAtom,
+  removeAgentSubagentsAtom,
+  replaceSubagentsAtom,
+  storeSubagentTimelineAtom,
+  subagentTimelineKey,
+  subagentTimelinesAtom,
+  subagentsByAgentAtom,
+  type SubagentTimelineCache,
+} from "@/stores/subagents";
 import { invalidateProviderQueries } from "@/lib/agent-query-keys";
 
 type JotaiStore = ReturnType<typeof createStore>;
@@ -194,7 +206,11 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
     }),
     client.onStream((envelope, meta) => store.set(applyAgentEventAtom, envelope, meta.replay)),
     client.onAgentState((agent) => store.set(upsertAgentSnapshotAtom, agent)),
-    client.onAgentRemoved((agentId) => store.set(removeAgentAtom, agentId)),
+    client.onAgentRemoved((agentId) => {
+      store.set(removeAgentAtom, agentId);
+      store.set(removeAgentSubagentsAtom, agentId);
+    }),
+    client.onSubagentUpdate((update) => store.set(applySubagentUpdateAtom, update)),
     client.onAgents((agents) => {
       store.set(replaceAgentSnapshotsAtom, agents);
       store.set(reconcileAgentRuntimesAtom, agents);
@@ -229,6 +245,10 @@ export function useSidecarBridge(): void {
     };
   }, [queryClient, store]);
 }
+
+const SUBAGENT_TIMELINE_PAGE = 200;
+const EMPTY_SUBAGENTS: Record<string, ProviderSubagentDescriptor> = {};
+const EMPTY_ROWS: ProviderSubagentTimelineRow[] = [];
 
 export function createAgentSessionActions(client: SidecarClient, store: JotaiStore) {
   return {
@@ -356,10 +376,41 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       store.set(settleInactiveAgentRuntimeAtom, agentId);
     },
 
+    /** agent.subagents.list：该会话全部层级的 provider 子代理，写入 store 并返回（design.md 4.11）。 */
+    async listSubagents(agentId: string): Promise<ProviderSubagentDescriptor[]> {
+      const { subagents } = await client.request("agent.subagents.list", { agentId });
+      store.set(replaceSubagentsAtom, { agentId, subagents });
+      return subagents;
+    },
+
+    /** agent.subagents.timeline：tail（缺省）或 before cursorSeq 的一页，结果合并进时间线缓存。 */
+    async subagentTimeline(
+      agentId: string,
+      subagentId: string,
+      options: { before?: number; limit?: number } = {},
+    ): Promise<{ rows: ProviderSubagentTimelineRow[]; hasOlder: boolean }> {
+      const before = options.before;
+      const result = await client.request("agent.subagents.timeline", {
+        agentId,
+        subagentId,
+        limit: options.limit ?? SUBAGENT_TIMELINE_PAGE,
+        ...(before !== undefined ? { direction: "before" as const, cursorSeq: before } : {}),
+      });
+      store.set(storeSubagentTimelineAtom, {
+        agentId,
+        subagentId,
+        rows: result.rows,
+        hasOlder: result.hasOlder,
+        mode: before !== undefined ? "before" : "tail",
+      });
+      return result;
+    },
+
     /** agent.delete：sidecar 关闭并删除会话（含磁盘目录），随后本地移除（agent.removed 也会触发同样处理）。 */
     async deleteSession(agentId: string): Promise<void> {
       await client.request("agent.delete", { agentId });
       store.set(removeAgentAtom, agentId);
+      store.set(removeAgentSubagentsAtom, agentId);
     },
   };
 }
@@ -369,4 +420,79 @@ export type AgentSessionActions = ReturnType<typeof createAgentSessionActions>;
 export function useAgentSession(): AgentSessionActions {
   const store = useStore();
   return useMemo(() => createAgentSessionActions(getSidecarClient(), store), [store]);
+}
+
+/**
+ * 某会话的 provider 子代理（design.md 4.11）：进入会话与每次重连成功后拉一次 agent.subagents.list，
+ * 之后由 agent.subagents.update 增量维护。返回按 createdAt 升序的全部层级描述。
+ */
+export function useProviderSubagents(agentId: string | null | undefined): ProviderSubagentDescriptor[] {
+  const actions = useAgentSession();
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const byAgent = useAtomValue(subagentsByAgentAtom);
+  useEffect(() => {
+    if (!agentId || connection !== "open") return;
+    actions.listSubagents(agentId).catch(() => {});
+  }, [actions, agentId, connection]);
+  const map = agentId ? byAgent[agentId] ?? EMPTY_SUBAGENTS : EMPTY_SUBAGENTS;
+  return useMemo(
+    () => Object.values(map).sort((a, b) => a.createdAt - b.createdAt),
+    [map],
+  );
+}
+
+export interface SubagentTimelineState extends SubagentTimelineCache {
+  loading: boolean;
+  error: string | null;
+  loadOlder: () => Promise<void>;
+}
+
+/** 子代理时间线：打开（及重连成功）时拉 tail，loadOlder 按最小 seq 向前翻页。 */
+export function useSubagentTimeline(agentId: string, subagentId: string): SubagentTimelineState {
+  const actions = useAgentSession();
+  const connection = useAtomValue(sidecarConnectionAtom);
+  const cache = useAtomValue(subagentTimelinesAtom)[subagentTimelineKey(agentId, subagentId)];
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (connection !== "open") return;
+    let canceled = false;
+    setLoading(true);
+    setError(null);
+    actions
+      .subagentTimeline(agentId, subagentId)
+      .catch((err: unknown) => {
+        if (!canceled) setError(humanizeSidecarError(err));
+      })
+      .finally(() => {
+        if (!canceled) setLoading(false);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [actions, agentId, connection, subagentId]);
+
+  const firstSeq = cache?.rows[0]?.seq;
+  const loadOlder = useCallback(async () => {
+    if (firstSeq === undefined) return;
+    setLoading(true);
+    try {
+      await actions.subagentTimeline(agentId, subagentId, { before: firstSeq });
+      setError(null);
+    } catch (err) {
+      setError(humanizeSidecarError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [actions, agentId, firstSeq, subagentId]);
+
+  return {
+    rows: cache?.rows ?? EMPTY_ROWS,
+    hasOlder: cache?.hasOlder ?? false,
+    loaded: cache?.loaded ?? false,
+    loading,
+    error,
+    loadOlder,
+  };
 }

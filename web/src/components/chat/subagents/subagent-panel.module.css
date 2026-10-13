@@ -1,0 +1,157 @@
+/* 子代理面板：与预览面板同位置的右侧分栏（宽度由 usePanelWidth 的 inline style 驱动）。 */
+.panel {
+  width: 460px;
+  flex: 0 0 460px;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--h-line);
+  background: var(--h-bg-app);
+  overflow: hidden;
+}
+
+.header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.heading {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--h-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status {
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.description,
+.subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--h-text-2);
+  font-size: 12px;
+}
+
+.subtitle {
+  color: var(--h-text-3);
+  font-size: 11px;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: var(--h-status-dot-size);
+  height: var(--h-status-dot-size);
+  border-radius: 50%;
+  background: var(--h-text-3);
+}
+
+.dot[data-status="running"],
+.dot[data-status="done"] {
+  background: var(--h-ok);
+}
+
+.dot[data-status="error"] {
+  background: var(--h-err);
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+}
+
+.olderBar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.olderButton {
+  height: 24px;
+  padding: 0 12px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.olderButton:hover:not(:disabled) {
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+}
+
+.olderButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.error {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  color: var(--h-err);
+  font-size: 12px;
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.footer {
+  flex: 0 0 auto;
+  padding: 8px 12px 0;
+}
+
+.footer:empty {
+  display: none;
+}
