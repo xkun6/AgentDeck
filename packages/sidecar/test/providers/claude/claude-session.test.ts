@@ -1920,6 +1920,7 @@ describe("后台任务（design.md 4.15）", () => {
     tool_use_id: "toolu_b",
     description: "pnpm build",
     task_type: "local_bash",
+    is_backgrounded: true,
     ...extra,
   });
 
@@ -1967,22 +1968,52 @@ describe("后台任务（design.md 4.15）", () => {
     expect(session.listBackgroundTasks!()).toMatchObject([{ taskId: "bk1", status: "completed", summary: "done" }]);
   });
 
-  test("前台子代理不登记；task_updated 转入后台后登记", async () => {
+  test("前台 Bash 与子代理（local_agent）不登记；前台 Bash 转入后台后登记", async () => {
     const h = createHarness();
     const session = await h.client.createSession({ cwd: "." });
     const snapshots = collectTasks(session);
     const cli = await launch(h, session);
     cli.emit(
-      taskStarted({ task_id: "a1", tool_use_id: "toolu_a", task_type: "local_agent", subagent_type: "Explore", is_backgrounded: false }),
+      taskStarted({ task_id: "a1", tool_use_id: "toolu_a", task_type: "local_agent", subagent_type: "Explore" }),
+      taskStarted({ task_id: "f1", tool_use_id: "toolu_f", is_backgrounded: false }),
     );
     cli.emit({ type: "system", subtype: "task_progress", session_id: SESSION_ID, task_id: "a1", usage: { total_tokens: 3 } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(snapshots).toHaveLength(0);
     expect(session.listBackgroundTasks!()).toEqual([]);
 
-    cli.emit({ type: "system", subtype: "task_updated", session_id: SESSION_ID, task_id: "a1", patch: { is_backgrounded: true } });
+    cli.emit({ type: "system", subtype: "task_updated", session_id: SESSION_ID, task_id: "f1", patch: { is_backgrounded: true } });
     await waitUntil(() => snapshots.length > 0);
-    expect(snapshots.at(-1)).toMatchObject([{ taskId: "a1", kind: "agent", status: "running" }]);
+    expect(snapshots.at(-1)).toMatchObject([{ taskId: "f1", kind: "command", status: "running" }]);
+  });
+
+  test("command 取自 assistant 的 Bash tool_use（主线程与子代理 sidechain 都收），exitCode 取自 task_notification 的 summary", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const snapshots = collectTasks(session);
+    const cli = await launch(h, session);
+    cli.emit(
+      msg.assistant("m1", [{ type: "tool_use", id: "toolu_b", name: "Bash", input: { command: "pnpm build", run_in_background: true } }]),
+      // 子代理 sidechain 里发起的后台命令
+      msg.assistant("m2", [{ type: "tool_use", id: "toolu_c", name: "PowerShell", input: { command: "Start-Sleep 9" } }], "toolu_parent"),
+    );
+    cli.emit(taskStarted(), taskStarted({ task_id: "bk2", tool_use_id: "toolu_c" }));
+    await waitUntil(() => (snapshots.at(-1)?.length ?? 0) === 2);
+    expect(snapshots.at(-1)).toMatchObject([
+      { taskId: "bk1", command: "pnpm build" },
+      { taskId: "bk2", command: "Start-Sleep 9" },
+    ]);
+
+    cli.emit({
+      type: "system",
+      subtype: "task_notification",
+      session_id: SESSION_ID,
+      task_id: "bk1",
+      status: "failed",
+      summary: 'Background command "pnpm build" failed (exit code 3)',
+    });
+    await waitUntil(() => snapshots.at(-1)?.[0]?.status === "failed");
+    expect(snapshots.at(-1)?.[0]).toMatchObject({ exitCode: 3 });
   });
 
   test("stopBackgroundTask：发 stop_task；未知任务 TASK_NOT_FOUND；已结束任务不再发", async () => {

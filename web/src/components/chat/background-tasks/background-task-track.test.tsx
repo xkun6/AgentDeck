@@ -1,17 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { AgentBackgroundTask, AgentBackgroundTaskOutput } from "@agentdeck/protocol";
-import { stubRadixGlobals } from "@/test-utils/radix";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { AgentBackgroundTask } from "@agentdeck/protocol";
 
 const stopBackgroundTask = vi.fn<(agentId: string, taskId: string) => Promise<void>>();
-const backgroundTaskOutput =
-  vi.fn<(agentId: string, taskId: string, maxBytes?: number) => Promise<AgentBackgroundTaskOutput>>();
 
 vi.mock("@/hooks/use-agent-session", () => {
   const actions = {
     stopBackgroundTask: (...args: [string, string]) => stopBackgroundTask(...args),
-    backgroundTaskOutput: (...args: [string, string, number?]) => backgroundTaskOutput(...args),
   };
   return {
     useAgentSession: () => actions,
@@ -21,11 +17,8 @@ vi.mock("@/hooks/use-agent-session", () => {
 
 const { BackgroundTaskTrack } = await import("./background-task-track");
 
-stubRadixGlobals();
 beforeEach(() => {
   stopBackgroundTask.mockReset();
-  backgroundTaskOutput.mockReset();
-  backgroundTaskOutput.mockResolvedValue({ text: "", truncated: false, size: 0 });
 });
 afterEach(() => {
   cleanup();
@@ -50,28 +43,25 @@ function openList() {
 describe("BackgroundTaskTrack 药丸", () => {
   it("没有任务时不渲染", () => {
     const { container } = render(<BackgroundTaskTrack agentId="a1" tasks={[]} />);
-    expect(container.firstChild).toBeNull();
+    expect(container.innerHTML).toBe("");
   });
 
-  it("有运行中显示「N 运行中」，全部结束显示「N 个已结束」", () => {
+  it("有运行中显示「后台任务 N 运行中」，全部结束显示「N 个已结束」", () => {
     const { rerender } = render(
       <BackgroundTaskTrack agentId="a1" tasks={[task("t1"), task("t2"), task("t3", { status: "completed" })]} />,
     );
-    const pill = screen.getByRole("button", { name: /后台任务/ });
-    expect(pill.textContent).toContain("后台任务");
-    expect(pill.textContent).toContain("2 运行中");
+    expect(screen.getByRole("button", { name: /后台任务/ }).textContent).toContain("后台任务");
+    expect(screen.getByRole("button", { name: /后台任务/ }).textContent).toContain("2 运行中");
     rerender(
       <BackgroundTaskTrack
         agentId="a1"
-        tasks={[task("t1", { status: "completed" }), task("t2", { status: "failed" }), task("t3", { status: "stopped" })]}
+        tasks={[task("t1", { status: "completed" }), task("t2", { status: "failed" })]}
       />,
     );
-    expect(screen.getByRole("button", { name: /后台任务/ }).textContent).toContain("3 个已结束");
+    expect(screen.getByRole("button", { name: /后台任务/ }).textContent).toContain("2 个已结束");
   });
-});
 
-describe("BackgroundTaskTrack 列表", () => {
-  it("展开后每行显示描述、状态文字、耗时；子代理附 token 与工具次数；按钮按状态与输出出现", () => {
+  it("展开后每行是 button：显示描述（无描述取命令首行）、状态、耗时；不显示 token / 工具次数 / 输出按钮", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000 + 65_000);
     render(
@@ -79,9 +69,9 @@ describe("BackgroundTaskTrack 列表", () => {
         agentId="a1"
         tasks={[
           task("c1", { hasOutput: true }),
-          task("a1", {
-            kind: "agent",
-            description: "读文件",
+          task("c2", {
+            description: "",
+            command: "cd x && pnpm build\nnext",
             status: "completed",
             endedAt: 1_000_000 + 3_723_000,
             usage: { totalTokens: 12_345, toolUses: 5 },
@@ -92,22 +82,24 @@ describe("BackgroundTaskTrack 列表", () => {
       />,
     );
     openList();
-    expect(screen.getByText("任务 c1").getAttribute("title")).toBe("任务 c1");
-    const rows = Array.from(document.querySelectorAll("li"));
-    expect(rows).toHaveLength(4);
-    expect(rows[0]!.textContent).toContain("运行中");
-    expect(rows[0]!.textContent).toContain("01:05");
-    expect(rows[0]!.querySelector("[data-status='running']")).not.toBeNull();
-    expect(rows[1]!.textContent).toContain("已完成");
-    expect(rows[1]!.textContent).toContain("1:02:03");
-    expect(rows[1]!.textContent).toContain("12.3k tokens · 5 次工具");
-    expect(rows[2]!.textContent).toContain("失败");
-    expect(rows[2]!.textContent).toContain("exit code 1");
-    expect(rows[3]!.textContent).toContain("已停止");
-    expect(rows[3]!.textContent).toContain("会话已结束");
-    // 运行中且有输出：两个按钮；其余没有按钮
-    expect(Array.from(rows[0]!.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["输出", "停止"]);
-    expect(rows[1]!.querySelectorAll("button")).toHaveLength(0);
+    const items = Array.from(document.querySelectorAll("li"));
+    expect(items).toHaveLength(4);
+    const rowOf = (index: number) => items[index]!.querySelector("button[data-status]") as HTMLElement;
+    expect(rowOf(0).textContent).toContain("任务 c1");
+    expect(rowOf(0).textContent).toContain("运行中");
+    expect(rowOf(0).textContent).toContain("01:05");
+    expect(rowOf(0).querySelector("[data-status='running']")).not.toBeNull();
+    expect(rowOf(1).textContent).toContain("cd x && pnpm build");
+    expect(rowOf(1).textContent).toContain("已完成");
+    expect(rowOf(1).textContent).toContain("1:02:03");
+    expect(rowOf(1).textContent).not.toContain("tokens");
+    expect(items[2]!.textContent).toContain("失败");
+    expect(items[2]!.textContent).toContain("exit code 1");
+    expect(items[3]!.textContent).toContain("已停止");
+    expect(items[3]!.textContent).toContain("会话已结束");
+    expect(screen.queryByRole("button", { name: "输出" })).toBeNull();
+    // 只有运行中的行带「停止」
+    expect(screen.getAllByRole("button", { name: "停止" })).toHaveLength(1);
   });
 
   it("运行中耗时每秒刷新", () => {
@@ -136,13 +128,37 @@ describe("BackgroundTaskTrack 列表", () => {
   });
 });
 
+describe("BackgroundTaskTrack 选中", () => {
+  it("点击一行调用 onOpen(taskId)，当前打开项 data-active 高亮", () => {
+    const onOpen = vi.fn();
+    const tasks = [task("t1"), task("t2", { status: "completed" })];
+    const { rerender } = render(<BackgroundTaskTrack agentId="a1" tasks={tasks} onOpen={onOpen} activeTaskId={null} />);
+    openList();
+    fireEvent.click(screen.getByText("任务 t2"));
+    expect(onOpen).toHaveBeenCalledWith("t2");
+
+    rerender(<BackgroundTaskTrack agentId="a1" tasks={tasks} onOpen={onOpen} activeTaskId="t2" />);
+    const rows = Array.from(document.querySelectorAll("button[data-status]"));
+    expect(rows.map((row) => row.getAttribute("data-active"))).toEqual([null, "true"]);
+  });
+
+  it("点击「停止」只发停止请求，不触发选中", () => {
+    const onOpen = vi.fn();
+    stopBackgroundTask.mockReturnValue(new Promise(() => {}));
+    render(<BackgroundTaskTrack agentId="a1" tasks={[task("t1")]} onOpen={onOpen} />);
+    openList();
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    expect(stopBackgroundTask).toHaveBeenCalledWith("a1", "t1");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+});
+
 describe("BackgroundTaskTrack 停止", () => {
   it("点击停止调用 agent.tasks.stop，按钮显示「停止中…」并禁用", async () => {
     stopBackgroundTask.mockReturnValue(new Promise(() => {}));
     render(<BackgroundTaskTrack agentId="a1" tasks={[task("t1")]} />);
     openList();
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
-    expect(stopBackgroundTask).toHaveBeenCalledWith("a1", "t1");
     const pending = await screen.findByRole("button", { name: "停止中…" });
     expect((pending as HTMLButtonElement).disabled).toBe(true);
   });
@@ -155,16 +171,5 @@ describe("BackgroundTaskTrack 停止", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("会话进程未运行");
     const button = screen.getByRole("button", { name: "停止" }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
-  });
-});
-
-describe("BackgroundTaskTrack 输出对话框", () => {
-  it("点击「输出」打开对话框并按 64KB 拉取输出", async () => {
-    backgroundTaskOutput.mockResolvedValue({ text: "构建完成\n", truncated: false, size: 12 });
-    render(<BackgroundTaskTrack agentId="a1" tasks={[task("t1", { status: "completed", hasOutput: true })]} />);
-    openList();
-    fireEvent.click(screen.getByRole("button", { name: "输出" }));
-    await waitFor(() => expect(screen.getByLabelText("命令输出").textContent).toBe("构建完成\n"));
-    expect(backgroundTaskOutput).toHaveBeenCalledWith("a1", "t1", 65536);
   });
 });

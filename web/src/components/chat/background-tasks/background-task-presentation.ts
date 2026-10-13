@@ -1,4 +1,4 @@
-// 后台任务展示的纯函数（design.md 4.15）：药丸文案、状态文字、耗时与用量格式化。
+// 后台任务展示的纯函数（design.md 4.15）：药丸文案、状态文字、耗时格式化。
 import type { AgentBackgroundTask, AgentBackgroundTaskStatus } from "@agentdeck/protocol";
 
 /** 药丸文案：有运行中显示「N 运行中」，否则「N 个已结束」。 */
@@ -50,15 +50,10 @@ export function taskElapsedMs(task: Pick<AgentBackgroundTask, "status" | "starte
   return Math.max(0, end - task.startedAt);
 }
 
-function formatTokens(tokens: number): string {
-  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(tokens);
-}
-
-/** 子代理 / workflow 的用量：「12.3k tokens · 5 次工具」；命令与没有用量时返回 null。 */
-export function taskUsageText(task: Pick<AgentBackgroundTask, "kind" | "usage">): string | null {
-  if (task.kind === "command" || !task.usage) return null;
-  const parts: string[] = [];
-  if (typeof task.usage.totalTokens === "number") parts.push(`${formatTokens(task.usage.totalTokens)} tokens`);
-  if (typeof task.usage.toolUses === "number") parts.push(`${task.usage.toolUses} 次工具`);
-  return parts.length > 0 ? parts.join(" · ") : null;
+/** 行 / 面板标题：描述；没有描述时取命令首行。 */
+export function taskDisplayLabel(task: Pick<AgentBackgroundTask, "description" | "command">): string {
+  const description = task.description.trim();
+  if (description) return description;
+  const firstLine = task.command?.split(/\r?\n/).find((line) => line.trim())?.trim();
+  return firstLine ?? "后台命令";
 }

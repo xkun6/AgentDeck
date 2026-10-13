@@ -93,6 +93,7 @@ export function redactBackgroundTask(
     description: redactText(task.description, secrets),
     ...(task.summary !== undefined ? { summary: redactText(task.summary, secrets) } : {}),
     ...(task.error !== undefined ? { error: redactText(task.error, secrets) } : {}),
+    ...(task.command !== undefined ? { command: redactText(task.command, secrets) } : {}),
   };
 }
 

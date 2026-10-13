@@ -3,8 +3,8 @@ import {
   backgroundTaskPillLabel,
   backgroundTaskStatusText,
   formatElapsed,
+  taskDisplayLabel,
   taskElapsedMs,
-  taskUsageText,
 } from "./background-task-presentation";
 
 describe("backgroundTaskPillLabel", () => {
@@ -41,12 +41,10 @@ describe("formatElapsed / taskElapsedMs", () => {
   });
 });
 
-describe("taskUsageText", () => {
-  it("子代理 / workflow 显示 token 与工具次数，命令不显示", () => {
-    expect(taskUsageText({ kind: "agent", usage: { totalTokens: 12_345, toolUses: 5 } })).toBe("12.3k tokens · 5 次工具");
-    expect(taskUsageText({ kind: "workflow", usage: { totalTokens: 800 } })).toBe("800 tokens");
-    expect(taskUsageText({ kind: "agent", usage: { totalTokens: 2_000 } })).toBe("2k tokens");
-    expect(taskUsageText({ kind: "command", usage: { totalTokens: 1 } })).toBeNull();
-    expect(taskUsageText({ kind: "agent" })).toBeNull();
+describe("taskDisplayLabel", () => {
+  it("优先用描述；没有描述时取命令首行（跳过空行）；都没有时给兜底文案", () => {
+    expect(taskDisplayLabel({ description: "跑构建", command: "pnpm build" })).toBe("跑构建");
+    expect(taskDisplayLabel({ description: "  ", command: "\n  cd x && pnpm build\nnext" })).toBe("cd x && pnpm build");
+    expect(taskDisplayLabel({ description: "" })).toBe("后台命令");
   });
 });

@@ -1102,6 +1102,8 @@ export class ClaudeAgentSession implements AgentSession {
   private handleMessage(message: ClaudeOutputMessage): void {
     if (message.type === "user") {
       this.observeBackgroundOutputPaths(message);
+    } else if (message.type === "assistant") {
+      this.observeBackgroundToolUses(message);
     }
     const parentToolUseId = readParentToolUseId(message);
     if (parentToolUseId) {
@@ -1696,6 +1698,17 @@ export class ClaudeAgentSession implements AgentSession {
 
   /** task_started / task_updated / task_progress / task_notification */
   /** 后台 Bash 的工具结果里带输出文件路径（子代理发起的命令也一样，所以不论 parent_tool_use_id） */
+  /** assistant 的 Bash / PowerShell tool_use：暂存命令文本供后台任务关联（主线程与子代理的都要） */
+  private observeBackgroundToolUses(message: ClaudeAssistantMessage): void {
+    const content = message.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        this.backgroundTasks.observeToolUse(block.id, block.name, block.input);
+      }
+    }
+  }
+
   private observeBackgroundOutputPaths(message: ClaudeUserOutputMessage): void {
     const content = message.message?.content;
     if (!Array.isArray(content)) return;

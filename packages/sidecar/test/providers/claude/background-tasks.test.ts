@@ -5,7 +5,7 @@ import path from "node:path";
 import type { AgentBackgroundTask } from "@agentdeck/protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ClaudeBackgroundTaskRegistry, readFileTail } from "../../../src/providers/claude/background-tasks.js";
+import { ClaudeBackgroundTaskRegistry, parseExitCode, readFileTail } from "../../../src/providers/claude/background-tasks.js";
 import type { ClaudeOutputMessage } from "../../../src/providers/claude/stream-json-types.js";
 
 function system(subtype: string, fields: Record<string, unknown>): ClaudeOutputMessage {
@@ -30,13 +30,13 @@ function setup() {
 }
 
 const bashStarted = (taskId = "bk1", toolUseId = "toolu_b") =>
-  system("task_started", { task_id: taskId, tool_use_id: toolUseId, description: "pnpm build", task_type: "local_bash" });
+  system("task_started", { task_id: taskId, tool_use_id: toolUseId, description: "pnpm build", task_type: "local_bash", is_backgrounded: true });
 
 const OUTPUT_TEXT =
   "Command running in background with ID: bk1. Output is being written to: C:\\Users\\x\\tasks\\bk1.output";
 
 describe("ClaudeBackgroundTaskRegistry：登记", () => {
-  test("local_bash 登记（无 is_backgrounded），随后工具结果带来输出路径 → hasOutput", () => {
+  test("后台 local_bash（is_backgrounded: true）登记，随后工具结果带来输出路径 → hasOutput", () => {
     const t = setup();
     t.registry.observe(bashStarted());
     expect(t.last()).toEqual([
@@ -47,58 +47,105 @@ describe("ClaudeBackgroundTaskRegistry：登记", () => {
     expect(t.registry.getOutputPath("bk1")).toBe("C:\\Users\\x\\tasks\\bk1.output");
   });
 
-  test("工具结果先于 task_started 到达时也能关联；无关文本与非命令任务不取路径", () => {
+  test("前台 local_bash（is_backgrounded: false 或缺省）不登记；task_updated 转入后台后才登记", () => {
+    const t = setup();
+    t.registry.observe(system("task_started", { task_id: "f1", tool_use_id: "toolu_f", description: "vitest", task_type: "local_bash", is_backgrounded: false }));
+    t.registry.observe(system("task_started", { task_id: "f2", description: "tsc", task_type: "local_bash" }));
+    expect(t.snapshots).toHaveLength(0);
+    expect(t.registry.list()).toEqual([]);
+    expect(t.registry.has("f1")).toBe(false);
+
+    t.registry.observe(system("task_updated", { task_id: "f1", patch: { is_backgrounded: true } }));
+    expect(t.registry.list().map((x) => x.taskId)).toEqual(["f1"]);
+    expect(t.last()[0]).toMatchObject({ taskId: "f1", status: "running", description: "vitest" });
+  });
+
+  test("前台命令未转后台就结束：不推送也不留记录（之后即使 is_backgrounded 也无从登记）", () => {
+    const t = setup();
+    t.registry.observe(system("task_started", { task_id: "f1", description: "ls", task_type: "local_bash", is_backgrounded: false }));
+    t.registry.observe(system("task_updated", { task_id: "f1", patch: { status: "completed" } }));
+    t.registry.observe(system("task_notification", { task_id: "f1", status: "completed" }));
+    expect(t.snapshots).toHaveLength(0);
+    t.registry.observe(system("task_updated", { task_id: "f1", patch: { is_backgrounded: true } }));
+    expect(t.registry.list()).toEqual([]);
+  });
+
+  test("local_agent / local_workflow / 其它类型一律不登记，即使 is_backgrounded（子代理由子代理列表负责）", () => {
+    const t = setup();
+    for (const [id, type] of [["a1", "local_agent"], ["w1", "local_workflow"], ["o1", "monitor"]] as const) {
+      t.registry.observe(system("task_started", { task_id: id, tool_use_id: "toolu_" + id, description: id, task_type: type, is_backgrounded: true }));
+      t.registry.observe(system("task_updated", { task_id: id, patch: { is_backgrounded: true } }));
+      t.registry.observe(system("task_progress", { task_id: id, usage: { total_tokens: 5 } }));
+      t.registry.observe(system("task_notification", { task_id: id, status: "completed" }));
+    }
+    // 无 task_type 但有 subagent_type
+    t.registry.observe(system("task_started", { task_id: "a2", description: "x", subagent_type: "Explore", is_backgrounded: true }));
+    expect(t.snapshots).toHaveLength(0);
+    expect(t.registry.list()).toEqual([]);
+  });
+
+  test("无 task_type：对应 tool_use 是 Bash / PowerShell 且 is_backgrounded 才登记；否则忽略", () => {
+    const t = setup();
+    t.registry.observeToolUse("toolu_p", "PowerShell", { command: "Start-Sleep 5" });
+    t.registry.observe(system("task_started", { task_id: "p1", tool_use_id: "toolu_p", description: "睡眠", is_backgrounded: true }));
+    t.registry.observe(system("task_started", { task_id: "p2", tool_use_id: "toolu_unknown", description: "未知", is_backgrounded: true }));
+    expect(t.registry.list().map((x) => [x.taskId, x.command])).toEqual([["p1", "Start-Sleep 5"]]);
+  });
+
+  test("command 从 tool_use 关联：tool_use 先到（含子代理里的）", () => {
+    const t = setup();
+    t.registry.observeToolUse("toolu_b", "Bash", { command: "ping -n 8 127.0.0.1", run_in_background: true });
+    t.registry.observeToolUse("toolu_x", "Read", { command: "不是 Shell 工具" });
+    t.registry.observe(bashStarted());
+    expect(t.last()[0]).toMatchObject({ taskId: "bk1", command: "ping -n 8 127.0.0.1" });
+  });
+
+  test("command 从 tool_use 关联：task_started 先到，tool_use 后到时补上并推送", () => {
+    const t = setup();
+    t.registry.observe(bashStarted());
+    expect(t.last()[0]!.command).toBeUndefined();
+    const before = t.snapshots.length;
+    t.registry.observeToolUse("toolu_b", "Bash", { command: "pnpm build" });
+    expect(t.snapshots).toHaveLength(before + 1);
+    expect(t.last()[0]).toMatchObject({ command: "pnpm build" });
+  });
+
+  test("前台命令先收到 command，转入后台后带着 command 出现", () => {
+    const t = setup();
+    t.registry.observeToolUse("toolu_f", "Bash", { command: "npx vitest run" });
+    t.registry.observe(system("task_started", { task_id: "f1", tool_use_id: "toolu_f", description: "vitest", task_type: "local_bash", is_backgrounded: false }));
+    t.registry.observe(system("task_updated", { task_id: "f1", patch: { is_backgrounded: true } }));
+    expect(t.last()[0]).toMatchObject({ taskId: "f1", command: "npx vitest run" });
+  });
+
+  test("工具结果先于 task_started 到达时也能关联输出路径；无关文本不取路径", () => {
     const t = setup();
     t.registry.observeToolResult("toolu_b", OUTPUT_TEXT);
     t.registry.observeToolResult("toolu_x", "普通输出");
     t.registry.observe(bashStarted());
     expect(t.registry.getOutputPath("bk1")).toBe("C:\\Users\\x\\tasks\\bk1.output");
     expect(t.last()[0]).toMatchObject({ hasOutput: true });
-    t.registry.observe(
-      system("task_started", {
-        task_id: "a1",
-        tool_use_id: "toolu_x",
-        description: "子代理",
-        task_type: "local_agent",
-        is_backgrounded: true,
-      }),
-    );
-    expect(t.registry.getOutputPath("a1")).toBeUndefined();
+  });
+});
+
+describe("parseExitCode / exitCode", () => {
+  test("从 summary 解析 exit code N（含负数），解析不到不填", () => {
+    expect(parseExitCode('Background command "pnpm build" completed (exit code 0)')).toBe(0);
+    expect(parseExitCode('Background command "x" failed (exit code 127)')).toBe(127);
+    expect(parseExitCode("exit code -1")).toBe(-1);
+    expect(parseExitCode('Background command "x" was stopped')).toBeUndefined();
+    expect(parseExitCode(undefined)).toBeUndefined();
   });
 
-  test("前台子代理不登记，task_updated 转入后台后才登记；workflow / 其它类型同理", () => {
+  test("task_notification 写入 exitCode；无退出码的 summary 不填", () => {
     const t = setup();
-    t.registry.observe(
-      system("task_started", {
-        task_id: "a1",
-        tool_use_id: "toolu_a",
-        description: "读文件",
-        task_type: "local_agent",
-        is_backgrounded: false,
-      }),
-    );
-    t.registry.observe(system("task_started", { task_id: "w1", description: "流程", task_type: "local_workflow" }));
-    t.registry.observe(
-      system("task_started", { task_id: "o1", description: "杂项", task_type: "monitor", is_backgrounded: true }),
-    );
-    expect(t.registry.list().map((x) => [x.taskId, x.kind])).toEqual([["o1", "other"]]);
-    expect(t.registry.has("a1")).toBe(false);
-
-    t.registry.observe(system("task_updated", { task_id: "a1", patch: { is_backgrounded: true } }));
-    t.registry.observe(system("task_updated", { task_id: "w1", patch: { is_backgrounded: true } }));
-    expect(t.registry.list().map((x) => [x.taskId, x.kind])).toEqual([
-      ["a1", "agent"],
-      ["w1", "workflow"],
-      ["o1", "other"],
-    ]);
-  });
-
-  test("前台子代理的 progress / notification 不推送", () => {
-    const t = setup();
-    t.registry.observe(system("task_started", { task_id: "a1", description: "读", task_type: "local_agent" }));
-    t.registry.observe(system("task_progress", { task_id: "a1", usage: { total_tokens: 5 } }));
-    t.registry.observe(system("task_notification", { task_id: "a1", status: "completed" }));
-    expect(t.snapshots).toHaveLength(0);
+    t.registry.observe(bashStarted("bk1", "toolu_1"));
+    t.registry.observe(bashStarted("bk2", "toolu_2"));
+    t.registry.observe(system("task_notification", { task_id: "bk1", status: "failed", summary: 'Background command "a" failed (exit code 2)' }));
+    t.registry.observe(system("task_notification", { task_id: "bk2", status: "stopped", summary: "已停止" }));
+    const byId = Object.fromEntries(t.last().map((x) => [x.taskId, x]));
+    expect(byId.bk1).toMatchObject({ exitCode: 2 });
+    expect(byId.bk2!.exitCode).toBeUndefined();
   });
 });
 
@@ -128,9 +175,7 @@ describe("ClaudeBackgroundTaskRegistry：状态与进度", () => {
     vi.useFakeTimers();
     try {
       const t = setup();
-      t.registry.observe(
-        system("task_started", { task_id: "a1", description: "读", task_type: "local_agent", is_backgrounded: true }),
-      );
+      t.registry.observe(bashStarted("a1", "toolu_a"));
       expect(t.snapshots).toHaveLength(1);
       // 同一毫秒内的进度被节流，定时器到点补发最新整表
       t.registry.observe(
@@ -181,30 +226,16 @@ describe("ClaudeBackgroundTaskRegistry：状态与进度", () => {
     });
   });
 
-  test("task_notification：failed / stopped；命令的 output_file 作为兜底输出路径，子代理的不算", () => {
+  test("task_notification：failed / stopped；output_file 作为兜底输出路径", () => {
     const t = setup();
     t.registry.observe(bashStarted("bk1", "toolu_1"));
     t.registry.observe(bashStarted("bk2", "toolu_2"));
-    t.registry.observe(
-      system("task_started", { task_id: "a1", description: "子代理", task_type: "local_agent", is_backgrounded: true }),
-    );
     t.registry.observe(system("task_notification", { task_id: "bk1", status: "failed", output_file: "C:\\t\\bk1.output" }));
     t.registry.observe(system("task_notification", { task_id: "bk2", status: "stopped" }));
-    t.registry.observe(
-      system("task_notification", {
-        task_id: "a1",
-        status: "completed",
-        output_file: "C:\\t\\a1.jsonl",
-        usage: { total_tokens: 9 },
-      }),
-    );
     const byId = Object.fromEntries(t.last().map((x) => [x.taskId, x]));
     expect(byId.bk1).toMatchObject({ status: "failed", hasOutput: true });
     expect(byId.bk2).toMatchObject({ status: "stopped" });
-    expect(byId.a1!.hasOutput).toBeUndefined();
-    expect(byId.a1!.usage).toEqual({ totalTokens: 9 });
     expect(t.registry.getOutputPath("bk1")).toBe("C:\\t\\bk1.output");
-    expect(t.registry.getOutputPath("a1")).toBeUndefined();
   });
 
   test("会话结束：仍在运行的任务标为已停止（会话已结束），已结束的不动", () => {

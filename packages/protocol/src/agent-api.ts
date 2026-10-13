@@ -130,7 +130,7 @@ export interface AgentMcpServer {
 }
 /** server = 可按服务器单独重连（Claude）；all = 只能整体重新加载（Codex） */
 export type AgentMcpReconnectScope = "server" | "all";
-/** 后台任务（design.md 4.15）：Claude 的后台命令 / 后台子代理 / workflow */
+/** 后台任务（design.md 4.15）：Claude 的后台 Shell 命令（子代理 / workflow 不登记，由子代理列表负责；kind 目前恒为 command） */
 export type AgentBackgroundTaskKind = "command" | "agent" | "workflow" | "other";
 export type AgentBackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
 export interface AgentBackgroundTask {
@@ -147,6 +147,10 @@ export interface AgentBackgroundTask {
   usage?: { totalTokens?: number; toolUses?: number; durationMs?: number };
   /** 有可读的命令输出文件（只对 command） */
   hasOutput?: boolean;
+  /** 后台命令文本（取自对应 Bash / PowerShell tool_use 的 input.command） */
+  command?: string;
+  /** 退出码（从 task_notification 的 summary 解析，解析不到不填） */
+  exitCode?: number;
 }
 export interface AgentBackgroundTaskOutput {
   text: string;

@@ -172,7 +172,7 @@ describe("脱敏", () => {
     ).toEqual({ type: "timeline", item: { type: "error", message: "bad ***" } });
   });
 
-  test("redactBackgroundTask：描述 / 摘要 / 错误脱敏", () => {
+  test("redactBackgroundTask：描述 / 命令 / 摘要 / 错误脱敏", () => {
     const task = {
       taskId: "bk1",
       kind: "command" as const,
@@ -181,12 +181,14 @@ describe("脱敏", () => {
       startedAt: 1,
       summary: "sk-abc 失败",
       error: "401 sk-abc",
+      command: "curl -H sk-abc",
     };
     expect(redactBackgroundTask(task, ["sk-abc"])).toEqual({
       ...task,
       description: "curl -H ***",
       summary: "*** 失败",
       error: "401 ***",
+      command: "curl -H ***",
     });
     expect(redactBackgroundTask(task, [])).toBe(task);
   });

@@ -550,11 +550,11 @@ export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: Ag
 
 ### 4.15 后台任务（仅 Claude；Codex / ACP 不支持）
 
-Claude 用 `run_in_background` 跑的后台命令、后台子代理与 workflow 在 CLI 里都是 task。AgentDeck 把它们登记成「后台任务」，供界面按会话列出、看进度与输出、单独停止。任务表只存在 sidecar 内存，不落盘、不随会话恢复（sidecar 重启后为空）。
+Claude 用 `run_in_background` 跑的后台 Shell 命令（Bash / PowerShell 工具）在 CLI 里是 `local_bash` task。AgentDeck 只把**后台 Shell**登记成「后台任务」，供界面按会话列出、在右侧面板看命令与实时输出、单独停止；子代理 / workflow（`local_agent` / `local_workflow`）由 4.11 的子代理列表负责，不进后台任务。任务表只存在 sidecar 内存，不落盘、不随会话恢复（sidecar 重启后为空）。
 
 **类型**（`agent-api.ts`）：
 ```ts
-export type AgentBackgroundTaskKind = "command" | "agent" | "workflow" | "other";   // local_bash / local_agent / local_workflow / 其它
+export type AgentBackgroundTaskKind = "command" | "agent" | "workflow" | "other";   // 目前只会产生 "command"（local_bash）；其余保留类型兼容，前端不再区分
 export type AgentBackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";  // pending / paused 归 running；killed 归 stopped
 export interface AgentBackgroundTask {
   taskId: string; kind: AgentBackgroundTaskKind; description: string; status: AgentBackgroundTaskStatus;
@@ -562,6 +562,8 @@ export interface AgentBackgroundTask {
   summary?: string; error?: string; lastToolName?: string;
   usage?: { totalTokens?: number; toolUses?: number; durationMs?: number };
   hasOutput?: boolean;                          // 有可读的命令输出文件（只对 command）
+  command?: string;                             // 后台命令文本：取自对应 Bash / PowerShell tool_use 的 input.command（用 tool_use_id 关联）
+  exitCode?: number;                            // 退出码：从 task_notification 的 summary 里的 `exit code N` 解析，解析不到不填
 }
 export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; size: number }
 ```
@@ -575,22 +577,25 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 
 **sidecar 内部**：
 - `AgentSession` 增加可选 `listBackgroundTasks()` / `stopBackgroundTask(taskId)` / `readBackgroundTaskOutput(taskId, maxBytes)`；内部流事件 `{ type: "provider_background_tasks"; tasks }`（整表快照，不进时间线、不占 seq、不落盘，`AgentSessionEvent` 的第三种）。AgentManager 在事件尾链里缓存到该 agent 并经监听器 `onTasks` 推给 RpcServer 广播。
-- 自定义中转（4.7）的会话包装层转发这三个方法与事件，描述 / 摘要 / 错误 / 输出文本按 4.7 规则脱敏。
+- 自定义中转（4.7）的会话包装层转发这三个方法与事件，描述 / 命令 / 摘要 / 错误 / 输出文本按 4.7 规则脱敏。
 
 **Claude**（`providers/claude/background-tasks.ts` 的登记表）：
 - 数据来源（协议见 4.11 的 task 消息，2.1.296 实测，类型参考 SDK 的 SDKTaskStarted / Updated / Progress / NotificationMessage）：`task_started { task_id, tool_use_id?, description, task_type?, subagent_type?, is_backgrounded? }`、`task_updated { task_id, patch: { status?, description?, end_time?, error?, is_backgrounded? } }`、`task_progress { task_id, usage: { total_tokens, tool_uses, duration_ms }, last_tool_name?, summary? }`、`task_notification { task_id, status: completed | failed | stopped, output_file, summary, usage? }`。
-- 只登记**后台**任务：`local_bash` 登记（前台命令通常不发 task_started；发了 `is_backgrounded: false` 的也登记，后台命令的识别以此为准）；`local_agent` / `local_workflow` / 其它 task_type 仅在 `is_backgrounded` 为 true（或之后 `task_updated` 的 patch 转为 true）时登记；没有 task_type 时有 subagent_type 才算子代理。`skip_transcript` 的任务也登记（这是任务面板）。未登记的任务仍在表里跟踪，转入后台时才出现。
+- 只登记**后台 Shell**：`task_type` 为 `local_bash` 且 `is_backgrounded === true`，或之后 `task_updated` 的 patch 把 `is_backgrounded` 变为 true 时再登记；没有 `task_type`（旧 CLI）时，以对应 tool_use 是 Bash / PowerShell 为准，仍要求 `is_backgrounded`。CLI 对**前台** Bash 也发 `task_started`（`is_backgrounded: false`），这些不登记（未转入后台就结束的直接丢弃记录）；`local_agent` / `local_workflow` / 其它 task_type 一律不登记。不论命令由主线程还是子代理发起，后台的都登记。`skip_transcript` 的任务也登记（这是任务面板）。
+- 命令文本：assistant 的 `tool_use { id, name: "Bash" | "PowerShell", input: { command, run_in_background? } }` 先于 `task_started` 到达，按 `tool_use_id` 暂存 `input.command`（含子代理 sidechain 里的 tool_use，条数有上限、淘汰旧的），`task_started` 时用 `tool_use_id` 关联到 `command`；`task_started` 先到则在 tool_use 到达时补上并推送。
+- 退出码：`task_notification.summary` 形如 `Background command "…" completed (exit code 0)`，宽松正则 `exit codes+(-?d+)` 解析为 `exitCode`，解析不到不填。
 - 状态：pending / running / paused → running，completed → completed，failed → failed，killed / stopped → stopped；`endedAt` 取 `patch.end_time`，没有则取收到时刻；进度不会让已结束的任务复活，`task_updated` 明确给出的状态以它为准。
-- 输出路径：后台 Bash 的工具结果文本形如 `Command running in background with ID: bk63yjvxs. Output is being written to: C:\Users\…\tasks\bk63yjvxs.output`，用 `tool_use_id` 关联到 task_started（结果可能先于 task_started 到达，先缓存），宽松正则 `Output is being written to:\s*(.+?\.output)`；`task_notification.output_file` 对 command 作兜底。子代理 / workflow 的 `output_file` 是 JSONL transcript，不作为「输出」，`hasOutput` 只对 command。
+- 输出路径：后台 Bash 的工具结果文本形如 `Command running in background with ID: bk63yjvxs. Output is being written to: C:\Users\…\tasks\bk63yjvxs.output`，用 `tool_use_id` 关联到 task_started（结果可能先于 task_started 到达，先缓存），宽松正则 `Output is being written to:\s*(.+?\.output)`；`task_notification.output_file` 作兜底。
 - 停止：控制请求 `{ subtype: "stop_task", task_id }`（30 秒默认超时），失败时按控制请求失败处理；不在本地改状态，等 CLI 的 `task_updated` / `task_notification`。
 - 进程退出 / 主动重建进程 / 会话关闭时，仍为 running 的任务标为 `stopped`（error「会话已结束」）并推送；进程重启（`--resume`）后旧任务保留为已结束，新进程的任务照常登记。
 - **initialize 带 `perTaskStopAffordance: true`（行为变化）**：声明后，用户「中止」本轮（`interrupt`）时 CLI 不再连带杀掉后台任务，后台任务只能经 `agent.tasks.stop` 逐个停止（界面在输入框上方提供入口）。
-- 与现有逻辑的关系：4.11 的子代理登记与 4.12 的 `task_notification` 卡片不变，后台任务登记表是并行的另一份视图。
+- 与现有逻辑的关系：4.11 的子代理登记与 4.12 的 `task_notification` 卡片不变，后台任务登记表是并行的另一份视图（只含后台 Shell）。
 
 **前端**：
 - 进入会话时 `agent.tasks.list` 拉一次（断线重连后重拉），之后由 `agent.tasks.update` 整表替换（按 agentId 存）。
-- 输入框上方、子代理药丸旁的「后台任务」药丸：有运行中显示「后台任务 N 运行中」，否则「N 个已结束」，没有任务不渲染；展开列出每个任务（类型图标、描述、状态、耗时、子代理 / workflow 的 token 与工具次数），操作「输出」（`hasOutput`）与「停止」（running）；「清除已结束」只在前端隐藏。
-- 「输出」对话框：等宽字体显示尾部，任务运行中每 2 秒刷新并保持滚动在底部（用户上滚暂停），`truncated` 时提示「已截断，仅显示最后 N KB」，任务结束后停止轮询。
+- 输入框上方、子代理药丸旁的「后台任务」药丸：有运行中显示「后台任务 N 运行中」，否则「N 个已结束」，没有任务不渲染；展开列出每个任务，**整行是可选中的 button**（`data-active` 高亮当前打开项，样式同子代理药丸的行）：Terminal 图标、描述（无描述时取命令首行）、状态文字、耗时、运行中时的「停止」小按钮（点击不触发选中）。「清除已结束」只在前端隐藏。
+- 点选一行 → 在**右侧面板**（与子代理面板同一区域、同一布局）打开该任务；后台任务面板与子代理面板互斥，打开一个关闭另一个。面板内容：标题（描述）、状态 + 耗时 + 退出码、完整命令（等宽、可选中复制、长命令换行）、输出区、运行中的「停止」按钮、关闭按钮。
+- 输出区：等宽字体显示尾部，任务运行中每 2 秒刷新并保持滚动在底部（用户上滚暂停），`truncated` 时提示「已截断，仅显示最后 N KB」，任务结束后再拉一次最终输出便停止轮询，保留最后输出。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

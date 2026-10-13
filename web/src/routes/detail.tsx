@@ -69,6 +69,8 @@ import { PreviewRail } from "@/components/chat/preview-rail/preview-rail";
 import { SubagentTrack } from "@/components/chat/subagents/subagent-track";
 import { BackgroundTaskTrack } from "@/components/chat/background-tasks/background-task-track";
 import { SubagentPanel } from "@/components/chat/subagents/subagent-panel";
+import { BackgroundTaskPanel } from "@/components/chat/background-tasks/background-task-panel";
+import { useSidePanelSelection } from "@/components/chat/use-side-panel-selection";
 import { PREVIEW_PANEL_QUERY_KEY } from "@/lib/preview-rail";
 import { ConversationWidthControl } from "@/components/chat/conversation-width-control";
 import { hermesUIMessagesToChatMessages } from "@/components/chat/message-adapter";
@@ -104,8 +106,10 @@ export function DetailRoute() {
   const subagents = useProviderSubagents(taskId);
   // 后台任务（design.md 4.15）：仅 Claude 会有；药丸紧邻子代理药丸
   const backgroundTasks = useBackgroundTasks(taskId);
-  const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
-  useEffect(() => setOpenSubagentId(null), [taskId]);
+  // 右侧面板：子代理面板与后台任务面板互斥（后台任务点选一行打开，替代预览面板）
+  const { openSubagentId, openTaskId, openSubagent, openTask, close: closeSidePanel } =
+    useSidePanelSelection(taskId);
+  const openBackgroundTask = openTaskId ? backgroundTasks.find((task) => task.taskId === openTaskId) ?? null : null;
 
   const actions = useAgentSession();
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
@@ -603,10 +607,18 @@ export function DetailRoute() {
             <SubagentTrack
               subagents={subagents}
               parentSubagentId={null}
-              onOpen={setOpenSubagentId}
+              onOpen={openSubagent}
               activeSubagentId={openSubagentId}
             />
-            {taskId ? <BackgroundTaskTrack key={taskId} agentId={taskId} tasks={backgroundTasks} /> : null}
+            {taskId ? (
+              <BackgroundTaskTrack
+                key={taskId}
+                agentId={taskId}
+                tasks={backgroundTasks}
+                onOpen={openTask}
+                activeTaskId={openTaskId}
+              />
+            ) : null}
             <QueuePanel
               entries={queuedPrompts}
               busy={runtimeIsBusy}
@@ -664,8 +676,10 @@ export function DetailRoute() {
             agentId={taskId}
             subagents={subagents}
             rootSubagentId={openSubagentId}
-            onClose={() => setOpenSubagentId(null)}
+            onClose={closeSidePanel}
           />
+        ) : openBackgroundTask && taskId ? (
+          <BackgroundTaskPanel agentId={taskId} task={openBackgroundTask} onClose={closeSidePanel} />
         ) : rightRailVisible && taskId ? (
           <PreviewRail
             sessionId={taskId}

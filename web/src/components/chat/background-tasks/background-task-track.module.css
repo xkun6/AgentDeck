@@ -85,23 +85,46 @@
 .item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px 8px;
   color: var(--h-text-2);
   font-size: 12px;
 }
 
-/* 已完成 / 已停止整体弱化；失败标红 */
-.item[data-status="done"],
-.item[data-status="stopped"] {
-  color: var(--h-text-3);
+.rowWrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  min-width: 0;
 }
 
+/* 整行是 button，样式与子代理药丸的行一致 */
 .row {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 已完成 / 已停止整体弱化；须写在 hover/active 之前，以便悬停时恢复正常色 */
+.row[data-status="done"],
+.row[data-status="stopped"] {
+  color: var(--h-text-3);
+}
+
+.row:hover,
+.row[data-active="true"] {
+  background: var(--h-bg-soft);
+  color: var(--h-text);
 }
 
 .kindIcon {
@@ -117,16 +140,6 @@
   white-space: nowrap;
 }
 
-.usage {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--h-text-3);
-  font-size: 11px;
-}
-
 .status {
   display: inline-flex;
   flex: 0 0 auto;
@@ -136,11 +149,11 @@
   font-size: 11px;
 }
 
-.item[data-status="running"] .status {
+.row[data-status="running"] .status {
   color: var(--h-ok);
 }
 
-.item[data-status="error"] .status {
+.row[data-status="error"] .status {
   color: var(--h-err);
 }
 
@@ -153,12 +166,8 @@
   text-align: right;
 }
 
-.actions {
-  display: inline-flex;
+.stop {
   flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
 }
 
 .dot {
@@ -186,6 +195,7 @@
 
 .detail {
   margin: 0;
+  padding: 0 8px 4px;
   color: var(--h-text-3);
   font-size: 11px;
   line-height: 1.5;

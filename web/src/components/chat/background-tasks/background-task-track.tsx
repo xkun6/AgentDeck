@@ -1,49 +1,36 @@
-// 输入框上方的「后台任务」药丸（design.md 4.15）：按会话列出 Claude 的后台命令 / 子代理 / workflow，
-// 展开后可查看耗时与用量、打开输出对话框、单独停止。样式与交互参照子代理药丸（subagent-track）。
+// 输入框上方的「后台任务」药丸（design.md 4.15）：按会话列出 Claude 的后台 Shell 命令，
+// 展开后每行是可选中的 button（点选在右侧面板查看命令与输出），运行中的行带「停止」小按钮。
+// 样式与交互参照子代理药丸（subagent-track）。
 import { useEffect, useMemo, useState } from "react";
-import { Bot, ChevronDown, ChevronUp, ListChecks, Terminal, Workflow } from "lucide-react";
-import type { AgentBackgroundTask, AgentBackgroundTaskKind } from "@agentdeck/protocol";
+import { ChevronDown, ChevronUp, Terminal } from "lucide-react";
+import type { AgentBackgroundTask } from "@agentdeck/protocol";
 import { Button } from "@agentdeck/shared-ui";
-import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import {
   backgroundTaskDotStatus,
   backgroundTaskPillLabel,
   backgroundTaskStatusText,
   formatElapsed,
+  taskDisplayLabel,
   taskElapsedMs,
-  taskUsageText,
 } from "./background-task-presentation";
-import { BackgroundTaskOutputDialog } from "./background-task-output-dialog";
+import { useStopBackgroundTask } from "./use-stop-background-task";
 import s from "./background-task-track.module.css";
-
-const KIND_ICON: Record<AgentBackgroundTaskKind, typeof Terminal> = {
-  command: Terminal,
-  agent: Bot,
-  workflow: Workflow,
-  other: ListChecks,
-};
-
-const KIND_LABEL: Record<AgentBackgroundTaskKind, string> = {
-  command: "命令",
-  agent: "子代理",
-  workflow: "workflow",
-  other: "任务",
-};
 
 export interface BackgroundTaskTrackProps {
   agentId: string;
   /** 该会话全部后台任务（已按登记顺序） */
   tasks: readonly AgentBackgroundTask[];
+  /** 点选一行：在右侧面板打开该任务 */
+  onOpen?: (taskId: string) => void;
+  /** 当前在右侧面板中打开的任务（高亮） */
+  activeTaskId?: string | null;
 }
 
-export function BackgroundTaskTrack({ agentId, tasks }: BackgroundTaskTrackProps) {
-  const actions = useAgentSession();
+export function BackgroundTaskTrack({ agentId, tasks, onOpen, activeTaskId }: BackgroundTaskTrackProps) {
+  const { stopping, errors: stopErrors, stop } = useStopBackgroundTask(agentId);
   const [open, setOpen] = useState(false);
   // 「清除已结束」只在前端隐藏
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
-  const [stopping, setStopping] = useState<Record<string, boolean>>({});
-  const [stopErrors, setStopErrors] = useState<Record<string, string>>({});
-  const [outputTaskId, setOutputTaskId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   const visible = useMemo(
@@ -62,23 +49,7 @@ export function BackgroundTaskTrack({ agentId, tasks }: BackgroundTaskTrackProps
   }, [hasRunning, open]);
 
   if (visible.length === 0) return null;
-  const tone = visible.some((task) => task.status === "running")
-    ? "running"
-    : visible.some((task) => task.status === "failed")
-      ? "error"
-      : "done";
-  const outputTask = outputTaskId ? tasks.find((task) => task.taskId === outputTaskId) ?? null : null;
-
-  const stop = async (taskId: string) => {
-    setStopping((current) => ({ ...current, [taskId]: true }));
-    setStopErrors(({ [taskId]: _removed, ...rest }) => rest);
-    try {
-      await actions.stopBackgroundTask(agentId, taskId);
-    } catch (error) {
-      setStopping(({ [taskId]: _removed, ...rest }) => rest);
-      setStopErrors((current) => ({ ...current, [taskId]: humanizeSidecarError(error) }));
-    }
-  };
+  const tone = hasRunning ? "running" : visible.some((task) => task.status === "failed") ? "error" : "done";
 
   const clearEnded = () => {
     setHiddenIds((current) => {
@@ -114,42 +85,41 @@ export function BackgroundTaskTrack({ agentId, tasks }: BackgroundTaskTrackProps
           ) : null}
           <ul className={s.list} aria-label="后台任务列表">
             {visible.map((task) => {
-              const Icon = KIND_ICON[task.kind];
               const dot = backgroundTaskDotStatus(task.status);
-              const usage = taskUsageText(task);
+              const label = taskDisplayLabel(task);
               const stopError = stopErrors[task.taskId];
               const isStopping = stopping[task.taskId] === true;
               const detail = stopError ?? (task.status !== "running" ? task.error : undefined);
               return (
                 <li key={task.taskId} className={s.item} data-status={dot}>
-                  <div className={s.row}>
-                    <Icon size={12} className={s.kindIcon} aria-label={KIND_LABEL[task.kind]} />
-                    <span className={s.label} title={task.description}>
-                      {task.description || KIND_LABEL[task.kind]}
-                    </span>
-                    {usage ? <span className={s.usage}>{usage}</span> : null}
-                    <span className={s.status}>
-                      <span className={s.dot} data-status={dot} aria-hidden="true" />
-                      {backgroundTaskStatusText(task.status)}
-                    </span>
-                    <span className={s.elapsed}>{formatElapsed(taskElapsedMs(task, now))}</span>
-                    <span className={s.actions}>
-                      {task.hasOutput ? (
-                        <Button size="xs" variant="outline" onClick={() => setOutputTaskId(task.taskId)}>
-                          输出
-                        </Button>
-                      ) : null}
-                      {task.status === "running" ? (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          disabled={isStopping}
-                          onClick={() => void stop(task.taskId)}
-                        >
-                          {isStopping ? "停止中…" : "停止"}
-                        </Button>
-                      ) : null}
-                    </span>
+                  <div className={s.rowWrap}>
+                    <button
+                      type="button"
+                      className={s.row}
+                      data-status={dot}
+                      data-active={task.taskId === activeTaskId ? "true" : undefined}
+                      onClick={() => onOpen?.(task.taskId)}
+                      title={task.command ?? label}
+                    >
+                      <Terminal size={12} className={s.kindIcon} aria-hidden="true" />
+                      <span className={s.label}>{label}</span>
+                      <span className={s.status}>
+                        <span className={s.dot} data-status={dot} aria-hidden="true" />
+                        {backgroundTaskStatusText(task.status)}
+                      </span>
+                      <span className={s.elapsed}>{formatElapsed(taskElapsedMs(task, now))}</span>
+                    </button>
+                    {task.status === "running" ? (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className={s.stop}
+                        disabled={isStopping}
+                        onClick={() => void stop(task.taskId)}
+                      >
+                        {isStopping ? "停止中…" : "停止"}
+                      </Button>
+                    ) : null}
                   </div>
                   {detail ? (
                     <p className={s.detail} data-tone={stopError ? "error" : undefined} role={stopError ? "alert" : undefined}>
@@ -162,12 +132,6 @@ export function BackgroundTaskTrack({ agentId, tasks }: BackgroundTaskTrackProps
           </ul>
         </div>
       ) : null}
-      <BackgroundTaskOutputDialog
-        open={outputTask !== null}
-        agentId={agentId}
-        task={outputTask}
-        onClose={() => setOutputTaskId(null)}
-      />
     </div>
   );
 }
