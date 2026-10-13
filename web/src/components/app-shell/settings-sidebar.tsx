@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   Bell,
   Bot,
+  Bug,
   Info,
   MonitorCog,
   Palette,
@@ -24,6 +25,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   { label: "Agent 与中转", path: "/agent-providers", icon: Waypoints },
   { label: "编程 Agent", path: "/coding-agents", icon: Bot },
   { label: "环境", path: "/env", icon: MonitorCog },
+  { label: "调试", path: "/debug", icon: Bug },
   { label: "关于", path: "/about", icon: Info },
 ];
 

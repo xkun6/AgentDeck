@@ -14,6 +14,36 @@ export interface ExportLogSnapshotResult {
   error?: string;
 }
 
+/** `log_tail`：`<日志目录>/sidecar.log` 尾部（design.md 4.18） */
+export interface LogTailResult {
+  path: string;
+  text: string;
+  truncated: boolean;
+  size: number;
+}
+
+/** `debug_paths` */
+export interface DebugPaths {
+  dataDir: string;
+  logDir: string;
+  webviewDataDir?: string;
+}
+
+export interface ExportDebugBundleInput {
+  /** 前端收集并已脱敏的诊断信息（JSON 文本） */
+  diagnostics: string;
+  /** 前端调试事件（JSON Lines 文本，已脱敏） */
+  frontendEvents: string;
+}
+
+export interface ExportDebugBundleResult {
+  ok: boolean;
+  canceled: boolean;
+  path?: string;
+  bytes: number;
+  error?: string;
+}
+
 export type EnvironmentCheckStatus = "ok" | "warning" | "error" | "unknown";
 
 export type EnvironmentCheckCategory = "core" | "runtime" | "tools" | "browser" | "paths";

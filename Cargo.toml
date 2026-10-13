@@ -41,6 +41,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 libc = "0.2"
 getrandom = "0.3"
 tauri-plugin-clipboard-manager = "2.3.2"
+# 诊断包 zip（commands/debug.rs），只启用 deflate
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [

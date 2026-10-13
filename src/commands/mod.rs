@@ -1,4 +1,5 @@
 pub mod coding_agents;
+pub mod debug;
 pub mod devtools;
 pub mod environment;
 pub mod file_dialogs;
