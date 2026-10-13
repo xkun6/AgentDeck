@@ -22,6 +22,15 @@ export function workspaceNameFromPath(path: string): string {
   return normalized.split("/").pop() || normalized || "NewProject";
 }
 
+/** 会话是否属于该项目：优先看 cwd，没有再看会话与工作区的关联（与项目详情页的判定一致） */
+export function agentInWorkspace(
+  agent: { id: string; cwd: string },
+  workspacePath: string,
+  sessionWorkspaceMap: Record<string, string>,
+): boolean {
+  return normalizeWorkspacePath(agent.cwd || sessionWorkspaceMap[agent.id]) === workspacePath;
+}
+
 function emitWorkspaceChange(): void {
   try {
     window.dispatchEvent(new Event(WORKSPACE_CHANGED_EVENT));

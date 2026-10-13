@@ -101,6 +101,48 @@
   display: inline-flex;
 }
 
+.workspaceTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 320px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-chip);
+  border-radius: 0;
+  color: var(--h-text);
+  font-size: var(--h-font-size-xs);
+  font-family: var(--h-font-cn);
+}
+
+.workspaceTagText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspaceTagClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+}
+
+.workspaceTagClear:hover {
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+}
+
 .searchBox {
   margin-left: auto;
   height: 32px;

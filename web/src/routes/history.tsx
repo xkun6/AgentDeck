@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { LoadingState, StatusDot } from "@agentdeck/shared-ui";
-import { Search, Trash2 } from "lucide-react";
+import { Search, Trash2, X } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
@@ -16,7 +16,13 @@ import {
   isAgentRunning,
 } from "@/lib/agent-session-display";
 import { dayKey, dayLabel, isToday, relativeTime, timeOfDay } from "@/lib/format";
-import { workspaceNameFromPath } from "@/lib/workspaces";
+import {
+  agentInWorkspace,
+  normalizeWorkspacePath,
+  readSessionWorkspaceMap,
+  subscribeWorkspaceChanges,
+  workspaceNameFromPath,
+} from "@/lib/workspaces";
 import { TopBar } from "@/components/top-bar/top-bar";
 import s from "./history.module.css";
 
@@ -61,16 +67,41 @@ export function HistoryRoute() {
   const deleteSession = useDeleteAgentSession();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  // 从项目详情跳转时带 ?workspace=，只看该项目的会话
+  const [searchParams, setSearchParams] = useSearchParams();
+  const workspacePath = normalizeWorkspacePath(searchParams.get("workspace"));
+  const [sessionWorkspaceMap, setSessionWorkspaceMap] = useState(readSessionWorkspaceMap);
+
+  useEffect(() => {
+    return subscribeWorkspaceChanges(() => {
+      setSessionWorkspaceMap(readSessionWorkspaceMap());
+    });
+  }, []);
+
+  const clearWorkspaceFilter = () => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("workspace");
+        return next;
+      },
+      { replace: true },
+    );
+  };
 
   const rows = useMemo<Row[]>(
     () =>
-      agents.map((agent) => ({
-        agent,
-        title: agentDisplayTitle(agent, runtimeBySession[agent.id], providers),
-        provider: agentProviderLabel(agent.provider, providers),
-        kind: statusKind(agent, isAgentRunning(agent, runtimeBySession[agent.id])),
-      })),
-    [agents, providers, runtimeBySession],
+      agents
+        .filter(
+          (agent) => !workspacePath || agentInWorkspace(agent, workspacePath, sessionWorkspaceMap),
+        )
+        .map((agent) => ({
+          agent,
+          title: agentDisplayTitle(agent, runtimeBySession[agent.id], providers),
+          provider: agentProviderLabel(agent.provider, providers),
+          kind: statusKind(agent, isAgentRunning(agent, runtimeBySession[agent.id])),
+        })),
+    [agents, providers, runtimeBySession, sessionWorkspaceMap, workspacePath],
   );
 
   const statusCounts = useMemo(() => {
@@ -133,6 +164,23 @@ export function HistoryRoute() {
               </button>
             ))}
           </div>
+
+          {workspacePath ? (
+            <span className={s.workspaceTag} title={workspacePath}>
+              <span className={s.workspaceTagText}>
+                项目：{workspaceNameFromPath(workspacePath)}
+              </span>
+              <button
+                type="button"
+                className={s.workspaceTagClear}
+                aria-label="清除项目筛选"
+                title="清除项目筛选"
+                onClick={clearWorkspaceFilter}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </span>
+          ) : null}
 
           <div className={s.searchBox}>
             <Search size={12} />
