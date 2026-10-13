@@ -78,7 +78,8 @@ sidecar 入口：
 - 用 `AGENTDECK_SIDECAR_ENTRY` 指定入口时，cwd 为该脚本所在目录。
 - ready 行之前的非 ready 输出只记日志，继续等待；进程在 ready 前退出立即判失败。
 - 进程自行退出后仍会结束 Job / 进程组，清理可能残留的孙进程。
-- 监管：连续失败暂停后监管循环不退出，手动 `restart_sidecar` 成功后恢复监管；**首次拉起失败不自动重试**，只能手动重启。
+- 监管：连续失败暂停后监管循环不退出，手动 `restart_sidecar` 成功后恢复监管；**首次拉起失败与手动重启失败不自动重试**，只能手动重启。
+- 自动重启本身拉起失败（未就绪）时，下一个轮询周期继续重试，与「进程退出」共用同一连续计数与上限（相邻两次自动重启间隔 < 60 秒计为连续，超过 5 次暂停）；手动 `restart_sidecar` 清零连续计数与待重试标记。
 - sidecar 未就绪时 `wsUrl` 为空字符串；`starting` 状态已带 token。
 - 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`（Windows 为 `%APPDATA%local.agentdeck.desktop`）；WebView2 数据在设置了 `AGENTDECK_HOME` 时为 `<home>webview2`，否则为 `%LOCALAPPDATA%local.agentdeck.desktopEBWebView`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
 - WS 中继沿用命令 `gateway_ws_open/send/close` 与事件 `gateway-ws-message` / `gateway-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
@@ -216,6 +217,7 @@ export interface AgentSnapshot {
   status: AgentStatus; activeTurnId?: string | null;
   pendingPermissions: AgentPermissionRequest[];
   lastUsage?: AgentUsage; lastError?: string | null;
+  totalUsage?: { inputTokens: number; outputTokens: number };   // 会话累计（见 4.4）
   persistence?: AgentPersistenceHandle | null;
   createdAt: number; updatedAt: number;
 }
@@ -223,7 +225,8 @@ export interface AgentSnapshot {
 
 ### 4.4 实现补充约定（P2 落地时确定）
 
-- `user_message` 由 AgentManager 在调用 `startTurn` 前统一写入（带 `clientMessageId`，不带 turnId）；**provider 不得发 `user_message`**。
+- `user_message` 由 AgentManager 统一写入（带 `clientMessageId`，不带 turnId）；**provider 不得发 `user_message`**。它在事件链中占位于 `startTurn` 之前（排在本轮所有 provider 事件之前），但只有 `startTurn` 成功返回后才真正写入时间线与磁盘；`startTurn` 失败则不写入，`agent.send` 返回错误，避免留下没有回合的用户消息。
+- `turn_completed.usage` 的 `inputTokens` / `outputTokens` 表示**本轮**合计用量（上下文窗口字段仍为最新值）；AgentManager 每次 `turn_completed` 把它累加进快照 `totalUsage`（随 meta.json 持久化，并推 `agent.state`）。早于该字段的旧会话没有 `totalUsage`，前端退回显示 `lastUsage`。
 - `timeline` / `permission_requested` 未带 turnId 时，AgentManager 自动补上当前 turnId。
 - provider 未发 `permission_resolved` / `model_changed` / `mode_changed` 时由 AgentManager 补发；重复事件去重。
 - `usage_updated` 只更新快照的 `lastUsage`，不推 `agent.state`。
@@ -322,7 +325,7 @@ interface ProviderProfile {
 - **中转凭据隔离**（`launch.ts` 的 `isolateRelayCredentials`，启动与 `provider.test` 共用）：合并后（settings → 表单推导 → profile.env）有效 `ANTHROPIC_BASE_URL` 非空即为中转。中转时 `--settings` 的 env 必须同时显式写出 `ANTHROPIC_AUTH_TOKEN` 与 `ANTHROPIC_API_KEY`：profile 自己提供的保留，未提供 / 空白的写 `""`；两者都未提供时 `ANTHROPIC_AUTH_TOKEN` 写占位值 `agentdeck-no-key`。非中转原样不动。表单填了 apiKey 时仍会把未选用的那种凭据压成 `""`（即使 settings 里给了它）。
   - 依据（Claude Code 2.1.296 实测）：中转且两个凭据都为空时，claude 会把 claude.ai OAuth 令牌（`$CLAUDE_CONFIG_DIR/.credentials.json` 的 `claudeAiOauth.accessToken` 或环境变量 `CLAUDE_CODE_OAUTH_TOKEN`）作为 Bearer 发给中转；只要设置了任一凭据就不再发送 OAuth。只置空另一个凭据而不显式写出时，用户 settings 中的另一个凭据会随请求外发。
   - `provider.test` 只用 profile 自己提供的凭据；占位值不算凭据，无凭据时不带鉴权头；不读取 `~/.claude` 或进程环境中的凭据。
-  - 继承环境中的 `CLAUDE_CODE_OAUTH_TOKEN` 目前未剔除，依靠上述占位值 / 中转自身凭据压住。
+  - 中转时启动环境还会剔除继承的 `CLAUDE_CODE_OAUTH_TOKEN`（与占位值双重保护）；非中转的自定义配置保留它（可能正依赖它登录）。`profile.env` 显式设置的值仍在剔除之后叠加。
 - `--settings` 与用户 settings 之间按 Claude Code 自身规则合并（Claude Code 2.1.296 实测）：`env` 按键合并、同名键以 flag 为准；`hooks` 跨来源叠加（两边的 hook 都执行）；`permissions.allow` 跨来源叠加（deny 推断同理，未单独测）。
 - WebSearch 默认禁用的条件：表单 baseUrl 或合并后 settings.env 中的 `ANTHROPIC_BASE_URL` 任一非空，且未显式给出 `disallowedTools`。
 - 合并后的整份设置（含其中密钥）会出现在 claude 的命令行中。
@@ -565,6 +568,7 @@ Codex（以本机 0.162.1 协议为准）：
 - 模式 `read-only` / `auto`（默认）/ `full-access`；`setMode` 只在切换后的下一轮带一次 approvalPolicy + sandboxPolicy。
 - 审批 actions：`accept`「允许」/ `decline`「拒绝」；拒绝时 `interrupt:true` 使本轮以 `turn_canceled` 结束；被拒绝的命令 tool_call 为 failed，error「用户拒绝了该操作」。
 - 多文件 fileChange 的 detail 只显示第一个文件，完整列表在 `metadata.files`；新增文件为 `write` detail。
+- `turn_completed.usage` 的 token 数为本轮合计：取本轮内 `thread/tokenUsage/updated` 的 `total`（缺省读 `total_token_usage`）相对本轮起点的差值（起点 = 本轮首条更新的 total − last）；没有 total 时退回 last。上下文窗口字段仍取最近一次 last。
 - 子进程意外退出后下一轮自动重启并 `thread/resume`。
 
 ACP：
@@ -572,6 +576,7 @@ ACP：
 - 权限 actions 为 `{ id: optionId, label: name, behavior }`，可能含 allow_once / allow_always / reject_once / reject_always 多项，前端按 actions 渲染并回传 `selectedActionId`。
 - `turn_failed.code`：`REFUSAL`、`PROCESS_EXITED`、`ACP_<错误码>`；进程崩溃后该 agent 不可再用（再 send 返回 `PROVIDER_UNAVAILABLE`），前端应提示新建会话。
 - 工具 `name` 为 ACP kind（如 execute），完整标题在 `metadata.title`。
+- `turn_completed.usage` 的 token 数只取本轮 `PromptResponse.usage`；本轮应答没带 usage 时不带 token 字段（不沿用上一轮的值），上下文窗口 / 费用字段仍为最新值。
 
 ## 6. 前端接缝（P4）
 
