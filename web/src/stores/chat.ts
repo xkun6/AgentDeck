@@ -344,6 +344,8 @@ function appendAgentNotice(
 
 /** 上下文压缩提示的消息 id 前缀（design.md 4.13）；时间线据此渲染成居中分隔线。 */
 export const AGENT_COMPACTION_NOTICE_PREFIX = "agent-compaction-";
+/** timeline `notice` 系统提示（如会话分叉，design.md 4.23）的消息 id 前缀；同样渲染成居中分隔线。 */
+export const AGENT_TIMELINE_NOTICE_PREFIX = "agent-timeline-notice-";
 
 type CompactionTimelineItem = Extract<AgentTimelineItem, { type: "compaction" }>;
 
@@ -678,6 +680,16 @@ function reduceAgentTimelineItem(
 
     case "error":
       return appendAgentNotice(runtime, agentId, `agent-notice-${seq}`, timestamp, item.message, "error");
+
+    case "notice":
+      return appendAgentNotice(
+        runtime,
+        agentId,
+        `${AGENT_TIMELINE_NOTICE_PREFIX}${seq}`,
+        timestamp,
+        item.text,
+        "system",
+      );
 
     case "compaction": {
       const next = upsertCompactionNotice(runtime, agentId, item, timestamp);

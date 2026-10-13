@@ -244,6 +244,12 @@ async function handleRequest(msg) {
       if (params?.cwd) CWD = params.cwd;
       respond(id, { thread: { id: params.threadId }, model: "gpt-a" });
       return;
+    case "thread/fork":
+      // 原生分叉：新线程 id 固定为 thr_forked，供测试断言
+      THREAD_ID = "thr_forked";
+      if (params?.cwd) CWD = params.cwd;
+      respond(id, { thread: { id: THREAD_ID, turns: [] }, model: "gpt-a" });
+      return;
     case "turn/start": {
       const turnId = `turn_${++turnCounter}`;
       activeTurn = { id: turnId };

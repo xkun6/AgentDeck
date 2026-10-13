@@ -7,6 +7,7 @@ import type {
   AgentStatusSection,
   AgentModelDefinition,
   AgentPermissionResponse,
+  AgentPersistenceHandle,
   AgentPromptInput,
   AgentProviderId,
   AgentSlashCommand,
@@ -14,6 +15,7 @@ import type {
   AgentStatus,
   AgentStreamEnvelope,
   AgentStreamEvent,
+  AgentTimelineItem,
   AgentUsage,
   ProviderSubagentDescriptor,
   ProviderSubagentUpdate,
@@ -23,9 +25,9 @@ import { createSilentLogger, type Logger } from "../logger.js";
 import { withTimeout } from "../utils/promise-timeout.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { UsageTurnTracker } from "../usage/turn-tracker.js";
-import type { AgentStore, PersistedAgentMeta } from "./agent-store.js";
+import type { AgentStore, PendingNativeFork, PersistedAgentMeta } from "./agent-store.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS, AgentStreamCoalescer } from "./coalescer.js";
-import { AgentRpcError } from "./errors.js";
+import { AgentInvalidParamsError, AgentRpcError } from "./errors.js";
 import {
   ProviderSubagentStore,
   type SubagentTimelinePage,
@@ -36,6 +38,7 @@ import { searchSources, type SearchResult } from "./timeline-search.js";
 import type {
   AgentClient,
   AgentSession,
+  AgentSessionConfig,
   AgentSessionEvent,
   ProviderSubagentInputEvent,
 } from "./types.js";
@@ -46,6 +49,9 @@ const PREVIEW_MAX_CHARS = 120;
 export const TASK_OUTPUT_DEFAULT_BYTES = 64 * 1024;
 export const TASK_OUTPUT_MAX_BYTES = 256 * 1024;
 export const RESUME_NOT_SUPPORTED_MESSAGE = "该会话无法恢复，请新建会话";
+/** summary 方式分叉时注入的历史对话文本上限（字数，保留最后部分，design.md 4.23） */
+export const FORK_TRANSCRIPT_MAX_CHARS = 60_000;
+const FORK_TITLE_SOURCE_MAX_CHARS = 30;
 
 export interface AgentClientLookup {
   get(provider: AgentProviderId): AgentClient | undefined;
@@ -128,6 +134,10 @@ interface ManagedAgent {
   backgroundTasks: AgentBackgroundTask[];
   /** 建会话时取到的模型目录（切换模型后校验思考强度用）；null 表示尚未取到 */
   models: AgentModelDefinition[] | null;
+  /** summary 方式分叉：首次 agent.send 时前置的历史对话文本（design.md 4.23），随 meta 持久化，不进快照 */
+  pendingForkContext?: string;
+  /** native 方式分叉且新会话尚未拿到自己的原生 id（Claude 懒启动）：恢复 / 首次拉起时仍需带分叉参数 */
+  pendingFork?: PendingNativeFork;
 }
 
 /**
@@ -268,10 +278,11 @@ export class AgentManager {
     }
     const metas = await this.store.loadAll();
     let restored = 0;
-    for (const meta of metas) {
-      if (this.agents.has(meta.id)) {
+    for (const metaWithFork of metas) {
+      if (this.agents.has(metaWithFork.id)) {
         continue;
       }
+      const { pendingForkContext, pendingFork, ...meta } = metaWithFork;
       const snapshot: AgentSnapshot = {
         ...meta,
         status: meta.status === "closed" ? "closed" : "dormant",
@@ -279,6 +290,12 @@ export class AgentManager {
         pendingPermissions: [],
       };
       const agent = newManagedAgent(meta.id, this.registry.get(meta.provider), snapshot);
+      if (pendingForkContext !== undefined) {
+        agent.pendingForkContext = pendingForkContext;
+      }
+      if (pendingFork !== undefined) {
+        agent.pendingFork = pendingFork;
+      }
       this.refreshResumable(agent);
       this.agents.set(meta.id, agent);
       restored += 1;
@@ -348,9 +365,10 @@ export class AgentManager {
         }
       });
       let turnId: string;
+      const forkContext = agent.pendingForkContext;
       try {
         ({ turnId } = await session.startTurn(
-          prompt,
+          forkContext !== undefined ? prependForkContext(prompt, forkContext) : prompt,
           clientMessageId !== undefined ? { clientMessageId } : undefined,
         ));
       } catch (error) {
@@ -362,6 +380,11 @@ export class AgentManager {
       }
       sentTurn.turnId = turnId;
       settleUserMessage(true);
+      if (forkContext !== undefined && agent.pendingForkContext === forkContext) {
+        // 已随首条消息发给 Agent：清除并落盘（design.md 4.23）
+        delete agent.pendingForkContext;
+        void this.persistNow(agent);
+      }
       // 放进尾链：session 在 startTurn 返回前发出的事件都已排在前面，
       // 若 turn 已结束（finishedTurnIds）则不再标记 running。
       this.runInChain(agent, () => {
@@ -594,6 +617,145 @@ export class AgentManager {
       prompt: turn.prompt,
       ...(turn.clientMessageId !== undefined ? { clientMessageId: turn.clientMessageId } : {}),
     };
+  }
+
+  /**
+   * design.md 4.23：基于原会话新建分叉会话。throughSeq 缺省 = 整个会话（原会话运行中返回 TURN_IN_PROGRESS）；
+   * 给出时必须落在已结束的回合上，只保留到该回合结束。provider 支持原生分叉（且无需截断或有回合锚点）
+   * 时走原生，否则新建空会话并把对话整理成文本，首次 agent.send 时前置注入。原生分叉失败 →
+   * PROVIDER_UNAVAILABLE，且不会留下新会话。
+   */
+  async forkAgent(
+    agentId: string,
+    opts: { throughSeq?: number; title?: string } = {},
+  ): Promise<AgentSnapshot> {
+    const origin = this.requireAgent(agentId);
+    // 先等已到达的事件处理完，再读时间线
+    await origin.tail;
+    const entries = await this.loadEntries(origin);
+    const busy =
+      origin.snapshot.status === "running" ||
+      Boolean(origin.snapshot.activeTurnId) ||
+      origin.sending;
+    const plan = planFork(entries, opts.throughSeq, busy);
+
+    const client = this.registry.get(origin.snapshot.provider) ?? origin.client;
+    if (!client) {
+      throw new AgentRpcError("PROVIDER_NOT_FOUND", `未知的 provider：${origin.snapshot.provider}`);
+    }
+    const availability = await client.isAvailable();
+    if (!availability.available) {
+      throw new AgentRpcError(
+        "PROVIDER_UNAVAILABLE",
+        availability.reason ?? `provider ${origin.snapshot.provider} 当前不可用`,
+      );
+    }
+
+    const originSnapshot = origin.snapshot;
+    const cfg: AgentSessionConfig = {
+      cwd: originSnapshot.cwd,
+      ...(originSnapshot.model != null ? { model: originSnapshot.model } : {}),
+      ...(originSnapshot.modeId != null ? { modeId: originSnapshot.modeId } : {}),
+      ...(originSnapshot.thinkingOptionId != null
+        ? { thinkingOptionId: originSnapshot.thinkingOptionId }
+        : {}),
+    };
+    const originHandle = originSnapshot.persistence;
+    const native =
+      client.forkSession !== undefined &&
+      Boolean(originHandle?.sessionId) &&
+      (plan.whole || plan.nativeRef !== undefined);
+
+    let session: AgentSession;
+    try {
+      session = native
+        ? await client.forkSession!(structuredClone(originHandle!), {
+            ...cfg,
+            ...(!plan.whole && plan.nativeRef !== undefined ? { nativeRef: plan.nativeRef } : {}),
+          })
+        : await client.createSession(cfg);
+    } catch (error) {
+      const message = errorMessage(error);
+      this.logger.warn("分叉 agent %s 失败：%s", origin.id, message);
+      throw new AgentRpcError(
+        "PROVIDER_UNAVAILABLE",
+        native ? `原生分叉会话失败：${message}` : `创建分叉会话失败：${message}`,
+      );
+    }
+
+    const retained = entries.filter((entry) => entry.seq <= plan.endSeq);
+    const originTitle = forkSourceTitle(originSnapshot);
+    const id = randomUUID();
+    const now = this.now();
+    const copied: AgentStreamEnvelope[] = retained.map((entry, index) =>
+      copyForkEntry(entry, id, index + 1, this.epoch),
+    );
+    copied.push({
+      agentId: id,
+      seq: copied.length + 1,
+      epoch: this.epoch,
+      timestamp: now,
+      event: { type: "timeline", item: { type: "notice", text: `已从「${originTitle}」分叉` } },
+    });
+
+    const handle = session.describePersistence();
+    const title = opts.title?.trim() || `${originTitle}（分叉）`;
+    const preview = firstUserPreview(copied);
+    const snapshot: AgentSnapshot = {
+      id,
+      provider: originSnapshot.provider,
+      cwd: originSnapshot.cwd,
+      title,
+      model: originSnapshot.model ?? null,
+      modeId: originSnapshot.modeId ?? null,
+      thinkingOptionId: originSnapshot.thinkingOptionId ?? null,
+      ...(originSnapshot.availableModes ? { availableModes: originSnapshot.availableModes } : {}),
+      status: "idle",
+      activeTurnId: null,
+      pendingPermissions: [],
+      lastError: null,
+      persistence: handle,
+      ...(preview !== undefined ? { preview } : {}),
+      lastSeq: copied.length,
+      resumable: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const agent: ManagedAgent = {
+      ...newManagedAgent(id, client, snapshot),
+      session,
+      entries: copied,
+      closed: false,
+      models: origin.models,
+    };
+    if (native && handle === null) {
+      // 新会话还没有自己的原生 id（Claude 进程懒启动）：记下来，首次拉起 / 恢复时仍带分叉参数
+      agent.pendingFork = {
+        handle: structuredClone(originHandle!),
+        ...(!plan.whole && plan.nativeRef !== undefined ? { nativeRef: plan.nativeRef } : {}),
+      };
+    } else if (!native) {
+      const transcript = buildForkTranscript(retained);
+      if (transcript) {
+        agent.pendingForkContext = transcript;
+      }
+    }
+    this.refreshResumable(agent);
+    this.agents.set(id, agent);
+    agent.unsubscribe = session.subscribe((event) => this.enqueueEvent(agent, event));
+    for (const entry of copied) {
+      this.store?.appendEntry(id, entry);
+    }
+    this.logger.info(
+      "分叉 agent %s → %s（方式=%s, 截至 seq=%d）",
+      origin.id,
+      id,
+      native ? "native" : "summary",
+      plan.endSeq,
+    );
+    await this.persistNow(agent);
+    this.emitState(agent);
+    return cloneSnapshot(snapshot);
   }
 
   async respondToPermission(
@@ -911,6 +1073,9 @@ export class AgentManager {
 
   /** 不可恢复时：dormant 返回 NOT_SUPPORTED（4.5），closed 返回 AGENT_CLOSED（4.4） */
   private assertResumable(agent: ManagedAgent): void {
+    if (agent.pendingFork && agent.client?.forkSession) {
+      return;
+    }
     if (agent.snapshot.resumable && agent.snapshot.persistence && agent.client?.resumeSession) {
       return;
     }
@@ -945,7 +1110,8 @@ export class AgentManager {
   /** dormant / closed → starting → idle；失败时回到原状态并写 lastError */
   private async resumeAgent(agent: ManagedAgent): Promise<void> {
     const client = agent.client!;
-    const persistence = agent.snapshot.persistence!;
+    const persistence = agent.snapshot.persistence;
+    const pendingFork = agent.pendingFork;
     const previousStatus = agent.snapshot.status;
     // 先读历史 timeline：seq 从磁盘与 meta 中较大者继续递增
     await this.loadEntries(agent);
@@ -960,9 +1126,21 @@ export class AgentManager {
       if (!availability.available) {
         throw new Error(availability.reason ?? `provider ${agent.snapshot.provider} 当前不可用`);
       }
-      session = await client.resumeSession!(structuredClone(persistence), {
-        cwd: agent.snapshot.cwd,
-      });
+      if (pendingFork && !persistence?.sessionId) {
+        // 分叉会话在拿到自己的原生 id 前被关闭 / 重启：按原分叉参数重新派生（design.md 4.23）
+        const { model, modeId, thinkingOptionId } = agent.snapshot;
+        session = await client.forkSession!(structuredClone(pendingFork.handle), {
+          cwd: agent.snapshot.cwd,
+          ...(model != null ? { model } : {}),
+          ...(modeId != null ? { modeId } : {}),
+          ...(thinkingOptionId != null ? { thinkingOptionId } : {}),
+          ...(pendingFork.nativeRef !== undefined ? { nativeRef: pendingFork.nativeRef } : {}),
+        });
+      } else {
+        session = await client.resumeSession!(structuredClone(persistence!), {
+          cwd: agent.snapshot.cwd,
+        });
+      }
     } catch (error) {
       const message = errorMessage(error);
       const notSupported = error instanceof AgentRpcError && error.code === "NOT_SUPPORTED";
@@ -1046,9 +1224,9 @@ export class AgentManager {
   }
 
   private refreshResumable(agent: ManagedAgent): void {
-    agent.snapshot.resumable = Boolean(
-      agent.snapshot.persistence?.sessionId && agent.client?.resumeSession,
-    );
+    agent.snapshot.resumable =
+      Boolean(agent.snapshot.persistence?.sessionId && agent.client?.resumeSession) ||
+      Boolean(agent.pendingFork && agent.client?.forkSession);
   }
 
   private requireSession(agent: ManagedAgent): AgentSession {
@@ -1183,6 +1361,8 @@ export class AgentManager {
     const snapshot = agent.snapshot;
     switch (event.type) {
       case "thread_started":
+        // 分叉会话拿到了自己的原生 id：不再需要分叉参数
+        delete agent.pendingFork;
         snapshot.persistence = agent.session?.describePersistence() ?? {
           provider: snapshot.provider,
           sessionId: event.sessionId,
@@ -1280,7 +1460,7 @@ export class AgentManager {
   private touch(agent: ManagedAgent): void {
     agent.snapshot.updatedAt = this.now();
     if (!agent.removed) {
-      this.store?.scheduleMeta(agent.id, () => toPersistedMeta(agent.snapshot));
+      this.store?.scheduleMeta(agent.id, () => toPersistedMeta(agent));
     }
   }
 
@@ -1289,7 +1469,7 @@ export class AgentManager {
     if (!this.store || agent.removed) {
       return Promise.resolve();
     }
-    return this.store.flushMeta(agent.id, () => toPersistedMeta(agent.snapshot));
+    return this.store.flushMeta(agent.id, () => toPersistedMeta(agent));
   }
 
   private emitEnvelope(agent: ManagedAgent, event: AgentStreamEvent): void {
@@ -1443,10 +1623,216 @@ function finiteOrNull(value: number | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** meta.json：快照中除 pendingPermissions / activeTurnId 外的字段 */
-function toPersistedMeta(snapshot: AgentSnapshot): PersistedAgentMeta {
-  const { pendingPermissions: _pending, activeTurnId: _active, ...rest } = snapshot;
-  return structuredClone(rest);
+/** meta.json：快照中除 pendingPermissions / activeTurnId 外的字段，加上分叉相关的待处理状态（不进快照） */
+function toPersistedMeta(agent: ManagedAgent): PersistedAgentMeta {
+  const { pendingPermissions: _pending, activeTurnId: _active, ...rest } = agent.snapshot;
+  return structuredClone({
+    ...rest,
+    ...(agent.pendingForkContext !== undefined
+      ? { pendingForkContext: agent.pendingForkContext }
+      : {}),
+    ...(agent.pendingFork !== undefined ? { pendingFork: agent.pendingFork } : {}),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 会话分叉（design.md 4.23）
+// ---------------------------------------------------------------------------
+
+interface ForkPlan {
+  /** 保留的最后一条原时间线条目的 seq */
+  endSeq: number;
+  /** 保留整个会话（原生分叉无需截断） */
+  whole: boolean;
+  /** 截断点所在回合的原生锚点（turn_completed.nativeRef） */
+  nativeRef?: string;
+}
+
+const TURN_END_TYPES = new Set(["turn_completed", "turn_failed", "turn_canceled"]);
+
+/** 校验 throughSeq 并算出保留范围；非法抛 -32602，缺省 throughSeq 但原会话运行中抛 TURN_IN_PROGRESS */
+function planFork(
+  entries: AgentStreamEnvelope[],
+  throughSeq: number | undefined,
+  busy: boolean,
+): ForkPlan {
+  const lastSeq = entries.length > 0 ? entries[entries.length - 1]!.seq : 0;
+  if (throughSeq === undefined) {
+    if (busy) {
+      throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束后再分叉");
+    }
+    return { endSeq: lastSeq, whole: true };
+  }
+  if (!Number.isInteger(throughSeq) || throughSeq < 1 || throughSeq > lastSeq) {
+    throw new AgentInvalidParamsError(`throughSeq 超出时间线范围：${throughSeq}`);
+  }
+  const end = entries.find((entry) => entry.seq >= throughSeq && TURN_END_TYPES.has(entry.event.type));
+  if (!end) {
+    throw new AgentInvalidParamsError("throughSeq 必须落在已结束的回合上");
+  }
+  const hasLaterTurn = entries.some(
+    (entry) =>
+      entry.seq > end.seq &&
+      (entry.event.type === "turn_started" ||
+        (entry.event.type === "timeline" && entry.event.item.type === "user_message")),
+  );
+  const nativeRef = end.event.type === "turn_completed" ? end.event.nativeRef : undefined;
+  return {
+    endSeq: end.seq,
+    whole: !hasLaterTurn && !busy,
+    ...(nativeRef ? { nativeRef } : {}),
+  };
+}
+
+/**
+ * 复制一条原时间线条目：换 agentId / seq / epoch。nativeRef 指向原会话的原生回合，对新会话无效，去掉
+ * （之后在复制出来的历史上再截断分叉会退回 summary 方式）。
+ */
+function copyForkEntry(
+  entry: AgentStreamEnvelope,
+  agentId: string,
+  seq: number,
+  epoch: string,
+): AgentStreamEnvelope {
+  const copy = structuredClone(entry);
+  if (copy.event.type === "turn_completed") {
+    delete copy.event.nativeRef;
+  }
+  return { ...copy, agentId, seq, epoch };
+}
+
+function forkSourceTitle(snapshot: AgentSnapshot): string {
+  if (snapshot.title) {
+    return snapshot.title;
+  }
+  if (snapshot.preview) {
+    return Array.from(snapshot.preview).slice(0, FORK_TITLE_SOURCE_MAX_CHARS).join("");
+  }
+  return "未命名会话";
+}
+
+function firstUserPreview(entries: AgentStreamEnvelope[]): string | undefined {
+  const retracted = new Set<string>();
+  for (const entry of entries) {
+    if (entry.event.type === "user_message_retracted" && entry.event.clientMessageId) {
+      retracted.add(entry.event.clientMessageId);
+    }
+  }
+  for (const entry of entries) {
+    const event = entry.event;
+    if (event.type !== "timeline" || event.item.type !== "user_message") {
+      continue;
+    }
+    if (event.item.clientMessageId && retracted.has(event.item.clientMessageId)) {
+      continue;
+    }
+    const preview = toPreview(event.item.text);
+    if (preview) {
+      return preview;
+    }
+  }
+  return undefined;
+}
+
+function toolCallSummary(item: Extract<AgentTimelineItem, { type: "tool_call" }>): string {
+  const detail = item.detail;
+  let target: string | undefined;
+  switch (detail.type) {
+    case "shell":
+      target = detail.command;
+      break;
+    case "read":
+    case "edit":
+    case "write":
+      target = detail.filePath;
+      break;
+    case "search":
+      target = detail.query;
+      break;
+    case "fetch":
+      target = detail.url;
+      break;
+    case "sub_agent":
+      target = detail.description;
+      break;
+    default:
+      break;
+  }
+  const oneLine = target?.replace(/\s*[\r\n]+\s*/g, " ").trim();
+  const clipped = oneLine && oneLine.length > 200 ? `${oneLine.slice(0, 200)}…` : oneLine;
+  return `[工具 ${item.name}${clipped ? `：${clipped}` : ""}]`;
+}
+
+/**
+ * summary 方式的历史对话文本：用户 / 助手文本，工具调用一行摘要；超过 FORK_TRANSCRIPT_MAX_CHARS 时保留最后部分。
+ * 已撤回的用户消息不计入；思考、待办、压缩、错误、系统提示等省略。
+ */
+export function buildForkTranscript(entries: AgentStreamEnvelope[]): string {
+  type Part = { kind: "user" | "assistant" | "tool"; text: string; clientMessageId?: string };
+  const parts: Part[] = [];
+  const toolIndex = new Map<string, number>();
+  for (const { event } of entries) {
+    if (event.type === "user_message_retracted") {
+      const index = event.clientMessageId
+        ? parts.findIndex(
+            (part) => part.kind === "user" && part.clientMessageId === event.clientMessageId,
+          )
+        : parts.map((part) => part.kind).lastIndexOf("user");
+      if (index >= 0) {
+        parts.splice(index, 1);
+        toolIndex.clear();
+      }
+      continue;
+    }
+    if (event.type !== "timeline") {
+      continue;
+    }
+    const item = event.item;
+    if (item.type === "user_message") {
+      parts.push({
+        kind: "user",
+        text: item.text,
+        ...(item.clientMessageId !== undefined ? { clientMessageId: item.clientMessageId } : {}),
+      });
+    } else if (item.type === "assistant_message") {
+      const last = parts[parts.length - 1];
+      if (last?.kind === "assistant") {
+        last.text += item.text;
+      } else {
+        parts.push({ kind: "assistant", text: item.text });
+      }
+    } else if (item.type === "tool_call") {
+      const text = toolCallSummary(item);
+      const existing = toolIndex.get(item.callId);
+      if (existing !== undefined && parts[existing]) {
+        parts[existing]!.text = text;
+      } else {
+        toolIndex.set(item.callId, parts.length);
+        parts.push({ kind: "tool", text });
+      }
+    }
+  }
+  const lines = parts
+    .filter((part) => part.text.trim() !== "")
+    .map((part) =>
+      part.kind === "user"
+        ? `用户：${part.text}`
+        : part.kind === "assistant"
+          ? `助手：${part.text}`
+          : part.text,
+    );
+  const transcript = lines.join("\n\n");
+  return transcript.length > FORK_TRANSCRIPT_MAX_CHARS
+    ? transcript.slice(-FORK_TRANSCRIPT_MAX_CHARS)
+    : transcript;
+}
+
+/** 在用户 prompt 前插入分叉历史上下文（design.md 4.23） */
+function prependForkContext(prompt: AgentPromptInput, transcript: string): AgentPromptInput {
+  const prefix = `以下是从另一个会话分叉过来的历史对话，仅供参考：\n<transcript>${transcript}</transcript>\n\n`;
+  return typeof prompt === "string"
+    ? prefix + prompt
+    : [{ type: "text", text: prefix }, ...prompt];
 }
 
 /** 首条用户消息预览：去掉首尾空白、换行压成空格，取前 120 个字符（按码点） */

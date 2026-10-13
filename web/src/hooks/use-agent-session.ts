@@ -522,6 +522,28 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       return client.request("usage.summary", range ?? {}, { timeoutMs: 60_000 });
     },
 
+    /**
+     * agent.fork：基于原会话新建分叉会话（design.md 4.23）。throughSeq 缺省 = 整个会话；
+     * 给出时只保留到所在回合结束。结果写入快照并预建聊天运行时，返回新会话。
+     */
+    async forkSession(
+      agentId: string,
+      options: { throughSeq?: number; title?: string } = {},
+    ): Promise<AgentSnapshot> {
+      const { agent } = await client.request(
+        "agent.fork",
+        {
+          agentId,
+          ...(options.throughSeq !== undefined ? { throughSeq: options.throughSeq } : {}),
+          ...(options.title ? { title: options.title } : {}),
+        },
+        { timeoutMs: 60_000 },
+      );
+      store.set(upsertAgentSnapshotAtom, agent);
+      store.set(ensureChatSessionAtom, agent.id);
+      return agent;
+    },
+
     /** agent.timeline：取会话全部时间线条目（dormant / closed 也可取，不恢复会话），供导出使用。 */
     async fetchAllTimelineEntries(agentId: string): Promise<AgentStreamEnvelope[]> {
       const { entries } = await client.request("agent.timeline", { agentId }, { timeoutMs: 60_000 });

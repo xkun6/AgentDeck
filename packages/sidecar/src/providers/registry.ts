@@ -92,7 +92,11 @@ export class ProviderRegistry {
           id: client.provider,
           kind: client.kind,
           label: client.label,
-          ...(client.capabilities ? { capabilities: client.capabilities } : {}),
+          // 能力（design.md 4.22 / 4.23）：steer 取自 client，fork 由是否实现 forkSession 决定（原生 / 带摘要新开）
+          capabilities: {
+            ...client.capabilities,
+            fork: client.forkSession ? "native" : "summary",
+          },
           ...(client.custom
             ? {
                 custom: true,

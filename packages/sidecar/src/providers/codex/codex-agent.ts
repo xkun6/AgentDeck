@@ -720,6 +720,32 @@ export class CodexAgentClient implements AgentClient {
     return session;
   }
 
+  /** 原生分叉（design.md 4.23）：立即 thread/fork，失败抛错由 AgentManager 回滚 */
+  async forkSession(
+    handle: AgentPersistenceHandle,
+    cfg: AgentSessionConfig & { nativeRef?: string },
+  ): Promise<AgentSession> {
+    const modeId = cfg.modeId ?? DEFAULT_CODEX_MODE_ID;
+    assertCodexMode(modeId);
+    const session = new CodexAgentSession({
+      ...(await this.sessionBaseDeps()),
+      cwd: cfg.cwd,
+      model: cfg.model ?? null,
+      modeId,
+      thinkingOptionId: cfg.thinkingOptionId ?? null,
+      threadId: null,
+      forkFrom: { threadId: handle.sessionId, ...(cfg.nativeRef ? { lastTurnId: cfg.nativeRef } : {}) },
+    });
+    this.sessions.add(session);
+    try {
+      await session.connect();
+    } catch (error) {
+      await session.close();
+      throw error;
+    }
+    return session;
+  }
+
   async shutdown(): Promise<void> {
     await Promise.allSettled(Array.from(this.sessions, (session) => session.close()));
   }
@@ -771,6 +797,8 @@ interface CodexSessionDeps {
   /** 思考强度（turn/start 的 effort）；null / 缺省为跟随 Codex 配置 */
   thinkingOptionId?: string | null;
   threadId: string | null;
+  /** 分叉来源（design.md 4.23）：threadId 为 null 时首次加载线程用 thread/fork 代替 thread/start */
+  forkFrom?: { threadId: string; lastTurnId?: string };
   onClosed?: (session: CodexAgentSession) => void;
 }
 
@@ -859,7 +887,7 @@ export class CodexAgentSession implements AgentSession {
   /** 拉起 app-server 并握手；resume 时顺带 thread/resume（失败尽早暴露） */
   async connect(): Promise<void> {
     await this.ensureClient();
-    if (this.threadId) {
+    if (this.threadId || this.deps.forkFrom) {
       await this.ensureThread();
     }
   }
@@ -1315,6 +1343,21 @@ export class CodexAgentSession implements AgentSession {
         { ...base, threadId: this.threadId },
         THREAD_START_TIMEOUT_MS,
       );
+    } else if (this.deps.forkFrom) {
+      // 原生分叉：新线程继承原线程历史（lastTurnId 给出时截断到该回合，含），之后照常 turn/start（0.162.1 实测）
+      const { threadId: sourceThreadId, lastTurnId } = this.deps.forkFrom;
+      const response = asRecord(
+        await client.request(
+          "thread/fork",
+          { ...base, threadId: sourceThreadId, ...(lastTurnId ? { lastTurnId } : {}) },
+          THREAD_START_TIMEOUT_MS,
+        ),
+      );
+      const threadId = str(asRecord(response?.thread)?.id) ?? str(pick(response, "threadId", "thread_id"));
+      if (!threadId) {
+        throw new Error("Codex thread/fork 未返回 thread.id");
+      }
+      this.threadId = threadId;
     } else {
       const response = asRecord(await client.request("thread/start", base, THREAD_START_TIMEOUT_MS));
       const threadId = str(asRecord(response?.thread)?.id) ?? str(pick(response, "threadId", "thread_id"));
@@ -1432,7 +1475,12 @@ export class CodexAgentSession implements AgentSession {
     }
     this.cancelAllPermissions(CANCEL_RESPONSE);
     this.toolItems.clear();
-    this.emit(event);
+    // 原生 turnId 作为分叉锚点（design.md 4.23：thread/fork 的 lastTurnId）
+    this.emit(
+      event.type === "turn_completed" && turn.nativeTurnId
+        ? { ...event, nativeRef: turn.nativeTurnId }
+        : event,
+    );
   }
 
   private cancelAllPermissions(response: AgentPermissionResponse): void {

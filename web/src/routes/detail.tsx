@@ -21,6 +21,7 @@ import {
   retryableTurn,
   type PendingApproval,
 } from "@/stores/chat";
+import { useForkSession } from "@/hooks/use-context-actions";
 import { useRetractMessage, type RetractPrefill } from "@/hooks/use-retract-message";
 import {
   agentListLoadedAtom,
@@ -125,6 +126,7 @@ export function DetailRoute() {
   const openBackgroundTask = openTaskId ? backgroundTasks.find((task) => task.taskId === openTaskId) ?? null : null;
 
   const actions = useAgentSession();
+  const forkSession = useForkSession();
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const snapshots = useAtomValue(agentSnapshotsAtom);
   const agentListLoaded = useAtomValue(agentListLoadedAtom);
@@ -662,6 +664,7 @@ export function DetailRoute() {
             onResend={() => void onResend()}
             resendDisabled={resending}
             focusSeq={focusSeq}
+            onFork={(seq) => { if (taskId) void forkSession(taskId, seq); }}
           />
           <div className={s.composerArea}>
             {retraction.notice ? (

@@ -45,6 +45,10 @@ describe("ProviderRegistry", () => {
     expect(byId.get("claude")?.capabilities?.steer).toBe(true);
     expect(byId.get("codex")?.capabilities?.steer).toBe(true);
     expect(byId.get("acp:dsh")?.capabilities?.steer).toBeFalsy();
+    // steer 与 fork 同时带出（design.md 4.22 / 4.23）
+    expect(byId.get("claude")?.capabilities).toEqual({ steer: true, fork: "native" });
+    expect(byId.get("codex")?.capabilities).toEqual({ steer: true, fork: "native" });
+    expect(byId.get("acp:dsh")?.capabilities).toEqual({ fork: "summary" });
   });
 
   test("listProviderInfo：可用性探测异常记为不可用并带 command", async () => {
@@ -72,6 +76,7 @@ describe("ProviderRegistry", () => {
         id: "broken",
         kind: "acp",
         label: "Broken",
+        capabilities: { fork: "summary" },
         available: false,
         unavailableReason: "探测失败",
       },
@@ -79,6 +84,7 @@ describe("ProviderRegistry", () => {
         id: "acp:x",
         kind: "acp",
         label: "X",
+        capabilities: { fork: "summary" },
         available: false,
         unavailableReason: "未安装",
         command: ["x", "acp"],

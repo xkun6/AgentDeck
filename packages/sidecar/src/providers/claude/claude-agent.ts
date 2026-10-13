@@ -386,9 +386,28 @@ export class ClaudeAgentClient implements AgentClient {
     return this.openSession({ cwd: cfg.cwd }, handle.sessionId);
   }
 
+  /**
+   * 原生分叉（design.md 4.23）：新会话首次拉起 claude 进程时用 `--resume <原 sessionId> --fork-session`
+   * （nativeRef 给出时再带 `--resume-session-at <assistant uuid>` 截断），进程懒启动，这里不拉起子进程。
+   */
+  async forkSession(
+    handle: AgentPersistenceHandle,
+    cfg: AgentSessionConfig & { nativeRef?: string },
+  ): Promise<AgentSession> {
+    if (!handle.sessionId) {
+      throw new Error("分叉 Claude 会话需要原会话的 sessionId");
+    }
+    const { nativeRef, ...sessionCfg } = cfg;
+    return this.openSession(sessionCfg, null, {
+      sessionId: handle.sessionId,
+      ...(nativeRef ? { atMessageUuid: nativeRef } : {}),
+    });
+  }
+
   private async openSession(
     cfg: AgentSessionConfig,
     resumeSessionId: string | null,
+    forkFrom?: ClaudeForkSource,
   ): Promise<ClaudeAgentSession> {
     const modeId = cfg.modeId ?? null;
     if (modeId !== null) {
@@ -416,6 +435,7 @@ export class ClaudeAgentClient implements AgentClient {
       modeId,
       thinkingOptionId,
       resumeSessionId,
+      ...(forkFrom ? { forkFrom } : {}),
       loadCatalogCommands: async () => (await this.loadProbe(cfg.cwd)).commands ?? [],
     });
   }
@@ -455,6 +475,12 @@ interface ClaudeProbeResult {
   commands: AgentSlashCommand[] | null;
 }
 
+/** 分叉来源：原会话 id，以及可选的截断点（assistant 消息 uuid） */
+interface ClaudeForkSource {
+  sessionId: string;
+  atMessageUuid?: string;
+}
+
 export interface ClaudeAgentSessionOptions {
   logger: Logger;
   /** 已清洗的子进程环境 */
@@ -475,6 +501,8 @@ export interface ClaudeAgentSessionOptions {
   /** 思考强度，null / 缺省表示跟随 Claude Code 设置（不传 --effort） */
   thinkingOptionId?: string | null;
   resumeSessionId: string | null;
+  /** 分叉来源（design.md 4.23）：拿到新会话 id 之前，启动进程都带 --fork-session */
+  forkFrom?: ClaudeForkSource;
   /** claude 进程尚未启动时 listCommands 的退回来源（provider 目录的 commands） */
   loadCatalogCommands?: () => Promise<AgentSlashCommand[]>;
 }
@@ -524,6 +552,10 @@ export class ClaudeAgentSession implements AgentSession {
   private readonly loadCatalogCommands: (() => Promise<AgentSlashCommand[]>) | undefined;
 
   private sessionId: string | null;
+  /** 尚未拿到新会话 id 的分叉会话：进程（重）启动都带 --fork-session，拿到后清空（design.md 4.23） */
+  private forkFrom: ClaudeForkSource | null;
+  /** 本轮最后一条主线程 assistant 消息的 uuid，作为 turn_completed.nativeRef（design.md 4.23） */
+  private lastAssistantUuid: string | null = null;
   private threadStarted = false;
   private closed = false;
   private model: string | null;
@@ -607,6 +639,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.mode = options.modeId;
     this.thinkingOptionId = normalizeThinkingOptionId(options.thinkingOptionId);
     this.sessionId = options.resumeSessionId;
+    this.forkFrom = options.forkFrom ?? null;
     this.loadCatalogCommands = options.loadCatalogCommands;
   }
 
@@ -636,6 +669,7 @@ export class ClaudeAgentSession implements AgentSession {
       await this.teardownCli();
     }
     const turnId = randomUUID();
+    this.lastAssistantUuid = null;
     const message = toClaudeUserInput(prompt, this.sessionId);
     const turn: ActiveTurn = {
       turnId,
@@ -1008,7 +1042,7 @@ export class ClaudeAgentSession implements AgentSession {
       model ?? "default",
       this.mode ?? "跟随设置",
       this.thinkingOptionId ?? "跟随设置",
-      this.sessionId ?? "-",
+      this.sessionId ?? (this.forkFrom ? `fork:${this.forkFrom.sessionId}` : "-"),
     );
     const cli = this.cliFactory({
       executablePath: this.executablePath,
@@ -1018,7 +1052,13 @@ export class ClaudeAgentSession implements AgentSession {
       model,
       permissionMode: launchMode,
       thinkingOptionId: this.thinkingOptionId,
-      resumeSessionId: this.sessionId,
+      resumeSessionId: this.sessionId ?? this.forkFrom?.sessionId ?? null,
+      ...(this.sessionId === null && this.forkFrom
+        ? {
+            forkSession: true,
+            ...(this.forkFrom.atMessageUuid ? { resumeSessionAt: this.forkFrom.atMessageUuid } : {}),
+          }
+        : {}),
       canUseTool: this.handleCanUseTool,
       logger: this.logger,
       onStderr: this.handleStderr,
@@ -1180,6 +1220,9 @@ export class ClaudeAgentSession implements AgentSession {
         return;
       case "assistant":
         this.captureSession(message.session_id);
+        if (!message.parent_tool_use_id && typeof message.uuid === "string") {
+          this.lastAssistantUuid = message.uuid;
+        }
         this.handleAssistantMessage(message.message);
         return;
       case "user":
@@ -1198,6 +1241,7 @@ export class ClaudeAgentSession implements AgentSession {
       return;
     }
     this.sessionId = sessionId;
+    this.forkFrom = null;
     if (!this.threadStarted) {
       this.threadStarted = true;
       this.emit({ type: "thread_started", sessionId });
@@ -1420,7 +1464,12 @@ export class ClaudeAgentSession implements AgentSession {
     );
 
     if (message.subtype === "success" && !message.is_error) {
-      this.finishTurn(turn, { type: "turn_completed", turnId: turn.turnId, usage });
+      this.finishTurn(turn, {
+        type: "turn_completed",
+        turnId: turn.turnId,
+        usage,
+        ...(this.lastAssistantUuid ? { nativeRef: this.lastAssistantUuid } : {}),
+      });
       return;
     }
     this.finishTurn(turn, {

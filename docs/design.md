@@ -753,6 +753,20 @@ interface UsageSummary {
 - 原会话不受影响；provider 原生 fork 失败时返回 `PROVIDER_UNAVAILABLE` 并删除刚建的会话。
 - 前端：会话右键菜单「分叉会话」；消息悬停菜单「从这里分叉」（传该回合内任一 seq）；成功后跳到新会话。
 
+**实测结论（claude 2.1.296、codex-cli 0.162.1，探针见 `tmp/fork-probe-*`）**：
+- Claude `--resume <id> --fork-session`（stream-json 模式）：**可用**。首个 `system init` 即带**新的** `session_id`，新会话带着原历史（两轮会话 fork 后问「暗号是什么」答得出），原会话不变。隐藏参数 `--resume-session-at <assistant message uuid>`：**可用**，与 `--fork-session` 同用时只保留到该条 assistant 消息（fork 后问「第二个问题是什么」，回答把新问题当成第二条，说明原第二轮被截掉）。`assistant` 帧自带 `uuid`（一个回合里每个内容块一条 assistant 消息，同 `message.id`、不同 `uuid`；用回合里**最后一条主线程 assistant 消息的 uuid** 作锚点）。
+- Codex `thread/fork { threadId, lastTurnId? }`：**可用**。应答 `{ thread: { id: <新 threadId>, turns }, … }`；新 thread 上直接 `turn/start` 即带完整历史（整会话 fork 后答得出「2 个问题、暗号蓝莓」）；带 `lastTurnId`（含）时 `thread.turns` 只剩到该回合，之后的问题不在上下文里（答「1 个问题」）。`turn/started` 的 `turn.id` 即原生 turnId。
+- 因此 Claude 与 Codex 都按 `native` 实现，截断分叉也走原生，无需退回 summary（仅在缺少回合锚点时退回，见下）。
+
+**协议与实现补充（落地时确定）**：
+- 新 timeline 项 `{ type: "notice"; text: string }`：居中系统提示（`AgentTimelineItem` 里原先没有可用类型）；前端 `stores/chat.ts` 渲染为 id 前缀 `agent-timeline-notice-` 的 system 消息，时间线按居中分隔线显示（同压缩提示）。
+- `turn_completed` 增加可选 `nativeRef`：provider 原生回合锚点（Claude = 本轮最后一条主线程 assistant 消息 uuid；Codex = 原生 turnId），供截断分叉使用；复制到新会话的时间线里会去掉它（对新会话无效）。`ProviderInfo.capabilities?: { steer?: boolean; fork?: "native" | "summary" }`：实现了 `forkSession` 的 provider 为 `native`，其余 `summary`；自定义 claude / codex 中转沿用其 extends 实现的值。
+- `agent.fork` 的参数校验：`throughSeq` 必须是正整数且不超过当前最大 seq，并落在**已结束**的回合上（该 seq 之后存在回合结束事件），否则 `-32602`；缺省 `throughSeq` 且原会话有进行中的回合（含 send / 恢复中）→ `TURN_IN_PROGRESS`。保留范围 = 原时间线中 seq ≤ 「第一个 seq ≥ throughSeq 的回合结束事件」。
+- 原生 / summary 的选择：provider 实现了 `forkSession`、原会话已有 persistence 句柄、且（保留整个会话——即所选回合是最后一个回合且原会话空闲——或所选回合有 `nativeRef`）→ native；否则（含旧会话没有 `nativeRef`、原会话是尚未发过消息的分叉会话、ACP / mock）→ summary。原会话 dormant / closed 时同样可分叉，不会恢复原会话。
+- Claude 进程懒启动：native 分叉后新会话暂时没有自己的原生 id（`persistence` 为 null），首次拉起进程带 `--resume <原 id> --fork-session [--resume-session-at <uuid>]`，拿到新 `session_id`（`thread_started`）后后续重启一律 `--resume <新 id>`。拿到新 id 之前若 sidecar 重启，meta 里的 `pendingFork { handle, nativeRef? }`（同 `pendingForkContext`，不进快照）让该会话仍可恢复：恢复时再次调用 `forkSession`。Codex 在 fork 时立即 `thread/fork`，失败即 `PROVIDER_UNAVAILABLE`（此时新会话尚未登记，无需回滚）；Claude 的原生失败体现在首次 send 的 `turn_failed`。
+- summary 注入：transcript 只含用户 / 助手文本与工具一行摘要（已撤回的用户消息、思考、待办、压缩、错误、系统提示不计入）；时间线里的用户消息仍是用户自己输入的文本，注入文本只发给 provider。`startTurn` 成功后才清除 `pendingForkContext` 并落盘。
+- 前端：分叉 notice 之外，消息 `metadata.seq` 记下对应时间线 seq（用户消息 = 自己的 seq，助手消息 = 首个输出事件的 seq），「从这里分叉」传它；进行中的回合（最后一条用户消息起）不显示该操作；会话右键菜单「分叉会话」在会话运行中禁用。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```

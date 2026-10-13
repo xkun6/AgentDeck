@@ -5,12 +5,28 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { AgentSnapshot, AgentStatus, AgentStreamEnvelope } from "@agentdeck/protocol";
+import type {
+  AgentPersistenceHandle,
+  AgentSnapshot,
+  AgentStatus,
+  AgentStreamEnvelope,
+} from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
 
 /** meta.json 的内容：快照中除 pendingPermissions / activeTurnId 外的全部字段（design.md 4.5） */
-export type PersistedAgentMeta = Omit<AgentSnapshot, "pendingPermissions" | "activeTurnId">;
+export type PersistedAgentMeta = Omit<AgentSnapshot, "pendingPermissions" | "activeTurnId"> & {
+  /** summary 方式分叉：首次 agent.send 时前置的历史对话文本（design.md 4.23），不属于快照 */
+  pendingForkContext?: string;
+  /** native 方式分叉且新会话尚未拿到自己的原生 id（design.md 4.23），不属于快照 */
+  pendingFork?: PendingNativeFork;
+};
+
+/** 待完成的原生分叉：原会话的 persistence 句柄与可选的回合锚点 */
+export interface PendingNativeFork {
+  handle: AgentPersistenceHandle;
+  nativeRef?: string;
+}
 
 export const META_FILE = "meta.json";
 export const TIMELINE_FILE = "timeline.jsonl";
@@ -447,6 +463,17 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   }
   if (typeof value.archived !== "boolean") {
     delete meta.archived;
+  }
+  if (typeof value.pendingForkContext !== "string") {
+    delete meta.pendingForkContext;
+  }
+  const pendingFork = value.pendingFork;
+  if (
+    !isRecord(pendingFork) ||
+    !isRecord(pendingFork.handle) ||
+    typeof pendingFork.handle.sessionId !== "string"
+  ) {
+    delete meta.pendingFork;
   }
   if (!isRecord(value.persistence) || typeof value.persistence.sessionId !== "string") {
     meta.persistence = null;

@@ -397,6 +397,39 @@ describe("MessageTimeline：上下文压缩提示（design.md 4.13）", () => {
   });
 });
 
+describe("MessageTimeline：分叉相关（design.md 4.23）", () => {
+  it("agent-timeline-notice-* 系统提示渲染为居中分隔线", () => {
+    const messages: ChatMessage[] = [
+      { id: "agent-timeline-notice-9", role: "system", createdAt: 1, text: "已从「原会话」分叉", status: "complete" },
+    ];
+    const html = renderTimeline(<MessageTimeline messages={messages} />);
+    expect(html).toMatch(/class="[^"]*dividerNotice[^"]*" role="status"><span[^>]*>已从「原会话」分叉<\/span>/);
+    expect(html).not.toMatch(/systemNotice(?!Icon|Body|Text|Title|Toggle)/);
+  });
+
+  it("有 firstSeq 的消息显示「从这里分叉」；进行中的回合（最后一条用户消息起）不显示", () => {
+    const messages = [
+      { id: "u1", role: "user", text: "第一问", createdAt: 1, firstSeq: 1 },
+      { id: "a1", role: "assistant", text: "答", createdAt: 2, firstSeq: 3, status: "complete" },
+      { id: "u2", role: "user", text: "第二问", createdAt: 3, firstSeq: 5 },
+      { id: "a2", role: "assistant", text: "答二", createdAt: 4, status: "complete" },
+      { id: "u3", role: "user", text: "没有 seq", createdAt: 5 },
+    ] as ChatMessage[];
+    const idle = renderTimeline(<MessageTimeline messages={messages} onFork={() => {}} />);
+    expect(idle.match(/从这里分叉/g)).toHaveLength(3);
+    const noHandler = renderTimeline(<MessageTimeline messages={messages} />);
+    expect(noHandler).not.toContain("从这里分叉");
+    // 正在运行：u3 起的回合未结束，只剩前两个回合的三条消息里 u2 仍可分叉（a2 没有 seq）
+    const busy = renderTimeline(<MessageTimeline messages={messages} onFork={() => {}} turnStartedAt={1} />);
+    expect(busy.match(/从这里分叉/g)).toHaveLength(3);
+    const busyLast = renderTimeline(
+      <MessageTimeline messages={messages.slice(0, 3)} onFork={() => {}} turnStartedAt={1} />,
+    );
+    // u2 是最后一条用户消息，其回合进行中：只有 u1、a1 可分叉
+    expect(busyLast.match(/从这里分叉/g)).toHaveLength(2);
+  });
+});
+
 describe("MessageTimeline 撤回操作（design.md 4.16）", () => {
   const messages: ChatMessage[] = [
     { id: "u1", role: "user", text: "你好", createdAt: 1 },

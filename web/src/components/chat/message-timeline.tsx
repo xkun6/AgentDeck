@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
-import { AlertTriangle, ChevronRight, Info, RotateCcw, Undo2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, GitFork, Info, RotateCcw, Undo2 } from "lucide-react";
 import { ASSISTANT_FALLBACK_NAME, assistantAvatarDataUrlAtom, showReasoningAtom } from "@/stores/ui";
-import { AGENT_COMPACTION_NOTICE_PREFIX } from "@/stores/chat";
+import { AGENT_COMPACTION_NOTICE_PREFIX, AGENT_TIMELINE_NOTICE_PREFIX } from "@/stores/chat";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
 import { AssistantProfileCard } from "./assistant-profile-card";
 import { MessageImage } from "./message-image";
@@ -55,6 +55,8 @@ interface MessageTimelineProps {
   resendDisabled?: boolean;
   /** 全文搜索定位（design.md 4.19）：滚动到包含该 seq 的消息并短暂高亮；找不到则保持贴底。 */
   focusSeq?: number | null;
+  /** 「从这里分叉」（design.md 4.23）：传该消息所在回合内的一个时间线 seq；不传则不显示该操作。 */
+  onFork?: (seq: number) => void;
 }
 
 /** 定位后消息高亮持续的时间（与 CSS 动画时长一致） */
@@ -793,6 +795,7 @@ interface MessageBubbleProps {
   onResend?: () => void;
   resendHint?: string;
   resendDisabled?: boolean;
+  onFork?: (seq: number) => void;
 }
 
 function MessageBubble({
@@ -808,6 +811,7 @@ function MessageBubble({
   onResend,
   resendHint,
   resendDisabled = false,
+  onFork,
 }: MessageBubbleProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
   const assistantAvatarDataUrl = useAtomValue(assistantAvatarDataUrlAtom);
@@ -831,8 +835,12 @@ function MessageBubble({
     );
   }
 
-  if (isSystem && message.id.startsWith(AGENT_COMPACTION_NOTICE_PREFIX)) {
-    // 上下文压缩（design.md 4.13）：居中细线分隔，不用告警框
+  if (
+    isSystem &&
+    (message.id.startsWith(AGENT_COMPACTION_NOTICE_PREFIX) ||
+      message.id.startsWith(AGENT_TIMELINE_NOTICE_PREFIX))
+  ) {
+    // 上下文压缩（design.md 4.13）/ 会话分叉等系统提示（4.23）：居中细线分隔，不用告警框
     return (
       <div className={s.messageRow} data-role="system">
         <div className={s.dividerNotice} role="status">
@@ -976,6 +984,16 @@ function MessageBubble({
                 再次发送
               </button>
             ) : null}
+            {onFork && message.firstSeq !== undefined && !streaming ? (
+              <button
+                type="button"
+                className={s.retractButton}
+                onClick={() => onFork(message.firstSeq!)}
+              >
+                <GitFork size={12} aria-hidden />
+                从这里分叉
+              </button>
+            ) : null}
           </span>
           {messageStats ? <MessageStatsFooter stats={messageStats} /> : null}
         </div>
@@ -1004,6 +1022,7 @@ export function MessageTimeline({
   onResend,
   resendDisabled,
   focusSeq,
+  onFork,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1039,6 +1058,14 @@ export function MessageTimeline({
       ),
     [messages],
   );
+  // 进行中的回合（从最后一条用户消息起）还没结束，不能作为分叉点（design.md 4.23）
+  const runningTurnStartIndex = useMemo(() => {
+    if (turnStartedAt === undefined) return Number.POSITIVE_INFINITY;
+    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+      if (visibleMessages[index]!.role === "user") return index;
+    }
+    return 0;
+  }, [turnStartedAt, visibleMessages]);
   const turnAnchors = useMemo<TurnAnchor[]>(() => {
     const anchors: TurnAnchor[] = [];
     for (const message of visibleMessages) {
@@ -1450,6 +1477,7 @@ export function MessageTimeline({
                 onResend={resendMessageId === message.id ? onResend : undefined}
                 resendHint={resendHint}
                 resendDisabled={resendDisabled}
+                onFork={index >= runningTurnStartIndex ? undefined : onFork}
               />
             </div>
           );

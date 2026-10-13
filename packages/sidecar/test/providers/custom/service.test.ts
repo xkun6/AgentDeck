@@ -86,9 +86,9 @@ describe("ProviderRegistry 自定义项", () => {
     expect(registry.list().map((c) => c.provider)).toEqual(["mock", "custom:a", "custom:b"]);
     expect(registry.builtinIds()).toEqual(["mock"]);
     await expect(registry.listProviderInfo()).resolves.toEqual([
-      { id: "mock", kind: "mock", label: "Mock Agent", available: true },
-      { id: "custom:a", kind: "claude", label: "中转", available: true, custom: true, extends: "claude", description: "说明" },
-      { id: "custom:b", kind: "codex", label: "中转", available: true, custom: true, extends: "codex" },
+      { id: "mock", kind: "mock", label: "Mock Agent", available: true, capabilities: { fork: "summary" } },
+      { id: "custom:a", kind: "claude", label: "中转", available: true, capabilities: { fork: "summary" }, custom: true, extends: "claude", description: "说明" },
+      { id: "custom:b", kind: "codex", label: "中转", available: true, capabilities: { fork: "summary" }, custom: true, extends: "codex" },
     ]);
 
     registry.replaceCustomClients([b]);
@@ -263,6 +263,59 @@ describe("CustomProviderClient 包装", () => {
     ]);
     const without = await make(base).createSession({ cwd: "/w" });
     expect(without.getStatus).toBeUndefined();
+  });
+});
+
+describe("CustomProviderClient 分叉（design.md 4.23）", () => {
+  test("内层实现 forkSession 时沿用（句柄 provider 换成自定义 id，补静态默认模型）；否则没有 forkSession", async () => {
+    const calls: Array<{ handle: unknown; cfg: unknown }> = [];
+    const session = {
+      provider: "custom:relay",
+      id: null,
+      startTurn: async () => ({ turnId: "t1" }),
+      subscribe: () => () => undefined,
+      getPendingPermissions: () => [],
+      respondToPermission: async () => undefined,
+      interrupt: async () => undefined,
+      close: async () => undefined,
+      describePersistence: () => null,
+    } as AgentSession;
+    const inner = (fork: boolean) =>
+      ({
+        provider: "custom:relay",
+        kind: "codex",
+        label: "x",
+        isAvailable: async () => ({ available: true }),
+        fetchCatalog: async () => ({ models: [], modes: [] }),
+        createSession: async () => session,
+        ...(fork
+          ? {
+              forkSession: async (handle: unknown, cfg: unknown) => {
+                calls.push({ handle, cfg });
+                return session;
+              },
+            }
+          : {}),
+      }) as AgentClient;
+    const make = (fork: boolean) =>
+      createCustomProviderClient(
+        profile({ extends: "codex", models: [{ id: "relay-model", label: "R", isDefault: true }] }),
+        { logger: createSilentLogger(), env: {}, createInner: () => inner(fork) },
+      );
+
+    const withFork = make(true);
+    expect(withFork.forkSession).toBeTypeOf("function");
+    await withFork.forkSession!(
+      { provider: "codex", sessionId: "thr-1" },
+      { cwd: "/w", nativeRef: "turn-9" },
+    );
+    expect(calls).toEqual([
+      {
+        handle: { provider: "custom:relay", sessionId: "thr-1" },
+        cfg: { cwd: "/w", nativeRef: "turn-9", model: "relay-model" },
+      },
+    ]);
+    expect(make(false).forkSession).toBeUndefined();
   });
 });
 

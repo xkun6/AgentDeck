@@ -181,6 +181,9 @@ export class CustomProviderClient implements AgentClient {
   readonly custom: { extends: ProviderProfileExtends; description?: string };
   readonly profile: ProviderProfile;
 
+  /** 内层 provider 支持原生分叉时才有（design.md 4.23） */
+  forkSession?: AgentClient["forkSession"];
+
   private readonly staticModels: AgentModelDefinition[] | null;
 
   constructor(
@@ -189,6 +192,14 @@ export class CustomProviderClient implements AgentClient {
     private readonly secrets: readonly string[],
   ) {
     this.profile = structuredClone(profile);
+    if (inner.forkSession) {
+      this.forkSession = async (handle, cfg) => {
+        const session = await this.guard(() =>
+          inner.forkSession!({ ...handle, provider: this.provider }, this.withDefaultModel(cfg)),
+        );
+        return new RedactingSession(session, this.secrets);
+      };
+    }
     this.provider = customProviderId(profile.id);
     this.kind = profile.extends;
     this.label = profile.label;
@@ -250,12 +261,16 @@ export class CustomProviderClient implements AgentClient {
   }
 
   async createSession(cfg: AgentSessionConfig): Promise<AgentSession> {
-    // 未指定模型时用静态列表里的默认模型（中转接口通常不认 CLI 的默认模型名）
-    const defaultModel = this.staticModels?.find((model) => model.isDefault)?.id;
-    const config: AgentSessionConfig =
-      cfg.model === undefined && defaultModel !== undefined ? { ...cfg, model: defaultModel } : cfg;
-    const session = await this.guard(() => this.inner.createSession(config));
+    const session = await this.guard(() => this.inner.createSession(this.withDefaultModel(cfg)));
     return new RedactingSession(session, this.secrets);
+  }
+
+  /** 未指定模型时用静态列表里的默认模型（中转接口通常不认 CLI 的默认模型名） */
+  private withDefaultModel<T extends AgentSessionConfig>(cfg: T): T {
+    const defaultModel = this.staticModels?.find((model) => model.isDefault)?.id;
+    return cfg.model === undefined && defaultModel !== undefined
+      ? { ...cfg, model: defaultModel }
+      : cfg;
   }
 
   async resumeSession(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession> {

@@ -197,6 +197,8 @@ export interface ClaudeAssistantMessage {
   type: "assistant";
   parent_tool_use_id?: string | null;
   session_id?: string;
+  /** 该条 assistant 消息在 transcript 中的 uuid（design.md 4.23 的 --resume-session-at 锚点） */
+  uuid?: string;
   /** model 只在子代理帧里用到（子代理 subtitle） */
   message: { id?: unknown; model?: unknown; content?: ClaudeContentBlock[] };
 }

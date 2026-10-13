@@ -59,6 +59,7 @@ describe("ACP provider × AgentManager", () => {
       kind: "acp",
       label: "Fake ACP",
       available: true,
+      capabilities: { fork: "summary" },
       command: [process.execPath, FAKE_AGENT_PATH],
     });
     expect(infos.map((info) => info.id)).toEqual(

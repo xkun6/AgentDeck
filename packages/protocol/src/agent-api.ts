@@ -24,7 +24,7 @@ export interface ProviderInfo {
   custom?: boolean;
   extends?: ProviderProfileExtends;
   description?: string;
-  /** provider 能力（design.md 4.22 / 4.23）：steer = 支持运行中插话；fork 由 4.23 填写 */
+  /** provider 能力（design.md 4.22 / 4.23）：steer = 支持运行中插话；fork = 原生分叉（native）或带摘要新开（summary） */
   capabilities?: ProviderCapabilities;
 }
 
@@ -272,7 +272,9 @@ export type AgentTimelineItem =
       trigger?: "auto" | "manual";
       preTokens?: number;
       error?: string;
-    };
+    }
+  /** 系统提示（居中显示），如会话分叉后的「已从「X」分叉」（design.md 4.23） */
+  | { type: "notice"; text: string };
 
 export interface AgentPermissionAction {
   id: string;
@@ -301,7 +303,8 @@ export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string }
   /** origin 缺省 = 由 agent.send 发起；"background" = CLI 自发轮次（design.md 4.12） */
   | { type: "turn_started"; turnId: string; origin?: AgentTurnOrigin }
-  | { type: "turn_completed"; turnId: string; usage?: AgentUsage }
+  /** nativeRef：provider 原生回合锚点，供 agent.fork 截断分叉用（Claude = 本轮最后一条 assistant 消息 uuid，Codex = 原生 turnId，design.md 4.23） */
+  | { type: "turn_completed"; turnId: string; usage?: AgentUsage; nativeRef?: string }
   | { type: "turn_failed"; turnId: string; error: string; code?: string }
   | { type: "turn_canceled"; turnId: string; reason: string }
   /** 用户在 Agent 首次响应前撤回了本轮消息（design.md 4.16）；回放时据此隐藏该用户消息与本轮 */
@@ -562,6 +565,7 @@ export const AGENT_RPC_METHODS = {
   agentCancel: "agent.cancel",
   agentRetract: "agent.retract",
   agentSteer: "agent.steer",
+  agentFork: "agent.fork",
   agentPermissionRespond: "agent.permission.respond",
   agentSetModel: "agent.setModel",
   agentSetMode: "agent.setMode",
@@ -632,6 +636,11 @@ export interface AgentRpcMethods {
   "agent.steer": {
     params: { agentId: string; prompt: AgentPromptInput; clientMessageId?: string };
     result: Record<string, never>;
+  };
+  /** 基于原会话新建分叉会话（design.md 4.23）；throughSeq 缺省 = 整个会话 */
+  "agent.fork": {
+    params: { agentId: string; throughSeq?: number; title?: string };
+    result: { agent: AgentSnapshot };
   };
   /** 只改元数据（design.md 4.17）：title 为 null / 空串 = 清除自定义标题；不改 updatedAt、不恢复会话 */
   "agent.update": {

@@ -151,6 +151,15 @@ export interface AgentClient {
   }>;
   createSession(cfg: AgentSessionConfig): Promise<AgentSession>;
   resumeSession?(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession>;
+  /**
+   * 原生分叉（design.md 4.23）：基于原会话的 persistence 句柄派生新会话，原会话不受影响。
+   * nativeRef 缺省 = 分叉整个会话，给出时只保留到该回合（取自 turn_completed.nativeRef）。
+   * 未实现的 provider 由 AgentManager 走 summary 方式（带摘要新开会话）。
+   */
+  forkSession?(
+    handle: AgentPersistenceHandle,
+    cfg: AgentSessionConfig & { nativeRef?: string },
+  ): Promise<AgentSession>;
   shutdown?(): Promise<void>;
 }
 
