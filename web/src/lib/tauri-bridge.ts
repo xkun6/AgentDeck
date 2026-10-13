@@ -38,9 +38,7 @@ import type {
   TerminalOpenExternalInput,
   TerminalStartInput,
   TerminalStartResult,
-  UiEventInput,
   UiStoreSnapshot,
-  UiTurnStats,
   WatchPreviewFileResult,
   WriteWorkspaceFileInput,
   WriteWorkspaceFileResult,
@@ -326,22 +324,6 @@ const tauriBridge = {
 
   async uiStoreRemoveKv(input: { key: string }): Promise<boolean> {
     return invokeCommand("ui_store_remove_kv", { input });
-  },
-
-  async uiStoreRecordTurnStats(input: UiTurnStats): Promise<boolean> {
-    return invokeCommand("ui_store_record_turn_stats", { input });
-  },
-
-  async uiStoreGetTurnStats(input: { sessionId: string }): Promise<UiTurnStats[]> {
-    return invokeCommand("ui_store_get_turn_stats", { input });
-  },
-
-  async uiStoreGetTurnStatsWindow(input: { sinceMs?: number; limit?: number }): Promise<UiTurnStats[]> {
-    return invokeCommand("ui_store_get_turn_stats_window", { input });
-  },
-
-  async uiStoreRecordEvent(input: UiEventInput): Promise<boolean> {
-    return invokeCommand("ui_store_record_event", { input });
   },
 
   async desktopNotify(input: DesktopNotifyInput): Promise<DesktopNotifyResult> {

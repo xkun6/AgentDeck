@@ -37,7 +37,8 @@ export const TOP_TABS: readonly TopTabDef[] = [
       path.startsWith("/tasks/") ||
       path.startsWith("/history") ||
       path.startsWith("/projects") ||
-      path.startsWith("/console"),
+      path.startsWith("/console") ||
+      path.startsWith("/usage"),
   },
   {
     id: "settings",

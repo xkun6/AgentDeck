@@ -23,6 +23,7 @@ const HistoryRoute = lazy(() => import("@/routes/history").then((m) => ({ defaul
 const ProjectsRoute = lazy(() => import("@/routes/projects").then((m) => ({ default: m.ProjectsRoute })));
 const ProjectDetailRoute = lazy(() => import("@/routes/project-detail").then((m) => ({ default: m.ProjectDetailRoute })));
 const ConsoleRoute = lazy(() => import("@/routes/console").then((m) => ({ default: m.ConsoleRoute })));
+const UsageRoute = lazy(() => import("@/routes/usage").then((m) => ({ default: m.UsageRoute })));
 const ThemeRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.ThemeRoute })));
 const AdvancedRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.AdvancedRoute })));
 const CodingAgentsRoute = lazy(() => import("@/routes/coding-agents").then((m) => ({ default: m.CodingAgentsRoute })));
@@ -61,6 +62,7 @@ function MainApp() {
             <Route path="/projects" element={withBoundary(<ProjectsRoute />)} />
             <Route path="/projects/:workspacePath" element={withBoundary(<ProjectDetailRoute />)} />
             <Route path="/console" element={withBoundary(<ConsoleRoute />)} />
+            <Route path="/usage" element={withBoundary(<UsageRoute />)} />
             <Route path="/theme" element={withBoundary(<ThemeRoute />)} />
             <Route path="/common" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/notifications" element={withBoundary(<AdvancedRoute />)} />

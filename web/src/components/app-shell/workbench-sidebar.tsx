@@ -3,7 +3,7 @@ import { useAtomValue } from "jotai";
 import { useNavigate, useLocation } from "react-router-dom";
 import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
 import type { AgentSnapshot } from "@agentdeck/protocol";
-import { Folder, MessageSquare, Plus, TerminalSquare, Trash2 } from "lucide-react";
+import { BarChart3, Folder, MessageSquare, Plus, TerminalSquare, Trash2 } from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom } from "@/stores/agents";
 import { sidebarSessions } from "@/lib/session-list";
@@ -231,6 +231,18 @@ export function WorkbenchSidebar() {
           </span>
           <span className={s.entryLabel}>终端</span>
           <span className={s.entryCommand}>/console</span>
+        </button>
+        <button
+          type="button"
+          className={s.quickNavButton}
+          data-active={location.pathname.startsWith("/usage") ? "true" : undefined}
+          onClick={() => navigate("/usage")}
+        >
+          <span className={s.entryIcon}>
+            <BarChart3 size={16} />
+          </span>
+          <span className={s.entryLabel}>用量统计</span>
+          <span className={s.entryCommand}>/usage</span>
         </button>
       </div>
 

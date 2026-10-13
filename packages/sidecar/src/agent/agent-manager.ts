@@ -21,6 +21,8 @@ import type {
 
 import { createSilentLogger, type Logger } from "../logger.js";
 import { withTimeout } from "../utils/promise-timeout.js";
+import type { UsageLedger } from "../usage/ledger.js";
+import { UsageTurnTracker } from "../usage/turn-tracker.js";
 import type { AgentStore, PersistedAgentMeta } from "./agent-store.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS, AgentStreamCoalescer } from "./coalescer.js";
 import { AgentRpcError } from "./errors.js";
@@ -30,6 +32,7 @@ import {
   type SubagentTimelineQuery,
 } from "./provider-subagent-store.js";
 import { dedupeSlashCommands } from "./slash-commands.js";
+import { searchSources, type SearchResult } from "./timeline-search.js";
 import type {
   AgentClient,
   AgentSession,
@@ -68,6 +71,8 @@ export interface AgentManagerOptions {
   now?: () => number;
   /** 会话持久化（设置了 AGENTDECK_DATA_DIR 时传入）；不传则纯内存 */
   store?: AgentStore;
+  /** 跨会话用量账本（design.md 4.20）；不传则不记录 */
+  usage?: UsageLedger;
 }
 
 export interface CreateAgentParams {
@@ -139,12 +144,16 @@ export class AgentManager {
   private readonly now: () => number;
   private readonly coalescer: AgentStreamCoalescer;
   private readonly store: AgentStore | undefined;
+  private readonly usage: UsageLedger | undefined;
+  /** 每个会话的回合账本折叠器（只在内存） */
+  private readonly usageTrackers = new Map<string, UsageTurnTracker>();
   /** provider 子代理（只在内存，会话关闭 / 删除时清空） */
   private readonly subagents: ProviderSubagentStore;
 
   constructor(options: AgentManagerOptions) {
     this.registry = options.registry;
     this.store = options.store;
+    this.usage = options.usage;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
@@ -641,6 +650,7 @@ export class AgentManager {
       return;
     }
     this.clearSubagents(agent);
+    this.usageTrackers.delete(agent.id);
     agent.removed = true;
     this.agents.delete(agent.id);
     this.coalescer.flushAndDiscard(agent.id);
@@ -652,6 +662,30 @@ export class AgentManager {
         this.logger.error("agent.removed 监听器出错：%s", String(error));
       }
     }
+  }
+
+  /**
+   * design.md 4.19：全文搜索。会话按 updatedAt 倒序；已加载时间线的会话用内存条目，
+   * 其余流式读取 timeline.jsonl（不为此加载整份时间线）。
+   */
+  search(query: string, limit: number, agentIds?: string[]): Promise<SearchResult> {
+    const allowed = agentIds ? new Set(agentIds) : null;
+    const sources = Array.from(this.agents.values())
+      .filter((agent) => !allowed || allowed.has(agent.id))
+      .sort((a, b) => b.snapshot.updatedAt - a.snapshot.updatedAt)
+      .map((agent) => ({
+        agentId: agent.id,
+        entries: () => {
+          const loaded = agent.entries;
+          if (loaded) {
+            return [...loaded];
+          }
+          return this.store ? this.store.streamTimeline(agent.id) : [];
+        },
+      }));
+    return searchSources(sources, query, limit, (agentId, error) =>
+      this.logger.warn("搜索 agent %s 的 timeline 失败：%s", agentId, errorMessage(error)),
+    );
   }
 
   /** 历史条目保留原 seq / epoch；返回的 epoch 为当前进程 epoch */
@@ -702,6 +736,7 @@ export class AgentManager {
   /** 强制落盘全部待写数据（未启用持久化时为空操作） */
   async flush(): Promise<void> {
     await this.store?.flushAll();
+    await this.usage?.flush();
   }
 
   // -------------------------------------------------------------------------
@@ -1216,6 +1251,7 @@ export class AgentManager {
       event,
     };
     agent.entries?.push(envelope);
+    this.recordUsage(agent, envelope);
     if (!agent.removed) {
       this.store?.appendEntry(agent.id, envelope);
     }
@@ -1225,6 +1261,26 @@ export class AgentManager {
       } catch (error) {
         this.logger.error("agent.stream 监听器出错：%s", String(error));
       }
+    }
+  }
+
+  /** design.md 4.20：回合结束时向账本追加一行（失败只记日志） */
+  private recordUsage(agent: ManagedAgent, envelope: AgentStreamEnvelope): void {
+    if (!this.usage) {
+      return;
+    }
+    try {
+      let tracker = this.usageTrackers.get(agent.id);
+      if (!tracker) {
+        tracker = new UsageTurnTracker(agent.id, agent.snapshot.provider);
+        this.usageTrackers.set(agent.id, tracker);
+      }
+      const record = tracker.observe(envelope, agent.snapshot.model ?? null);
+      if (record) {
+        this.usage.record(record);
+      }
+    } catch (error) {
+      this.logger.warn("记录 agent %s 的用量失败：%s", agent.id, errorMessage(error));
     }
   }
 

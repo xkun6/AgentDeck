@@ -1328,3 +1328,18 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+
+/* 全文搜索定位到的消息：短暂高亮后淡出（design.md 4.19） */
+.messages > [data-focus="true"] {
+  animation: focusFlash 2s ease-out;
+}
+
+@keyframes focusFlash {
+  0%,
+  60% {
+    background: var(--h-accent-soft);
+  }
+  100% {
+    background: transparent;
+  }
+}

@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import { Dialog } from "@agentdeck/shared-ui";
 import {
+  BarChart3,
   Bell,
   Bot,
   FileText,
@@ -59,6 +60,7 @@ const ICONS: Record<CommandPaletteIconKey, LucideIcon> = {
   project: Folder,
   settings: Settings,
   theme: Palette,
+  usage: BarChart3,
 };
 
 function sortProjectsForFileSearch(projects: readonly WorkspaceProject[]): WorkspaceProject[] {

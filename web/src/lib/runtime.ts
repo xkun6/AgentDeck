@@ -11,9 +11,9 @@ import type {
   LogTailResult,
 } from "@agentdeck/protocol";
 import type { SidecarStatusPayload } from "./sidecar-client";
-import type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
+import type { UiStoreSnapshot } from "./ui-store";
 
-export type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
+export type { UiStoreSnapshot } from "./ui-store";
 
 export type RuntimePlatform = "web" | "electron" | "tauri";
 export type HostOS = "macos" | "windows" | "linux" | "unknown";
@@ -349,10 +349,6 @@ declare global {
       uiStoreSnapshot?(): Promise<UiStoreSnapshot>;
       uiStoreSetKv?(input: { key: string; value: unknown }): Promise<boolean>;
       uiStoreRemoveKv?(input: { key: string }): Promise<boolean>;
-      uiStoreRecordTurnStats?(input: UiTurnStats): Promise<boolean>;
-      uiStoreGetTurnStats?(input: { sessionId: string }): Promise<UiTurnStats[]>;
-      uiStoreGetTurnStatsWindow?(input: { sinceMs?: number; limit?: number }): Promise<UiTurnStats[]>;
-      uiStoreRecordEvent?(input: UiEventInput): Promise<boolean>;
       desktopNotify?(input: DesktopNotifyInput): Promise<DesktopNotifyResult>;
       terminalStart?(input: TerminalStartInput): Promise<TerminalStartResult>;
       terminalOpenExternal?(input: TerminalOpenExternalInput): Promise<ExternalTerminalResult>;

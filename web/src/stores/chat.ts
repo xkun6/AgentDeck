@@ -198,11 +198,13 @@ function ensureAssistantMessage(
   sessionId: string,
   id: string,
   now: number,
+  seq?: number,
 ): ChatSessionRuntime {
   if (runtime.messages.some((message) => message.id === id)) {
     return updateMessage(runtime, id, (message) => ({
       ...message,
       status: message.status === "error" ? "error" : "streaming",
+      ...(message.firstSeq === undefined && seq !== undefined ? { firstSeq: seq } : {}),
     }));
   }
 
@@ -218,6 +220,7 @@ function ensureAssistantMessage(
         createdAt,
         status: "streaming",
         parts: [],
+        ...(seq !== undefined ? { firstSeq: seq } : {}),
       },
     ],
   };
@@ -407,6 +410,7 @@ function withActiveAgentAssistant(
     envelope.agentId,
     id,
     envelope.timestamp,
+    envelope.seq,
   );
   return updateMessage(ensured, id, updater);
 }
@@ -565,7 +569,11 @@ function reduceAgentTimelineItem(
       const optimisticId = item.clientMessageId;
       if (optimisticId && runtime.messages.some((message) => message.id === optimisticId)) {
         // 本地乐观消息已在：只确认状态，不重复插入
-        return updateMessage(runtime, optimisticId, (message) => ({ ...message, status: "complete" }));
+        return updateMessage(runtime, optimisticId, (message) => ({
+          ...message,
+          status: "complete",
+          ...(message.firstSeq === undefined ? { firstSeq: seq } : {}),
+        }));
       }
       return {
         ...runtime,
@@ -580,6 +588,7 @@ function reduceAgentTimelineItem(
             createdAt: timestamp,
             status: "complete",
             parts: [{ type: "text", text: item.text }],
+            firstSeq: seq,
           },
         ],
       };
@@ -753,6 +762,7 @@ function reduceAgentEventInner(
         agentId,
         id,
         timestamp,
+        seq,
       );
     }
 

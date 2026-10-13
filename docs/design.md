@@ -716,6 +716,12 @@ interface UsageSummary {
 - 前端新增「用量统计」页（侧栏入口 + 命令面板）：时间范围切换（7 天 / 30 天 / 90 天 / 全部）、总量卡片、按天堆叠柱状图（输入 / 缓存 / 输出）、按 Agent 与按模型的占比、高用量会话前 10（点击跳转，已删除的会话不可点）、性能指标（TTFT 与耗时 P50 / P95、输出速度）。`backfilling` 时顶部提示「正在统计历史会话…」。
 - ui_store 的 `turn_stats` / `ui_events` 表与相关命令删除（统计改以 sidecar 账本为准）。
 
+**实现补充（4.19 / 4.20 落地时确定）**：
+- `agent.search`：`limit` 超过 500 返回 `-32602`（不静默截断）；tool_call 的「标题」取 `metadata.title`（字符串时），另并入 `search` 详情的查询词；未带 `agentIds` 时扫描全部会话。`truncated` 在命中数达到 `limit` 时置位。
+- 定位：前端消息带首个 seq（`AgentUIMessage.firstSeq`，乐观消息在服务端确认时补上）；`?seq=` 取「首个 seq 不大于目标的最后一条消息」，因为助手消息把一个回合的思考 / 工具 / 文本合在一起。
+- 账本：失败 / 中断回合没有 usage，token 与费用字段缺省；去重键为 `agentId + turnId + ts`（回填与实时记录重叠时不重复）；回填时间线里没有 `model_changed` 才用 meta 里的 model，否则首次切换之前的回合记为 null。`usage.summary` 的 `topAgents.title` 取用户标题，缺省取首条消息预览，已删除的会话为 null；`byDay` 只含有数据的日期（前端补零）。
+- 前端统计页的图表为纯 CSS 实现（无图表库依赖）。
+
 ### 4.21 重试
 
 纯前端：回合以 `turn_failed` / `turn_canceled` 结束时，在该回合末尾显示「重试」；最后一条用户消息悬停时提供「再次发送」。两者都取该回合的用户消息重新 `agent.send`（新的 clientMessageId）：优先用前端运行时里该消息的 parts（含图片）；时间线的 `user_message` 只存文本（图片不落盘），所以重启后重建的消息只能重发文本，此时按钮提示「图片未保存，仅重发文字」。CLI 自身历史中仍保留上一次的尝试（与 4.16 的限制相同）。CLI 自发回合（origin background）不提供重试。
