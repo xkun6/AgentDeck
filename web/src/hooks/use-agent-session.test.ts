@@ -159,6 +159,35 @@ describe("中转被删除的会话发送", () => {
   });
 });
 
+describe("思考强度（design.md 4.10）", () => {
+  it("createSession 带 thinkingOptionId 时传给 agent.create，省略时不传", async () => {
+    const store = createStore();
+    const client = fakeClient(async () => ({ agent: snapshot({ status: "idle", thinkingOptionId: "low" }) }));
+    const actions = createAgentSessionActions(client, store);
+    await actions.createSession({ provider: "mock", cwd: "/work", thinkingOptionId: "low" });
+    expect(client.request).toHaveBeenLastCalledWith("agent.create", {
+      provider: "mock",
+      cwd: "/work",
+      thinkingOptionId: "low",
+    });
+    await actions.createSession({ provider: "mock", cwd: "/work" });
+    expect(client.request).toHaveBeenLastCalledWith("agent.create", { provider: "mock", cwd: "/work" });
+  });
+
+  it("setThinking 调 agent.setThinking，更新快照并返回提示", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "running" }));
+    const client = fakeClient(async () => ({
+      agent: snapshot({ status: "running", thinkingOptionId: "high", updatedAt: 3 }),
+      notice: "思考强度将在下一轮生效",
+    }));
+    const result = await createAgentSessionActions(client, store).setThinking(AGENT, "high");
+    expect(client.request).toHaveBeenCalledWith("agent.setThinking", { agentId: AGENT, thinkingOptionId: "high" });
+    expect(result.notice).toBe("思考强度将在下一轮生效");
+    expect(store.get(agentSnapshotsAtom)[AGENT]?.thinkingOptionId).toBe("high");
+  });
+});
+
 describe("删除会话", () => {
   it("deleteSession 调 agent.delete 并从 store 移除", async () => {
     const store = createStore();

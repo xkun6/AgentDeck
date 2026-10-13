@@ -29,6 +29,106 @@ function openMenu(chipName: RegExp | string): HTMLElement {
   return screen.getByRole("listbox");
 }
 
+const THINKING_CATALOG = {
+  models: [
+    {
+      provider: "codex",
+      id: "gpt-5",
+      label: "GPT-5",
+      isDefault: true,
+      thinkingOptions: [
+        { id: "low", label: "低" },
+        { id: "high", label: "高", description: "更深入" },
+      ],
+      defaultThinkingOptionId: "low",
+    },
+    { provider: "codex", id: "gpt-mini", label: "GPT-Mini" },
+    { provider: "codex", id: "gpt-pro", label: "GPT-Pro", thinkingOptions: [{ id: "high", label: "高" }] },
+  ],
+  modes: [],
+};
+
+describe("AgentSessionPicker：思考强度", () => {
+  it("当前模型（未选模型时为默认模型）有档位才显示；首项为「默认（跟随 CLI 设置）」", () => {
+    const { rerender } = render(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: null, modeId: null }}
+        onChange={vi.fn()}
+        providers={PROVIDERS}
+        catalog={THINKING_CATALOG}
+      />,
+    );
+    const list = openMenu("思考强度：默认思考");
+    const options = within(list).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("默认（跟随 CLI 设置）"),
+      expect.stringContaining("低"),
+      expect.stringContaining("高"),
+    ]);
+    expect(options[2]!.textContent).toContain("更深入");
+
+    rerender(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: "gpt-mini", modeId: null }}
+        onChange={vi.fn()}
+        providers={PROVIDERS}
+        catalog={THINKING_CATALOG}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^思考强度/ })).toBeNull();
+  });
+
+  it("选择档位 / 默认回调新选择；chip 显示当前档位", () => {
+    const onChange = vi.fn();
+    render(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: "gpt-5", modeId: null, thinkingOptionId: "high" }}
+        onChange={onChange}
+        providers={PROVIDERS}
+        catalog={THINKING_CATALOG}
+      />,
+    );
+    fireEvent.click(within(openMenu("思考强度：高")).getByRole("option", { name: /低/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "codex", model: "gpt-5", modeId: null, thinkingOptionId: "low" });
+    fireEvent.click(within(openMenu("思考强度：高")).getByRole("option", { name: /默认/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "codex", model: "gpt-5", modeId: null, thinkingOptionId: null });
+  });
+
+  it("切换模型：新模型没有当前档位时重置为默认，有则保留", () => {
+    const onChange = vi.fn();
+    render(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: "gpt-5", modeId: null, thinkingOptionId: "high" }}
+        onChange={onChange}
+        providers={PROVIDERS}
+        catalog={THINKING_CATALOG}
+      />,
+    );
+    fireEvent.click(within(openMenu("模型：GPT-5")).getByRole("option", { name: /GPT-Pro/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "codex", model: "gpt-pro", modeId: null, thinkingOptionId: "high" });
+    fireEvent.click(within(openMenu("模型：GPT-5")).getByRole("option", { name: /GPT-Mini/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "codex", model: "gpt-mini", modeId: null, thinkingOptionId: null });
+  });
+
+  it("thinkingDisabled 单独控制思考强度 chip；notice 显示在下方", () => {
+    render(
+      <AgentSessionPicker
+        selection={{ provider: "codex", model: null, modeId: null }}
+        onChange={vi.fn()}
+        providers={PROVIDERS}
+        catalog={THINKING_CATALOG}
+        disabled
+        thinkingDisabled={false}
+        notice="思考强度将在下一轮生效"
+        providerLocked
+      />,
+    );
+    expect((screen.getByRole("button", { name: "模型：默认模型" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "思考强度：默认思考" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("status").textContent).toBe("思考强度将在下一轮生效");
+  });
+});
+
 describe("AgentSessionPicker", () => {
   it("chip 只显示当前值，字段名放在 aria-label 与菜单标题", () => {
     render(
@@ -77,7 +177,7 @@ describe("AgentSessionPicker", () => {
       />,
     );
     fireEvent.click(within(openMenu("Agent：Codex")).getByRole("option", { name: /Mock/ }));
-    expect(onChange).toHaveBeenLastCalledWith({ provider: "mock", model: null, modeId: null });
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "mock", model: null, modeId: null, thinkingOptionId: null });
     expect(screen.queryByRole("listbox")).toBeNull();
 
     fireEvent.click(within(openMenu("模型：默认模型")).getByRole("option", { name: /GPT-5/ }));
@@ -122,7 +222,7 @@ describe("AgentSessionPicker", () => {
     fireEvent.keyDown(list, { key: "ArrowDown" });
     expect(activeText()).toContain("Mock");
     fireEvent.keyDown(list, { key: "Enter" });
-    expect(onChange).toHaveBeenLastCalledWith({ provider: "mock", model: null, modeId: null });
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "mock", model: null, modeId: null, thinkingOptionId: null });
     expect(screen.queryByRole("listbox")).toBeNull();
 
     const reopened = openMenu("Agent：Codex");
@@ -282,7 +382,7 @@ describe("AgentSessionPicker", () => {
     fireEvent.click(off);
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(relay);
-    expect(onChange).toHaveBeenLastCalledWith({ provider: "custom:relay", model: null, modeId: null });
+    expect(onChange).toHaveBeenLastCalledWith({ provider: "custom:relay", model: null, modeId: null, thinkingOptionId: null });
   });
 
   it("没有中转时不显示分组标题", () => {

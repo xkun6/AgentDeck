@@ -10,6 +10,7 @@ import {
   resolveCatalogChoice,
   resolveModeChoice,
   resolveProvider,
+  resolveThinkingChoice,
   writeAgentSelection,
   type AgentSelection,
 } from "@/lib/agent-selection";
@@ -41,7 +42,7 @@ export function useAgentCatalog(provider: string | null, cwd: string) {
   });
 }
 
-/** 新建会话的 Agent / 模型 / 模式选择：读写 ui_store 记忆，并按可用性与目录校正。 */
+/** 新建会话的 Agent / 模型 / 模式 / 思考强度选择：读写 ui_store 记忆，并按可用性与目录校正。 */
 export function useAgentSessionSelection(cwd: string) {
   const [stored, setStored] = useState<AgentSelection>(readAgentSelection);
   // 本次手动选中的危险模式（只有它会被保留；记忆里的危险模式不恢复）
@@ -53,17 +54,19 @@ export function useAgentSessionSelection(cwd: string) {
   const catalogQuery = useAgentCatalog(provider, cwd);
   const catalog = catalogQuery.data ?? null;
 
+  const model = resolveCatalogChoice(stored.model, catalog?.models);
   const selection: AgentSelection = {
     provider,
-    model: resolveCatalogChoice(stored.model, catalog?.models),
+    model,
     modeId: resolveModeChoice(stored.modeId, catalog?.modes, pickedDangerousModeId),
+    thinkingOptionId: resolveThinkingChoice(stored.thinkingOptionId, catalog?.models, model),
   };
 
   // 写 ui_store 不能放进 setState 的 updater：updater 在渲染期执行，
   // 写入会同步通知其它组件，触发 React「渲染中更新其它组件」告警。
   const onChange = useCallback((next: AgentSelection) => {
-    const merged = next.provider !== provider
-      ? { provider: next.provider, model: null, modeId: null }
+    const merged: AgentSelection = next.provider !== provider
+      ? { provider: next.provider, model: null, modeId: null, thinkingOptionId: null }
       : next;
     const modes = next.provider !== provider ? undefined : catalog?.modes;
     setPickedDangerousModeId(isDangerousMode(findMode(merged.modeId, modes)) ? merged.modeId : null);

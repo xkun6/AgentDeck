@@ -1,4 +1,4 @@
-/* Agent / 模型 / 模式选择器组：chip 一行排布；危险模式警告与错误放在 chip 下方。 */
+/* Agent / 模型 / 模式 / 思考强度选择器组：chip 一行排布；危险模式警告、提示与错误放在 chip 下方。 */
 
 .picker {
   display: flex;
@@ -31,6 +31,10 @@
 
 .notice[data-tone="error"] {
   color: var(--h-color-danger-fg);
+}
+
+.notice[data-tone="info"] {
+  color: var(--h-color-fg-muted);
 }
 
 .noticeIcon {

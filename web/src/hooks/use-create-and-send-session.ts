@@ -36,6 +36,7 @@ export function useCreateAndSendSession() {
       cwd,
       ...(selection.model ? { model: selection.model } : {}),
       ...(selection.modeId ? { modeId: selection.modeId } : {}),
+      ...(selection.thinkingOptionId ? { thinkingOptionId: selection.thinkingOptionId } : {}),
       ...(title ? { title } : {}),
     });
 

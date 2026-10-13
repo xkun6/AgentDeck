@@ -37,7 +37,7 @@ import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
 import { agentProviderLabel } from "@/lib/agent-session-display";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
-import type { AgentSelection } from "@/lib/agent-selection";
+import { applyAgentSelectionChange, type AgentSelection } from "@/lib/agent-selection";
 import {
   composerDraftStorageKey,
   readComposerDraftByKey,
@@ -130,6 +130,8 @@ export function DetailRoute() {
   });
   const [sessionIdCopyState, setSessionIdCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [controlError, setControlError] = useState<string | undefined>();
+  // 切换思考强度的提示（如「思考强度将在下一轮生效」），本轮结束后清除
+  const [controlNotice, setControlNotice] = useState<string | undefined>();
   const sessionIdCopyTimer = useRef<number | null>(null);
 
   const sessionWorkspace = snapshot?.cwd ?? "";
@@ -311,6 +313,7 @@ export function DetailRoute() {
     previousBusyRef.current = false;
     userInterruptedRef.current = false;
     setControlError(undefined);
+    setControlNotice(undefined);
     setSendUnrecoverable(null);
     setRecreateState({ pending: false });
   }, [taskId]);
@@ -349,14 +352,19 @@ export function DetailRoute() {
     provider: snapshot?.provider ?? null,
     model: snapshot?.model ?? null,
     modeId: snapshot?.modeId ?? null,
+    thinkingOptionId: snapshot?.thinkingOptionId ?? null,
   };
+
+  useEffect(() => {
+    if (!runtimeIsBusy) setControlNotice(undefined);
+  }, [runtimeIsBusy]);
 
   const onSelectionChange = useCallback(async (next: AgentSelection) => {
     if (!taskId || !snapshot) return;
     setControlError(undefined);
     try {
-      if (next.model !== (snapshot.model ?? null)) await actions.setModel(taskId, next.model);
-      if (next.modeId && next.modeId !== (snapshot.modeId ?? null)) await actions.setMode(taskId, next.modeId);
+      const result = await applyAgentSelectionChange(actions, taskId, snapshot, next);
+      if (result.thinkingChanged) setControlNotice(result.notice);
     } catch (error) {
       setControlError(humanizeSidecarError(error));
     }
@@ -566,6 +574,8 @@ export function DetailRoute() {
                     catalogLoading={catalogQuery.isLoading}
                     catalogError={controlError}
                     disabled={runtimeIsBusy || inactive || resuming}
+                    thinkingDisabled={inactive || resuming}
+                    notice={controlNotice}
                     providerLocked
                   />
                 ) : null

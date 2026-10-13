@@ -2,7 +2,7 @@
 // lib/sidecar-client.ts：
 // - bindSidecarToStore：把连续去重后的事件流 / 快照 / 连接状态写进 jotai store；
 // - useSidecarBridge：在应用根部挂一次，负责绑定与首次连接；
-// - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式、列表、历史、删除）。
+// - useAgentSession：会话动作（新建、发送、中断、审批、切模型/模式/思考强度、列表、历史、删除）。
 import { useEffect, useMemo } from "react";
 import { useStore } from "jotai";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
@@ -51,6 +51,8 @@ export interface CreateAgentSessionInput {
   cwd: string;
   model?: string;
   modeId?: string;
+  /** 思考强度；省略 = 跟随 CLI 设置 */
+  thinkingOptionId?: string;
   title?: string;
 }
 
@@ -263,6 +265,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         cwd: input.cwd,
         ...(input.model ? { model: input.model } : {}),
         ...(input.modeId ? { modeId: input.modeId } : {}),
+        ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
         ...(input.title ? { title: input.title } : {}),
       });
       store.set(upsertAgentSnapshotAtom, agent);
@@ -326,6 +329,16 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       const { agent } = await client.request("agent.setMode", { agentId, modeId });
       store.set(upsertAgentSnapshotAtom, agent);
       return agent;
+    },
+
+    /** agent.setThinking：下一轮生效；运行中切换时 notice 为中文提示（design.md 4.10）。 */
+    async setThinking(
+      agentId: string,
+      thinkingOptionId: string | null,
+    ): Promise<{ agent: AgentSnapshot; notice?: string }> {
+      const result = await client.request("agent.setThinking", { agentId, thinkingOptionId });
+      store.set(upsertAgentSnapshotAtom, result.agent);
+      return result;
     },
 
     /** agent.list：刷新快照并返回。 */
