@@ -87,7 +87,20 @@ describe("CodexAgentClient（假 app-server）", () => {
   test("fetchCatalog 走 model/list，跳过隐藏模型，模式固定三种", async () => {
     const catalog = await makeClient().fetchCatalog({ cwd: tmpDir });
     expect(catalog.models).toEqual([
-      { provider: "codex", id: "gpt-a", label: "GPT-A", description: "默认模型", isDefault: true },
+      {
+        provider: "codex",
+        id: "gpt-a",
+        label: "GPT-A",
+        description: "默认模型",
+        isDefault: true,
+        // supportedReasoningEfforts → 档位；默认档位不在列表里时补一项
+        thinkingOptions: [
+          { id: "low", label: "低", description: "快" },
+          { id: "high", label: "高", description: "深" },
+          { id: "medium", label: "中", description: "模型默认档位" },
+        ],
+        defaultThinkingOptionId: "medium",
+      },
       { provider: "codex", id: "gpt-b", label: "GPT-B" },
     ]);
     expect(catalog.modes.map((m) => m.id)).toEqual(["read-only", "auto", "full-access"]);
@@ -426,6 +439,55 @@ describe("CodexAgentSession（假 app-server）", () => {
     await session.startTurn("hello");
     await waitUntil(() => events.filter(isTerminal).length === 3);
     expect(received().filter((m) => m.method === "turn/start")[2]?.params.sandboxPolicy).toBeUndefined();
+  });
+
+  test("思考强度：turn/start 带 effort；中途切换下一轮生效；切回 null 后带一次默认档位", async () => {
+    const client = makeClient();
+    const session = await client.createSession({ cwd: tmpDir, thinkingOptionId: "high" });
+    sessions.push(session);
+    const events = collect(session);
+    const turnStarts = () => received().filter((m) => m.method === "turn/start");
+
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 1);
+    expect(turnStarts()[0]?.params.effort).toBe("high");
+
+    // 运行中切换：返回提示，本轮不变
+    await session.startTurn("hang");
+    await waitUntil(() => turnStarts().length === 2);
+    expect(await session.setThinking!("low")).toEqual({ notice: "思考强度将在下一轮生效" });
+    expect(events).toContainEqual({ type: "thinking_option_changed", thinkingOptionId: "low" });
+    await session.interrupt();
+    await waitUntil(() => events.filter(isTerminal).length === 2);
+
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 3);
+    expect(turnStarts()[2]?.params.effort).toBe("low");
+
+    // 切回跟随配置：下一轮显式带默认档位（无 config 时取默认模型 gpt-a 的 medium），之后不再带
+    expect(await session.setThinking!(null)).toEqual({});
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 4);
+    expect(turnStarts()[3]?.params.effort).toBe("medium");
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 5);
+    expect(turnStarts()[4]?.params).not.toHaveProperty("effort");
+  });
+
+  test("思考强度：null 起步不带 effort；切回 null 时优先用 config.toml 的 model_reasoning_effort", async () => {
+    const session = await newSession(makeClient({ FAKE_CODEX_CONFIG_EFFORT: "xhigh" }));
+    const events = collect(session);
+    const turnStarts = () => received().filter((m) => m.method === "turn/start");
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 1);
+    expect(turnStarts()[0]?.params).not.toHaveProperty("effort");
+    await session.setThinking!("low");
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 2);
+    await session.setThinking!(null);
+    await session.startTurn("hello");
+    await waitUntil(() => events.filter(isTerminal).length === 3);
+    expect(turnStarts().map((m) => m.params.effort)).toEqual([undefined, "low", "xhigh"]);
   });
 
   test("resumeSession 发 thread/resume，首轮补发 thread_started", async () => {

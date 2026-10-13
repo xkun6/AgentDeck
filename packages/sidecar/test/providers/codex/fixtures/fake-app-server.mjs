@@ -186,7 +186,11 @@ async function handleRequest(msg) {
     case "model/list":
       respond(id, {
         data: [
-          { id: "gpt-a", model: "gpt-a", displayName: "GPT-A", description: "默认模型", hidden: false, isDefault: true },
+          {
+            id: "gpt-a", model: "gpt-a", displayName: "GPT-A", description: "默认模型", hidden: false, isDefault: true,
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [{ reasoningEffort: "low", description: "快" }, { reasoningEffort: "high", description: "深" }],
+          },
           { id: "gpt-hidden", model: "gpt-hidden", displayName: "Hidden", description: "", hidden: true, isDefault: false },
           { id: "gpt-b", model: "gpt-b", displayName: "GPT-B", description: "", hidden: false, isDefault: false },
         ],
@@ -222,6 +226,10 @@ async function handleRequest(msg) {
       }
       respond(id, {});
       activeTurn.onInterrupt?.();
+      return;
+    case "config/read":
+      // FAKE_CODEX_CONFIG_EFFORT：模拟 config.toml 里的 model_reasoning_effort
+      respond(id, { config: process.env.FAKE_CODEX_CONFIG_EFFORT ? { model_reasoning_effort: process.env.FAKE_CODEX_CONFIG_EFFORT } : {} });
       return;
     default:
       respondError(id, -32601, `unknown method ${method}`);

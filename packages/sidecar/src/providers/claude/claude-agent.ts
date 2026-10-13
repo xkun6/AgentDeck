@@ -1,7 +1,8 @@
 // Derived from paseo packages/server/src/server/agent/providers/claude/agent.ts and query.ts (Apache-2.0); modified for AgentDeck
 // 大幅精简：一个会话一个长生命周期 claude 子进程（stream-json stdio 协议，见 claude-cli-session.ts），每轮写一条用户消息；
 // 只保留 AgentDeck 协议需要的事件翻译、权限中转、中断、模型/模式切换与 tree-kill 关闭。
-// 去掉了 paseo 的子代理侧链、steer、rewind、历史回放、快速模式、思考预算等功能。
+// 去掉了 paseo 的子代理侧链、steer、rewind、历史回放、快速模式、思考预算等功能；
+// 思考强度（--effort / --thinking disabled）按 paseo 的做法在切换后标记重启，下一轮以 --resume 重新拉起。
 // AgentDeck 改动：不再依赖 Anthropic 的 Agent SDK，直接 spawn 用户本机安装的 claude 可执行文件。
 import { randomUUID } from "node:crypto";
 import os from "node:os";
@@ -64,6 +65,14 @@ import type {
   ClaudeUserOutputMessage,
 } from "./stream-json-types.js";
 import { readClaudeUserSettings, withSettingsModels } from "./settings-models.js";
+import {
+  isClaudeThinkingOption,
+  withClaudeThinkingOptions,
+} from "./thinking-options.js";
+import {
+  normalizeThinkingOptionId,
+  THINKING_APPLIES_NEXT_TURN_NOTICE,
+} from "../shared/thinking-options.js";
 
 export const CLAUDE_PROVIDER_ID = "claude";
 
@@ -217,14 +226,17 @@ export class ClaudeAgentClient implements AgentClient {
   async fetchCatalog(opts?: {
     cwd?: string;
   }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
-    const models = (await this.loadModels(opts?.cwd)) ?? CLAUDE_MODELS;
+    // initialize 应答里的模型已按 CLI 报告定好档位（含「不支持」）；静态别名与设置发现的模型按清单 / 标准组补档位
+    const models =
+      (await this.loadModels(opts?.cwd)) ?? CLAUDE_MODELS.map((model) => withClaudeThinkingOptions(model));
+    const decided = new Set(models.map((model) => model.id));
     const settings = await this.loadSettings().catch(() => null);
     return {
       models: withSettingsModels(
         models.map((model) => ({ ...model, provider: this.provider })),
         settings,
         this.provider,
-      ),
+      ).map((model) => (decided.has(model.id) ? model : withClaudeThinkingOptions(model))),
       modes: CLAUDE_MODES.map((mode) => ({ ...mode })),
     };
   }
@@ -297,6 +309,10 @@ export class ClaudeAgentClient implements AgentClient {
     if (modeId !== null) {
       assertClaudeMode(modeId);
     }
+    const thinkingOptionId = normalizeThinkingOptionId(cfg.thinkingOptionId);
+    if (thinkingOptionId !== null) {
+      assertClaudeThinkingOption(thinkingOptionId);
+    }
     const resolution = await this.resolve();
     if (!resolution.available) {
       throw new Error(resolution.reason);
@@ -312,6 +328,7 @@ export class ClaudeAgentClient implements AgentClient {
       cwd: cfg.cwd,
       model: cfg.model ?? null,
       modeId,
+      thinkingOptionId,
       resumeSessionId,
     });
   }
@@ -360,6 +377,8 @@ export interface ClaudeAgentSessionOptions {
   model: string | null;
   /** null 表示跟随用户设置（不传 --permission-mode） */
   modeId: string | null;
+  /** 思考强度，null / 缺省表示跟随 Claude Code 设置（不传 --effort） */
+  thinkingOptionId?: string | null;
   resumeSessionId: string | null;
 }
 
@@ -404,6 +423,10 @@ export class ClaudeAgentSession implements AgentSession {
   private baseMode: string | null = null;
   /** 进入 plan 之前的模式（null 为跟随设置），批准计划后切回 */
   private modeBeforePlan: ClaudePermissionMode | null = null;
+  /** 思考强度（null 为跟随设置）；只能在启动参数里指定 */
+  private thinkingOptionId: string | null;
+  /** 思考强度在 claude 进程运行期间改变：下一轮开始前结束旧进程，以 --resume 带新参数重启 */
+  private cliRestartNeeded = false;
 
   private cli: ClaudeCliHandle | null = null;
 
@@ -432,6 +455,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.cwd = options.cwd;
     this.model = options.model;
     this.mode = options.modeId;
+    this.thinkingOptionId = normalizeThinkingOptionId(options.thinkingOptionId);
     this.sessionId = options.resumeSessionId;
   }
 
@@ -445,6 +469,11 @@ export class ClaudeAgentSession implements AgentSession {
     }
     if (this.activeTurn) {
       throw new Error("Claude 会话正在执行中");
+    }
+    if (this.cliRestartNeeded) {
+      // 思考强度变了：结束旧进程，下面 ensureCli 以 --resume 带新参数重新拉起
+      this.cliRestartNeeded = false;
+      await this.teardownCli();
     }
     const turnId = randomUUID();
     const message = toClaudeUserInput(prompt, this.sessionId);
@@ -569,6 +598,23 @@ export class ClaudeAgentSession implements AgentSession {
     this.emit({ type: "mode_changed", modeId });
   }
 
+  /**
+   * 思考强度只能通过启动参数指定：进程已在运行时标记重启，下一轮生效（参照 paseo queryRestartNeeded）。
+   * 正在运行一轮时返回「下一轮生效」提示。
+   */
+  async setThinking(thinkingOptionId: string | null): Promise<{ notice?: string }> {
+    const next = normalizeThinkingOptionId(thinkingOptionId);
+    if (next !== null) {
+      assertClaudeThinkingOption(next);
+    }
+    if (next !== this.thinkingOptionId && this.cli) {
+      this.cliRestartNeeded = true;
+    }
+    this.thinkingOptionId = next;
+    this.emit({ type: "thinking_option_changed", thinkingOptionId: next });
+    return this.activeTurn ? { notice: THINKING_APPLIES_NEXT_TURN_NOTICE } : {};
+  }
+
   /** 切回进入 plan 之前的模式；之前为跟随设置时切回基础模式，快照 modeId 回到 null */
   private async leavePlanMode(): Promise<void> {
     const previous = this.modeBeforePlan;
@@ -600,11 +646,12 @@ export class ClaudeAgentSession implements AgentSession {
     const deferPlan = this.mode === "plan" && this.modeBeforePlan === null;
     const launchMode = deferPlan ? null : this.mode;
     this.logger.info(
-      "启动 Claude Code 会话（exe=%s, cwd=%s, model=%s, mode=%s, resume=%s）",
+      "启动 Claude Code 会话（exe=%s, cwd=%s, model=%s, mode=%s, thinking=%s, resume=%s）",
       this.executablePath,
       this.cwd,
       model ?? "default",
       this.mode ?? "跟随设置",
+      this.thinkingOptionId ?? "跟随设置",
       this.sessionId ?? "-",
     );
     const cli = this.cliFactory({
@@ -614,6 +661,7 @@ export class ClaudeAgentSession implements AgentSession {
       ...(this.extraArgs && this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
       model,
       permissionMode: launchMode,
+      thinkingOptionId: this.thinkingOptionId,
       resumeSessionId: this.sessionId,
       canUseTool: this.handleCanUseTool,
       logger: this.logger,
@@ -1102,6 +1150,12 @@ function assertClaudeMode(modeId: string): asserts modeId is ClaudePermissionMod
   }
 }
 
+function assertClaudeThinkingOption(thinkingOptionId: string): void {
+  if (!isClaudeThinkingOption(thinkingOptionId)) {
+    throw new Error(`Claude Code 不支持思考强度：${thinkingOptionId}`);
+  }
+}
+
 /** `default` / 空串 / null 表示不指定模型 */
 function normalizeModel(modelId: string | null | undefined): string | null {
   const trimmed = modelId?.trim();
@@ -1131,18 +1185,29 @@ export function mapInitializeModels(
     const label = typeof entry.displayName === "string" && entry.displayName ? entry.displayName : id;
     const description =
       typeof entry.description === "string" && entry.description ? entry.description : undefined;
+    // 思考档位优先用应答里的 supportsEffort / supportedEffortLevels
     if (id === "default") {
       // `default` 表示不传 --model；沿用内置的中文标签
-      models.push({ ...builtinDefault, provider: providerId, ...(description ? { description } : {}) });
+      models.push(
+        withClaudeThinkingOptions(
+          { ...builtinDefault, provider: providerId, ...(description ? { description } : {}) },
+          entry,
+        ),
+      );
     } else {
-      models.push({ provider: providerId, id, label, ...(description ? { description } : {}) });
+      models.push(
+        withClaudeThinkingOptions(
+          { provider: providerId, id, label, ...(description ? { description } : {}) },
+          entry,
+        ),
+      );
     }
   }
   if (models.length === 0) {
     return null;
   }
   if (!seen.has("default")) {
-    models.unshift({ ...builtinDefault, provider: providerId });
+    models.unshift(withClaudeThinkingOptions({ ...builtinDefault, provider: providerId }));
   }
   return models;
 }

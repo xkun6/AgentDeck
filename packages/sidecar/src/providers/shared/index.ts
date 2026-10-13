@@ -7,3 +7,4 @@
 export * from "./tool-call-mapper-utils.js";
 export * from "./tool-call-detail-primitives.js";
 export * from "./provider-runner.js";
+export * from "./thinking-options.js";

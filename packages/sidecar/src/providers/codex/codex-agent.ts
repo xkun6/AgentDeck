@@ -11,6 +11,7 @@ import path from "node:path";
 import type {
   AgentMode,
   AgentModelDefinition,
+  AgentThinkingOption,
   AgentPermissionAction,
   AgentPermissionRequest,
   AgentPermissionResponse,
@@ -37,6 +38,11 @@ import {
   type JsonRpcId,
 } from "./app-server-transport.js";
 import { describeCodexLaunch, resolveCodexLaunch, type CodexLaunch } from "./launch.js";
+import {
+  makeThinkingOption,
+  normalizeThinkingOptionId,
+  THINKING_APPLIES_NEXT_TURN_NOTICE,
+} from "../shared/thinking-options.js";
 import {
   mapCodexToolCallFromThreadItem,
   normalizeCommandExecutionCommand,
@@ -196,7 +202,10 @@ export function planToTodoItems(plan: unknown): { text: string; completed: boole
     .filter((entry) => entry.text.length > 0);
 }
 
-/** model/list 的一项 → AgentModelDefinition（隐藏模型跳过） */
+/**
+ * model/list 的一项 → AgentModelDefinition（隐藏模型跳过）。
+ * 思考档位来自 supportedReasoningEfforts，defaultReasoningEffort 不在其中时补一项（参照 paseo）。
+ */
 export function toModelDefinition(
   raw: unknown,
   providerId: string = CODEX_PROVIDER_ID,
@@ -207,13 +216,39 @@ export function toModelDefinition(
   if (!id) return null;
   const label = str(record.displayName) ?? str(record.display_name) ?? id;
   const description = str(record.description);
+  const defaultEffort = normalizeThinkingOptionId(
+    str(pick(record, "defaultReasoningEffort", "default_reasoning_effort")),
+  );
+  const thinkingOptions = codexThinkingOptions(
+    pick(record, "supportedReasoningEfforts", "supported_reasoning_efforts"),
+    defaultEffort,
+  );
   return {
     provider: providerId,
     id,
     label,
     ...(description ? { description } : {}),
     ...(record.isDefault === true || record.is_default === true ? { isDefault: true } : {}),
+    ...(thinkingOptions.length > 0 ? { thinkingOptions } : {}),
+    ...(defaultEffort && thinkingOptions.length > 0 ? { defaultThinkingOptionId: defaultEffort } : {}),
   };
+}
+
+function codexThinkingOptions(raw: unknown, defaultEffort: string | null): AgentThinkingOption[] {
+  const options = new Map<string, AgentThinkingOption>();
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const record = asRecord(entry);
+    const effort = normalizeThinkingOptionId(
+      typeof entry === "string" ? entry : str(pick(record, "reasoningEffort", "reasoning_effort")),
+    );
+    if (effort && !options.has(effort)) {
+      options.set(effort, makeThinkingOption(effort, { description: str(record?.description) ?? null }));
+    }
+  }
+  if (defaultEffort && !options.has(defaultEffort)) {
+    options.set(defaultEffort, makeThinkingOption(defaultEffort, { description: "模型默认档位" }));
+  }
+  return Array.from(options.values());
 }
 
 async function listCodexModels(
@@ -463,6 +498,7 @@ export class CodexAgentClient implements AgentClient {
       cwd: cfg.cwd,
       model: cfg.model ?? null,
       modeId,
+      thinkingOptionId: cfg.thinkingOptionId ?? null,
       threadId: null,
     });
     this.sessions.add(session);
@@ -536,6 +572,8 @@ interface CodexSessionDeps {
   cwd: string;
   model: string | null;
   modeId: string;
+  /** 思考强度（turn/start 的 effort）；null / 缺省为跟随 Codex 配置 */
+  thinkingOptionId?: string | null;
   threadId: string | null;
   onClosed?: (session: CodexAgentSession) => void;
 }
@@ -586,6 +624,10 @@ export class CodexAgentSession implements AgentSession {
   /** setModel / setMode 之后下一轮 turn/start 需要带上覆盖 */
   private modelOverridePending = false;
   private modeOverridePending = false;
+  /** null 为跟随 Codex 配置（turn/start 不带 effort） */
+  private thinkingOptionId: string | null;
+  /** 已在本线程的 turn/start 带过具体 effort：codex 会沿用到后续回合，切回 null 时要显式带默认档位 */
+  private effortOverridden = false;
   private active: ActiveTurn | null = null;
   private readonly finishedNativeTurnIds = new Set<string>();
   private readonly pending = new Map<string, PendingPermission>();
@@ -600,6 +642,7 @@ export class CodexAgentSession implements AgentSession {
     this.threadId = deps.threadId;
     this.model = deps.model;
     this.modeId = deps.modeId;
+    this.thinkingOptionId = normalizeThinkingOptionId(deps.thinkingOptionId);
   }
 
   get id(): string | null {
@@ -695,6 +738,13 @@ export class CodexAgentSession implements AgentSession {
       params.approvalPolicy = preset.approvalPolicy;
       params.sandboxPolicy = toSandboxPolicy(preset.sandbox);
     }
+    const effort = this.thinkingOptionId ?? (this.effortOverridden ? await this.defaultEffort(client) : null);
+    if (effort) {
+      params.effort = effort;
+    }
+    if (turn.finished) {
+      return; // 查询默认档位期间已被中断或关闭
+    }
 
     let response: unknown;
     try {
@@ -709,6 +759,9 @@ export class CodexAgentSession implements AgentSession {
     }
     this.modelOverridePending = false;
     this.modeOverridePending = false;
+    if (effort) {
+      this.effortOverridden = this.thinkingOptionId !== null;
+    }
     const nativeId = str(asRecord(asRecord(response)?.turn)?.id);
     if (!nativeId) {
       return;
@@ -777,6 +830,39 @@ export class CodexAgentSession implements AgentSession {
       this.modelOverridePending = modelId !== null;
     }
     this.emit({ type: "model_changed", modelId });
+  }
+
+  /** 只改配置，下一次 turn/start 生效（design.md 4.10） */
+  async setThinking(thinkingOptionId: string | null): Promise<{ notice?: string }> {
+    this.thinkingOptionId = normalizeThinkingOptionId(thinkingOptionId);
+    this.emit({ type: "thinking_option_changed", thinkingOptionId: this.thinkingOptionId });
+    return this.active && !this.active.finished ? { notice: THINKING_APPLIES_NEXT_TURN_NOTICE } : {};
+  }
+
+  /**
+   * 切回「跟随配置」时显式带的默认档位：config/read 的 model_reasoning_effort，
+   * 取不到再用当前模型（未指定时为默认模型）的 defaultReasoningEffort；都取不到返回 null。
+   */
+  private async defaultEffort(client: CodexAppServerClient): Promise<string | null> {
+    try {
+      const config = asRecord(asRecord(await client.request("config/read", {}, MODEL_LIST_TIMEOUT_MS))?.config);
+      const configured = normalizeThinkingOptionId(
+        str(pick(config, "model_reasoning_effort", "modelReasoningEffort")),
+      );
+      if (configured) return configured;
+    } catch (error) {
+      this.deps.logger.debug("[codex] config/read 失败：%s", errorMessage(error));
+    }
+    try {
+      const models = await listCodexModels(client, this.provider);
+      const model = this.model
+        ? models.find((m) => m.id === this.model)
+        : (models.find((m) => m.isDefault) ?? models[0]);
+      return model?.defaultThinkingOptionId ?? null;
+    } catch (error) {
+      this.deps.logger.warn("[codex] 查询默认思考档位失败：%s", errorMessage(error));
+      return null;
+    }
   }
 
   async setMode(modeId: string): Promise<void> {

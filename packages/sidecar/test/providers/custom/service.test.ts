@@ -127,9 +127,19 @@ describe("CustomProviderClient 包装", () => {
       { logger: createSilentLogger(), env: {}, createInner: () => inner },
     );
     const catalog = await client.fetchCatalog();
+    // 基于 claude 的中转：静态模型补 Claude 标准思考档位
+    const claudeStandard = {
+      thinkingOptions: [
+        { id: "low", label: "低" },
+        { id: "medium", label: "中" },
+        { id: "high", label: "高" },
+        { id: "max", label: "最高" },
+      ],
+      defaultThinkingOptionId: "high",
+    };
     expect(catalog.models).toEqual([
-      { provider: "custom:relay", id: "glm", label: "GLM" },
-      { provider: "custom:relay", id: "kimi", label: "Kimi", isDefault: true },
+      { provider: "custom:relay", id: "glm", label: "GLM", ...claudeStandard },
+      { provider: "custom:relay", id: "kimi", label: "Kimi", isDefault: true, ...claudeStandard },
     ]);
     expect(catalog.modes.map((m) => m.id)).toContain("bypassPermissions");
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -140,6 +150,33 @@ describe("CustomProviderClient 包装", () => {
     const explicit = await client.createSession({ cwd: "/w", model: "glm" });
     expect(createSpy).toHaveBeenLastCalledWith({ cwd: "/w", model: "glm" });
     await explicit.close();
+  });
+
+  test("思考强度：codex 中转静态模型补 low/medium/high；acp 中转沿用会话报告的档位；会话透传 setThinking", async () => {
+    const codex = createCustomProviderClient(
+      profile({ extends: "codex", models: [{ id: "gpt-x", label: "GPT-X" }] }),
+      { logger: createSilentLogger(), env: {}, createInner: () => new MockAgentClient() },
+    );
+    const codexCatalog = await codex.fetchCatalog();
+    expect(codexCatalog.models[0]!.thinkingOptions?.map((o) => o.id)).toEqual(["low", "medium", "high"]);
+    expect(codexCatalog.models[0]!.defaultThinkingOptionId).toBe("medium");
+
+    // acp：内层（这里用 mock）报告了档位 → 挂到每个静态模型上
+    const acp = createCustomProviderClient(
+      profile({ extends: "acp", command: ["agent"], models: [{ id: "m1", label: "M1" }] }),
+      { logger: createSilentLogger(), env: {}, createInner: () => new MockAgentClient() },
+    );
+    const acpCatalog = await acp.fetchCatalog();
+    expect(acpCatalog.models[0]!.thinkingOptions?.map((o) => o.id)).toEqual(["low", "high"]);
+    expect(acpCatalog.models[0]!.defaultThinkingOptionId).toBe("high");
+
+    const session = await codex.createSession({ cwd: "/w", thinkingOptionId: "low" });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    expect(session.setThinking).toBeTypeOf("function");
+    await session.setThinking!("high");
+    expect(events).toContainEqual({ type: "thinking_option_changed", thinkingOptionId: "high" });
+    await session.close();
   });
 
   test("错误与会话事件中的密钥被脱敏", async () => {

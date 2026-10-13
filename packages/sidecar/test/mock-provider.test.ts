@@ -24,7 +24,17 @@ describe("MockAgentClient", () => {
     await expect(client.isAvailable()).resolves.toEqual({ available: true });
     const catalog = await client.fetchCatalog();
     expect(catalog.models).toEqual([
-      { provider: "mock", id: "mock-fast", label: "Mock Fast", isDefault: true },
+      {
+        provider: "mock",
+        id: "mock-fast",
+        label: "Mock Fast",
+        isDefault: true,
+        thinkingOptions: [
+          { id: "low", label: "低" },
+          { id: "high", label: "高" },
+        ],
+        defaultThinkingOptionId: "high",
+      },
       { provider: "mock", id: "mock-slow", label: "Mock Slow" },
     ]);
     expect(catalog.modes.map((m) => m.id)).toEqual(["default", "plan"]);

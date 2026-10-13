@@ -250,6 +250,7 @@ export class RpcServer {
           cwd: z.string().min(1),
           model: z.string().optional(),
           modeId: z.string().optional(),
+          thinkingOptionId: z.string().min(1).nullable().optional(),
           title: z.string().optional(),
         }),
         async (params) => ({ agent: await manager.createAgent(params) }),
@@ -291,6 +292,11 @@ export class RpcServer {
         AGENT_RPC_METHODS.agentSetMode,
         z.object({ agentId: z.string().min(1), modeId: z.string().min(1) }),
         async (params) => ({ agent: await manager.setMode(params.agentId, params.modeId) }),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentSetThinking,
+        z.object({ agentId: z.string().min(1), thinkingOptionId: z.string().min(1).nullable() }),
+        (params) => manager.setThinking(params.agentId, params.thinkingOptionId),
       ),
       defineMethod(AGENT_RPC_METHODS.agentClose, agentIdParams, async (params) => {
         await manager.close(params.agentId);

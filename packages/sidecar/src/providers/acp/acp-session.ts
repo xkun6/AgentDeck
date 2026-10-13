@@ -1,5 +1,6 @@
 // Derived from paseo packages/server/src/server/agent/providers/acp-agent.ts (Apache-2.0); modified for AgentDeck
-// 改动：只保留 AgentDeck 需要的会话能力（无 terminal / fs 客户端能力、无历史导入、无 config option 回退），
+// 改动：只保留 AgentDeck 需要的会话能力（无 terminal / fs 客户端能力、无历史导入、无 config option 回退；
+// configOptions 只用 thought_level 一项做思考强度，design.md 4.10），
 // 事件收敛到 AgentDeck 精简协议；SDK 在连接关闭时不会拒绝挂起请求，这里用进程退出 Promise 兜底。
 import { randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -12,6 +13,7 @@ import {
   type PromptResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SessionConfigOption,
   type SessionModeState,
   type SessionModelState,
   type SessionNotification,
@@ -35,6 +37,8 @@ import type { Logger } from "../../logger.js";
 import { spawnProcess } from "../../utils/spawn.js";
 import { terminateWithTreeKill } from "../../utils/tree-kill.js";
 import {
+  ACP_PLACEHOLDER_MODEL_ID,
+  findThoughtLevel,
   fromAcpUsage,
   fromAcpUsageUpdate,
   mergeToolSnapshot,
@@ -50,6 +54,10 @@ import {
   type AcpToolSnapshot,
 } from "./acp-mapping.js";
 import { createTolerantNdJsonStream } from "./ndjson-stream.js";
+import {
+  normalizeThinkingOptionId,
+  THINKING_APPLIES_NEXT_TURN_NOTICE,
+} from "../shared/thinking-options.js";
 
 /** 启动（spawn + initialize + newSession/loadSession）总超时；npx 首次运行需要下载包，放宽到 2 分钟 */
 export const ACP_START_TIMEOUT_MS = 120_000;
@@ -68,7 +76,7 @@ export interface AcpLaunchSpec {
 }
 
 export type AcpSessionInit =
-  | { type: "new"; model?: string; modeId?: string }
+  | { type: "new"; model?: string; modeId?: string; thinkingOptionId?: string | null }
   | { type: "load"; sessionId: string };
 
 export interface AcpSessionStartOptions {
@@ -117,6 +125,9 @@ export class AcpAgentSession implements AgentSession {
   private modes: SessionModeState | null = null;
   private models: SessionModelState | null = null;
   private defaultModelId: string | null = null;
+  private configOptions: SessionConfigOption[] | null = null;
+  /** 建会话时 thought_level 的 currentValue：思考强度设回 null（跟随 Agent）时恢复成它 */
+  private defaultThoughtValue: string | null = null;
   private usage: AgentUsage = {};
 
   private active: ActiveTurn | null = null;
@@ -149,11 +160,13 @@ export class AcpAgentSession implements AgentSession {
 
   /** newSession / loadSession 返回的模型与模式（ACP 只能在建会话后得知） */
   catalog(): { models: AgentModelDefinition[]; modes: AgentMode[] } {
+    const thought = findThoughtLevel(this.configOptions);
     return {
       models: toModelDefinitions(
         this.provider,
         this.models?.availableModels,
         this.defaultModelId,
+        thought ? { options: thought.options, defaultId: this.defaultThoughtValue } : null,
       ),
       modes: toAgentModes(this.modes?.availableModes),
     };
@@ -306,6 +319,11 @@ export class AcpAgentSession implements AgentSession {
 
   async setModel(modelId: string | null): Promise<void> {
     const { connection, sessionId } = this.requireUsable();
+    if (this.usesPlaceholderModel() && (modelId === null || modelId === ACP_PLACEHOLDER_MODEL_ID)) {
+      // agent 没有模型列表：占位模型即「不指定」，无需通知 agent
+      this.emit({ type: "model_changed", modelId });
+      return;
+    }
     const target = modelId ?? this.defaultModelId;
     if (!target) {
       throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 未提供默认模型，无法恢复默认`);
@@ -343,6 +361,63 @@ export class AcpAgentSession implements AgentSession {
     this.emit({ type: "mode_changed", modeId });
   }
 
+  /**
+   * design.md 4.10：经 session/set_config_option 设置 thought_level；null 时设回建会话时的值。
+   * agent 一般在下一次 prompt 才按新档位思考，运行中切换返回提示。
+   */
+  async setThinking(thinkingOptionId: string | null): Promise<{ notice?: string }> {
+    const { connection, sessionId } = this.requireUsable();
+    const requested = normalizeThinkingOptionId(thinkingOptionId);
+    const thought = findThoughtLevel(this.configOptions);
+    if (!thought) {
+      throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 不支持切换思考强度`);
+    }
+    const target = requested ?? this.defaultThoughtValue;
+    if (target !== null && !thought.options.some((option) => option.id === target)) {
+      throw new Error(`${this.label} 不支持思考强度：${target}`);
+    }
+    if (target !== null && target !== thought.currentValue) {
+      await this.writeThoughtLevel(connection, sessionId, thought.configId, target);
+    }
+    this.emit({ type: "thinking_option_changed", thinkingOptionId: requested });
+    return this.active && !this.active.finished ? { notice: THINKING_APPLIES_NEXT_TURN_NOTICE } : {};
+  }
+
+  private async writeThoughtLevel(
+    connection: ClientSideConnection,
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<void> {
+    try {
+      const response = await this.raceExit(
+        connection.setSessionConfigOption({ sessionId, configId, value }),
+      );
+      this.configOptions = response.configOptions ?? this.configOptions;
+    } catch (error) {
+      this.logger.warn("[%s] 设置思考强度 %s 失败：%s", this.provider, value, errorMessage(error));
+      if (errorCode(error) === METHOD_NOT_FOUND) {
+        throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 不支持切换思考强度`);
+      }
+      throw new Error(`切换思考强度失败：${errorMessage(error)}`);
+    }
+    // 应答未带新的 configOptions 时本地记下新值
+    this.setLocalThoughtValue(configId, value);
+  }
+
+  private setLocalThoughtValue(configId: string, value: string): void {
+    const current = findThoughtLevel(this.configOptions);
+    if (current && current.currentValue !== value) {
+      this.configOptions = (this.configOptions ?? []).map((option) =>
+        option.id === configId && option.type === "select" ? { ...option, currentValue: value } : option,
+      );
+    }
+  }
+
+  private usesPlaceholderModel(): boolean {
+    return !this.models?.availableModels?.length && findThoughtLevel(this.configOptions) !== null;
+  }
+
   // -------------------------------------------------------------------------
   // 启动
   // -------------------------------------------------------------------------
@@ -377,7 +452,7 @@ export class AcpAgentSession implements AgentSession {
           connection.loadSession({ sessionId: init.sessionId, cwd, mcpServers: [] }),
           "session/load",
         );
-        this.applySessionState(loaded.modes, loaded.models);
+        this.applySessionState(loaded.modes, loaded.models, loaded.configOptions);
       } finally {
         this.loadingHistory = false;
       }
@@ -386,7 +461,7 @@ export class AcpAgentSession implements AgentSession {
 
     const created = await step(connection.newSession({ cwd, mcpServers: [] }), "session/new");
     this.sessionId = created.sessionId;
-    this.applySessionState(created.modes, created.models);
+    this.applySessionState(created.modes, created.models, created.configOptions);
 
     if (init.modeId !== undefined && init.modeId !== this.currentModeId) {
       await step(
@@ -397,7 +472,8 @@ export class AcpAgentSession implements AgentSession {
         this.modes = { ...this.modes, currentModeId: init.modeId };
       }
     }
-    if (init.model !== undefined && init.model !== this.currentModelId) {
+    const placeholderModel = this.usesPlaceholderModel() && init.model === ACP_PLACEHOLDER_MODEL_ID;
+    if (init.model !== undefined && init.model !== this.currentModelId && !placeholderModel) {
       try {
         await step(
           connection.unstable_setSessionModel({ sessionId: created.sessionId, modelId: init.model }),
@@ -409,6 +485,25 @@ export class AcpAgentSession implements AgentSession {
       } catch (error) {
         // design.md 5.1：模型设置失败忽略，沿用 agent 默认模型
         this.logger.warn("[%s] 设置初始模型 %s 失败，沿用默认：%s", this.provider, init.model, errorMessage(error));
+      }
+    }
+    const thinking = normalizeThinkingOptionId(init.thinkingOptionId);
+    const thought = findThoughtLevel(this.configOptions);
+    if (thinking !== null && thought && thinking !== thought.currentValue) {
+      try {
+        const response = await step(
+          connection.setSessionConfigOption({
+            sessionId: created.sessionId,
+            configId: thought.configId,
+            value: thinking,
+          }),
+          "session/set_config_option",
+        );
+        this.configOptions = response.configOptions ?? this.configOptions;
+        this.setLocalThoughtValue(thought.configId, thinking);
+      } catch (error) {
+        // 与模型一致：失败只记日志，沿用 agent 默认档位
+        this.logger.warn("[%s] 设置初始思考强度 %s 失败：%s", this.provider, thinking, errorMessage(error));
       }
     }
   }
@@ -462,10 +557,23 @@ export class AcpAgentSession implements AgentSession {
   private applySessionState(
     modes: SessionModeState | null | undefined,
     models: SessionModelState | null | undefined,
+    configOptions: SessionConfigOption[] | null | undefined,
   ): void {
     this.modes = modes ?? null;
     this.models = models ?? null;
     this.defaultModelId = models?.currentModelId ?? null;
+    this.configOptions = configOptions ?? null;
+    this.defaultThoughtValue = findThoughtLevel(this.configOptions)?.currentValue ?? null;
+  }
+
+  /** config_option_update：记下最新配置；thought_level 的当前值变了就同步思考强度 */
+  private applyConfigOptionUpdate(configOptions: SessionConfigOption[], emit: boolean): void {
+    const previous = findThoughtLevel(this.configOptions)?.currentValue ?? null;
+    this.configOptions = configOptions;
+    const next = findThoughtLevel(configOptions)?.currentValue ?? null;
+    if (emit && next !== null && next !== previous) {
+      this.emit({ type: "thinking_option_changed", thinkingOptionId: next });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -478,6 +586,9 @@ export class AcpAgentSession implements AgentSession {
       // loadSession 会重放历史；此时还没有订阅者，只记录模式
       if (update.sessionUpdate === "current_mode_update" && this.modes) {
         this.modes = { ...this.modes, currentModeId: update.currentModeId };
+      }
+      if (update.sessionUpdate === "config_option_update") {
+        this.applyConfigOptionUpdate(update.configOptions, false);
       }
       return;
     }
@@ -545,9 +656,12 @@ export class AcpAgentSession implements AgentSession {
         this.usage = { ...this.usage, ...fromAcpUsageUpdate(update) };
         this.emit({ type: "usage_updated", usage: { ...this.usage } });
         return;
+      case "config_option_update":
+        this.applyConfigOptionUpdate(update.configOptions, true);
+        return;
       default:
         // user_message_chunk（user_message 由 AgentManager 统一记录）、available_commands_update、
-        // config_option_update、session_info_update：忽略
+        // session_info_update：忽略
         return;
     }
   }

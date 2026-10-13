@@ -8,6 +8,7 @@ import type {
   PermissionOptionKind,
   Plan,
   PromptCapabilities,
+  SessionConfigOption,
   SessionMode,
   ToolCall,
   ToolCallContent,
@@ -24,12 +25,15 @@ import type {
   AgentPermissionAction,
   AgentPermissionResponse,
   AgentPromptInput,
+  AgentThinkingOption,
   AgentTimelineItem,
   AgentUsage,
   ToolCallDetail,
   ToolCallStatus,
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
+
+import { makeThinkingOption } from "../shared/thinking-options.js";
 
 /** 按 toolCallId 合并后的工具调用快照 */
 export interface AcpToolSnapshot {
@@ -243,11 +247,62 @@ export function toAcpPrompt(
   return blocks;
 }
 
+/** agent 不提供 models 但有思考档位时的占位模型 id（design.md 4.10）：对它的 setModel 视为「不指定」 */
+export const ACP_PLACEHOLDER_MODEL_ID = "default";
+
+/** session 的思考强度配置项（category 为 thought_level 的 select 项） */
+export interface AcpThoughtLevel {
+  configId: string;
+  currentValue: string;
+  options: AgentThinkingOption[];
+}
+
+/** 从 configOptions 中取 thought_level 的 select 项（分组选项展开）；没有返回 null */
+export function findThoughtLevel(
+  configOptions: SessionConfigOption[] | null | undefined,
+): AcpThoughtLevel | null {
+  const option = (configOptions ?? []).find(
+    (entry) => entry.category === "thought_level" && entry.type === "select",
+  );
+  if (!option || option.type !== "select") {
+    return null;
+  }
+  const flat = option.options.flatMap((entry) => ("group" in entry ? entry.options : [entry]));
+  const options = flat.map((entry) =>
+    makeThinkingOption(entry.value, { name: entry.name, description: entry.description ?? null }),
+  );
+  return options.length > 0
+    ? { configId: option.id, currentValue: option.currentValue, options }
+    : null;
+}
+
+/**
+ * agent 报告的模型 → AgentModelDefinition，思考档位挂到每个模型上。
+ * agent 没有 models 但有思考档位时给一个占位模型，前端才能显示思考强度选择器。
+ */
 export function toModelDefinitions(
   provider: string,
   models: ModelInfo[] | undefined,
   currentModelId: string | null,
+  thinking?: { options: AgentThinkingOption[]; defaultId: string | null } | null,
 ): AgentModelDefinition[] {
+  const extra = thinking?.options.length
+    ? {
+        thinkingOptions: thinking.options,
+        ...(thinking.defaultId ? { defaultThinkingOptionId: thinking.defaultId } : {}),
+      }
+    : {};
+  if ((!models || models.length === 0) && thinking?.options.length) {
+    return [
+      {
+        provider,
+        id: ACP_PLACEHOLDER_MODEL_ID,
+        label: "默认（跟随 Agent 设置）",
+        isDefault: true,
+        ...structuredClone(extra),
+      },
+    ];
+  }
   return (models ?? []).map((model) =>
     compact({
       provider,
@@ -255,6 +310,7 @@ export function toModelDefinitions(
       label: model.name,
       description: model.description ?? undefined,
       isDefault: model.modelId === currentModelId ? true : undefined,
+      ...structuredClone(extra),
     }),
   );
 }

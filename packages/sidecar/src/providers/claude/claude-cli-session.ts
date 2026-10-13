@@ -12,6 +12,7 @@ import type { Logger } from "../../logger.js";
 import { spawnProcess } from "../../utils/spawn.js";
 import { terminateWithTreeKill, type ProcessTerminator } from "../../utils/tree-kill.js";
 import { isJavaScriptEntry } from "./claude-executable.js";
+import { claudeThinkingArgs } from "./thinking-options.js";
 import type {
   ClaudeCanUseTool,
   ClaudeCanUseToolRequest,
@@ -44,6 +45,8 @@ export interface ClaudeCliOptions {
   model: string | null;
   /** null 表示不传 --permission-mode，沿用用户设置的默认模式 */
   permissionMode: ClaudePermissionMode | null;
+  /** 思考强度（design.md 4.10）：off → --thinking disabled，其它 → --effort；null / 缺省不传 */
+  thinkingOptionId?: string | null;
   resumeSessionId: string | null;
   canUseTool: ClaudeCanUseTool;
   logger: Logger;
@@ -67,7 +70,10 @@ export interface ClaudeCliHandle extends AsyncIterable<ClaudeOutputMessage> {
 export type ClaudeCliFactory = (options: ClaudeCliOptions) => ClaudeCliHandle;
 
 export function buildClaudeCliArgs(
-  options: Pick<ClaudeCliOptions, "model" | "permissionMode" | "resumeSessionId" | "extraArgs">,
+  options: Pick<
+    ClaudeCliOptions,
+    "model" | "permissionMode" | "resumeSessionId" | "extraArgs" | "thinkingOptionId"
+  >,
 ): string[] {
   const args = [
     "--print",
@@ -90,6 +96,7 @@ export function buildClaudeCliArgs(
   if (options.model) {
     args.push("--model", options.model);
   }
+  args.push(...claudeThinkingArgs(options.thinkingOptionId ?? null));
   if (options.resumeSessionId) {
     args.push("--resume", options.resumeSessionId);
   }

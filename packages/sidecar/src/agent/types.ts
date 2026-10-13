@@ -19,6 +19,8 @@ export interface AgentSessionConfig {
   cwd: string;
   model?: string;
   modeId?: string;
+  /** 思考强度档位；null / 缺省 = 跟随 CLI 自身设置（design.md 4.10） */
+  thinkingOptionId?: string | null;
 }
 
 /**
@@ -29,7 +31,8 @@ export interface AgentSessionConfig {
  *   `turn_completed` / `turn_failed` / `turn_canceled`；
  * - `user_message` 由 AgentManager 统一记录，provider **不要**再发；
  * - `respondToPermission` 应在 resolve 前发出 `permission_resolved`（manager 有兜底补发）；
- * - `setModel` / `setMode` 应发出 `model_changed` / `mode_changed`（manager 有兜底补发）。
+ * - `setModel` / `setMode` / `setThinking` 应发出 `model_changed` / `mode_changed` /
+ *   `thinking_option_changed`（manager 有兜底补发）。
  */
 export interface AgentSession {
   readonly provider: AgentProviderId;
@@ -47,6 +50,11 @@ export interface AgentSession {
   describePersistence(): AgentPersistenceHandle | null;
   setModel?(modelId: string | null): Promise<void>;
   setMode?(modeId: string): Promise<void>;
+  /**
+   * 切换思考强度（null = 跟随 CLI 设置），下一轮生效；档位不合法时抛错。
+   * 正在运行一轮时返回 notice（中文提示）。
+   */
+  setThinking?(thinkingOptionId: string | null): Promise<{ notice?: string } | void>;
 }
 
 export interface AgentAvailability {

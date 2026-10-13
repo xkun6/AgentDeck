@@ -75,6 +75,7 @@ export class AcpAgentClient implements AgentClient {
       type: "new",
       ...(cfg.model !== undefined ? { model: cfg.model } : {}),
       ...(cfg.modeId !== undefined ? { modeId: cfg.modeId } : {}),
+      ...(cfg.thinkingOptionId != null ? { thinkingOptionId: cfg.thinkingOptionId } : {}),
     });
   }
 

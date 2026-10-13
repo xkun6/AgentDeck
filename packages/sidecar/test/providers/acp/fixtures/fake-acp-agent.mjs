@@ -7,6 +7,8 @@
 //   FAKE_ACP_NOISE=1          启动时往 stdout 打一行非 JSON（验证容错）
 //   FAKE_ACP_FAIL_SET_MODEL=1 unstable_setSessionModel 返回 method not found
 //   FAKE_ACP_NO_MODES=1       newSession 不返回 modes / models
+//   FAKE_ACP_THOUGHT=1        返回 thought_level 配置项（同 DeepSeek Harness：reasoning_effort，默认 high），
+//                             支持 session/set_config_option，echo 回显当前档位
 import { Readable, Writable } from "node:stream";
 
 import {
@@ -20,6 +22,12 @@ const env = process.env;
 const MODES = [
   { id: "default", name: "默认", description: "需要审批" },
   { id: "plan", name: "计划" },
+];
+const THOUGHT_VALUES = [
+  { value: "off", name: "Off", description: "不思考" },
+  { value: "low", name: "Low" },
+  { value: "high", name: "High" },
+  { value: "max", name: "Max" },
 ];
 const MODELS = [
   { modelId: "fake-small", name: "Fake Small" },
@@ -53,21 +61,48 @@ class FakeAgent {
     return {};
   }
 
+  configOptions(state) {
+    return [
+      {
+        id: "reasoning_effort",
+        name: "Reasoning effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: state.thought,
+        options: THOUGHT_VALUES,
+      },
+    ];
+  }
+
   sessionState(sessionId) {
-    if (env.FAKE_ACP_NO_MODES === "1") {
-      return {};
-    }
     const state = this.sessions.get(sessionId);
+    const config = env.FAKE_ACP_THOUGHT === "1" ? { configOptions: this.configOptions(state) } : {};
+    if (env.FAKE_ACP_NO_MODES === "1") {
+      return config;
+    }
     return {
       modes: { availableModes: MODES, currentModeId: state.mode },
       models: { availableModels: MODELS, currentModelId: state.model },
+      ...config,
     };
+  }
+
+  async setSessionConfigOption(params) {
+    const state = this.requireSession(params.sessionId);
+    if (env.FAKE_ACP_THOUGHT !== "1" || params.configId !== "reasoning_effort") {
+      throw RequestError.invalidParams({ configId: params.configId }, "未知配置项");
+    }
+    if (!THOUGHT_VALUES.some((option) => option.value === params.value)) {
+      throw RequestError.invalidParams({ value: params.value }, "未知档位");
+    }
+    state.thought = params.value;
+    return { configOptions: this.configOptions(state) };
   }
 
   async newSession(params) {
     this.counter += 1;
     const sessionId = `fake-session-${this.counter}`;
-    this.sessions.set(sessionId, { mode: "default", model: "fake-small", cwd: params.cwd, cancel: null });
+    this.sessions.set(sessionId, { mode: "default", model: "fake-small", thought: "high", cwd: params.cwd, cancel: null });
     return { sessionId, ...this.sessionState(sessionId) };
   }
 
@@ -75,7 +110,7 @@ class FakeAgent {
     if (env.FAKE_ACP_LOAD_SESSION !== "1") {
       throw RequestError.methodNotFound("session/load");
     }
-    this.sessions.set(params.sessionId, { mode: "plan", model: "fake-small", cwd: params.cwd, cancel: null });
+    this.sessions.set(params.sessionId, { mode: "plan", model: "fake-small", thought: "high", cwd: params.cwd, cancel: null });
     // 重放历史（客户端应忽略）
     await this.update(params.sessionId, {
       sessionUpdate: "user_message_chunk",
@@ -156,6 +191,9 @@ class FakeAgent {
         const images = prompt.filter((block) => block.type === "image").length;
         await say("你好，");
         await say(`世界（图片数:${images}，模式:${state.mode}，模型:${state.model}）`);
+        if (env.FAKE_ACP_THOUGHT === "1") {
+          await say(`思考:${state.thought}`);
+        }
         await this.update(sessionId, {
           sessionUpdate: "usage_update",
           size: 200000,
@@ -236,6 +274,12 @@ class FakeAgent {
             { content: "第三步", priority: "low", status: "pending" },
           ],
         });
+        return { stopReason: "end_turn" };
+      }
+      case "thoughtupdate": {
+        // agent 自己改了档位：发 config_option_update
+        state.thought = "max";
+        await this.update(sessionId, { sessionUpdate: "config_option_update", configOptions: this.configOptions(state) });
         return { stopReason: "end_turn" };
       }
       case "mode": {

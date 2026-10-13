@@ -29,7 +29,9 @@ import {
   resolveClaudeExecutable,
   type ClaudeExecutableResolution,
 } from "../claude/claude-executable.js";
+import { claudeStandardThinkingOptions, withThinkingOptions } from "../claude/thinking-options.js";
 import { CODEX_MODES, CodexAgentClient } from "../codex/codex-agent.js";
+import { thinkingOptionsFromIds } from "../shared/thinking-options.js";
 import { resolveCodexLaunch, type CodexLaunch } from "../codex/launch.js";
 import { buildClaudeLaunchOverride, buildCodexLaunchOverride, mergeClaudeSettings } from "./launch.js";
 import {
@@ -189,7 +191,9 @@ export class CustomProviderClient implements AgentClient {
     };
     this.staticModels =
       profile.models && profile.models.length > 0
-        ? profile.models.map((model) => ({ ...model, provider: this.provider }))
+        ? profile.models.map((model) =>
+            withStaticThinkingOptions({ ...model, provider: this.provider }, profile.extends),
+          )
         : null;
   }
 
@@ -209,7 +213,17 @@ export class CustomProviderClient implements AgentClient {
       return { models: structuredClone(this.staticModels), modes: structuredClone(modes) };
     }
     const catalog = await this.guard(() => this.inner.fetchCatalog(opts));
-    return this.staticModels ? { ...catalog, models: structuredClone(this.staticModels) } : catalog;
+    if (!this.staticModels) {
+      return catalog;
+    }
+    // ACP 的思考档位是会话级的：沿用 agent 报告的档位挂到每个静态模型上
+    const source = catalog.models.find((model) => model.thinkingOptions?.length);
+    const models = structuredClone(this.staticModels).map((model) =>
+      source?.thinkingOptions
+        ? withThinkingOptions(model, source.thinkingOptions, source.defaultThinkingOptionId)
+        : model,
+    );
+    return { ...catalog, models };
   }
 
   async createSession(cfg: AgentSessionConfig): Promise<AgentSession> {
@@ -245,10 +259,31 @@ export class CustomProviderClient implements AgentClient {
   }
 }
 
+/**
+ * 中转静态模型的思考档位（design.md 4.10）：claude 补标准组 low / medium / high / max，
+ * codex 补 low / medium / high；acp 由会话报告的档位决定（fetchCatalog 时挂上）。
+ */
+function withStaticThinkingOptions(
+  model: AgentModelDefinition,
+  kind: ProviderProfileExtends,
+): AgentModelDefinition {
+  switch (kind) {
+    case "claude":
+      return withThinkingOptions(model, claudeStandardThinkingOptions());
+    case "codex":
+      return withThinkingOptions(model, thinkingOptionsFromIds(CODEX_RELAY_THINKING_LEVELS), "medium");
+    case "acp":
+      return model;
+  }
+}
+
+const CODEX_RELAY_THINKING_LEVELS = ["low", "medium", "high"] as const;
+
 /** 会话代理：事件与错误中的机密值脱敏，其余原样转发 */
 class RedactingSession implements AgentSession {
   setModel?: (modelId: string | null) => Promise<void>;
   setMode?: (modeId: string) => Promise<void>;
+  setThinking?: (thinkingOptionId: string | null) => Promise<{ notice?: string } | void>;
 
   constructor(
     private readonly inner: AgentSession,
@@ -259,6 +294,9 @@ class RedactingSession implements AgentSession {
     }
     if (inner.setMode) {
       this.setMode = (modeId) => this.guard(() => inner.setMode!(modeId));
+    }
+    if (inner.setThinking) {
+      this.setThinking = (thinkingOptionId) => this.guard(() => inner.setThinking!(thinkingOptionId));
     }
   }
 

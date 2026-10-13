@@ -19,7 +19,10 @@ import {
 const CWD = process.cwd();
 const sessions: AgentSession[] = [];
 
-async function open(env: Record<string, string> = {}, cfg: { model?: string; modeId?: string } = {}) {
+async function open(
+  env: Record<string, string> = {},
+  cfg: { model?: string; modeId?: string; thinkingOptionId?: string | null } = {},
+) {
   const session = await fakeClient(env).createSession({ cwd: CWD, ...cfg });
   sessions.push(session);
   return { session, events: collect(session) };
@@ -430,6 +433,91 @@ describe("AcpAgentSession 模型与模式", () => {
     sessions.push(session);
     expect(await client.fetchCatalog()).toEqual({ models: [], modes: [] });
     await expect(session.setModel!(null)).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  });
+});
+
+describe("AcpAgentSession 思考强度（thought_level）", () => {
+  const THOUGHT = { FAKE_ACP_THOUGHT: "1" };
+
+  test("configOptions 的 thought_level → 每个模型的 thinkingOptions，currentValue 为默认档位", async () => {
+    const client = fakeClient(THOUGHT);
+    const session = await client.createSession({ cwd: CWD });
+    sessions.push(session);
+    const { models } = await client.fetchCatalog();
+    expect(models.map((m) => m.id)).toEqual(["fake-small", "fake-large"]);
+    for (const model of models) {
+      expect(model.thinkingOptions).toEqual([
+        { id: "off", label: "关闭思考", description: "不思考" },
+        { id: "low", label: "低" },
+        { id: "high", label: "高" },
+        { id: "max", label: "最高" },
+      ]);
+      expect(model.defaultThinkingOptionId).toBe("high");
+    }
+  });
+
+  test("没有 models 但有档位（如 DeepSeek Harness）：给占位模型，setModel 占位 / null 不报错", async () => {
+    const client = fakeClient({ ...THOUGHT, FAKE_ACP_NO_MODES: "1" });
+    const session = await client.createSession({ cwd: CWD, model: "default" });
+    sessions.push(session);
+    const events = collect(session);
+    const { models } = await client.fetchCatalog();
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({ id: "default", label: "默认（跟随 Agent 设置）", isDefault: true });
+    expect(models[0]!.thinkingOptions?.map((o) => o.id)).toEqual(["off", "low", "high", "max"]);
+    await session.setModel!("default");
+    await session.setModel!(null);
+    expect(events.filter((e) => e.type === "model_changed")).toHaveLength(2);
+  });
+
+  test("setThinking → session/set_config_option，下一轮生效；null 设回建会话时的档位；未知档位报错", async () => {
+    const { session, events } = await open(THOUGHT);
+    expect(await session.setThinking!("low")).toEqual({});
+    expect(events.at(-1)).toEqual({ type: "thinking_option_changed", thinkingOptionId: "low" });
+    await session.startTurn("hi");
+    await waitForTerminal(events);
+    expect(assistantText(events)).toContain("思考:low");
+
+    await session.setThinking!(null);
+    expect(events.at(-1)).toEqual({ type: "thinking_option_changed", thinkingOptionId: null });
+    await session.startTurn("hi");
+    await waitForTerminal(events, 2);
+    expect(assistantText(events)).toContain("思考:high");
+
+    await expect(session.setThinking!("turbo")).rejects.toThrow("不支持思考强度：turbo");
+  });
+
+  test("运行中切换返回提示；建会话时带档位立即设置", async () => {
+    const { session, events } = await open(THOUGHT);
+    await session.startTurn("scenario:slow");
+    expect(await session.setThinking!("off")).toEqual({ notice: "思考强度将在下一轮生效" });
+    await session.interrupt();
+    await waitForTerminal(events);
+    await session.startTurn("hi");
+    await waitForTerminal(events, 2);
+    expect(assistantText(events)).toContain("思考:off");
+
+    const created = await open(THOUGHT, { thinkingOptionId: "max" });
+    await created.session.startTurn("hi");
+    await waitForTerminal(created.events);
+    expect(assistantText(created.events)).toContain("思考:max");
+  });
+
+  test("config_option_update 改变档位 → thinking_option_changed", async () => {
+    const { session, events } = await open(THOUGHT);
+    await session.startTurn("scenario:thoughtupdate");
+    await waitForTerminal(events);
+    expect(events.filter((e) => e.type === "thinking_option_changed")).toEqual([
+      { type: "thinking_option_changed", thinkingOptionId: "max" },
+    ]);
+  });
+
+  test("agent 没有 thought_level → setThinking 返回 NOT_SUPPORTED，模型不带档位", async () => {
+    const client = fakeClient();
+    const session = await client.createSession({ cwd: CWD });
+    sessions.push(session);
+    expect((await client.fetchCatalog()).models.every((m) => m.thinkingOptions === undefined)).toBe(true);
+    await expect(session.setThinking!("low")).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
   });
 });
 

@@ -143,7 +143,15 @@ export interface ClaudeCanUseToolRequest {
 
 /** initialize 应答里用到的部分 */
 export interface ClaudeInitializeResponse {
-  models?: Array<{ value?: unknown; displayName?: unknown; description?: unknown }>;
+  /** 2.1.296 起每项还带 resolvedModel / supportsEffort / supportedEffortLevels（思考强度档位来源） */
+  models?: Array<{
+    value?: unknown;
+    displayName?: unknown;
+    description?: unknown;
+    resolvedModel?: unknown;
+    supportsEffort?: unknown;
+    supportedEffortLevels?: unknown;
+  }>;
   /** 进程当前的权限模式；未传 --permission-mode 启动时即用户设置的默认模式 */
   current_permission_mode?: unknown;
 }

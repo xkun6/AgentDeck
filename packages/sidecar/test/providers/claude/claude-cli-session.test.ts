@@ -99,6 +99,30 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<v
   }
 }
 
+describe("buildClaudeCliArgs：思考强度", () => {
+  test("档位 → --effort；off → --thinking disabled；null 不传", () => {
+    const base = { model: null, permissionMode: null, resumeSessionId: null } as const;
+    const low = buildClaudeCliArgs({ ...base, thinkingOptionId: "low" });
+    expect(low.join(" ")).toContain("--effort low");
+    expect(low).not.toContain("--thinking");
+    const off = buildClaudeCliArgs({ ...base, thinkingOptionId: "off" });
+    expect(off.join(" ")).toContain("--thinking disabled");
+    expect(off).not.toContain("--effort");
+    for (const args of [buildClaudeCliArgs(base), buildClaudeCliArgs({ ...base, thinkingOptionId: null })]) {
+      expect(args).not.toContain("--effort");
+      expect(args).not.toContain("--thinking");
+    }
+    // 位于 --resume 与 extraArgs 之前
+    const full = buildClaudeCliArgs({
+      ...base,
+      thinkingOptionId: "max",
+      resumeSessionId: "s-1",
+      extraArgs: ["--settings", "{}"],
+    });
+    expect(full.slice(-6)).toEqual(["--effort", "max", "--resume", "s-1", "--settings", "{}"]);
+  });
+});
+
 describe("buildClaudeCliArgs", () => {
   test("固定参数 + 可选 model / resume", () => {
     const base = buildClaudeCliArgs({ model: null, permissionMode: "default", resumeSessionId: null });

@@ -21,10 +21,23 @@ import type {
 
 export const MOCK_PROVIDER_ID = "mock";
 
+/** mock-fast 带两档思考强度（design.md 4.10，供测试切换与回退），mock-slow 不支持 */
 export const MOCK_MODELS: AgentModelDefinition[] = [
-  { provider: MOCK_PROVIDER_ID, id: "mock-fast", label: "Mock Fast", isDefault: true },
+  {
+    provider: MOCK_PROVIDER_ID,
+    id: "mock-fast",
+    label: "Mock Fast",
+    isDefault: true,
+    thinkingOptions: [
+      { id: "low", label: "低" },
+      { id: "high", label: "高" },
+    ],
+    defaultThinkingOptionId: "high",
+  },
   { provider: MOCK_PROVIDER_ID, id: "mock-slow", label: "Mock Slow" },
 ];
+
+const MOCK_THINKING_OPTION_IDS = new Set(["low", "high"]);
 
 export const MOCK_MODES: AgentMode[] = [
   { id: "default", label: "默认" },
@@ -55,6 +68,9 @@ export class MockAgentClient implements AgentClient {
   async createSession(cfg: AgentSessionConfig): Promise<AgentSession> {
     if (cfg.modeId !== undefined) {
       assertMockMode(cfg.modeId);
+    }
+    if (cfg.thinkingOptionId != null) {
+      assertMockThinking(cfg.thinkingOptionId);
     }
     return new MockAgentSession(cfg);
   }
@@ -198,6 +214,14 @@ export class MockAgentSession implements AgentSession {
     assertMockMode(modeId);
     this.modeId = modeId;
     this.emit({ type: "mode_changed", modeId });
+  }
+
+  async setThinking(thinkingOptionId: string | null): Promise<{ notice?: string }> {
+    if (thinkingOptionId !== null) {
+      assertMockThinking(thinkingOptionId);
+    }
+    this.emit({ type: "thinking_option_changed", thinkingOptionId });
+    return this.active ? { notice: "思考强度将在下一轮生效" } : {};
   }
 
   // -------------------------------------------------------------------------
@@ -360,4 +384,10 @@ export function splitIntoChunks(text: string): string[] {
     chunks.push(chars.slice(i, i + size).join(""));
   }
   return chunks;
+}
+
+function assertMockThinking(thinkingOptionId: string): void {
+  if (!MOCK_THINKING_OPTION_IDS.has(thinkingOptionId)) {
+    throw new Error(`Mock 不支持思考强度：${thinkingOptionId}`);
+  }
 }

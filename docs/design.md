@@ -97,13 +97,14 @@ sidecar 入口：
 | `sidecar.info` | — | `{ version, pid }` |
 | `provider.list` | — | `ProviderInfo[]` |
 | `provider.listModels` | `{ provider, cwd? }` | `{ models: AgentModelDefinition[], modes: AgentMode[] }` |
-| `agent.create` | `{ provider, cwd, model?, modeId?, title? }` | `{ agent: AgentSnapshot }` |
+| `agent.create` | `{ provider, cwd, model?, modeId?, thinkingOptionId?: string \| null, title? }` | `{ agent: AgentSnapshot }` |
 | `agent.list` | — | `{ agents: AgentSnapshot[] }` |
 | `agent.send` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{ turnId }` |
 | `agent.cancel` | `{ agentId }` | `{}` |
 | `agent.permission.respond` | `{ agentId, requestId, response: AgentPermissionResponse }` | `{}` |
 | `agent.setModel` | `{ agentId, modelId: string \| null }` | `{ agent: AgentSnapshot }` |
 | `agent.setMode` | `{ agentId, modeId }` | `{ agent: AgentSnapshot }` |
+| `agent.setThinking` | `{ agentId, thinkingOptionId: string \| null }` | `{ agent: AgentSnapshot, notice?: string }`（见 4.10） |
 | `agent.close` | `{ agentId }` | `{}` |
 | `agent.timeline` | `{ agentId, sinceSeq? }` | `{ epoch, entries: AgentStreamEnvelope[] }` |
 
@@ -354,6 +355,47 @@ interface ProviderProfile {
   - winget 某些安装包会弹 UAC，属预期，不绕过。
 - **前端**：缺失项有 `install` 时显示「一键安装」（`available=false` 时禁用并显示原因）；点击先 `useConfirm` 确认（展示完整命令，提示可能弹管理员授权、需要几分钟）；安装中该按钮 loading、其它安装按钮禁用；成功显示「安装完成」并让环境检查与编程 Agent 检测查询失效重取，node / npm / claude-code / codex / agent-browser 额外提示「如 Agent 仍显示不可用，请重启 sidecar」；失败显示退出码与可折叠的输出末尾。
 
+### 4.10 思考强度（会话内可切换，下一轮生效）
+
+参照 paseo 的 thinkingOptions（`packages/protocol/src/agent-types.ts`）。
+
+**类型**（`agent-api.ts`）：
+- `AgentThinkingOption { id: string; label: string; description?: string }`。
+- `AgentModelDefinition` 增加 `thinkingOptions?: AgentThinkingOption[]` 与 `defaultThinkingOptionId?: string`（provider 自身的默认档位，仅供展示）。档位按模型挂载；ACP 的档位是会话级的，同样挂到该 provider 的每个模型上。模型没有 `thinkingOptions` 表示不支持选择思考强度（前端隐藏选择器）。
+- `AgentSnapshot.thinkingOptionId?: string | null`：`null` / 缺省 = 跟随 CLI 自身设置（不传任何思考参数）。随 meta.json 持久化，恢复会话后重新设置（同 model / modeId）。
+- `agent.create` 增加可选 `thinkingOptionId: string | null`（null / 省略 = 跟随 CLI）。
+- 新方法 `agent.setThinking { agentId, thinkingOptionId: string | null }` → `{ agent: AgentSnapshot, notice?: string }`；`notice` 为中文提示（正在运行一轮时为「思考强度将在下一轮生效」）。provider 不支持 → `NOT_SUPPORTED`；档位不合法 → `INTERNAL_ERROR`（中文 message）；dormant 同 setModel 返回 `AGENT_CLOSED`。
+- 新流事件 `{ type: "thinking_option_changed"; thinkingOptionId: string | null }`：更新快照并推 `agent.state`；provider 未发时由 AgentManager 补发，重复值去重。
+
+**AgentManager**：
+- `agent.setModel` 之后若快照 `thinkingOptionId` 非 null，按 provider 目录（建会话时取到的目录，没有再 `fetchCatalog`）查新模型（`modelId` 为 null 时取 `isDefault` 模型）；找到该模型且其 `thinkingOptions` 不含当前档位（或没有档位）→ 调 `setThinking(null)` 回退为跟随 CLI，并发 `thinking_option_changed { thinkingOptionId: null }`。目录里找不到该模型时不动。
+
+**Claude**（`providers/claude/thinking-options.ts`）：
+- 档位来源优先级：① initialize 应答 `models[]` 的 `supportsEffort` / `supportedEffortLevels`（Claude Code 2.1.296 实测每个模型都带，如 opus / sonnet / haiku 均为 low…max 五档）；`supportsEffort === false` 则无档位；② 否则按移植自 paseo `model-manifest.ts` 的清单（按 id 或 `resolvedModel` 归一化查找，清单内无 effortLevels 的模型如 Haiku 4.5 无档位）；③ 都判断不了（静态别名回退、设置发现的模型、未知 id）给标准组 low / medium / high / max。
+- 「关闭思考」`off` 只给 paseo 清单中 `supportsThinkingDisabled` 的模型（按 id 或 `resolvedModel` 归一化命中）；paseo 的 `ultracode` 档位不移植。
+- 档位顺序 off → low → medium → high → xhigh → max；`defaultThinkingOptionId` 为 `high`（含 high 时）。
+- 下发：`--effort <level>`；`off` 为 `--thinking disabled`（隐藏参数，Agent SDK 同样使用）；null 不传。
+- 会话中切换：只记录新档位；若 claude 子进程已在运行，标记「下一轮需重启」，下一次 `startTurn` 前结束旧进程，以 `--resume <sessionId>` 带新参数重新拉起（与进程意外退出后的重启是同一机制）。运行中切换返回 notice。
+- 基于 claude 的中转：静态模型一律补标准组（low / medium / high / max）；未配静态模型时同内置规则。
+
+**Codex**：
+- `model/list` 每项的 `supportedReasoningEfforts[].reasoningEffort`（description 原样带上）生成档位，`defaultReasoningEffort` 为 `defaultThinkingOptionId`（不在列表里时补一项）。
+- 下发：`turn/start` 带 `effort: <thinkingOptionId>`（null 不带）；setThinking 只改配置，下一次 turn/start 生效，运行中切换返回 notice。
+- codex 的 turn 级 effort 覆盖会延续到后续回合，因此从具体档位切回 null 后的下一轮显式带默认档位：先取 `config/read` 的 `model_reasoning_effort`，取不到再用当前模型（未指定时为默认模型）的 `defaultReasoningEffort`；都取不到则不带。
+- 基于 codex 的中转静态模型：补 low / medium / high 标准组。
+
+**ACP**：
+- 从 `session/new`（或 `session/load`）应答及 `config_option_update` 通知的 `configOptions` 中取 `category === "thought_level"` 的 select 项（分组选项展开），`options[].value` / `name` / `description` → 档位；建会话时的 `currentValue` 为 `defaultThinkingOptionId`。
+- agent 不提供 `models`（如 DeepSeek Harness 只给 configOptions）但有思考档位时，目录给一个占位模型 `{ id: "default", label: "默认（跟随 Agent 设置）", isDefault: true }` 承载档位；对该占位模型的 setModel / 建会话 model 参数视为「不指定」。
+- setThinking → `session/set_config_option { sessionId, configId, value }`；null 时设回建会话时的 `currentValue`。成功后发 `thinking_option_changed`。agent 没有 thought_level 项 → `NOT_SUPPORTED`。
+- `config_option_update` 中 thought_level 的 `currentValue` 与已知值不同时，同步发 `thinking_option_changed { thinkingOptionId: currentValue }`。
+- 建会话时带 `thinkingOptionId` 则在 session/new 后立即设置（失败只记日志，同模型）。
+
+**前端**：
+- 输入框工具栏「Agent / 模型 / 模式」后追加「思考」chip：选项 = 当前模型（未选模型时为 `isDefault` 模型）的 `thinkingOptions`，首项「默认」= null（跟随 CLI 设置）；该模型没有 `thinkingOptions` 时隐藏。
+- 新建会话：选择随 `agent.create` 传入，并与模型 / 模式一起记忆在 ui_store（`agentdeck.composer.agent-selection` 增加 `thinkingOptionId`）；切换模型 / Agent 后若当前档位不在新模型选项中，重置为默认。
+- 会话中：调 `agent.setThinking`，运行中也可切换（其它 chip 运行中仍禁用），显示返回的 notice；快照经 `agent.state` 同步显示。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -389,6 +431,8 @@ interface AgentSession {
   describePersistence(): AgentPersistenceHandle | null;
   setModel?(modelId: string | null): Promise<void>;
   setMode?(modeId: string): Promise<void>;
+  /** 4.10：null = 跟随 CLI；运行中切换时返回 notice */
+  setThinking?(thinkingOptionId: string | null): Promise<{ notice?: string } | void>;
 }
 interface AgentClient {
   readonly provider: AgentProviderId;
@@ -396,7 +440,7 @@ interface AgentClient {
   readonly label: string;
   isAvailable(): Promise<{ available: boolean; reason?: string }>;
   fetchCatalog(opts?: { cwd?: string }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }>;
-  createSession(cfg: { cwd: string; model?: string; modeId?: string }): Promise<AgentSession>;
+  createSession(cfg: { cwd: string; model?: string; modeId?: string; thinkingOptionId?: string | null }): Promise<AgentSession>;
   resumeSession?(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession>;
   shutdown?(): Promise<void>;
 }

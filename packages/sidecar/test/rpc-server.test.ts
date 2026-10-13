@@ -312,6 +312,35 @@ describe("mock 会话", () => {
     ]);
   });
 
+  test("agent.create 带 thinkingOptionId；agent.setThinking 更新快照、推事件，参数校验", async () => {
+    const { agent } = await client.call("agent.create", {
+      provider: "mock",
+      cwd: process.cwd(),
+      thinkingOptionId: "low",
+    });
+    expect(agent.thinkingOptionId).toBe("low");
+    const result = await client.call("agent.setThinking", { agentId: agent.id, thinkingOptionId: "high" });
+    expect(result.agent.thinkingOptionId).toBe("high");
+    expect(result.notice).toBeUndefined();
+    const reset = await client.call("agent.setThinking", { agentId: agent.id, thinkingOptionId: null });
+    expect(reset.agent.thinkingOptionId).toBeNull();
+    expect(client.eventsFor(agent.id)).toEqual([
+      { type: "thinking_option_changed", thinkingOptionId: "high" },
+      { type: "thinking_option_changed", thinkingOptionId: null },
+    ]);
+
+    const missing = await expectRpcError(client.call("agent.setThinking", { agentId: agent.id } as never));
+    expect(missing.error.code).toBe(-32602);
+    const empty = await expectRpcError(
+      client.call("agent.setThinking", { agentId: agent.id, thinkingOptionId: "" }),
+    );
+    expect(empty.error.code).toBe(-32602);
+    const unknown = await expectRpcError(
+      client.call("agent.setThinking", { agentId: "nope", thinkingOptionId: "low" }),
+    );
+    expect(unknown.error.data?.code).toBe("AGENT_NOT_FOUND");
+  });
+
   test("agent.close 置 closed，之后 send 返回 AGENT_CLOSED", async () => {
     const agent = await createAgent();
     await client.call("agent.close", { agentId: agent.id });

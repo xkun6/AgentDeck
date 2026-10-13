@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type {
+  AgentModelDefinition,
   AgentPermissionResponse,
   AgentPromptInput,
   AgentProviderId,
@@ -48,6 +49,8 @@ export interface CreateAgentParams {
   cwd: string;
   model?: string;
   modeId?: string;
+  /** null / 省略 = 跟随 CLI 自身设置（design.md 4.10） */
+  thinkingOptionId?: string | null;
   title?: string;
 }
 
@@ -75,6 +78,8 @@ interface ManagedAgent {
   closing: Promise<void> | null;
   /** 已从注册表删除 */
   removed: boolean;
+  /** 建会话时取到的模型目录（切换模型后校验思考强度用）；null 表示尚未取到 */
+  models: AgentModelDefinition[] | null;
 }
 
 /**
@@ -147,10 +152,12 @@ export class AgentManager {
 
     let catalog = await fetchCatalog();
 
+    const thinkingOptionId = params.thinkingOptionId ?? null;
     const session = await client.createSession({
       cwd: params.cwd,
       ...(params.model !== undefined ? { model: params.model } : {}),
       ...(params.modeId !== undefined ? { modeId: params.modeId } : {}),
+      ...(thinkingOptionId !== null ? { thinkingOptionId } : {}),
     });
 
     // ACP 等 provider 的模式要建会话后才可得：建会话前为空时再取一次（失败只记日志）。
@@ -168,6 +175,7 @@ export class AgentManager {
       ...(params.title !== undefined ? { title: params.title } : {}),
       model: params.model ?? null,
       modeId: params.modeId ?? null,
+      thinkingOptionId,
       ...(catalog ? { availableModes: catalog.modes } : {}),
       status: "idle",
       activeTurnId: null,
@@ -184,6 +192,7 @@ export class AgentManager {
       session,
       entries: [],
       closed: false,
+      models: catalog?.models ?? null,
     };
     this.refreshResumable(agent);
     this.agents.set(id, agent);
@@ -336,7 +345,28 @@ export class AgentManager {
     await session.setModel(modelId);
     this.enqueueEvent(agent, { type: "model_changed", modelId });
     await agent.tail;
+    await this.reconcileThinkingForModel(agent, session, modelId);
     return cloneSnapshot(agent.snapshot);
+  }
+
+  /** design.md 4.10：切换思考强度，下一轮生效；运行中切换时返回 provider 给出的提示 */
+  async setThinking(
+    agentId: string,
+    thinkingOptionId: string | null,
+  ): Promise<{ agent: AgentSnapshot; notice?: string }> {
+    const agent = this.requireOpenAgent(agentId);
+    const session = this.requireSession(agent);
+    if (!session.setThinking) {
+      throw new AgentRpcError(
+        "NOT_SUPPORTED",
+        `provider ${agent.snapshot.provider} 不支持切换思考强度`,
+      );
+    }
+    const result = await session.setThinking(thinkingOptionId);
+    this.enqueueEvent(agent, { type: "thinking_option_changed", thinkingOptionId });
+    await agent.tail;
+    const notice = result?.notice;
+    return { agent: cloneSnapshot(agent.snapshot), ...(notice ? { notice } : {}) };
   }
 
   async setMode(agentId: string, modeId: string): Promise<AgentSnapshot> {
@@ -415,6 +445,52 @@ export class AgentManager {
   // -------------------------------------------------------------------------
   // 内部
   // -------------------------------------------------------------------------
+
+  /**
+   * 切换模型后：新模型不支持当前思考强度（目录里该模型没有此档位）时回退为跟随 CLI（null）。
+   * 目录取不到或目录里找不到该模型时不动。
+   */
+  private async reconcileThinkingForModel(
+    agent: ManagedAgent,
+    session: AgentSession,
+    modelId: string | null,
+  ): Promise<void> {
+    const current = agent.snapshot.thinkingOptionId ?? null;
+    if (current === null || !session.setThinking) {
+      return;
+    }
+    let models = agent.models;
+    if (!models && agent.client) {
+      const catalog = await agent.client
+        .fetchCatalog({ cwd: agent.snapshot.cwd })
+        .catch((error: unknown) => {
+          this.logger.warn("获取 %s 模型目录失败：%s", agent.snapshot.provider, errorMessage(error));
+          return null;
+        });
+      models = catalog?.models ?? null;
+      agent.models = models;
+    }
+    const model = models?.find((entry) =>
+      modelId === null ? entry.isDefault === true : entry.id === modelId,
+    );
+    if (!model || model.thinkingOptions?.some((option) => option.id === current)) {
+      return;
+    }
+    this.logger.info(
+      "agent %s 的模型 %s 不支持思考强度 %s，回退为跟随 CLI 设置",
+      agent.id,
+      modelId ?? "默认",
+      current,
+    );
+    try {
+      await session.setThinking(null);
+    } catch (error) {
+      this.logger.warn("agent %s 回退思考强度失败：%s", agent.id, errorMessage(error));
+      return;
+    }
+    this.enqueueEvent(agent, { type: "thinking_option_changed", thinkingOptionId: null });
+    await agent.tail;
+  }
 
   private closeAgent(agent: ManagedAgent, finalStatus: AgentStatus): Promise<void> {
     if (!agent.closing) {
@@ -539,8 +615,8 @@ export class AgentManager {
     agent.finishedTurnIds = new Set();
     agent.unsubscribe = session.subscribe((event) => this.enqueueEvent(agent, event));
 
-    // 恢复后重新设置快照记录的模型 / 模式（provider 发出的变化事件与快照相同，会被去重）
-    const { model, modeId } = agent.snapshot;
+    // 恢复后重新设置快照记录的模型 / 模式 / 思考强度（provider 发出的变化事件与快照相同，会被去重）
+    const { model, modeId, thinkingOptionId } = agent.snapshot;
     if (model != null && session.setModel) {
       await session.setModel(model).catch((error: unknown) => {
         this.logger.warn("恢复 agent %s 后设置模型 %s 失败：%s", agent.id, model, errorMessage(error));
@@ -552,6 +628,16 @@ export class AgentManager {
           "恢复 agent %s 后设置模式 %s 失败：%s",
           agent.id,
           modeId,
+          errorMessage(error),
+        );
+      });
+    }
+    if (thinkingOptionId != null && session.setThinking) {
+      await session.setThinking(thinkingOptionId).catch((error: unknown) => {
+        this.logger.warn(
+          "恢复 agent %s 后设置思考强度 %s 失败：%s",
+          agent.id,
+          thinkingOptionId,
           errorMessage(error),
         );
       });
@@ -670,6 +756,8 @@ export class AgentManager {
         return (snapshot.model ?? null) === event.modelId;
       case "mode_changed":
         return snapshot.modeId === event.modeId;
+      case "thinking_option_changed":
+        return (snapshot.thinkingOptionId ?? null) === event.thinkingOptionId;
       default:
         return false;
     }
@@ -739,6 +827,9 @@ export class AgentManager {
         return true;
       case "mode_changed":
         snapshot.modeId = event.modeId;
+        return true;
+      case "thinking_option_changed":
+        snapshot.thinkingOptionId = event.thinkingOptionId;
         return true;
       case "timeline":
         if (event.item.type === "user_message" && snapshot.preview === undefined) {
@@ -858,6 +949,7 @@ function newManagedAgent(
     resuming: null,
     closing: null,
     removed: false,
+    models: null,
   };
 }
 

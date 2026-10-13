@@ -95,12 +95,22 @@ export interface AgentMode {
   /** 跳过权限确认类模式（Claude bypassPermissions、Codex full-access），前端据此标红 */
   dangerous?: boolean;
 }
+/** 思考强度档位（design.md 4.10） */
+export interface AgentThinkingOption {
+  id: string;
+  label: string;
+  description?: string;
+}
 export interface AgentModelDefinition {
   provider: AgentProviderId;
   id: string;
   label: string;
   description?: string;
   isDefault?: boolean;
+  /** 该模型可选的思考强度；缺省表示不支持选择（前端隐藏选择器） */
+  thinkingOptions?: AgentThinkingOption[];
+  /** provider 自身的默认档位（仅供展示；快照中 null 才表示跟随 CLI） */
+  defaultThinkingOptionId?: string;
 }
 
 export type AgentPromptInput =
@@ -187,7 +197,9 @@ export type AgentStreamEvent =
   | { type: "usage_updated"; usage: AgentUsage }
   | { type: "model_changed"; modelId: string | null }
   /** modeId 为 null 表示回到「跟随 Agent 设置」（如 Claude 批准计划后切回用户默认模式） */
-  | { type: "mode_changed"; modeId: string | null };
+  | { type: "mode_changed"; modeId: string | null }
+  /** 思考强度变化（design.md 4.10）；null 表示跟随 CLI 自身设置 */
+  | { type: "thinking_option_changed"; thinkingOptionId: string | null };
 
 export interface AgentStreamEnvelope {
   agentId: string;
@@ -212,6 +224,8 @@ export interface AgentSnapshot {
   title?: string;
   model?: string | null;
   modeId?: string | null;
+  /** 思考强度档位；null / 缺省 = 跟随 CLI 自身设置（design.md 4.10） */
+  thinkingOptionId?: string | null;
   availableModes?: AgentMode[];
   status: AgentStatus;
   activeTurnId?: string | null;
@@ -293,6 +307,7 @@ export const AGENT_RPC_METHODS = {
   agentPermissionRespond: "agent.permission.respond",
   agentSetModel: "agent.setModel",
   agentSetMode: "agent.setMode",
+  agentSetThinking: "agent.setThinking",
   agentClose: "agent.close",
   agentTimeline: "agent.timeline",
   agentDelete: "agent.delete",
@@ -324,6 +339,8 @@ export interface AgentRpcMethods {
       cwd: string;
       model?: string;
       modeId?: string;
+      /** null / 省略 = 跟随 CLI 自身设置 */
+      thinkingOptionId?: string | null;
       title?: string;
     };
     result: { agent: AgentSnapshot };
@@ -343,6 +360,11 @@ export interface AgentRpcMethods {
     result: { agent: AgentSnapshot };
   };
   "agent.setMode": { params: { agentId: string; modeId: string }; result: { agent: AgentSnapshot } };
+  /** 下一轮生效；运行中切换时 notice 为中文提示（design.md 4.10） */
+  "agent.setThinking": {
+    params: { agentId: string; thinkingOptionId: string | null };
+    result: { agent: AgentSnapshot; notice?: string };
+  };
   "agent.close": { params: { agentId: string }; result: Record<string, never> };
   "agent.timeline": {
     params: { agentId: string; sinceSeq?: number };

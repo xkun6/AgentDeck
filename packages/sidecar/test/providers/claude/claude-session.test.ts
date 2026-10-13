@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentStreamEvent, ToolCallTimelineItem } from "@agentdeck/protocol";
+import type { AgentModelDefinition, AgentStreamEvent, ToolCallTimelineItem } from "@agentdeck/protocol";
 import { describe, expect, test } from "vitest";
 
 import type { AgentSession } from "../../../src/agent/types.js";
@@ -192,6 +192,16 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<v
 }
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
+
+/** 去掉思考档位字段，便于比较模型的其它字段 */
+function withoutThinking(model: AgentModelDefinition): AgentModelDefinition {
+  const { thinkingOptions: _options, defaultThinkingOptionId: _default, ...rest } = model;
+  return rest;
+}
+
+function thinkingIds(model: AgentModelDefinition | undefined): string[] | undefined {
+  return model?.thinkingOptions?.map((option) => option.id);
+}
 
 const msg = {
   init: (sessionId = SESSION_ID) => ({
@@ -385,15 +395,23 @@ describe("ClaudeAgentClient", () => {
     h.setup((cli) => {
       cli.initialized = Promise.resolve({
         models: [
-          { value: "default", displayName: "Default (recommended)", description: "Opus · 推荐" },
+          {
+            value: "default",
+            displayName: "Default (recommended)",
+            description: "Opus · 推荐",
+            resolvedModel: "claude-opus-5",
+            supportsEffort: true,
+            supportedEffortLevels: ["max", "low", "high", "bogus"],
+          },
           { value: "sonnet", displayName: "Sonnet", description: "Sonnet · 均衡" },
           { value: "claude-fable-5-1[1m]", displayName: "Fable" },
+          { value: "haiku", displayName: "Haiku", supportsEffort: false },
           { value: "" },
         ],
       });
     });
     const catalog = await h.client.fetchCatalog({ cwd: "J:\\work" });
-    expect(catalog.models).toEqual([
+    expect(catalog.models.map(withoutThinking)).toEqual([
       {
         provider: "claude",
         id: "default",
@@ -403,7 +421,18 @@ describe("ClaudeAgentClient", () => {
       },
       { provider: "claude", id: "sonnet", label: "Sonnet", description: "Sonnet · 均衡" },
       { provider: "claude", id: "claude-fable-5-1[1m]", label: "Fable" },
+      { provider: "claude", id: "haiku", label: "Haiku" },
     ]);
+    // CLI 报告的档位（按 low→max 排序、未知值丢弃）；resolvedModel 命中清单的可关闭思考
+    expect(thinkingIds(catalog.models[0])).toEqual(["off", "low", "high", "max"]);
+    expect(catalog.models[0]!.thinkingOptions![0]).toEqual({ id: "off", label: "关闭思考" });
+    expect(catalog.models[0]!.defaultThinkingOptionId).toBe("high");
+    // 无 CLI 档位信息的别名：标准组
+    expect(thinkingIds(catalog.models[1])).toEqual(["low", "medium", "high", "max"]);
+    // 按清单：Fable 5.1 有 xhigh、不可关闭思考
+    expect(thinkingIds(catalog.models[2])).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // supportsEffort=false：无档位
+    expect(catalog.models[3]!.thinkingOptions).toBeUndefined();
     expect(h.clis).toHaveLength(1);
     expect(h.clis[0]!.options).toMatchObject({ cwd: "J:\\work", model: null, permissionMode: null, resumeSessionId: null });
     expect(h.clis[0]!.received).toHaveLength(0);
@@ -442,7 +471,13 @@ describe("ClaudeAgentClient", () => {
       });
     });
     const catalog = await h.client.fetchCatalog();
-    expect(catalog.models).toEqual([
+    expect(thinkingIds(catalog.models.find((m) => m.id === "glm-4.5-air"))).toEqual([
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(catalog.models.map(withoutThinking)).toEqual([
       {
         provider: "claude",
         id: "default",
@@ -1115,6 +1150,84 @@ describe("ClaudeAgentSession", () => {
     await session.setMode!("bypassPermissions");
     expect(h.clis[0]!.calls.setModel).toEqual([null, "haiku"]);
     expect(h.clis[0]!.calls.setPermissionMode).toEqual(["plan", "bypassPermissions"]);
+  });
+
+  test("思考强度：建会话时随启动参数下发；不合法档位抛错", async () => {
+    const h = createHarness();
+    h.setup((q) => (q.onUser = (user) => q.emit(msg.init(), msg.result(user.uuid))));
+    await expect(h.client.createSession({ cwd: ".", thinkingOptionId: "turbo" })).rejects.toThrow(
+      "Claude Code 不支持思考强度：turbo",
+    );
+    const session = await h.client.createSession({ cwd: ".", thinkingOptionId: "low" });
+    const events = collect(session);
+    await session.startTurn("x");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(h.clis[0]!.options.thinkingOptionId).toBe("low");
+    await expect(session.setThinking!("turbo")).rejects.toThrow();
+  });
+
+  test("思考强度：中途切换标记重启，下一轮以 --resume 带新参数重新拉起；运行中切换返回提示", async () => {
+    const h = createHarness();
+    let created = 0;
+    let release: (() => void) | null = null;
+    h.setup((q) => {
+      created += 1;
+      q.onUser = (user) => {
+        q.emit(msg.init());
+        // 第一个进程的第二轮先挂起，便于测试「运行中切换」
+        if (created === 1 && q.received.length === 2) {
+          release = () => q.emit(msg.result(user.uuid));
+          return;
+        }
+        q.emit(msg.result(user.uuid));
+      };
+    });
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+
+    // 无进程时切换：只记下，首轮启动即生效，不重启
+    expect(await session.setThinking!("high")).toEqual({});
+    await session.startTurn("a");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(h.clis).toHaveLength(1);
+    expect(h.clis[0]!.options).toMatchObject({ thinkingOptionId: "high", resumeSessionId: null });
+
+    // 进程运行中、回合进行时切换：返回提示，本轮不受影响
+    await session.startTurn("b");
+    await waitUntil(() => release !== null);
+    expect(await session.setThinking!("off")).toEqual({ notice: "思考强度将在下一轮生效" });
+    expect(h.clis[0]!.calls.close).toBe(0);
+    release!();
+    await waitUntil(() => terminalEvents(events).length === 2);
+
+    // 下一轮：结束旧进程，以 --resume 带新档位重启
+    await session.startTurn("c");
+    await waitUntil(() => terminalEvents(events).length === 3);
+    expect(h.clis).toHaveLength(2);
+    expect(h.clis[0]!.calls.close).toBeGreaterThanOrEqual(1);
+    expect(h.clis[1]!.options).toMatchObject({ thinkingOptionId: "off", resumeSessionId: SESSION_ID });
+    expect(terminalEvents(events).map((e) => e.type)).toEqual([
+      "turn_completed",
+      "turn_completed",
+      "turn_completed",
+    ]);
+
+    // 切回跟随设置（null）同样重启，且不再带参数；档位不变时不重启
+    await session.setThinking!(null);
+    await session.startTurn("d");
+    await waitUntil(() => terminalEvents(events).length === 4);
+    expect(h.clis).toHaveLength(3);
+    expect(h.clis[2]!.options.thinkingOptionId).toBeNull();
+    await session.setThinking!(null);
+    await session.startTurn("e");
+    await waitUntil(() => terminalEvents(events).length === 5);
+    expect(h.clis).toHaveLength(3);
+    expect(events.filter((e) => e.type === "thinking_option_changed")).toEqual([
+      { type: "thinking_option_changed", thinkingOptionId: "high" },
+      { type: "thinking_option_changed", thinkingOptionId: "off" },
+      { type: "thinking_option_changed", thinkingOptionId: null },
+      { type: "thinking_option_changed", thinkingOptionId: null },
+    ]);
   });
 
   test("resumeSession：立即可描述持久化句柄，并以 --resume 启动", async () => {
