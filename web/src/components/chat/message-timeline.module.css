@@ -1392,3 +1392,29 @@
     background: transparent;
   }
 }
+
+/* 回合末尾「本回合修改了 N 个文件」小条（design.md 4.24）：与助手气泡左缘对齐（头像列 36px + 间距 12px） */
+.snapshotBar {
+  margin: -4px 0 12px 48px;
+}
+
+.snapshotBar[data-compact="true"] {
+  margin-left: 0;
+}
+
+.snapshotBarButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--h-line);
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.snapshotBarButton:hover {
+  color: var(--h-text);
+  background: var(--h-bg-chip);
+}

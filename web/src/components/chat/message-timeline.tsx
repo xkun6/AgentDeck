@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
-import { AlertTriangle, ChevronRight, GitFork, Info, RotateCcw, Undo2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, FileDiff, GitFork, Info, RotateCcw, Undo2 } from "lucide-react";
 import { ASSISTANT_FALLBACK_NAME, assistantAvatarDataUrlAtom, showReasoningAtom } from "@/stores/ui";
 import { AGENT_COMPACTION_NOTICE_PREFIX, AGENT_TIMELINE_NOTICE_PREFIX } from "@/stores/chat";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
@@ -22,7 +22,8 @@ import {
   formatTokPerSec,
   formatTokens,
 } from "@/lib/format";
-import type { SessionUsageResult } from "@agentdeck/protocol";
+import type { SessionUsageResult, SnapshotTurn } from "@agentdeck/protocol";
+import { snapshotForMessage } from "@/lib/snapshots";
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const BOTTOM_FOLLOW_THRESHOLD_PX = 120;
@@ -57,6 +58,10 @@ interface MessageTimelineProps {
   focusSeq?: number | null;
   /** 「从这里分叉」（design.md 4.23）：传该消息所在回合内的一个时间线 seq；不传则不显示该操作。 */
   onFork?: (seq: number) => void;
+  /** 按回合文件快照索引（design.md 4.24）：已结束且有文件变化的回合末尾显示「本回合修改了 N 个文件」。 */
+  snapshotTurns?: readonly SnapshotTurn[];
+  /** 点击该小条：在右侧预览栏打开快照面板并展开该回合。 */
+  onOpenSnapshot?: (turnId: string) => void;
 }
 
 /** 定位后消息高亮持续的时间（与 CSS 动画时长一致） */
@@ -782,6 +787,27 @@ function MessageStatsFooter({ stats }: { stats: AssistantMessageStats }) {
   );
 }
 
+/** 回合末尾「本回合修改了 N 个文件」小条（design.md 4.24）；回合没有文件变化时不渲染。 */
+function TurnSnapshotBar({
+  turn,
+  compact,
+  onOpen,
+}: {
+  turn: SnapshotTurn | undefined;
+  compact: boolean;
+  onOpen: (turnId: string) => void;
+}) {
+  if (!turn) return null;
+  return (
+    <div className={s.snapshotBar} data-compact={compact ? "true" : undefined}>
+      <button type="button" className={s.snapshotBarButton} onClick={() => onOpen(turn.turnId)}>
+        <FileDiff size={12} aria-hidden />
+        本回合修改了 {turn.changedFiles.length} 个文件
+      </button>
+    </div>
+  );
+}
+
 interface MessageBubbleProps {
   message: ChatMessage;
   turnStartedAt?: number;
@@ -1023,6 +1049,8 @@ export function MessageTimeline({
   resendDisabled,
   focusSeq,
   onFork,
+  snapshotTurns,
+  onOpenSnapshot,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1479,6 +1507,13 @@ export function MessageTimeline({
                 resendDisabled={resendDisabled}
                 onFork={index >= runningTurnStartIndex ? undefined : onFork}
               />
+              {onOpenSnapshot && message.role === "assistant" && index < runningTurnStartIndex ? (
+                <TurnSnapshotBar
+                  turn={snapshotForMessage(snapshotTurns, message.firstSeq)}
+                  compact={compact}
+                  onOpen={onOpenSnapshot}
+                />
+              ) : null}
             </div>
           );
         })}

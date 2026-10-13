@@ -2,6 +2,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
+  Camera,
   FileText,
   GitPullRequest,
   Globe,
@@ -12,6 +13,7 @@ import {
 import {
   DEFAULT_PREVIEW_PANEL,
   PREVIEW_PANEL_QUERY_KEY,
+  SNAPSHOT_TURN_QUERY_KEY,
   UNSAVED_DISCARD_CONFIRM,
   normalizePreviewPanel,
   type PreviewPanel,
@@ -27,6 +29,7 @@ import { WebPreviewTab } from "./web-preview-tab";
 import { FilePreviewTab } from "./file-preview-tab";
 import { ReviewTab } from "./review-tab";
 import { TerminalTab } from "./terminal-tab";
+import { SnapshotsTab } from "./snapshots-tab";
 import { PanelResizeHandle, usePanelWidth } from "../panel-resize";
 import s from "./preview-rail.module.css";
 
@@ -43,6 +46,7 @@ const TABS: Array<{ key: PreviewPanel; label: string; icon: typeof Globe; hidden
   { key: "web", label: "网页", icon: Globe, hidden: true },
   { key: "files", label: "文件", icon: FileText },
   { key: "review", label: "改动", icon: GitPullRequest },
+  { key: "snapshots", label: "快照", icon: Camera },
   { key: "terminal", label: "终端", icon: TerminalSquare },
 ];
 
@@ -155,6 +159,18 @@ export function PreviewRail({ sessionId, workspaceRoot, onClose }: PreviewRailPr
         ) : null}
         {active === "review" ? (
           <ReviewTab workspaceRoot={workspaceRoot} active={active === "review"} />
+        ) : null}
+        {active === "snapshots" ? (
+          <SnapshotsTab
+            agentId={sessionId}
+            selectedTurnId={searchParams.get(SNAPSHOT_TURN_QUERY_KEY)}
+            onSelectTurn={(turnId) => {
+              const next = new URLSearchParams(searchParams);
+              if (turnId) next.set(SNAPSHOT_TURN_QUERY_KEY, turnId);
+              else next.delete(SNAPSHOT_TURN_QUERY_KEY);
+              setSearchParams(next, { replace: true });
+            }}
+          />
         ) : null}
         {active === "terminal" ? <TerminalTab /> : null}
       </div>

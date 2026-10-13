@@ -11,6 +11,8 @@ import { createLogger, type Logger } from "./logger.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { RpcServer } from "./server/rpc-server.js";
+import { SettingsStore } from "./settings/sidecar-settings.js";
+import { SnapshotService } from "./snapshots/snapshot-service.js";
 import { UsageLedger } from "./usage/ledger.js";
 import { withTimeout } from "./utils/promise-timeout.js";
 
@@ -182,7 +184,18 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error("加载用量账本失败：%s", String(error));
   }
-  manager = new AgentManager({ registry, logger, usage, ...(store ? { store } : {}) });
+  // sidecar 设置与按回合文件快照（design.md 4.24）：设置读取失败只记日志，沿用默认值
+  const settings = new SettingsStore({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) });
+  await settings.load();
+  const snapshots = new SnapshotService({
+    logger,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+    settings: () => settings.get().snapshots,
+    agentCwd: (agentId) => manager?.listAgents().find((agent) => agent.id === agentId)?.cwd,
+    listAgents: () => manager?.listAgents().map((agent) => ({ id: agent.id, cwd: agent.cwd })) ?? [],
+    isCwdBusy: (cwd) => manager?.isCwdBusy(cwd) ?? false,
+  });
+  manager = new AgentManager({ registry, logger, usage, snapshots, ...(store ? { store } : {}) });
   try {
     await manager.restore();
   } catch (error) {
@@ -195,6 +208,8 @@ async function main(): Promise<void> {
     registry,
     providerConfig,
     usage,
+    settings,
+    snapshots,
     logger,
   });
 

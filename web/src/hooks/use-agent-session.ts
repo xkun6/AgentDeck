@@ -26,6 +26,9 @@ import type {
   ProviderSubagentDescriptor,
   ProviderSubagentTimelineRow,
   ProviderTestResult,
+  SidecarSettings,
+  SidecarSettingsPatch,
+  SnapshotTurn,
   UsageSummary,
 } from "@agentdeck/protocol";
 import {
@@ -520,6 +523,47 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     /** usage.summary：跨会话用量统计（design.md 4.20）；sinceMs 缺省为最近 30 天，0 表示全部。 */
     async usageSummary(range?: { sinceMs?: number; untilMs?: number }): Promise<UsageSummary> {
       return client.request("usage.summary", range ?? {}, { timeoutMs: 60_000 });
+    },
+
+    /** settings.get / settings.set：sidecar 设置（design.md 4.24）。 */
+    async getSidecarSettings(): Promise<SidecarSettings> {
+      return client.request("settings.get", {});
+    },
+    async setSidecarSettings(patch: SidecarSettingsPatch): Promise<SidecarSettings> {
+      return client.request("settings.set", { patch });
+    },
+
+    /** snapshot.list：按回合的文件快照索引（design.md 4.24）。 */
+    async listSnapshots(agentId: string): Promise<SnapshotTurn[]> {
+      const { turns } = await client.request("snapshot.list", { agentId }, { timeoutMs: 60_000 });
+      return turns;
+    },
+    /** snapshot.diff：回合前与回合后（缺省）或当前工作区的 unified diff，上限 512 KB。 */
+    async snapshotDiff(
+      agentId: string,
+      turnId: string,
+      options: { path?: string; against?: "after" | "current" } = {},
+    ): Promise<{ diff: string; truncated: boolean }> {
+      return client.request("snapshot.diff", { agentId, turnId, ...options }, { timeoutMs: 60_000 });
+    },
+    /** snapshot.restore：把文件恢复到该回合开始前；同工作目录有进行中的回合时 TURN_IN_PROGRESS。 */
+    async restoreSnapshot(
+      agentId: string,
+      turnId: string,
+      paths?: string[],
+    ): Promise<{ restored: string[]; deleted: string[]; backupCommit: string }> {
+      return client.request(
+        "snapshot.restore",
+        { agentId, turnId, ...(paths ? { paths } : {}) },
+        { timeoutMs: 120_000 },
+      );
+    },
+    async snapshotStorage(): Promise<Array<{ cwd: string; bytes: number }>> {
+      const { repos } = await client.request("snapshot.storage", {}, { timeoutMs: 60_000 });
+      return repos;
+    },
+    async pruneSnapshots(cwd: string): Promise<void> {
+      await client.request("snapshot.prune", { cwd }, { timeoutMs: 120_000 });
     },
 
     /**

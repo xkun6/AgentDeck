@@ -23,6 +23,7 @@ import type {
 
 import { createSilentLogger, type Logger } from "../logger.js";
 import { withTimeout } from "../utils/promise-timeout.js";
+import { normalizeCwd, type SnapshotService } from "../snapshots/snapshot-service.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { UsageTurnTracker } from "../usage/turn-tracker.js";
 import type { AgentStore, PendingNativeFork, PersistedAgentMeta } from "./agent-store.js";
@@ -79,6 +80,8 @@ export interface AgentManagerOptions {
   store?: AgentStore;
   /** 跨会话用量账本（design.md 4.20）；不传则不记录 */
   usage?: UsageLedger;
+  /** 按回合文件快照（design.md 4.24）；不传则不拍快照 */
+  snapshots?: SnapshotService;
 }
 
 export interface CreateAgentParams {
@@ -155,6 +158,7 @@ export class AgentManager {
   private readonly coalescer: AgentStreamCoalescer;
   private readonly store: AgentStore | undefined;
   private readonly usage: UsageLedger | undefined;
+  private readonly snapshots: SnapshotService | undefined;
   /** 每个会话的回合账本折叠器（只在内存） */
   private readonly usageTrackers = new Map<string, UsageTurnTracker>();
   /** provider 子代理（只在内存，会话关闭 / 删除时清空） */
@@ -164,6 +168,7 @@ export class AgentManager {
     this.registry = options.registry;
     this.store = options.store;
     this.usage = options.usage;
+    this.snapshots = options.snapshots;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
@@ -864,6 +869,7 @@ export class AgentManager {
     }
     this.clearSubagents(agent);
     this.usageTrackers.delete(agent.id);
+    void this.snapshots?.removeAgent(agent.id, agent.snapshot.cwd);
     agent.removed = true;
     this.agents.delete(agent.id);
     this.coalescer.flushAndDiscard(agent.id);
@@ -944,6 +950,7 @@ export class AgentManager {
     await Promise.allSettled(live.map((agent) => this.closeAgent(agent, finalStatus)));
     this.coalescer.flushAll();
     await this.flush();
+    await this.snapshots?.idle();
   }
 
   /** 强制落盘全部待写数据（未启用持久化时为空操作） */
@@ -1483,6 +1490,7 @@ export class AgentManager {
     };
     agent.entries?.push(envelope);
     this.recordUsage(agent, envelope);
+    this.recordSnapshot(agent, envelope);
     if (!agent.removed) {
       this.store?.appendEntry(agent.id, envelope);
     }
@@ -1493,6 +1501,50 @@ export class AgentManager {
         this.logger.error("agent.stream 监听器出错：%s", String(error));
       }
     }
+  }
+
+  /** design.md 4.24：turn_started / 回合结束时异步拍快照（不阻塞事件链，失败只记日志） */
+  private recordSnapshot(agent: ManagedAgent, envelope: AgentStreamEnvelope): void {
+    const snapshots = this.snapshots;
+    if (!snapshots || agent.removed) {
+      return;
+    }
+    const event = envelope.event;
+    const info = { agentId: agent.id, cwd: agent.snapshot.cwd, turnId: "" };
+    let task: Promise<void> | undefined;
+    switch (event.type) {
+      case "turn_started":
+        task = snapshots.onTurnStarted({
+          ...info,
+          turnId: event.turnId,
+          seq: envelope.seq,
+          startedAt: envelope.timestamp,
+        });
+        break;
+      case "turn_completed":
+      case "turn_failed":
+      case "turn_canceled":
+        task = snapshots.onTurnEnded({ ...info, turnId: event.turnId });
+        break;
+      default:
+        return;
+    }
+    task.catch((error: unknown) =>
+      this.logger.warn("agent %s 的快照任务出错：%s", agent.id, errorMessage(error)),
+    );
+  }
+
+  /** 同一工作目录上是否有任一会话正在跑回合（含 send / 恢复中），供快照回滚与清理判断 */
+  isCwdBusy(cwd: string): boolean {
+    const key = normalizeCwd(cwd);
+    return Array.from(this.agents.values()).some(
+      (agent) =>
+        normalizeCwd(agent.snapshot.cwd) === key &&
+        (agent.sending ||
+          agent.resuming !== null ||
+          agent.snapshot.status === "running" ||
+          Boolean(agent.snapshot.activeTurnId)),
+    );
   }
 
   /** design.md 4.20：回合结束时向账本追加一行（失败只记日志） */

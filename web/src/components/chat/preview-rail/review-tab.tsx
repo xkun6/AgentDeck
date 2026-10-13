@@ -453,7 +453,7 @@ function diffLineKind(line: string): string {
   return "context";
 }
 
-function DiffView({ diff }: { diff: string }) {
+export function DiffView({ diff }: { diff: string }) {
   // Drop a trailing empty line so the view doesn't end on a blank row.
   const lines = useMemo(() => diff.replace(/\n$/, "").split("\n"), [diff]);
   return (

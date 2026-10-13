@@ -6,6 +6,7 @@ import { useSetAtom } from "jotai";
 import {
   Archive,
   ArchiveRestore,
+  Camera,
   Copy,
   ExternalLink,
   FileJson,
@@ -24,7 +25,8 @@ import type { ContextMenuEntry } from "@/components/context-menu/entity-context-
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import { useExportSession } from "@/hooks/use-export-session";
-import { activeSessionIdAtom } from "@/stores/ui";
+import { activeSessionIdAtom, rightRailVisibleAtom } from "@/stores/ui";
+import { PREVIEW_PANEL_QUERY_KEY } from "@/lib/preview-rail";
 import { agentProviderLabel } from "@/lib/agent-session-display";
 import { useConfirm } from "@/lib/use-confirm";
 import {
@@ -161,6 +163,7 @@ export function useForkSession() {
 export function useSessionActions() {
   const navigate = useNavigate();
   const setActiveId = useSetAtom(activeSessionIdAtom);
+  const setRightRailVisible = useSetAtom(rightRailVisibleAtom);
   const deleteSession = useDeleteAgentSession();
   const exportSession = useExportSession();
   const forkSession = useForkSession();
@@ -217,6 +220,16 @@ export function useSessionActions() {
     [navigate, setActiveId],
   );
 
+  /** 「快照历史」（design.md 4.24）：打开会话并在右侧预览栏显示快照面板 */
+  const openSnapshotHistory = useCallback(
+    (agent: Pick<AgentSnapshot, "id">) => {
+      setActiveId(agent.id);
+      setRightRailVisible(true);
+      navigate(`/tasks/${encodeURIComponent(agent.id)}?${PREVIEW_PANEL_QUERY_KEY}=snapshots`);
+    },
+    [navigate, setActiveId, setRightRailVisible],
+  );
+
   const buildMenu = useCallback(
     (agent: AgentSnapshot, title: string): ContextMenuEntry[] => {
       const cwd = normalizeWorkspacePath(agent.cwd || readSessionWorkspaceMap()[agent.id]);
@@ -247,6 +260,7 @@ export function useSessionActions() {
           disabled: running,
           onSelect: () => void forkSession(agent.id),
         },
+        { key: "snapshots", label: "快照历史", icon: <Camera size={ICON} />, onSelect: () => openSnapshotHistory(agent) },
         { key: "copy-title", label: "复制会话标题", icon: <Copy size={ICON} />, onSelect: () => void copyText(title) },
         ...(cwd
           ? [{ key: "copy-cwd", label: "复制工作目录", icon: <Copy size={ICON} />, onSelect: () => void copyText(cwd) }]
@@ -274,7 +288,7 @@ export function useSessionActions() {
         },
       ];
     },
-    [deleteSession, exportSession, forkSession, navigate, openSession, renameSession, updateSession],
+    [deleteSession, exportSession, forkSession, navigate, openSession, openSnapshotHistory, renameSession, updateSession],
   );
 
   return { openSession, buildMenu };

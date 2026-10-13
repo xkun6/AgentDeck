@@ -4,12 +4,15 @@
 
 import type { FilePreview } from "./runtime";
 
-export const PREVIEW_PANELS = ["web", "files", "review", "terminal"] as const;
+export const PREVIEW_PANELS = ["web", "files", "review", "snapshots", "terminal"] as const;
 export type PreviewPanel = (typeof PREVIEW_PANELS)[number];
 export const DEFAULT_PREVIEW_PANEL: PreviewPanel = "files";
 
 /** The `?panel=` query key used to deep-link the active rail tab. */
 export const PREVIEW_PANEL_QUERY_KEY = "panel";
+
+/** 快照面板（design.md 4.24）默认展开的回合：`?snapshotTurn=<turnId>`。 */
+export const SNAPSHOT_TURN_QUERY_KEY = "snapshotTurn";
 
 export function normalizePreviewPanel(value: unknown): PreviewPanel {
   return PREVIEW_PANELS.includes(value as PreviewPanel)

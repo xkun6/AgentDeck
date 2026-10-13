@@ -1,0 +1,77 @@
+.numberField {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.numberInput {
+  width: 96px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.numberInput:focus {
+  outline: none;
+  border-color: var(--h-accent-border);
+}
+
+.unit {
+  font-size: 12px;
+  color: var(--h-text-3);
+}
+
+.message {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--h-text-2);
+}
+
+.message[data-tone="error"] {
+  color: var(--h-danger);
+}
+
+.subheading {
+  margin: 24px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.storageList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storageRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.storagePath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  color: var(--h-text-2);
+}
+
+.storageSize {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--h-text-3);
+}

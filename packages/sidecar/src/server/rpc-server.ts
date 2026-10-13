@@ -30,6 +30,8 @@ import {
 } from "../providers/custom/schema.js";
 import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
+import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
+import type { SnapshotService } from "../snapshots/snapshot-service.js";
 import { UsageLedger } from "../usage/ledger.js";
 import { summarizeUsage } from "../usage/summary.js";
 
@@ -54,6 +56,10 @@ export interface RpcServerOptions {
   providerConfig?: ProviderConfigHandler;
   /** 用量账本（design.md 4.20）；不传时 usage.summary 返回空统计 */
   usage?: UsageLedger;
+  /** sidecar 设置（design.md 4.24）；不传时用内存默认值 */
+  settings?: SettingsStore;
+  /** 按回合文件快照（design.md 4.24）；不传时 snapshot.* 返回 NOT_SUPPORTED（list / storage 返回空） */
+  snapshots?: SnapshotService;
   logger?: Logger;
 }
 
@@ -180,6 +186,7 @@ export class RpcServer {
   private readonly logger: Logger;
   private readonly tokenHash: Buffer;
   private readonly unsubscribeManager: () => void;
+  private readonly unsubscribeSettings: () => void;
 
   constructor(private readonly options: RpcServerOptions) {
     this.logger = options.logger ?? createSilentLogger();
@@ -199,6 +206,10 @@ export class RpcServer {
       onTasks: (agentId, tasks) =>
         this.broadcast(AGENT_RPC_NOTIFICATIONS.agentTasksUpdate, { agentId, tasks }),
     });
+    this.unsubscribeSettings =
+      options.settings?.subscribe((settings) =>
+        this.broadcast(AGENT_RPC_NOTIFICATIONS.settingsChanged, { settings }),
+      ) ?? (() => undefined);
   }
 
   /** 监听并返回实际端口 */
@@ -219,6 +230,7 @@ export class RpcServer {
 
   async close(): Promise<void> {
     this.unsubscribeManager();
+    this.unsubscribeSettings();
     for (const ws of this.clients) {
       ws.terminate();
     }
@@ -235,6 +247,14 @@ export class RpcServer {
   private createMethods(): Array<[string, RegisteredMethod]> {
     const { manager, registry, version } = this.options;
     const usage = this.options.usage ?? new UsageLedger();
+    const settings = this.options.settings ?? new SettingsStore();
+    const snapshots = this.options.snapshots;
+    const requireSnapshots = (): SnapshotService => {
+      if (!snapshots) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用文件快照");
+      }
+      return snapshots;
+    };
     const requireClient = (provider: string) => {
       const client = registry.get(provider);
       if (!client) {
@@ -426,6 +446,50 @@ export class RpcServer {
               agentTitle: (agentId) => titles.get(agentId),
             },
           );
+        },
+      ),
+      defineMethod(AGENT_RPC_METHODS.settingsGet, emptyParams, () => settings.get()),
+      defineMethod(
+        AGENT_RPC_METHODS.settingsSet,
+        z.object({ patch: settingsPatchSchema }),
+        (params) => settings.set(params.patch),
+      ),
+      defineMethod(AGENT_RPC_METHODS.snapshotList, agentIdParams, async (params) => {
+        manager.getAgent(params.agentId);
+        return { turns: (await snapshots?.list(params.agentId)) ?? [] };
+      }),
+      defineMethod(
+        AGENT_RPC_METHODS.snapshotDiff,
+        z.object({
+          agentId: z.string().min(1),
+          turnId: z.string().min(1),
+          path: z.string().min(1).optional(),
+          against: z.enum(["after", "current"]).optional(),
+        }),
+        (params) =>
+          requireSnapshots().diff(params.agentId, params.turnId, {
+            ...(params.path !== undefined ? { path: params.path } : {}),
+            ...(params.against !== undefined ? { against: params.against } : {}),
+          }),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.snapshotRestore,
+        z.object({
+          agentId: z.string().min(1),
+          turnId: z.string().min(1),
+          paths: z.array(z.string().min(1)).max(10_000).optional(),
+        }),
+        (params) => requireSnapshots().restore(params.agentId, params.turnId, params.paths),
+      ),
+      defineMethod(AGENT_RPC_METHODS.snapshotStorage, emptyParams, async () => ({
+        repos: (await snapshots?.storage()) ?? [],
+      })),
+      defineMethod(
+        AGENT_RPC_METHODS.snapshotPrune,
+        z.object({ cwd: z.string().min(1) }),
+        async (params) => {
+          await requireSnapshots().prune(params.cwd);
+          return {};
         },
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
