@@ -951,3 +951,92 @@
   white-space: pre;
   overflow: auto;
 }
+
+/* ── 快照面板（design.md 4.24） ─────────────────────────────────────────── */
+
+.snapshotTurn {
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.snapshotTurn .reviewRow {
+  height: 32px;
+}
+
+.snapshotTurn .reviewRow:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.snapshotCount {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--h-text-3);
+}
+
+.snapshotDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 8px;
+  background: var(--h-bg-soft);
+}
+
+.snapshotFiles {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.snapshotDiff {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--h-line-soft);
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.snapshotActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 8px;
+}
+
+.snapshotActions .reviewModalBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.snapshotActions .reviewModalBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.snapshotNotice {
+  margin: 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--h-text-2);
+}
+
+.snapshotNotice[data-tone="error"] {
+  color: var(--h-danger);
+}
+
+.snapshotPreviewGroup {
+  margin-top: 8px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.snapshotPreviewList {
+  max-height: 120px;
+  margin: 4px 0 0;
+  padding-left: 16px;
+  overflow: auto;
+  font-family: var(--h-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--h-text-3);
+  word-break: break-all;
+}

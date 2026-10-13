@@ -800,6 +800,14 @@ interface SidecarSettings {
 - 会话右键菜单「快照历史」打开同一面板（按回合列出）。
 - 设置页（「高级」）新增「文件快照」：开关、上限设置、各工作目录占用空间与「清理」。
 
+**实现补充（落地时确定）**：
+- git 命令：`--git-dir=<repo> --work-tree=<cwd> --literal-pathspecs -c core.autocrlf=false -c core.safecrlf=false -c core.quotepath=false -c core.fsmonitor=false -c core.longpaths=true -c gc.auto=0 -c user.name=AgentDeck -c user.email=agentdeck@localhost`，环境 `GIT_CONFIG_NOSYSTEM=1`、`GIT_TERMINAL_PROMPT=0`、`GIT_OPTIONAL_LOCKS=0`；git 经 `findExecutable("git")` 定位，`spawnProcess` 保证 `shell:false`、`windowsHide:true`。
+- 拍快照流程（持 repo 锁）：`ls-files -z -o --exclude-standard`（未跟踪）/ `-m`（已修改）/ `-d`（已删除）得到候选，数量（三者之和）超过 `maxFiles` → `skipped: "too_many_files"`；对未跟踪与已修改的文件 `lstat` 过滤超过 `maxFileBytes` 的（已跟踪但变大的文件 `git rm --cached` 移出索引）；其余经 `git add -A --pathspec-from-file=- --pathspec-file-nul`（stdin，NUL 分隔）暂存，已删除文件同一命令暂存删除；`write-tree` 后与 `refs/agentdeck/<agentId>` 当前提交的树比较，相同则复用该提交，否则 `commit-tree` + `update-ref`。影子仓库用持久索引，所以后续快照只需处理增量。嵌套仓库（`ls-files -o` 里以 `/` 结尾的项）忽略。
+- 索引项在 `turn_started` 时登记（`before` 之后才有 `after`），回合结束后补 `after` 与 `changedFiles`（`diff-tree -r --name-status --no-renames`，因此不产生 `R`，重命名表现为 `D` + `A`）；`before` 为 null 的回合（跳过 / 失败）不计算 `changedFiles`。同一会话的回合前 / 后任务在 sidecar 内串行，`snapshot.list` 会先等待该会话排队中的任务，前端在回合结束后刷新即可拿到最新结果。未设置 `AGENTDECK_DATA_DIR` 时没有地方存放影子仓库，回合记 `skipped: "disabled"`。
+- `snapshot.restore`：`before` 与「恢复前快照」（`refs/agentdeck/restore`）之间 `diff-tree` 得到差异，`A` 删除（并清理空目录）、`M` / `D` 用 `git checkout <before> --pathspec-from-file=- --pathspec-file-nul` 检出；`paths` 为精确文件或目录前缀；路径含 `..` / 绝对路径 → `-32602`。注意是「回合前快照 → 当前」的整体差异，因此也会回退该回合之后各回合的改动，前端确认弹窗按该回合及之后各回合的 `changedFiles` 折叠出预计的恢复 / 删除列表。`snapshot.prune` 同样在同 cwd 有运行中回合时返回 `TURN_IN_PROGRESS`。
+- `snapshot.diff`：`against: "current"` 时对当前工作区临时 `write-tree`（不产生提交）再 diff；输出超过 512 KB 终止 git 进程并 `truncated: true`。
+- 前端：助手消息的 `firstSeq` 等于其回合 `turn_started` 的 seq，与索引项 `seq` 对应；快照面板是预览栏的「快照」标签，`?panel=snapshots&snapshotTurn=<turnId>` 深链；设置页路径 `/snapshots`。
+
 ### 4.25 调度器：定时任务、心跳、目标循环
 
 **存储**：`<AGENTDECK_DATA_DIR>/schedules.json`（原子写入，内容 `{ version: 1, paused: boolean, schedules: Schedule[] }`）；运行记录追加到 `<AGENTDECK_DATA_DIR>/schedule-runs.jsonl`。

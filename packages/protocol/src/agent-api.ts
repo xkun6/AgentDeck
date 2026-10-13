@@ -552,6 +552,43 @@ export interface UsageSummary {
 }
 
 // ---------------------------------------------------------------------------
+// 4.24 sidecar 设置与按回合文件快照（影子仓库）
+// ---------------------------------------------------------------------------
+
+export interface SidecarSettings {
+  snapshots: { enabled: boolean; maxFiles: number; maxFileBytes: number };
+  /** 4.26 以后实现，目前只存取 */
+  interop: { enabled: boolean };
+}
+
+export interface SidecarSettingsPatch {
+  snapshots?: Partial<SidecarSettings["snapshots"]>;
+  interop?: Partial<SidecarSettings["interop"]>;
+}
+
+export type SnapshotFileStatus = "A" | "M" | "D" | "R";
+
+export interface SnapshotChangedFile {
+  path: string;
+  status: SnapshotFileStatus;
+}
+
+export type SnapshotSkipReason = "too_many_files" | "git_unavailable" | "disabled";
+
+export interface SnapshotTurn {
+  turnId: string;
+  /** 本回合 turn_started 的 seq */
+  seq: number;
+  startedAt: number;
+  before: string | null;
+  after: string | null;
+  changedFiles: SnapshotChangedFile[];
+  skipped?: SnapshotSkipReason;
+  /** 影子仓库已被清理 */
+  pruned?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // 4.1 请求方法 / 4.2 通知：方法名常量与参数/返回映射
 // ---------------------------------------------------------------------------
 
@@ -576,6 +613,13 @@ export const AGENT_RPC_METHODS = {
   agentUpdate: "agent.update",
   agentSearch: "agent.search",
   usageSummary: "usage.summary",
+  settingsGet: "settings.get",
+  settingsSet: "settings.set",
+  snapshotList: "snapshot.list",
+  snapshotDiff: "snapshot.diff",
+  snapshotRestore: "snapshot.restore",
+  snapshotStorage: "snapshot.storage",
+  snapshotPrune: "snapshot.prune",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
   agentCommands: "agent.commands",
@@ -595,6 +639,7 @@ export const AGENT_RPC_NOTIFICATIONS = {
   agentState: "agent.state",
   agentRemoved: "agent.removed",
   providerChanged: "provider.changed",
+  settingsChanged: "settings.changed",
   agentSubagentsUpdate: "agent.subagents.update",
   agentTasksUpdate: "agent.tasks.update",
 } as const;
@@ -657,6 +702,25 @@ export interface AgentRpcMethods {
     params: { sinceMs?: number; untilMs?: number } | undefined;
     result: UsageSummary;
   };
+  /** sidecar 设置（design.md 4.24） */
+  "settings.get": { params: AgentRpcEmptyParams; result: SidecarSettings };
+  "settings.set": { params: { patch: SidecarSettingsPatch }; result: SidecarSettings };
+  "snapshot.list": { params: { agentId: string }; result: { turns: SnapshotTurn[] } };
+  /** before 与 after（默认）或当前工作区的 unified diff，上限 512 KB */
+  "snapshot.diff": {
+    params: { agentId: string; turnId: string; path?: string; against?: "after" | "current" };
+    result: { diff: string; truncated: boolean };
+  };
+  /** 把文件恢复到该回合开始前；同 cwd 有进行中的回合 → TURN_IN_PROGRESS */
+  "snapshot.restore": {
+    params: { agentId: string; turnId: string; paths?: string[] };
+    result: { restored: string[]; deleted: string[]; backupCommit: string };
+  };
+  "snapshot.storage": {
+    params: AgentRpcEmptyParams;
+    result: { repos: Array<{ cwd: string; bytes: number }> };
+  };
+  "snapshot.prune": { params: { cwd: string }; result: Record<string, never> };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };
     result: Record<string, never>;
@@ -746,6 +810,8 @@ export interface AgentRpcNotifications {
   "agent.removed": { agentId: string };
   /** providers.json 被替换后广播，前端据此刷新 provider.list */
   "provider.changed": Record<string, never>;
+  /** sidecar 设置变化（design.md 4.24） */
+  "settings.changed": { settings: SidecarSettings };
   /** provider 子代理描述 / 时间线变化（design.md 4.11），向所有连接广播，前端按 agentId 过滤 */
   "agent.subagents.update": ProviderSubagentUpdate;
   /** 后台任务整表推送（design.md 4.15），向所有连接广播，前端按 agentId 过滤 */

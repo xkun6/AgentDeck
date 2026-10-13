@@ -81,7 +81,8 @@ import { BackgroundTaskTrack } from "@/components/chat/background-tasks/backgrou
 import { SubagentPanel } from "@/components/chat/subagents/subagent-panel";
 import { BackgroundTaskPanel } from "@/components/chat/background-tasks/background-task-panel";
 import { useSidePanelSelection } from "@/components/chat/use-side-panel-selection";
-import { PREVIEW_PANEL_QUERY_KEY } from "@/lib/preview-rail";
+import { PREVIEW_PANEL_QUERY_KEY, SNAPSHOT_TURN_QUERY_KEY } from "@/lib/preview-rail";
+import { useSnapshotTurns } from "@/hooks/use-snapshots";
 import { ConversationWidthControl } from "@/components/chat/conversation-width-control";
 import { agentUIMessagesToChatMessages } from "@/components/chat/message-adapter";
 import s from "./detail.module.css";
@@ -112,7 +113,7 @@ export function DetailRoute() {
   const conversationFontSizeMode = useAtomValue(conversationFontSizeAtom);
   const assistantDisplayName = useAtomValue(assistantDisplayNameAtom);
   const [rightRailVisible, setRightRailVisible] = useAtom(rightRailVisibleAtom);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   // 全文搜索命中跳转（design.md 4.19）：?seq= 指定要定位的 sidecar seq
   const focusSeq = parseFocusSeq(searchParams.get("seq"));
   const taskId = activeSessionId ?? urlTaskId;
@@ -127,6 +128,18 @@ export function DetailRoute() {
 
   const actions = useAgentSession();
   const forkSession = useForkSession();
+  // 「本回合修改了 N 个文件」：打开右侧预览栏的快照面板并展开该回合（design.md 4.24）
+  const openSnapshotPanel = useCallback(
+    (turnId: string) => {
+      closeSidePanel();
+      setRightRailVisible(true);
+      const next = new URLSearchParams(searchParams);
+      next.set(PREVIEW_PANEL_QUERY_KEY, "snapshots");
+      next.set(SNAPSHOT_TURN_QUERY_KEY, turnId);
+      setSearchParams(next, { replace: true });
+    },
+    [closeSidePanel, searchParams, setRightRailVisible, setSearchParams],
+  );
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const snapshots = useAtomValue(agentSnapshotsAtom);
   const agentListLoaded = useAtomValue(agentListLoadedAtom);
@@ -142,6 +155,8 @@ export function DetailRoute() {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [statusDialogOpen, setStatusDialogOpen] = useState(false);
   const runtimeIsBusy = isRuntimeRunning(runtime) || snapshot?.status === "running";
+  // 按回合文件快照（design.md 4.24）：回合结束后刷新；「本回合修改了 N 个文件」小条据此显示
+  const { turns: snapshotTurns } = useSnapshotTurns(taskId, runtimeIsBusy);
   // dormant（sidecar 重启后的历史会话）/ closed：发送时自动恢复；starting：恢复进行中
   const inactive = isInactiveAgent(snapshot);
   const resuming = snapshot?.status === "starting";
@@ -665,6 +680,8 @@ export function DetailRoute() {
             resendDisabled={resending}
             focusSeq={focusSeq}
             onFork={(seq) => { if (taskId) void forkSession(taskId, seq); }}
+            snapshotTurns={snapshotTurns}
+            onOpenSnapshot={openSnapshotPanel}
           />
           <div className={s.composerArea}>
             {retraction.notice ? (

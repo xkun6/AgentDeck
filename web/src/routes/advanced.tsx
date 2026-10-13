@@ -3,13 +3,15 @@ import { SectionShell } from "./section-shell";
 import { AboutSection, GeneralSection, NotificationSection, ThemeSection } from "./settings";
 import { EnvironmentSection } from "./environment";
 import { DebugSection } from "./debug";
+import { SnapshotSettingsSection } from "./snapshot-settings";
 
-type AdvancedSection = "general" | "notifications" | "env" | "debug" | "about";
+type AdvancedSection = "general" | "notifications" | "env" | "snapshots" | "debug" | "about";
 
 const SECTION_PATHS: Record<AdvancedSection, string> = {
   general: "/common",
   notifications: "/notifications",
   env: "/env",
+  snapshots: "/snapshots",
   debug: "/debug",
   about: "/about",
 };
@@ -18,6 +20,7 @@ const LEGACY_SECTION_PATHS: Record<string, AdvancedSection> = {
   "/advanced": "general",
   "/advanced/notifications": "notifications",
   "/advanced/env": "env",
+  "/advanced/snapshots": "snapshots",
   "/advanced/debug": "debug",
   "/advanced/about": "about",
 };
@@ -26,6 +29,7 @@ const SECTION_META: Record<AdvancedSection, { title: string; sub: string }> = {
   general: { title: "常规", sub: "调整会话显示与输入偏好。" },
   notifications: { title: "通知", sub: "控制任务完成与权限确认的系统通知、提示音。" },
   env: { title: "环境", sub: "检查本机 CLI 与可选工具能力。" },
+  snapshots: { title: "文件快照", sub: "按回合自动记录工作目录的文件状态，用于查看回合改动与回滚。" },
   debug: { title: "调试", sub: "运行状态、路径、日志，一键导出脱敏诊断包。" },
   about: { title: "关于", sub: "版本、许可与第三方声明。" },
 };
@@ -60,6 +64,7 @@ export function AdvancedRoute() {
       {section === "general" && <GeneralSection showHeading={false} />}
       {section === "notifications" && <NotificationSection showHeading={false} />}
       {section === "env" && <EnvironmentSection showHeading={false} />}
+      {section === "snapshots" && <SnapshotSettingsSection showHeading={false} />}
       {section === "debug" && <DebugSection showHeading={false} />}
       {section === "about" && <AboutSection showHeading={false} />}
     </SectionShell>

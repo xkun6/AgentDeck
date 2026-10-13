@@ -3,6 +3,7 @@ import {
   Bell,
   Bot,
   Bug,
+  Camera,
   Info,
   MonitorCog,
   Palette,
@@ -25,6 +26,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   { label: "Agent 与中转", path: "/agent-providers", icon: Waypoints },
   { label: "编程 Agent", path: "/coding-agents", icon: Bot },
   { label: "环境", path: "/env", icon: MonitorCog },
+  { label: "文件快照", path: "/snapshots", icon: Camera },
   { label: "调试", path: "/debug", icon: Bug },
   { label: "关于", path: "/about", icon: Info },
 ];
