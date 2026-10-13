@@ -579,10 +579,16 @@ pub(crate) fn probe_commands(commands: &[&str], version_args: &[&str]) -> Comman
 }
 
 fn run_version_command(command: &Path, args: &[&str]) -> CommandProbe {
-    let output = Command::new(command)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output();
+    let mut cmd = Command::new(command);
+    cmd.args(args).env("GIT_TERMINAL_PROMPT", "0");
+    // 窗口子系统程序拉起控制台程序会闪窗（bash/node/npm.cmd 等版本探测），与 commands/git.rs 一致。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output();
     match output {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
