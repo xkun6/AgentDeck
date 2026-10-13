@@ -13,8 +13,12 @@ import type {
   CodingAgentsCheckResult,
   EnvironmentCheckResult,
   EnvironmentInstallResult,
+  DebugPaths,
+  ExportDebugBundleInput,
+  ExportDebugBundleResult,
   ExportLogSnapshotInput,
   ExportLogSnapshotResult,
+  LogTailResult,
 } from "@agentdeck/protocol";
 import type {
   DesktopNotifyInput,
@@ -270,6 +274,26 @@ const tauriBridge = {
 
   async exportSessionFile(input: ExportSessionFileInput): Promise<ExportSessionFileResult> {
     return invokeCommand("export_session_file", { input });
+  },
+
+  async logTail(input?: { maxBytes?: number }): Promise<LogTailResult> {
+    return invokeCommand("log_tail", { input: input ?? {} });
+  },
+
+  async debugPaths(): Promise<DebugPaths> {
+    return invokeCommand("debug_paths");
+  },
+
+  async exportDebugBundle(input: ExportDebugBundleInput): Promise<ExportDebugBundleResult> {
+    return invokeCommand("export_debug_bundle", { input });
+  },
+
+  async sidecarStatus(): Promise<SidecarStatusPayload> {
+    return invokeCommand("get_sidecar_config");
+  },
+
+  async restartSidecar(): Promise<SidecarStatusPayload> {
+    return invokeCommand("restart_sidecar");
   },
 
   async environmentCheck(): Promise<EnvironmentCheckResult> {

@@ -1,11 +1,16 @@
 import type {
   CodingAgentPaths,
   CodingAgentsCheckResult,
+  DebugPaths,
   EnvironmentCheckResult,
   EnvironmentInstallResult,
+  ExportDebugBundleInput,
+  ExportDebugBundleResult,
   ExportLogSnapshotInput,
   ExportLogSnapshotResult,
+  LogTailResult,
 } from "@agentdeck/protocol";
+import type { SidecarStatusPayload } from "./sidecar-client";
 import type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
 
 export type { UiEventInput, UiStoreSnapshot, UiTurnStats } from "./ui-store";
@@ -328,6 +333,12 @@ declare global {
       exportLogSnapshot?(input: ExportLogSnapshotInput): Promise<ExportLogSnapshotResult>;
       /** 弹出保存对话框并写入会话导出文件（Rust export_session_file；内容由前端生成） */
       exportSessionFile?(input: ExportSessionFileInput): Promise<ExportSessionFileResult>;
+      /** Debug 面板（design.md 4.18）：sidecar 日志尾部、目录、诊断包导出、sidecar 状态与重启。 */
+      logTail?(input?: { maxBytes?: number }): Promise<LogTailResult>;
+      debugPaths?(): Promise<DebugPaths>;
+      exportDebugBundle?(input: ExportDebugBundleInput): Promise<ExportDebugBundleResult>;
+      sidecarStatus?(): Promise<SidecarStatusPayload>;
+      restartSidecar?(): Promise<SidecarStatusPayload>;
       environmentCheck?(): Promise<EnvironmentCheckResult>;
       /** 一键安装缺失工具（Rust environment_install；只传检测项 id，命令由 Rust 白名单决定） */
       environmentInstall?(id: string): Promise<EnvironmentInstallResult>;

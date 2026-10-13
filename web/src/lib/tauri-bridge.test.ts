@@ -133,6 +133,20 @@ describe("tauri bridge", () => {
     });
   });
 
+  it("exposes debug panel commands through Tauri IPC", async () => {
+    await installTauriBridge();
+
+    await window.agentdeckDesktop?.logTail?.({ maxBytes: 1024 });
+    await window.agentdeckDesktop?.debugPaths?.();
+    await window.agentdeckDesktop?.exportDebugBundle?.({ diagnostics: "{}", frontendEvents: "" });
+
+    expect(mockInvoke).toHaveBeenCalledWith("log_tail", { input: { maxBytes: 1024 } });
+    expect(mockInvoke).toHaveBeenCalledWith("debug_paths", undefined);
+    expect(mockInvoke).toHaveBeenCalledWith("export_debug_bundle", {
+      input: { diagnostics: "{}", frontendEvents: "" },
+    });
+  });
+
   it("exposes external URL opening through Tauri IPC", async () => {
     await installTauriBridge();
 

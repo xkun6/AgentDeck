@@ -40,6 +40,7 @@ describe("command palette item building and filtering", () => {
       "/agent-providers",
       "/coding-agents",
       "/env",
+      "/debug",
       "/common",
       "/notifications",
       "/theme",

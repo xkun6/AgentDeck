@@ -26,6 +26,7 @@ import {
   type AgentBackgroundTask,
   type ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
+import { debugBus } from "./debug-bus";
 import { createSidecarSocket } from "./sidecar-socket-path";
 
 export type SidecarConnectionState = "idle" | "connecting" | "open" | "closed" | "error";
@@ -242,6 +243,12 @@ export class SidecarClient {
 
   private setState(next: SidecarConnectionState): void {
     if (this._state === next) return;
+    debugBus.push({
+      type: "sidecar",
+      level: next === "error" ? "warn" : "info",
+      summary: `sidecar 连接状态：${this._state} → ${next}`,
+      payload: { from: this._state, to: next, reconnectAttempts: this.reconnectAttempts },
+    });
     this._state = next;
     emitTo(this.stateListeners, next);
   }
@@ -474,6 +481,29 @@ export class SidecarClient {
   // ── 请求 ────────────────────────────────────────────────────────────────
 
   async request<M extends AgentRpcMethodName>(
+    method: M,
+    ...args: RequestArgs<M>
+  ): Promise<AgentRpcResult<M>> {
+    try {
+      return await this.sendRequest(method, ...args);
+    } catch (error) {
+      // 旁路记录到调试事件（Debug 面板），不改变错误本身
+      debugBus.push({
+        type: "sidecar",
+        level: "error",
+        summary: `RPC 失败 ${method}：${error instanceof Error ? error.message : String(error)}`,
+        payload: {
+          method,
+          code: error instanceof SidecarRpcError ? error.code : undefined,
+          businessCode: error instanceof SidecarRpcError ? error.businessCode : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+  }
+
+  private async sendRequest<M extends AgentRpcMethodName>(
     method: M,
     ...args: RequestArgs<M>
   ): Promise<AgentRpcResult<M>> {

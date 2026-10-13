@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, renameSync, statSync, writeSync } from "node:fs";
 import path from "node:path";
 import { format } from "node:util";
 
@@ -19,6 +19,20 @@ export interface CreateLoggerOptions {
   stderr?: boolean;
 }
 
+/** sidecar.log 超过该大小时，下次启动打开前轮转为 sidecar.log.1（design.md 4.18） */
+export const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
+
+/** 启动时轮转：超限则把 sidecar.log 重命名为 sidecar.log.1（覆盖旧的）；失败不影响启动。 */
+export function rotateLogIfNeeded(logFile: string, maxBytes = LOG_ROTATE_BYTES): void {
+  try {
+    if (statSync(logFile).size > maxBytes) {
+      renameSync(logFile, `${logFile}.1`);
+    }
+  } catch {
+    // 文件不存在或轮转失败：忽略，继续追加写
+  }
+}
+
 /**
  * sidecar 日志：只写 stderr 与日志文件，**绝不写 stdout**（stdout 只留给 ready 握手行）。
  * 文件写入用同步 writeSync，保证 process.exit 前的日志不丢。
@@ -29,7 +43,9 @@ export function createLogger(options: CreateLoggerOptions = {}): Logger {
   if (options.logDir) {
     try {
       mkdirSync(options.logDir, { recursive: true });
-      fd = openSync(path.join(options.logDir, "sidecar.log"), "a");
+      const logFile = path.join(options.logDir, "sidecar.log");
+      rotateLogIfNeeded(logFile);
+      fd = openSync(logFile, "a");
     } catch (error) {
       process.stderr.write(`[sidecar] 打开日志文件失败：${String(error)}\n`);
     }

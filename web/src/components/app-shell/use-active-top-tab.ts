@@ -19,6 +19,7 @@ export const SETTINGS_ROUTES = [
   "/agent-providers",
   "/coding-agents",
   "/env",
+  "/debug",
   "/about",
   "/advanced",
   "/settings",

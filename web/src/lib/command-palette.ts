@@ -101,6 +101,7 @@ export const COMMAND_PALETTE_COMMANDS: readonly CommandPaletteItem[] = [
   command("command-agent-providers", "Agent 与中转", "/agent-providers · 管理三方中转与 Agent 可用状态", ["agents", "providers", "relay", "proxy", "claude", "codex", "acp", "中转", "接口", "密钥"], "agents", "/agent-providers", 4),
   command("command-coding-agents", "编程 Agent", "/coding-agents · 检测已安装的 Agent CLI", ["agents", "claude", "codex", "acp", "cli", "编程", "检测"], "agents", "/coding-agents", 4),
   command("command-env", "环境检测", "/env · 检查本机 CLI 与可选工具", ["env", "environment", "tools", "diagnostics", "环境", "检测"], "env", "/env", 5),
+  command("command-debug", "打开调试面板", "/debug · 运行状态、日志与诊断包导出", ["debug", "diagnostics", "log", "logs", "bundle", "调试", "日志", "诊断", "诊断包"], "env", "/debug", 6, false),
   command("command-settings", "常规设置", "/common · 显示、发送快捷键与助手名称", ["settings", "preferences", "common", "设置", "常规"], "settings", "/common", 6, false),
   command("command-notifications", "通知设置", "/notifications · 任务完成与权限确认提醒", ["notifications", "notify", "sound", "通知", "提醒"], "notifications", "/notifications", 7, false),
   command("command-theme", "主题", "/theme · 外观、密度与字号", ["theme", "appearance", "dark", "light", "主题", "外观"], "theme", "/theme", 8, false),
