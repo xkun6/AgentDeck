@@ -11,6 +11,7 @@ import { createLogger, type Logger } from "./logger.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { RpcServer } from "./server/rpc-server.js";
+import { UsageLedger } from "./usage/ledger.js";
 import { withTimeout } from "./utils/promise-timeout.js";
 
 const SIDECAR_VERSION: string = packageJson.version;
@@ -174,7 +175,14 @@ async function main(): Promise<void> {
   }
   // 设置了 AGENTDECK_DATA_DIR 才持久化会话（design.md 4.5）；恢复失败只记日志，不影响启动
   const store = config.dataDir ? new AgentStore({ dataDir: config.dataDir, logger }) : undefined;
-  manager = new AgentManager({ registry, logger, ...(store ? { store } : {}) });
+  // 跨会话用量账本（design.md 4.20）：读取失败只记日志；未设置 AGENTDECK_DATA_DIR 时只在内存累计
+  const usage = new UsageLedger({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) });
+  try {
+    await usage.load();
+  } catch (error) {
+    logger.error("加载用量账本失败：%s", String(error));
+  }
+  manager = new AgentManager({ registry, logger, usage, ...(store ? { store } : {}) });
   try {
     await manager.restore();
   } catch (error) {
@@ -186,6 +194,7 @@ async function main(): Promise<void> {
     manager,
     registry,
     providerConfig,
+    usage,
     logger,
   });
 
@@ -196,6 +205,15 @@ async function main(): Promise<void> {
   process.stdout.write(
     `${JSON.stringify({ type: "ready", port, version: SIDECAR_VERSION, pid: process.pid })}\n`,
   );
+  // 历史用量回填在后台进行（design.md 4.20），不阻塞启动；完成前 usage.summary 带 backfilling: true
+  if (store && usage.backfilling) {
+    const backfillAgents = manager.listAgents().map((agent) => ({
+      id: agent.id,
+      provider: agent.provider,
+      model: agent.model ?? null,
+    }));
+    void usage.backfill(backfillAgents, (agentId) => store.streamTimeline(agentId));
+  }
   logger.info(
     "已监听 127.0.0.1:%d（epoch=%s, providers=%s）",
     port,

@@ -457,6 +457,98 @@ export type AgentRpcBusinessErrorCode =
   | "INTERNAL_ERROR";
 
 // ---------------------------------------------------------------------------
+// 4.19 会话全文搜索 / 4.20 用量统计
+// ---------------------------------------------------------------------------
+
+export interface AgentSearchHit {
+  agentId: string;
+  seq: number;
+  timestamp: number;
+  role: "user" | "assistant" | "reasoning" | "tool";
+  /** 命中处前后各约 60 字，换行压成空格 */
+  snippet: string;
+  /** 命中在 snippet 内的位置（UTF-16 下标） */
+  matchStart: number;
+  matchLength: number;
+}
+
+export interface UsageTurnRecord {
+  /** 回合结束时间（ms） */
+  ts: number;
+  agentId: string;
+  provider: AgentProviderId;
+  /** 回合进行时快照中的 model；null = provider 默认 */
+  model: string | null;
+  turnId: string;
+  origin: "user" | "background";
+  outcome: "completed" | "failed" | "canceled";
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  /** turn_started → 结束 */
+  durationMs?: number;
+  /** turn_started → 本回合第一个 assistant_message */
+  ttftMs?: number;
+}
+
+export interface UsageSummary {
+  /** 历史回填尚未完成 */
+  backfilling: boolean;
+  totals: {
+    turns: number;
+    failedTurns: number;
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+  };
+  /** day 为 sidecar 进程本地日期 yyyy-MM-dd，升序，只含有数据的日期 */
+  byDay: Array<{
+    day: string;
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    costUsd: number;
+    turns: number;
+  }>;
+  byProvider: Array<{
+    provider: AgentProviderId;
+    label: string;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    turns: number;
+  }>;
+  byModel: Array<{
+    provider: AgentProviderId;
+    model: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    turns: number;
+  }>;
+  /** 前 10（按 输入+输出 tokens 降序）；title 为用户标题，缺省取首条消息预览；已删除的会话为 null */
+  topAgents: Array<{
+    agentId: string;
+    title: string | null;
+    provider: AgentProviderId;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    turns: number;
+    deleted: boolean;
+  }>;
+  perf: {
+    ttftP50Ms?: number;
+    ttftP95Ms?: number;
+    durationP50Ms?: number;
+    durationP95Ms?: number;
+    outputTokensPerSecP50?: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 4.1 请求方法 / 4.2 通知：方法名常量与参数/返回映射
 // ---------------------------------------------------------------------------
 
@@ -478,6 +570,8 @@ export const AGENT_RPC_METHODS = {
   agentTimeline: "agent.timeline",
   agentDelete: "agent.delete",
   agentUpdate: "agent.update",
+  agentSearch: "agent.search",
+  usageSummary: "usage.summary",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
   agentCommands: "agent.commands",
@@ -543,6 +637,16 @@ export interface AgentRpcMethods {
   "agent.update": {
     params: { agentId: string; title?: string | null; pinned?: boolean; archived?: boolean };
     result: { agent: AgentSnapshot };
+  };
+  /** 会话全文搜索（design.md 4.19）：query 去首尾空白后 1–200 字；limit 缺省 100、上限 500 */
+  "agent.search": {
+    params: { query: string; limit?: number; agentIds?: string[] };
+    result: { hits: AgentSearchHit[]; truncated: boolean };
+  };
+  /** 跨会话用量统计（design.md 4.20）：sinceMs 缺省为最近 30 天 */
+  "usage.summary": {
+    params: { sinceMs?: number; untilMs?: number } | undefined;
+    result: UsageSummary;
   };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };

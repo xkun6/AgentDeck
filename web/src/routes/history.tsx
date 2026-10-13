@@ -3,8 +3,9 @@ import { useAtomValue } from "jotai";
 import { useSearchParams } from "react-router-dom";
 import { LoadingState, StatusDot } from "@agentdeck/shared-ui";
 import { Pin, Search, Trash2, X } from "lucide-react";
-import type { AgentSnapshot } from "@agentdeck/protocol";
+import type { AgentSearchHit, AgentSnapshot } from "@agentdeck/protocol";
 import { useAgentSession } from "@/hooks/use-agent-session";
+import { useContentSearch } from "@/hooks/use-content-search";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
@@ -23,6 +24,7 @@ import {
   splitPinned,
   type HistoryView,
 } from "@/lib/session-list";
+import { splitSnippet } from "@/lib/usage-stats";
 import { dayKey, dayLabel, isToday, relativeTime, timeOfDay } from "@/lib/format";
 import {
   agentInWorkspace,
@@ -45,6 +47,13 @@ const STATUS_LABELS: Record<StatusFilter, string> = {
   dormant: AGENT_STATUS_LABELS.dormant,
   error: "出错",
   closed: "已关闭",
+};
+
+const SEARCH_ROLE_LABELS: Record<AgentSearchHit["role"], string> = {
+  user: "用户",
+  assistant: "助手",
+  reasoning: "思考",
+  tool: "工具",
 };
 
 const VIEW_LABELS: Record<HistoryView, string> = {
@@ -163,6 +172,14 @@ export function HistoryRoute() {
   }, [filtered, view]);
 
   const goSession = sessionActions.openSession;
+
+  // 内容匹配（design.md 4.19）：搜索框非空时 300ms 防抖调用 agent.search，结果按会话行信息展示
+  const contentSearch = useContentSearch(searchQuery);
+  const rowById = useMemo(() => new Map(rows.map((row) => [row.agent.id, row])), [rows]);
+  const contentHits = useMemo(
+    () => contentSearch.hits.filter((hit) => rowById.has(hit.agentId)),
+    [contentSearch.hits, rowById],
+  );
 
   const exitSelectMode = () => {
     setSelectMode(false);
@@ -301,6 +318,50 @@ export function HistoryRoute() {
       </div>
 
       <div className={s.scroll}>
+        {contentSearch.query ? (
+          <section className={s.dayGroup} aria-label="内容匹配">
+            <div className={s.dayHead}>
+              <span className={s.dayLabel}>内容匹配</span>
+              <span className={s.dayCount}>
+                {contentSearch.loading
+                  ? "搜索中…"
+                  : contentSearch.error
+                    ? "搜索失败"
+                    : `${contentHits.length} 条${contentSearch.truncated ? "（已截断）" : ""}`}
+              </span>
+            </div>
+            {contentSearch.error ? (
+              <div className={s.contentHint} role="alert">{contentSearch.error}</div>
+            ) : !contentSearch.loading && contentHits.length === 0 ? (
+              <div className={s.contentHint}>没有匹配的会话内容</div>
+            ) : (
+              contentHits.map((hit) => {
+                const row = rowById.get(hit.agentId)!;
+                const parts = splitSnippet(hit.snippet, hit.matchStart, hit.matchLength);
+                const sec = Math.floor(hit.timestamp / 1000);
+                return (
+                  <button
+                    key={`${hit.agentId}-${hit.seq}-${hit.role}`}
+                    type="button"
+                    className={s.hitRow}
+                    onClick={() => goSession(row.agent, { seq: hit.seq })}
+                  >
+                    <span className={s.hitHead}>
+                      <span className={s.hitTitle}>{row.title}</span>
+                      <span className={s.sourceChip}>{SEARCH_ROLE_LABELS[hit.role]}</span>
+                      <span className={s.cellTimestamp}>{isToday(sec) ? timeOfDay(sec) : relativeTime(sec)}</span>
+                    </span>
+                    <span className={s.hitSnippet}>
+                      {parts.before}
+                      <mark className={s.hitMark}>{parts.match}</mark>
+                      {parts.after}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </section>
+        ) : null}
         {loading ? (
           <LoadingState variant="page" label="正在加载会话…" />
         ) : dayGroups.length === 0 ? (

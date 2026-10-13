@@ -177,9 +177,11 @@ export function useSessionActions() {
   );
 
   const openSession = useCallback(
-    (agent: Pick<AgentSnapshot, "id">) => {
+    (agent: Pick<AgentSnapshot, "id">, options?: { seq?: number }) => {
       setActiveId(agent.id);
-      navigate(`/tasks/${encodeURIComponent(agent.id)}`);
+      // seq：全文搜索命中定位（design.md 4.19），详情页据此滚动到对应消息
+      const query = options?.seq !== undefined ? `?seq=${options.seq}` : "";
+      navigate(`/tasks/${encodeURIComponent(agent.id)}${query}`);
     },
     [navigate, setActiveId],
   );

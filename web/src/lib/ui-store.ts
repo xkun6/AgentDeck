@@ -1,49 +1,5 @@
-import type { AgentMessageMetadata } from "@agentdeck/protocol";
-
 export interface UiStoreSnapshot {
   kv: Record<string, unknown>;
-}
-
-export interface UiTurnStats {
-  id: string;
-  sessionId: string;
-  gatewaySessionId?: string;
-  clientMessageId?: string;
-  backendMessageId?: number;
-  turnIndex?: number;
-  contentHash?: string;
-  metadata?: AgentMessageMetadata;
-  model?: string;
-  provider?: string;
-  startedAt?: number;
-  firstTokenAt?: number;
-  completedAt?: number;
-  ttftMs?: number;
-  durationMs?: number;
-  tokensInput?: number;
-  tokensOutput?: number;
-  tokensTotal?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  reasoningTokens?: number;
-  contextUsed?: number;
-  contextMax?: number;
-  apiCalls?: number;
-  costUsd?: number;
-  costStatus?: string;
-  finishReason?: string;
-  status?: string;
-  createdAt?: number;
-}
-
-export interface UiEventInput {
-  id: string;
-  ts: number;
-  eventName: string;
-  sessionId?: string;
-  source?: string;
-  props?: Record<string, unknown>;
-  appVersion?: string;
 }
 
 type Listener = () => void;

@@ -344,6 +344,7 @@ export function agentUIMessageToChatMessage(msg: AgentUIMessage): ChatMessage | 
     stats: deriveAssistantStats(msg),
     ...(typeof msg.retryFor === "string" ? { retryUserMessageId: msg.retryFor } : {}),
     ...(msg.restored === true ? { restored: true } : {}),
+    ...(typeof msg.firstSeq === "number" ? { firstSeq: msg.firstSeq } : {}),
   };
 }
 

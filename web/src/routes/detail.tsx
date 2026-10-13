@@ -72,6 +72,7 @@ import {
 } from "@/stores/composer-queue";
 import type { ComposerSubmitPayload } from "@/components/chat/composer-types";
 import { MessageTimeline } from "@/components/chat/message-timeline";
+import { parseFocusSeq } from "@/components/chat/focus-seq";
 import { StallNotice } from "@/components/chat/stall-notice";
 import { PreviewRail } from "@/components/chat/preview-rail/preview-rail";
 import { SubagentTrack } from "@/components/chat/subagents/subagent-track";
@@ -111,6 +112,8 @@ export function DetailRoute() {
   const assistantDisplayName = useAtomValue(assistantDisplayNameAtom);
   const [rightRailVisible, setRightRailVisible] = useAtom(rightRailVisibleAtom);
   const [searchParams] = useSearchParams();
+  // 全文搜索命中跳转（design.md 4.19）：?seq= 指定要定位的 sidecar seq
+  const focusSeq = parseFocusSeq(searchParams.get("seq"));
   const taskId = activeSessionId ?? urlTaskId;
   // provider 子代理（design.md 4.11）：输入框上方药丸 + 右侧只读面板（打开时替代预览面板）
   const subagents = useProviderSubagents(taskId);
@@ -658,6 +661,7 @@ export function DetailRoute() {
             resendHint={resendHint}
             onResend={() => void onResend()}
             resendDisabled={resending}
+            focusSeq={focusSeq}
           />
           <div className={s.composerArea}>
             {retraction.notice ? (

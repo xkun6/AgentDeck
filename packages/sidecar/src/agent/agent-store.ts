@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { AgentSnapshot, AgentStatus, AgentStreamEnvelope } from "@agentdeck/protocol";
@@ -169,6 +171,40 @@ export class AgentStore {
       this.logger.warn("%s 中有 %d 行损坏或乱序，已跳过", file, skipped);
     }
     return { entries, lastSeq };
+  }
+
+  /** 流式逐行读取 timeline.jsonl（全文搜索 / 用量回填用）；损坏、乱序的行跳过，文件不存在则为空 */
+  async *streamTimeline(agentId: string): AsyncGenerator<AgentStreamEnvelope> {
+    await this.drain(agentId);
+    const file = this.timelinePath(agentId);
+    const stream = createReadStream(file, { encoding: "utf8" });
+    const lines = createInterface({ input: stream, crlfDelay: Infinity });
+    let lastSeq = 0;
+    try {
+      for await (const line of lines) {
+        if (line.trim() === "") {
+          continue;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!isEnvelope(parsed) || parsed.seq <= lastSeq) {
+          continue;
+        }
+        lastSeq = parsed.seq;
+        yield parsed;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        this.logger.warn("流式读取 %s 失败：%s", file, String(error));
+      }
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
   }
 
   // -------------------------------------------------------------------------

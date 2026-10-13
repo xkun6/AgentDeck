@@ -7,6 +7,7 @@ import { AGENT_COMPACTION_NOTICE_PREFIX } from "@/stores/chat";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
 import { AssistantProfileCard } from "./assistant-profile-card";
 import { MessageImage } from "./message-image";
+import { findMessageIdForSeq } from "./focus-seq";
 import { MessageSkeleton } from "./message-skeleton";
 import { MessageText } from "./message-text";
 import { SubAgentToolDetail } from "./subagents/subagent-tool-detail";
@@ -52,7 +53,12 @@ interface MessageTimelineProps {
   onResend?: () => void;
   /** 重试 / 再次发送进行中 */
   resendDisabled?: boolean;
+  /** 全文搜索定位（design.md 4.19）：滚动到包含该 seq 的消息并短暂高亮；找不到则保持贴底。 */
+  focusSeq?: number | null;
 }
+
+/** 定位后消息高亮持续的时间（与 CSS 动画时长一致） */
+const FOCUS_HIGHLIGHT_MS = 2000;
 
 interface TurnAnchor {
   id: string;
@@ -997,8 +1003,13 @@ export function MessageTimeline({
   resendHint,
   onResend,
   resendDisabled,
+  focusSeq,
 }: MessageTimelineProps) {
   const compact = density === "compact";
+  const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const focusedKeyRef = useRef<string | null>(null);
+  const focusTimerRef = useRef<number | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const turnAnchorRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1249,6 +1260,40 @@ export function MessageTimeline({
     }
   }, [clearAutoAnchor, pendingApproval, scrollToBottom, statusMessage, turnAnchors, visibleMessages]);
 
+  const focusTargetId = useMemo(
+    () => (focusSeq ? findMessageIdForSeq(visibleMessages, focusSeq) : undefined),
+    [focusSeq, visibleMessages],
+  );
+
+  // 全文搜索定位：声明在贴底逻辑之后，同一次提交里先贴底、再脱离贴底并滚动到目标消息。
+  useIsomorphicLayoutEffect(() => {
+    if (!focusSeq || !focusTargetId) return;
+    const key = `${focusSeq}:${focusTargetId}`;
+    const container = containerRef.current;
+    const node = messageNodeRefs.current.get(focusTargetId);
+    if (focusedKeyRef.current === key || !container || !node) return;
+    focusedKeyRef.current = key;
+    detachFromBottomAutoFollow();
+    const align = () => {
+      const top = container.scrollTop + node.getBoundingClientRect().top - container.getBoundingClientRect().top - 12;
+      container.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+      lastScrollTopRef.current = container.scrollTop;
+    };
+    align();
+    // Markdown / 代码块稳定高度后再对齐一次
+    window.requestAnimationFrame(align);
+    setHighlightId(focusTargetId);
+    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = window.setTimeout(() => {
+      focusTimerRef.current = null;
+      setHighlightId(null);
+    }, FOCUS_HIGHLIGHT_MS);
+  }, [detachFromBottomAutoFollow, focusSeq, focusTargetId]);
+
+  useEffect(() => () => {
+    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+  }, []);
+
   useEffect(() => {
     const container = containerRef.current;
     const messagesElement = messagesRef.current;
@@ -1383,8 +1428,13 @@ export function MessageTimeline({
           return (
             <div
               key={message.id}
-              ref={isUserTurn ? (node) => setTurnAnchorNode(message.id, node) : undefined}
+              ref={(node) => {
+                if (node) messageNodeRefs.current.set(message.id, node);
+                else messageNodeRefs.current.delete(message.id);
+                if (isUserTurn) setTurnAnchorNode(message.id, node);
+              }}
               data-turn-anchor={isUserTurn ? "true" : undefined}
+              data-focus={highlightId === message.id ? "true" : undefined}
             >
               {showDate ? <div className={s.dateSeparator}>{formatDay(message.createdAt)}</div> : null}
               <MessageBubble

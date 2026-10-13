@@ -50,4 +50,6 @@ export interface ChatMessage {
   retryUserMessageId?: string;
   /** 用户消息由时间线重建，图片没有保存（design.md 4.21） */
   restored?: boolean;
+  /** 该消息对应的首个 sidecar seq（全文搜索定位用，design.md 4.19） */
+  firstSeq?: number;
 }

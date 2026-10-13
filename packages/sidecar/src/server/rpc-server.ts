@@ -30,6 +30,8 @@ import {
 } from "../providers/custom/schema.js";
 import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
+import { UsageLedger } from "../usage/ledger.js";
+import { summarizeUsage } from "../usage/summary.js";
 
 export const RPC_PATH = "/rpc";
 
@@ -50,6 +52,8 @@ export interface RpcServerOptions {
   registry: Pick<ProviderRegistry, "get" | "listProviderInfo">;
   /** 不传时 provider.config.get 返回空表、set 返回 NOT_SUPPORTED，provider.test 仍可用 */
   providerConfig?: ProviderConfigHandler;
+  /** 用量账本（design.md 4.20）；不传时 usage.summary 返回空统计 */
+  usage?: UsageLedger;
   logger?: Logger;
 }
 
@@ -58,6 +62,9 @@ export interface RpcServerOptions {
 // ---------------------------------------------------------------------------
 
 const AGENT_TITLE_MAX_LENGTH = 200;
+const SEARCH_QUERY_MAX_LENGTH = 200;
+const SEARCH_LIMIT_DEFAULT = 100;
+const SEARCH_LIMIT_MAX = 500;
 
 const emptyParams = z.object({}).optional();
 const agentIdParams = z.object({ agentId: z.string().min(1) });
@@ -224,6 +231,7 @@ export class RpcServer {
 
   private createMethods(): Array<[string, RegisteredMethod]> {
     const { manager, registry, version } = this.options;
+    const usage = this.options.usage ?? new UsageLedger();
     const requireClient = (provider: string) => {
       const client = registry.get(provider);
       if (!client) {
@@ -360,6 +368,48 @@ export class RpcServer {
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
           }),
         }),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentSearch,
+        z.object({
+          query: z
+            .string()
+            .refine((value) => value.trim().length >= 1 && value.trim().length <= SEARCH_QUERY_MAX_LENGTH, {
+              message: `query 去除首尾空白后需为 1–${SEARCH_QUERY_MAX_LENGTH} 个字符`,
+            }),
+          limit: z.number().int().min(1).max(SEARCH_LIMIT_MAX).optional(),
+          agentIds: z.array(z.string().min(1)).optional(),
+        }),
+        (params) =>
+          manager.search(params.query, params.limit ?? SEARCH_LIMIT_DEFAULT, params.agentIds),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.usageSummary,
+        z
+          .object({
+            sinceMs: z.number().finite().optional(),
+            untilMs: z.number().finite().optional(),
+          })
+          .optional(),
+        async (params) => {
+          const labels = new Map(
+            (await registry.listProviderInfo()).map((info) => [info.id, info.label]),
+          );
+          const titles = new Map(
+            manager.listAgents().map((agent) => [agent.id, agent.title ?? agent.preview ?? null]),
+          );
+          return summarizeUsage(
+            usage.list(),
+            { ...(params?.sinceMs !== undefined ? { sinceMs: params.sinceMs } : {}),
+              ...(params?.untilMs !== undefined ? { untilMs: params.untilMs } : {}) },
+            {
+              now: Date.now(),
+              backfilling: usage.backfilling,
+              providerLabel: (provider) => labels.get(provider),
+              agentTitle: (agentId) => titles.get(agentId),
+            },
+          );
+        },
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
         await manager.deleteAgent(params.agentId);

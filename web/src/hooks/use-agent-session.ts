@@ -11,6 +11,7 @@ import type { createStore } from "jotai";
 import type {
   AgentPermissionResponse,
   AgentPromptInput,
+  AgentSearchHit,
   AgentSnapshot,
   AgentStreamEnvelope,
   AgentBackgroundTask,
@@ -25,6 +26,7 @@ import type {
   ProviderSubagentDescriptor,
   ProviderSubagentTimelineRow,
   ProviderTestResult,
+  UsageSummary,
 } from "@agentdeck/protocol";
 import {
   getSidecarClient,
@@ -501,6 +503,23 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       const { agent } = await client.request("agent.update", { agentId, ...patch });
       store.set(upsertAgentSnapshotAtom, agent);
       return agent;
+    },
+
+    /** agent.search：会话全文搜索（design.md 4.19）；每个会话最多 5 条命中，达到 limit 时 truncated。 */
+    async searchSessions(
+      query: string,
+      options?: { limit?: number },
+    ): Promise<{ hits: AgentSearchHit[]; truncated: boolean }> {
+      return client.request(
+        "agent.search",
+        options?.limit === undefined ? { query } : { query, limit: options.limit },
+        { timeoutMs: 60_000 },
+      );
+    },
+
+    /** usage.summary：跨会话用量统计（design.md 4.20）；sinceMs 缺省为最近 30 天，0 表示全部。 */
+    async usageSummary(range?: { sinceMs?: number; untilMs?: number }): Promise<UsageSummary> {
+      return client.request("usage.summary", range ?? {}, { timeoutMs: 60_000 });
     },
 
     /** agent.timeline：取会话全部时间线条目（dormant / closed 也可取，不恢复会话），供导出使用。 */
