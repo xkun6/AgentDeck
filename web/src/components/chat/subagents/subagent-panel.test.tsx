@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ProviderSubagentDescriptor, ProviderSubagentTimelineRow } from "@agentdeck/protocol";
 import { stubRadixGlobals } from "@/test-utils/radix";
@@ -120,6 +120,35 @@ describe("SubagentPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "返回上一级" }));
     expect(panel.textContent).toContain("name 是 agentdeck");
     expect(within(panel).queryByRole("button", { name: "返回上一级" })).toBeNull();
+  });
+
+  it("子代理运行中时「思考中」计时从 createdAt 起走；已完成时不显示计时", () => {
+    vi.useFakeTimers();
+    try {
+      const running = [sub("s1", { status: "running", createdAt: Date.now() - 65_000 })];
+      const { unmount } = render(
+        <MemoryRouter>
+          <SubagentPanel agentId="a1" subagents={running} rootSubagentId="s1" onClose={() => undefined} />
+        </MemoryRouter>,
+      );
+      const timeline = screen.getByTestId("subagent-panel-timeline");
+      const progress = within(timeline).getByRole("status");
+      expect(progress.textContent).toContain("1:05");
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(progress.textContent).toContain("1:06");
+      unmount();
+
+      render(
+        <MemoryRouter>
+          <SubagentPanel agentId="a1" subagents={SUBAGENTS} rootSubagentId="s1" onClose={() => undefined} />
+        </MemoryRouter>,
+      );
+      expect(within(screen.getByTestId("subagent-panel-timeline")).queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

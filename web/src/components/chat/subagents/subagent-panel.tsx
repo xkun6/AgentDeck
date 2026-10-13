@@ -156,6 +156,7 @@ function SubagentPanelBody({
           messages={messages}
           loading={!timeline.loaded && timeline.loading}
           assistantName={title}
+          turnStartedAt={running ? descriptor?.createdAt : undefined}
         />
       </div>
       <div className={s.footer}>
