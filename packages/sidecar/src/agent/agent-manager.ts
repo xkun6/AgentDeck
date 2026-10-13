@@ -297,18 +297,36 @@ export class AgentManager {
       if (agent.closed || !session) {
         throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
       }
-      this.enqueueEvent(agent, {
+      // user_message 先在事件链中占位（排在 startTurn 期间 provider 发出的事件之前），
+      // startTurn 成功返回后才写入；失败则不写，避免留下没有回合的用户消息（design.md 4.4）
+      let settleUserMessage!: (sent: boolean) => void;
+      const userMessageSent = new Promise<boolean>((resolve) => {
+        settleUserMessage = resolve;
+      });
+      const userMessage: AgentStreamEvent = {
         type: "timeline",
         item: {
           type: "user_message",
           text: promptToText(prompt),
           ...(clientMessageId !== undefined ? { clientMessageId } : {}),
         },
+      };
+      this.runInChain(agent, async () => {
+        if (await userMessageSent) {
+          this.processEvent(agent, userMessage);
+        }
       });
-      const { turnId } = await session.startTurn(
-        prompt,
-        clientMessageId !== undefined ? { clientMessageId } : undefined,
-      );
+      let turnId: string;
+      try {
+        ({ turnId } = await session.startTurn(
+          prompt,
+          clientMessageId !== undefined ? { clientMessageId } : undefined,
+        ));
+      } catch (error) {
+        settleUserMessage(false);
+        throw error;
+      }
+      settleUserMessage(true);
       // 放进尾链：session 在 startTurn 返回前发出的事件都已排在前面，
       // 若 turn 已结束（finishedTurnIds）则不再标记 running。
       this.runInChain(agent, () => {

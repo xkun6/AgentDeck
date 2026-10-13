@@ -205,6 +205,32 @@ describe("AgentManager", () => {
     expect(manager.getAgent(agent.id)).toMatchObject({ status: "idle", activeTurnId: null });
   });
 
+  test("startTurn 抛错：send 拒绝，不写入孤儿 user_message，preview 不变", async () => {
+    const { manager, agent, session } = await setup();
+    session.onStartTurn = () => {
+      throw new Error("启动失败");
+    };
+    await expect(manager.sendPrompt(agent.id, "hi", "c-1")).rejects.toThrow("启动失败");
+    const entries = (await manager.timeline(agent.id)).entries;
+    expect(
+      entries.some((e) => e.event.type === "timeline" && e.event.item.type === "user_message"),
+    ).toBe(false);
+    expect(manager.getAgent(agent.id).preview).toBeUndefined();
+  });
+
+  test("startTurn 内同步发出 turn_started：user_message 的 seq 仍在其前", async () => {
+    const { manager, agent } = await setup();
+    await manager.sendPrompt(agent.id, "hi");
+    const entries = (await manager.timeline(agent.id)).entries;
+    const userMessage = entries.find(
+      (e) => e.event.type === "timeline" && e.event.item.type === "user_message",
+    );
+    const turnStarted = entries.find((e) => e.event.type === "turn_started");
+    expect(userMessage).toBeDefined();
+    expect(turnStarted).toBeDefined();
+    expect(userMessage!.seq).toBeLessThan(turnStarted!.seq);
+  });
+
   test("单 turn 约束：running 时 send 抛 TURN_IN_PROGRESS", async () => {
     const { manager, agent } = await setup();
     await manager.sendPrompt(agent.id, "first");
