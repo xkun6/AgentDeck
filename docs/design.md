@@ -727,9 +727,9 @@ ACP：
 
 保留 Hermes 的渲染层：`ChatSessionRuntime` / `AgentUIMessage` / `ChatMessage` / `MessageTimeline` / `GooseComposer` / `PreviewRail`。替换三处：
 1. **事件入口**：`stores/chat.ts` 新增 `reduceAgentEvent(runtime, envelope)` 与 `applyAgentEventAtom`，把 `AgentStreamEvent` 翻译成 `AgentUIMessage.parts`（assistant_message→text、reasoning→reasoning、tool_call→tool part、error→notice）。
-2. **动作 hook**：新增 `hooks/use-agent-session.ts` 替换 `useGateway()` 的调用方，方法：`createSession`、`sendPrompt`、`interrupt`、`closeSession`、`respondPermission`、`setModel`、`setMode`、`listProviders`、`listModels`。
+2. **动作 hook**：新增 `hooks/use-agent-session.ts` 替换原 Hermes `useGateway()` 的调用方（已删除），方法：`createSession`、`sendPrompt`、`interrupt`、`closeSession`、`respondPermission`、`setModel`、`setMode`、`listProviders`、`listModels`。
 3. **历史**：`detail.tsx` 从 `agent.timeline` 重建消息，替代 Hermes REST 历史。
-4. **传输**：新增 `lib/sidecar-client.ts`，复用 `gateway-client.ts` 的 JSON-RPC 与重连/退避逻辑以及 `sidecar-socket-path.ts` 的原生 WS / Rust 中继回退；地址与 token 来自 `get_sidecar_config`，订阅 `sidecar-status` 事件。
+4. **传输**：新增 `lib/sidecar-client.ts`，复用原 Hermes `gateway-client.ts`（已删除）的 JSON-RPC 与重连/退避逻辑以及 `sidecar-socket-path.ts` 的原生 WS / Rust 中继回退；地址与 token 来自 `get_sidecar_config`，订阅 `sidecar-status` 事件。
 5. **审批**：`ApprovalDialog` 抽到 `components/chat/`，按 `AgentPermissionRequest.actions` 渲染多按钮。
 6. **新建会话**：composer 上的模型选择器改为「Agent（provider）+ 模型 + 模式」，工作目录沿用 workspace picker。
 
