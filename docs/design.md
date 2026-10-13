@@ -67,7 +67,7 @@ sidecar 入口：
 
 ### 3.4 Rust 暴露给前端的接口
 
-- 命令 `get_sidecar_config` → `{ wsUrl: string, token: string, version: string | null, status: "starting" | "ready" | "failed" | "stopped", error: string | null }`
+- 命令 `get_sidecar_config` → `{ wsUrl: string, token: string, version: string | null, status: "starting" | "ready" | "failed" | "stopped", error: string | null, pid: number | null }`（`pid` 为 sidecar 进程 pid，未运行时为 null；供 Debug 面板显示，4.18）
   - `wsUrl` 形如 `ws://127.0.0.1:<port>/rpc`
 - 命令 `restart_sidecar` → 同上结构
 - 事件 `sidecar-status`：载荷同 `get_sidecar_config` 的返回值（状态每次变化都发）
@@ -119,6 +119,10 @@ sidecar 入口：
 | `agent.tasks.stop` | `{ agentId, taskId }` | `{}`（见 4.15） |
 | `agent.tasks.output` | `{ agentId, taskId, maxBytes? }` | `{ text, truncated, size }`（见 4.15） |
 | `agent.update` | `{ agentId, title?: string \| null, pinned?, archived? }` | `{ agent: AgentSnapshot }`（重命名 / 置顶 / 归档，见 4.17） |
+| `agent.search` | `{ query, limit?, agentIds? }` | `{ hits: AgentSearchHit[], truncated }`（全文搜索，见 4.19） |
+| `usage.summary` | `{ sinceMs?, untilMs? }` | `UsageSummary`（跨会话用量统计，见 4.20） |
+| `agent.steer` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{}`（运行中插话，见 4.22） |
+| `agent.fork` | `{ agentId, throughSeq?, title? }` | `{ agent: AgentSnapshot }`（会话分叉，见 4.23） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -664,6 +668,83 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
   - sidecar 日志：`log_tail` 尾部，按级别（全部 / 警告及以上 / 错误）与关键字过滤，「自动刷新」开关（2 秒），「打开日志目录」。
   - 操作：「复制诊断信息」（diagnostics JSON 写入剪贴板）、「导出诊断包」。
 - `diagnostics` 内容：上述运行状态、路径、Agent 可用性、平台与 UA、当前会话数量（按状态计数），不含会话内容。
+
+### 4.19 会话全文搜索
+
+- 新方法 `agent.search { query: string, limit?: number, agentIds?: string[] }` → `{ hits: AgentSearchHit[], truncated: boolean }`。
+  - `query` 去首尾空白后 1–200 字，否则 `-32602`；`limit` 默认 100、上限 500（按命中条数计）。
+  - `AgentSearchHit = { agentId: string; seq: number; timestamp: number; role: "user" | "assistant" | "reasoning" | "tool"; snippet: string; matchStart: number; matchLength: number }`。`snippet` 为命中处前后各约 60 字（换行压成空格），`matchStart` / `matchLength` 为命中在 snippet 内的位置（UTF-16 下标）。
+  - 匹配：大小写不敏感的子串匹配（`toLocaleLowerCase`），支持中文。对象：`user_message` 文本、`assistant_message`（同一 messageId 的分段先拼接再匹配，seq 取该消息首段）、`reasoning`（同一回合内连续分段拼接）、`tool_call`（工具名、标题、shell 命令、文件路径）。被撤回的用户消息（4.16）不参与。
+  - 每个会话最多返回 5 条命中；会话按 `updatedAt` 倒序扫描，凑够 `limit` 即停止并置 `truncated: true`。
+  - 实现：逐个读取 `timeline.jsonl`（已在内存中的会话直接用内存时间线），不建常驻索引；读文件为流式逐行解析，坏行跳过。归档会话同样参与。
+- 前端（历史页）：搜索框输入非空时（300ms 防抖）除现有的标题 / 元数据过滤外，另显示「内容匹配」分组：每条结果显示会话标题、角色、时间与高亮 snippet；点击跳转 `/tasks/:id?seq=<seq>`。详情页支持 `seq` 查询参数：时间线重建后滚动到包含该 seq 的消息并短暂高亮，找不到则停在底部。
+
+### 4.20 用量统计（跨会话）
+
+**账本**：sidecar 在 `<AGENTDECK_DATA_DIR>/usage/turns.jsonl` 为每个结束的回合（`turn_completed` / `turn_failed` / `turn_canceled`）追加一行 `UsageTurnRecord`：
+```ts
+interface UsageTurnRecord {
+  ts: number;                 // 回合结束时间（ms）
+  agentId: string;
+  provider: AgentProviderId;
+  model: string | null;       // 回合进行时快照中的 model；null = provider 默认
+  turnId: string;
+  origin: "user" | "background";
+  outcome: "completed" | "failed" | "canceled";
+  inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number;
+  durationMs?: number;        // turn_started → 结束
+  ttftMs?: number;            // turn_started → 本回合第一个 assistant_message
+}
+```
+- 账本与会话独立：删除会话不删除账本记录（统计是历史数据）。
+- 回填：sidecar 启动时若 `usage/backfill-v1.done` 不存在，后台扫描全部会话时间线生成历史记录（model 取当时快照中的 model），完成后写标记文件；回填期间 `usage.summary` 照常返回已有数据并带 `backfilling: true`。
+- 未设置 `AGENTDECK_DATA_DIR` 时只在内存中累计。
+
+**RPC** `usage.summary { sinceMs?: number, untilMs?: number }` → `UsageSummary`：
+```ts
+interface UsageSummary {
+  backfilling: boolean;
+  totals: { turns: number; failedTurns: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; costUsd: number };
+  byDay: Array<{ day: string /* 本地日期 yyyy-MM-dd */; inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd: number; turns: number }>;
+  byProvider: Array<{ provider: AgentProviderId; label: string; inputTokens: number; outputTokens: number; costUsd: number; turns: number }>;
+  byModel: Array<{ provider: AgentProviderId; model: string | null; inputTokens: number; outputTokens: number; costUsd: number; turns: number }>;
+  topAgents: Array<{ agentId: string; title: string | null; provider: AgentProviderId; inputTokens: number; outputTokens: number; costUsd: number; turns: number; deleted: boolean }>; // 前 10
+  perf: { ttftP50Ms?: number; ttftP95Ms?: number; durationP50Ms?: number; durationP95Ms?: number; outputTokensPerSecP50?: number };
+}
+```
+- 时间范围缺省为最近 30 天；按天分桶用 sidecar 进程本地时区。
+- 前端新增「用量统计」页（侧栏入口 + 命令面板）：时间范围切换（7 天 / 30 天 / 90 天 / 全部）、总量卡片、按天堆叠柱状图（输入 / 缓存 / 输出）、按 Agent 与按模型的占比、高用量会话前 10（点击跳转，已删除的会话不可点）、性能指标（TTFT 与耗时 P50 / P95、输出速度）。`backfilling` 时顶部提示「正在统计历史会话…」。
+- ui_store 的 `turn_stats` / `ui_events` 表与相关命令删除（统计改以 sidecar 账本为准）。
+
+### 4.21 重试
+
+纯前端：回合以 `turn_failed` / `turn_canceled` 结束时，在该回合末尾显示「重试」；最后一条用户消息悬停时提供「再次发送」。两者都取该回合的用户消息重新 `agent.send`（新的 clientMessageId）：优先用前端运行时里该消息的 parts（含图片）；时间线的 `user_message` 只存文本（图片不落盘），所以重启后重建的消息只能重发文本，此时按钮提示「图片未保存，仅重发文字」。CLI 自身历史中仍保留上一次的尝试（与 4.16 的限制相同）。CLI 自发回合（origin background）不提供重试。
+
+### 4.22 运行中插话（steer）
+
+- `ProviderInfo` 增加 `capabilities?: { steer?: boolean; fork?: "native" | "summary" }`（4.23 同用）。
+- 新方法 `agent.steer { agentId, prompt: AgentPromptInput, clientMessageId? }` → `{}`：把消息投递给**正在进行的回合**。
+  - 没有进行中的回合 → `NOT_SUPPORTED`（message「当前没有进行中的回合」）；provider 不支持 → `NOT_SUPPORTED`（「该 Agent 不支持运行中插话」）。
+  - AgentManager 照常写入 `user_message`（带 clientMessageId，并带 `steer: true`），归属当前 turnId，不开新回合。
+- Codex：`turn/steer { threadId, input, expectedTurnId: <当前原生 turnId>, clientUserMessageId }`；当前回合为 review / compact（NonSteerableTurnKind）或请求失败时把错误原样返回（`INTERNAL_ERROR`，中文 message）。
+- Claude：实现前必须实测 2.1.296 的 stream-json 行为——回合进行中（含工具执行中）再写入一条带新 `uuid` 的 user 消息：
+  - 若 CLI 在当前回合内吸收这条消息（在当前 result 之前的 assistant 输出里能看到它的影响，且没有为它单独再出一个带其 uuid 的 result），则 `steer: true` 支持，当前回合仍以原 uuid 的 result 结束；
+  - 若 CLI 把它排到当前回合之后单独执行（单独出带其 uuid 的 result），则 Claude 的 `capabilities.steer` 为 false（前端改用排队），并在本节补记实测结论。
+- ACP：不支持。
+- 前端：回合运行中，输入框发送区显示「排队」（现有队列，默认 Enter）与「插话」（Ctrl+Enter），provider 不支持插话时只显示排队。插话的用户消息在当前助手消息流中以内联气泡显示（标注「插话」）。
+
+### 4.23 会话分叉（fork）
+
+- 新方法 `agent.fork { agentId, throughSeq?: number, title?: string }` → `{ agent: AgentSnapshot }`：基于原会话新建一个会话（同 provider / cwd / model / modeId / thinkingOptionId），新会话标题缺省为「<原标题>（分叉）」。
+  - `throughSeq` 缺省 = 整个会话；给出时只保留到包含该 seq 的回合结束为止（必须落在已结束的回合上，否则 `-32602`）。
+  - 原会话有进行中的回合时 → `TURN_IN_PROGRESS`（`throughSeq` 指向已结束回合时除外）。
+  - 新会话的时间线：复制原时间线中 `throughSeq` 之前（含所在回合）的条目，重新编号 seq 从 1 开始、epoch 为当前进程 epoch，末尾追加一条系统提示 timeline 项 `{ type: "notice", text: "已从「<原标题>」分叉" }`（若无 notice 类型则用现有的系统提示表达方式，并在此处补记）。
+- 方式（`capabilities.fork`）：
+  - Claude `native`：新会话首次拉起进程时用 `--resume <原 sessionId> --fork-session`；`throughSeq` 不是最后一个回合时，若实测隐藏参数 `--resume-session-at <assistant message uuid>` 可用则使用，否则退回 `summary` 方式。
+  - Codex `native`：`thread/fork { threadId, lastTurnId?: <throughSeq 所在回合的原生 turnId> }`，之后在新 thread 上 `turn/start`。
+  - ACP / 其它 `summary`：新建空会话，并把截至 throughSeq 的对话整理为纯文本（用户 / 助手文本，工具调用一行摘要，超过 60k 字时保留最后 60k 字）存为待注入上下文；新会话第一次 `agent.send` 时在用户 prompt 前插入一个文本块：「以下是从另一个会话分叉过来的历史对话，仅供参考：\n<transcript>…</transcript>\n\n」，之后清除。该上下文随 meta 持久化（`pendingForkContext`），不进快照。
+- 原会话不受影响；provider 原生 fork 失败时返回 `PROVIDER_UNAVAILABLE` 并删除刚建的会话。
+- 前端：会话右键菜单「分叉会话」；消息悬停菜单「从这里分叉」（传该回合内任一 seq）；成功后跳到新会话。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
