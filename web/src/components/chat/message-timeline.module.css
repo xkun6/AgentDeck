@@ -998,7 +998,9 @@
 }
 
 .toolActivityLabel {
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 50%;
   overflow: hidden;
   color: var(--h-text-3);
   line-height: inherit;
@@ -1007,6 +1009,7 @@
 }
 
 .toolActivityMeta {
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 360px;
   overflow: hidden;
@@ -1093,7 +1096,9 @@
 }
 
 .toolName {
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 50%;
   color: var(--h-text);
   font-weight: 500;
   line-height: inherit;
@@ -1103,6 +1108,7 @@
 }
 
 .toolContext {
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 360px;
   overflow: hidden;
