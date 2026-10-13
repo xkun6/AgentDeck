@@ -118,6 +118,7 @@ sidecar 入口：
 | `agent.tasks.list` | `{ agentId }` | `{ tasks: AgentBackgroundTask[] }`（见 4.15） |
 | `agent.tasks.stop` | `{ agentId, taskId }` | `{}`（见 4.15） |
 | `agent.tasks.output` | `{ agentId, taskId, maxBytes? }` | `{ text, truncated, size }`（见 4.15） |
+| `agent.update` | `{ agentId, title?: string \| null, pinned?, archived? }` | `{ agent: AgentSnapshot }`（重命名 / 置顶 / 归档，见 4.17） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -611,6 +612,58 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 **AgentManager**：为 `agent.send` 发起的回合记录原始 prompt、clientMessageId 与「是否已有输出」。retract 先等已到达事件处理完，再在事件链内校验并写 `user_message_retracted`（与输出事件串行，无竞态），然后走与 `agent.cancel` 相同的 interrupt 路径，回合随后以 `turn_canceled` 结束。撤回事件写入后到中断生效前 provider 仍吐出的 timeline 事件被丢弃。provider 无需改动。
 
 **限制**：Claude 等 CLI 自身的历史（transcript）里仍会留下这条被中断的用户消息（CLI 无法删除）；只有 AgentDeck 自己的时间线把它隐藏。
+
+### 4.17 会话管理：重命名、置顶、归档、导出、批量操作
+
+**协议**：
+- `AgentSnapshot` 增加 `pinned?: boolean`、`archived?: boolean`（缺省视为 false，随 meta.json 持久化）。`title` 表示用户自定义标题；未设置时前端沿用现有推导（`agentDisplayTitle`）。
+- 新方法 `agent.update { agentId, title?: string | null, pinned?: boolean, archived?: boolean }` → `{ agent: AgentSnapshot }`：
+  - 三个字段至少给一个，否则 `-32602`。`title` 去首尾空白后长度 1–200；`null` 或空字符串 = 清除自定义标题（快照中删除 `title`）。超长为 `-32602`。
+  - 只改元数据：任何状态（含 running / dormant / closed）都可调用，**不恢复会话、不受单 turn 约束、不改 `updatedAt`**（避免改名把会话顶到列表最前）。
+  - 立即落盘 meta（不走 500ms 防抖），随后推 `agent.state`。agent 不存在 → `AGENT_NOT_FOUND`。
+- `agent.send` 发到 `archived: true` 的会话时自动取消归档（写入 `archived: false`，随本轮的 `agent.state` 推送）。
+
+**导出**（前端生成内容，Rust 只负责保存对话框与写文件）：
+- Rust 命令 `export_session_json` 改为 `export_session_file`，`input: { fileName, content, format: "json" | "markdown" }`；按 format 补 `.json` / `.md` 扩展名，保存对话框的过滤器与标题（「导出 AgentDeck 会话」）同步；返回结构不变（`{ ok, canceled, path?, bytes, error? }`）。
+- 前端经 `agent.timeline { agentId }` 取全部条目（dormant / closed 也可取，不恢复会话）后生成：
+  - JSON：`{ format: "agentdeck.session", version: 1, exportedAt: <ms>, agent: <快照，去掉 persistence / pendingPermissions / activeTurnId>, entries: AgentStreamEnvelope[] }`。
+  - Markdown：一级标题为会话标题；元信息列表（Agent、模型、模式、工作目录、创建 / 更新时间、累计 tokens）；按时间顺序输出用户消息（「### 用户」）、助手消息（「### 助手」，按 messageId 拼接）、思考（`<details><summary>思考</summary>…</details>`）、工具调用（一行「- 工具 `name` · 状态」，shell 附命令）、错误与系统提示；图片写「[图片]」；被撤回的用户消息（4.16）不输出。
+- 文件名默认 `<标题前 40 字，去掉非法字符>-<yyyyMMdd-HHmm>`。
+
+**前端**：
+- 会话右键菜单（`use-context-actions.tsx`）在现有项之外增加：重命名（弹窗，带「恢复自动标题」）、置顶 / 取消置顶、归档 / 取消归档、导出为 JSON、导出为 Markdown。运行中的会话不提供「归档」。
+- 侧边栏会话列表：不显示归档的会话；置顶的会话排在最前（置顶组内仍按 `updatedAt` 倒序）。
+- 历史页：
+  - 状态筛选旁增加视图切换「全部会话 / 已归档」，默认视图不含归档的会话。置顶的会话在最前，单列一个「置顶」分组。
+  - 新增「选择」模式：每行复选框、「全选当前筛选结果」、底部批量操作栏（已选 N 个）：删除（确认弹窗写明数量；运行中的会话由 `agent.delete` 先关闭再删除）、归档 / 取消归档、置顶 / 取消置顶。批量操作在前端逐个调用 RPC，结束后汇总提示成功与失败数量。
+  - 全文搜索见后续 4.19（第 2 批）。
+- 旧的 ui_store `session_ui_state` 表（archived / pinned 列）与 `set_session_archived` / `read_archived_session_ids` 删除；置顶与归档只以 sidecar 快照为准。项目置顶仍沿用 ui_store kv。
+
+### 4.18 Debug 面板与诊断包
+
+**sidecar 日志轮转**：sidecar 启动打开 `sidecar.log` 前，若文件超过 10 MB，先把它重命名为 `sidecar.log.1`（覆盖旧的 `.1`），再新建。运行中不轮转。
+
+**Rust 命令**：
+- `log_tail { input: { maxBytes?: number } }` → `{ path: string, text: string, truncated: boolean, size: number }`：读取 `<日志目录>/sidecar.log` 尾部，`maxBytes` 默认 256 KB、上限 2 MB；从截断处跳到下一个换行再返回，按 UTF-8 宽松解码。文件不存在时 `text` 为空字符串、`size` 为 0，不报错。
+- `debug_paths {}` → `{ dataDir, logDir, webviewDataDir? }`。
+- `export_debug_bundle { input: { diagnostics: string, frontendEvents: string } }` → `{ ok, canceled, path?, bytes, error? }`：弹出保存对话框（默认文件名 `agentdeck-debug-<yyyyMMdd-HHmmss>.zip`），zip 内容：
+  - `diagnostics.json`：前端收集的诊断信息（见下）；
+  - `frontend-events.jsonl`：前端调试事件；
+  - `logs/sidecar.log`、`logs/sidecar.log.1`（存在才放，各取最后 5 MB）；
+  - `config/providers.json`：按 4.7 规则脱敏（apiKey 一律脱敏，`env` / `settings.env` 中长度 ≥ 6 的值脱敏）；`config/coding-agent-paths.json` 原样。
+  - **绝不包含** `AGENTDECK_TOKEN`、WS 地址中的 token、ui.sqlite 与会话时间线。
+- 前端传入的 `diagnostics` / `frontendEvents` 在前端已经过 `debug-redact.ts` 脱敏；Rust 再对 providers.json 单独脱敏。
+
+**前端**：
+- 全局采集（应用启动时安装一次）：`console.error` / `console.warn`、`window` 的 `error` / `unhandledrejection`、sidecar RPC 请求失败（方法名、错误码、message）、sidecar 连接断开 / 重连、`sidecar-status` 变化，写入 `debug-bus`（环形缓冲 500 条，写入前脱敏）。
+- 调试页（「高级」下新增「调试」子页，并在命令面板加入「打开调试面板」）：
+  - 运行状态：应用版本 / 提交 / 构建日期；sidecar 状态、版本、pid、端口（来自 `get_sidecar_config`，**不显示 token**）；「重启 sidecar」按钮。
+  - 路径：`debug_paths` 的各目录，每项带「打开」。
+  - Agent 可用性：`provider.list` 的可用状态与不可用原因，`coding_agents_check` 的版本与路径。
+  - 前端事件：按类型筛选、清空、复制。
+  - sidecar 日志：`log_tail` 尾部，按级别（全部 / 警告及以上 / 错误）与关键字过滤，「自动刷新」开关（2 秒），「打开日志目录」。
+  - 操作：「复制诊断信息」（diagnostics JSON 写入剪贴板）、「导出诊断包」。
+- `diagnostics` 内容：上述运行状态、路径、Agent 可用性、平台与 UA、当前会话数量（按状态计数），不含会话内容。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
