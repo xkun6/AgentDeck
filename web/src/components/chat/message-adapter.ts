@@ -337,6 +337,7 @@ export function agentUIMessageToChatMessage(msg: AgentUIMessage): ChatMessage | 
     status: msg.status,
     error: msg.status === "error" || messageHasErrorNotice(msg),
     stats: deriveAssistantStats(msg),
+    ...(typeof msg.metadata?.seq === "number" ? { seq: msg.metadata.seq } : {}),
   };
 }
 

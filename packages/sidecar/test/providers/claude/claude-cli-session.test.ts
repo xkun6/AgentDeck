@@ -149,6 +149,23 @@ describe("buildClaudeCliArgs", () => {
     expect(full).toContain("plan");
   });
 
+  test("分叉（design.md 4.23）：--resume 后带 --fork-session，可选 --resume-session-at；未 resume 时忽略", () => {
+    const base = { model: null, permissionMode: "default" as const };
+    const fork = buildClaudeCliArgs({ ...base, resumeSessionId: "s-1", forkSession: true });
+    expect(fork.slice(-3)).toEqual(["--resume", "s-1", "--fork-session"]);
+    const forkAt = buildClaudeCliArgs({
+      ...base,
+      resumeSessionId: "s-1",
+      forkSession: true,
+      resumeSessionAt: "uuid-9",
+    });
+    expect(forkAt.slice(-5)).toEqual(["--resume", "s-1", "--fork-session", "--resume-session-at", "uuid-9"]);
+    expect(buildClaudeCliArgs({ ...base, resumeSessionId: "s-1" })).not.toContain("--fork-session");
+    expect(buildClaudeCliArgs({ ...base, resumeSessionId: null, forkSession: true })).not.toContain(
+      "--fork-session",
+    );
+  });
+
   test("permissionMode 为 null 时不传 --permission-mode，仍保留 --allow-dangerously-skip-permissions", () => {
     const args = buildClaudeCliArgs({ model: null, permissionMode: null, resumeSessionId: null });
     expect(args).not.toContain("--permission-mode");

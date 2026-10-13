@@ -1719,6 +1719,57 @@ describe("ClaudeAgentSession", () => {
     expect(events.filter((e) => e.type === "thread_started")).toHaveLength(1);
   });
 
+  test("forkSession（design.md 4.23）：首次拉起带 --fork-session，拿到新会话 id 后重启不再分叉；turn_completed 带 nativeRef", async () => {
+    const NEW_ID = "99999999-8888-7777-6666-555555555555";
+    const h = createHarness();
+    h.setup((q) => {
+      q.onUser = (user, cli) => {
+        cli.emit(
+          msg.init(NEW_ID),
+          { ...msg.assistant(`msg-${cli.received.length}`, [{ type: "text", text: "好" }]), session_id: NEW_ID },
+          { ...msg.result(user.uuid), session_id: NEW_ID },
+        );
+      };
+    });
+    const session = await h.client.forkSession!(
+      { provider: "claude", sessionId: SESSION_ID },
+      { cwd: ".", nativeRef: "uuid-at" },
+    );
+    // 还没有自己的原生 id：不能把原会话的 id 当成持久化句柄
+    expect(session.id).toBeNull();
+    expect(session.describePersistence()).toBeNull();
+    expect(h.clis).toHaveLength(0);
+    const events = collect(session);
+    await session.startTurn("x");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(h.clis[0]!.options).toMatchObject({
+      resumeSessionId: SESSION_ID,
+      forkSession: true,
+      resumeSessionAt: "uuid-at",
+    });
+    expect(events).toContainEqual({ type: "thread_started", sessionId: NEW_ID });
+    expect(session.describePersistence()).toEqual({ provider: "claude", sessionId: NEW_ID });
+    expect(terminalEvents(events)[0]).toMatchObject({
+      type: "turn_completed",
+      nativeRef: "a-msg-1",
+    });
+
+    // 思考强度变化触发重启：以新会话 id 恢复，不再带分叉参数
+    await session.setThinking!("high");
+    await session.startTurn("y");
+    await waitUntil(() => terminalEvents(events).length === 2);
+    expect(h.clis[1]!.options.resumeSessionId).toBe(NEW_ID);
+    expect(h.clis[1]!.options.forkSession).toBeUndefined();
+    expect(h.clis[1]!.options.resumeSessionAt).toBeUndefined();
+  });
+
+  test("forkSession 缺少原 sessionId 时报错", async () => {
+    const h = createHarness();
+    await expect(
+      h.client.forkSession!({ provider: "claude", sessionId: "" }, { cwd: "." }),
+    ).rejects.toThrow("sessionId");
+  });
+
   test("close：关闭 claude 进程、取消回合，之后不可再用", async () => {
     const h = createHarness();
     const session = await h.client.createSession({ cwd: "." });

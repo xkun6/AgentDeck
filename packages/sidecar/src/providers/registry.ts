@@ -87,11 +87,13 @@ export class ProviderRegistry {
       this.list().map(async (client): Promise<ProviderInfo> => {
         const base: Pick<
           ProviderInfo,
-          "id" | "kind" | "label" | "custom" | "extends" | "description"
+          "id" | "kind" | "label" | "custom" | "extends" | "description" | "capabilities"
         > = {
           id: client.provider,
           kind: client.kind,
           label: client.label,
+          // 分叉方式（design.md 4.23）：实现了 forkSession 为原生，否则带摘要新开
+          capabilities: { fork: client.forkSession ? "native" : "summary" },
           ...(client.custom
             ? {
                 custom: true,

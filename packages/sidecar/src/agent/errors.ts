@@ -12,3 +12,11 @@ export class AgentRpcError extends Error {
     this.data = data;
   }
 }
+
+/** 参数语义非法（通过了 schema 校验但对当前会话无效）：RPC 层映射为 `-32602` */
+export class AgentInvalidParamsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentInvalidParamsError";
+  }
+}

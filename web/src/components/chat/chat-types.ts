@@ -46,4 +46,6 @@ export interface ChatMessage {
   title?: string;
   error?: boolean;
   stats?: AssistantMessageStats;
+  /** 该消息对应的时间线 seq（design.md 4.23：「从这里分叉」传给 agent.fork 的 throughSeq） */
+  seq?: number;
 }

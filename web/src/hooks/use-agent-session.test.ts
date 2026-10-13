@@ -225,6 +225,22 @@ describe("agent.update（design.md 4.17）", () => {
     expect(store.get(agentSnapshotsAtom)[AGENT]).toMatchObject({ archived: true, title: "新名字" });
   });
 
+  it("forkSession 调 agent.fork（可选 throughSeq / title），结果写入快照并预建聊天运行时", async () => {
+    const store = createStore();
+    const forked = snapshot({ id: "agent-fork", title: "分叉", status: "idle" });
+    const client = fakeClient(async () => ({ agent: forked }));
+    const actions = createAgentSessionActions(client, store);
+    await expect(actions.forkSession(AGENT)).resolves.toEqual(forked);
+    expect(client.request.mock.calls[0]?.slice(0, 2)).toEqual(["agent.fork", { agentId: AGENT }]);
+    await actions.forkSession(AGENT, { throughSeq: 7, title: "T" });
+    expect(client.request.mock.calls[1]?.slice(0, 2)).toEqual([
+      "agent.fork",
+      { agentId: AGENT, throughSeq: 7, title: "T" },
+    ]);
+    expect(store.get(agentSnapshotsAtom)["agent-fork"]).toMatchObject({ title: "分叉" });
+    expect(store.get(chatRuntimeBySessionAtom)["agent-fork"]).toBeDefined();
+  });
+
   it("fetchAllTimelineEntries 取全部条目", async () => {
     const store = createStore();
     const entries = [{ agentId: AGENT, seq: 1, epoch: "e", timestamp: 1, event: { type: "turn_started", turnId: "t" } }];

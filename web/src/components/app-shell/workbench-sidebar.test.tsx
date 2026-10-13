@@ -14,8 +14,9 @@ stubRadixGlobals();
 
 const updateSession = vi.fn(async (_id: string, _patch: unknown) => ({}));
 const fetchAllTimelineEntries = vi.fn(async (_id: string) => [] as unknown[]);
+const forkSession = vi.fn(async (id: string, _options?: unknown) => ({ id: `${id}-fork` }));
 vi.mock("@/hooks/use-agent-session", () => ({
-  useAgentSession: () => ({ updateSession, fetchAllTimelineEntries, deleteSession: vi.fn() }),
+  useAgentSession: () => ({ updateSession, fetchAllTimelineEntries, forkSession, deleteSession: vi.fn() }),
   humanizeSidecarError: (error: unknown) => String(error),
 }));
 vi.mock("@/hooks/use-agent-catalog", () => ({ useAgentProviders: () => ({ data: undefined }) }));
@@ -88,6 +89,27 @@ describe("会话右键菜单（4.17）", () => {
     fireEvent.contextMenu(screen.getByText("会话-a"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "归档会话" }));
     await waitFor(() => expect(updateSession).toHaveBeenCalledWith("a", { archived: true }));
+  });
+
+  it("分叉会话（4.23）：调用 agent.fork（整会话，不带 throughSeq）；运行中的会话禁用", async () => {
+    renderSidebar([agent("a")]);
+    fireEvent.contextMenu(screen.getByText("会话-a"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "分叉会话" }));
+    await waitFor(() => expect(forkSession).toHaveBeenCalledWith("a", {}));
+    cleanup();
+
+    renderSidebar([agent("b", { status: "running" })]);
+    fireEvent.contextMenu(screen.getByText("会话-b"));
+    const item = await screen.findByRole("menuitem", { name: "分叉会话" });
+    expect(item.getAttribute("aria-disabled") === "true" || item.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("分叉失败时用提示框反馈", async () => {
+    forkSession.mockRejectedValueOnce(new Error("原生分叉会话失败：炸了"));
+    renderSidebar([agent("a")]);
+    fireEvent.contextMenu(screen.getByText("会话-a"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "分叉会话" }));
+    expect(await screen.findByText(/原生分叉会话失败：炸了/)).toBeTruthy();
   });
 
   it("已置顶显示「取消置顶会话」；运行中的会话不提供归档", async () => {

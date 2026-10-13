@@ -11,6 +11,7 @@ import {
   FileJson,
   FileText,
   FolderOpen,
+  GitFork,
   MessageSquarePlus,
   MessageSquare,
   Pencil,
@@ -128,11 +129,41 @@ export function useProjectActions() {
   return { newChat, openDetail, togglePin, openInExplorer, copyPath, deleteProject, buildMenu };
 }
 
+/**
+ * 分叉会话（design.md 4.23）：成功后跳到新会话，失败用应用内提示框反馈。
+ * throughSeq 缺省 = 整个会话；给出时只保留到该 seq 所在回合结束。
+ */
+export function useForkSession() {
+  const navigate = useNavigate();
+  const setActiveId = useSetAtom(activeSessionIdAtom);
+  const actions = useAgentSession();
+  const { confirm } = useConfirm();
+
+  return useCallback(
+    async (agentId: string, throughSeq?: number): Promise<void> => {
+      try {
+        const agent = await actions.forkSession(agentId, throughSeq !== undefined ? { throughSeq } : {});
+        setActiveId(agent.id);
+        navigate(`/tasks/${encodeURIComponent(agent.id)}`);
+      } catch (error) {
+        await confirm({
+          title: "分叉会话失败",
+          body: humanizeSidecarError(error),
+          confirmLabel: "知道了",
+          cancelLabel: "关闭",
+        });
+      }
+    },
+    [actions, confirm, navigate, setActiveId],
+  );
+}
+
 export function useSessionActions() {
   const navigate = useNavigate();
   const setActiveId = useSetAtom(activeSessionIdAtom);
   const deleteSession = useDeleteAgentSession();
   const exportSession = useExportSession();
+  const forkSession = useForkSession();
   const actions = useAgentSession();
   const { confirm, prompt } = useConfirm();
 
@@ -206,6 +237,14 @@ export function useSessionActions() {
               icon: agent.archived ? <ArchiveRestore size={ICON} /> : <Archive size={ICON} />,
               onSelect: () => void updateSession(agent.id, { archived: !agent.archived }, agent.archived ? "取消归档失败" : "归档失败"),
             }]),
+        {
+          key: "fork",
+          label: "分叉会话",
+          icon: <GitFork size={ICON} />,
+          // 整会话分叉要求原会话没有进行中的回合（design.md 4.23）
+          disabled: running,
+          onSelect: () => void forkSession(agent.id),
+        },
         { key: "copy-title", label: "复制会话标题", icon: <Copy size={ICON} />, onSelect: () => void copyText(title) },
         ...(cwd
           ? [{ key: "copy-cwd", label: "复制工作目录", icon: <Copy size={ICON} />, onSelect: () => void copyText(cwd) }]
@@ -233,7 +272,7 @@ export function useSessionActions() {
         },
       ];
     },
-    [deleteSession, exportSession, navigate, openSession, renameSession, updateSession],
+    [deleteSession, exportSession, forkSession, navigate, openSession, renameSession, updateSession],
   );
 
   return { openSession, buildMenu };

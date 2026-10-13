@@ -53,6 +53,10 @@ export interface ClaudeCliOptions {
   /** 思考强度（design.md 4.10）：off → --thinking disabled，其它 → --effort；null / 缺省不传 */
   thinkingOptionId?: string | null;
   resumeSessionId: string | null;
+  /** 配合 resumeSessionId：以 --fork-session 派生新会话（design.md 4.23），不改动原会话 */
+  forkSession?: boolean;
+  /** 配合 forkSession：只保留到该 assistant 消息 uuid（隐藏参数 --resume-session-at，2.1.296 实测可用） */
+  resumeSessionAt?: string;
   canUseTool: ClaudeCanUseTool;
   logger: Logger;
   onStderr?: (text: string) => void;
@@ -85,7 +89,13 @@ export type ClaudeCliFactory = (options: ClaudeCliOptions) => ClaudeCliHandle;
 export function buildClaudeCliArgs(
   options: Pick<
     ClaudeCliOptions,
-    "model" | "permissionMode" | "resumeSessionId" | "extraArgs" | "thinkingOptionId"
+    | "model"
+    | "permissionMode"
+    | "resumeSessionId"
+    | "forkSession"
+    | "resumeSessionAt"
+    | "extraArgs"
+    | "thinkingOptionId"
   >,
 ): string[] {
   const args = [
@@ -112,6 +122,12 @@ export function buildClaudeCliArgs(
   args.push(...claudeThinkingArgs(options.thinkingOptionId ?? null));
   if (options.resumeSessionId) {
     args.push("--resume", options.resumeSessionId);
+    if (options.forkSession) {
+      args.push("--fork-session");
+      if (options.resumeSessionAt) {
+        args.push("--resume-session-at", options.resumeSessionAt);
+      }
+    }
   }
   if (options.extraArgs) {
     args.push(...options.extraArgs);

@@ -102,6 +102,7 @@ describe("基础方法", () => {
       kind: "mock",
       label: "Mock Agent",
       available: true,
+      capabilities: { fork: "summary" },
     });
   });
 

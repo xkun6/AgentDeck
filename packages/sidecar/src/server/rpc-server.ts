@@ -21,7 +21,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { z } from "zod";
 
 import type { AgentManager } from "../agent/agent-manager.js";
-import { AgentRpcError } from "../agent/errors.js";
+import { AgentInvalidParamsError, AgentRpcError } from "../agent/errors.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import {
   createProviderProfilesSchema,
@@ -134,6 +134,9 @@ function toErrorObject(error: unknown): AgentRpcErrorObject {
       message: error.message,
       ...(error.data ? { data: error.data } : {}),
     };
+  }
+  if (error instanceof AgentInvalidParamsError) {
+    return { code: AGENT_RPC_ERROR_CODES.INVALID_PARAMS, message: error.message };
   }
   if (error instanceof AgentRpcError) {
     return {
@@ -281,6 +284,20 @@ export class RpcServer {
       }),
       defineMethod(AGENT_RPC_METHODS.agentRetract, agentIdParams, (params) =>
         manager.retract(params.agentId),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentFork,
+        z.object({
+          agentId: z.string().min(1),
+          throughSeq: z.number().int().positive().optional(),
+          title: z.string().max(AGENT_TITLE_MAX_LENGTH).optional(),
+        }),
+        async (params) => ({
+          agent: await manager.forkAgent(params.agentId, {
+            ...(params.throughSeq !== undefined ? { throughSeq: params.throughSeq } : {}),
+            ...(params.title !== undefined ? { title: params.title } : {}),
+          }),
+        }),
       ),
       defineMethod(
         AGENT_RPC_METHODS.agentPermissionRespond,
@@ -558,7 +575,11 @@ export class RpcServer {
         this.send(ws, { jsonrpc: "2.0", id, result });
       }
     } catch (error) {
-      if (!(error instanceof RpcProtocolError) && !(error instanceof AgentRpcError)) {
+      if (
+        !(error instanceof RpcProtocolError) &&
+        !(error instanceof AgentRpcError) &&
+        !(error instanceof AgentInvalidParamsError)
+      ) {
         this.logger.error("处理 %s 出错：%s", message.method, String(error));
       }
       if (!isNotification) {

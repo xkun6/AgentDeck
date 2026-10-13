@@ -196,7 +196,7 @@ describe("CodexAgentSession（假 app-server）", () => {
       contextWindowUsedTokens: 120,
     };
     expect(events).toContainEqual({ type: "usage_updated", usage });
-    expect(events.at(-1)).toEqual({ type: "turn_completed", turnId, usage });
+    expect(events.at(-1)).toEqual({ type: "turn_completed", turnId, usage, nativeRef: "turn_1" });
     expect(events.filter(isTerminal)).toHaveLength(1);
     expect(session.id).toBe("thr_fake");
     expect(session.describePersistence()).toEqual({ provider: "codex", sessionId: "thr_fake" });
@@ -381,7 +381,7 @@ describe("CodexAgentSession（假 app-server）", () => {
     const events = collect(session);
     const { turnId } = await session.startTurn("  /compact " + String.fromCharCode(10));
     await waitUntil(() => events.some(isTerminal));
-    expect(events.filter(isTerminal)).toEqual([{ type: "turn_completed", turnId }]);
+    expect(events.filter(isTerminal)).toEqual([{ type: "turn_completed", turnId, nativeRef: "turn_1" }]);
     expect(events.filter((e) => e.type === "thread_started")).toHaveLength(1);
     expect(
       events.flatMap((e) => (e.type === "timeline" && e.item.type === "compaction" ? [e.item.status] : [])),
@@ -393,7 +393,7 @@ describe("CodexAgentSession（假 app-server）", () => {
     // 只有一个 text 块的数组同样拦截；带其它文字的照常走 turn/start
     const second = await session.startTurn([{ type: "text", text: "/compact" }]);
     await waitUntil(() => events.filter(isTerminal).length === 2);
-    expect(events.filter(isTerminal)[1]).toEqual({ type: "turn_completed", turnId: second.turnId });
+    expect(events.filter(isTerminal)[1]).toEqual({ type: "turn_completed", turnId: second.turnId, nativeRef: "turn_2" });
     expect(received().filter((m) => m.method === "thread/compact/start")).toHaveLength(2);
 
     const third = await session.startTurn("/compact 只保留结论");
@@ -640,6 +640,42 @@ describe("CodexAgentSession（假 app-server）", () => {
     await waitUntil(() => events.some(isTerminal));
     expect(events).toContainEqual({ type: "thread_started", sessionId: "thr_old" });
     expect(received().some((m) => m.method === "thread/start")).toBe(false);
+  });
+
+  test("forkSession 发 thread/fork（带 lastTurnId），新线程上 turn/start，turn_completed 带原生 turnId", async () => {
+    const client = makeClient();
+    const session = await client.forkSession!(
+      { provider: "codex", sessionId: "thr_old" },
+      { cwd: tmpDir, model: "gpt-b", nativeRef: "turn_prev" },
+    );
+    sessions.push(session);
+    const fork = received().find((m) => m.method === "thread/fork");
+    expect(fork?.params).toMatchObject({
+      threadId: "thr_old",
+      lastTurnId: "turn_prev",
+      cwd: tmpDir,
+      model: "gpt-b",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    expect(received().some((m) => m.method === "thread/start" || m.method === "thread/resume")).toBe(false);
+    // 分叉立即完成：持久化句柄是新线程
+    expect(session.describePersistence()).toEqual({ provider: "codex", sessionId: "thr_forked" });
+
+    const events = collect(session);
+    await session.startTurn("hello");
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.method === "turn/start")?.params).toMatchObject({ threadId: "thr_forked" });
+    expect(events).toContainEqual({ type: "thread_started", sessionId: "thr_forked" });
+    expect(events.find(isTerminal)).toMatchObject({ type: "turn_completed", nativeRef: "turn_1" });
+  });
+
+  test("forkSession 不带 nativeRef 时 thread/fork 不传 lastTurnId", async () => {
+    const session = await makeClient().forkSession!({ provider: "codex", sessionId: "thr_old" }, { cwd: tmpDir });
+    sessions.push(session);
+    const params = received().find((m) => m.method === "thread/fork")?.params;
+    expect(params).toMatchObject({ threadId: "thr_old" });
+    expect(params).not.toHaveProperty("lastTurnId");
   });
 
   test("图片输入写入临时文件并以 localImage 传给 codex", async () => {

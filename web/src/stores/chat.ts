@@ -338,6 +338,8 @@ function appendAgentNotice(
 
 /** 上下文压缩提示的消息 id 前缀（design.md 4.13）；时间线据此渲染成居中分隔线。 */
 export const AGENT_COMPACTION_NOTICE_PREFIX = "agent-compaction-";
+/** timeline `notice` 系统提示（如会话分叉，design.md 4.23）的消息 id 前缀；同样渲染成居中分隔线。 */
+export const AGENT_TIMELINE_NOTICE_PREFIX = "agent-timeline-notice-";
 
 type CompactionTimelineItem = Extract<AgentTimelineItem, { type: "compaction" }>;
 
@@ -650,6 +652,16 @@ function reduceAgentTimelineItem(
     case "error":
       return appendAgentNotice(runtime, agentId, `agent-notice-${seq}`, timestamp, item.message, "error");
 
+    case "notice":
+      return appendAgentNotice(
+        runtime,
+        agentId,
+        `${AGENT_TIMELINE_NOTICE_PREFIX}${seq}`,
+        timestamp,
+        item.text,
+        "system",
+      );
+
     case "compaction": {
       const next = upsertCompactionNotice(runtime, agentId, item, timestamp);
       // 压缩后不再显示压缩前的已用量，等下一次 usage 刷新
@@ -813,6 +825,30 @@ function reduceAgentEventInner(
   }
 }
 
+/**
+ * 在消息 metadata 里记下对应的时间线 seq（design.md 4.23「从这里分叉」传该回合内任一 seq）：
+ * 用户消息记自己的 seq（乐观消息在回显时补上），助手消息记其首个输出事件的 seq。
+ */
+function stampMessageSeq(runtime: ChatSessionRuntime, envelope: AgentStreamEnvelope): ChatSessionRuntime {
+  const { event, seq } = envelope;
+  if (event.type !== "timeline") return runtime;
+  const item = event.item;
+  let targetId: string | undefined;
+  if (item.type === "user_message") {
+    targetId = item.clientMessageId ?? item.messageId ?? `agent-user-${seq}`;
+  } else if (
+    item.type === "assistant_message" ||
+    item.type === "reasoning" ||
+    item.type === "tool_call"
+  ) {
+    targetId = runtime.activeAssistantId;
+  }
+  if (!targetId) return runtime;
+  return updateMessage(runtime, targetId, (message) =>
+    message.metadata?.seq !== undefined ? message : { ...message, metadata: { ...message.metadata, seq } },
+  );
+}
+
 /** 把一个 sidecar 事件归约进会话运行时；seq 不大于已归约序号的事件直接忽略（与 epoch 无关）。 */
 export function reduceAgentEvent(
   runtime: ChatSessionRuntime,
@@ -822,7 +858,7 @@ export function reduceAgentEvent(
   if (runtime.agentLastSeq !== undefined && envelope.seq <= runtime.agentLastSeq) {
     return runtime;
   }
-  const next = reduceAgentEventInner(runtime, envelope);
+  const next = stampMessageSeq(reduceAgentEventInner(runtime, envelope), envelope);
   return {
     ...next,
     agentLastSeq: envelope.seq,
