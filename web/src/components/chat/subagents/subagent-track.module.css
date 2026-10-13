@@ -74,6 +74,11 @@
   cursor: pointer;
 }
 
+/* 已完成行整体弱化，让运行中的行更醒目；须写在 hover/active 之前，以便悬停时恢复正常色 */
+.row[data-status="done"] {
+  color: var(--h-text-3);
+}
+
 .row:hover,
 .row[data-active="true"] {
   background: var(--h-bg-soft);
@@ -94,7 +99,13 @@
 }
 
 .dot[data-status="done"] {
-  background: var(--h-ok);
+  background: var(--h-text-3);
+}
+
+.dot[data-status="canceled"] {
+  box-sizing: border-box;
+  border: 1px solid var(--h-text-3);
+  background: transparent;
 }
 
 .dot[data-status="error"] {
@@ -118,6 +129,20 @@
   white-space: nowrap;
   color: var(--h-text-3);
   font-size: 11px;
+}
+
+.rowStatus {
+  flex: 0 0 auto;
+  color: var(--h-text-3);
+  font-size: 11px;
+}
+
+.row[data-status="running"] .rowStatus {
+  color: var(--h-ok);
+}
+
+.row[data-status="error"] .rowStatus {
+  color: var(--h-err);
 }
 
 @keyframes pulse {

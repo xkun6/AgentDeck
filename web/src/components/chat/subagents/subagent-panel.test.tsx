@@ -90,6 +90,24 @@ describe("SubagentTrack", () => {
     fireEvent.click(within(list).getByText("运行中的任务"));
     expect(onOpen).toHaveBeenCalledWith("s3");
   });
+
+  it("运行中与已完成的行分别显示状态文字，data-status 不同", () => {
+    render(
+      <SubagentTrack
+        subagents={[sub("s1"), sub("s3", { status: "running", description: "运行中的任务" })]}
+        parentSubagentId={null}
+        onOpen={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^子代理/ }));
+    const list = screen.getByRole("list", { name: "子代理列表" });
+    const doneRow = within(list).getByText("任务 s1").closest("button")!;
+    const runningRow = within(list).getByText("运行中的任务").closest("button")!;
+    expect(within(doneRow).getByText("已完成")).toBeTruthy();
+    expect(within(runningRow).getByText("运行中")).toBeTruthy();
+    expect(doneRow.getAttribute("data-status")).toBe("done");
+    expect(runningRow.getAttribute("data-status")).toBe("running");
+  });
 });
 
 describe("SubagentPanel", () => {

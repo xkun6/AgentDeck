@@ -56,6 +56,7 @@ export function SubagentTrack({ subagents, parentSubagentId, onOpen, activeSubag
               <button
                 type="button"
                 className={s.row}
+                data-status={subagentDotStatus(row.status)}
                 data-active={row.id === activeSubagentId ? "true" : undefined}
                 onClick={() => onOpen(row.id)}
                 title={subagentStatusText(row.status)}
@@ -63,6 +64,7 @@ export function SubagentTrack({ subagents, parentSubagentId, onOpen, activeSubag
                 <span className={s.dot} data-status={subagentDotStatus(row.status)} aria-hidden="true" />
                 <span className={s.rowLabel}>{subagentRowLabel(row)}</span>
                 {row.subtitle ? <span className={s.rowSubtitle}>{row.subtitle}</span> : null}
+                <span className={s.rowStatus}>{subagentStatusText(row.status)}</span>
               </button>
             </li>
           ))}

@@ -74,9 +74,13 @@
   background: var(--h-text-3);
 }
 
-.dot[data-status="running"],
-.dot[data-status="done"] {
+.dot[data-status="running"] {
   background: var(--h-ok);
+}
+
+/* 已完成与轨道一致：不动的弱化色点，与运行中区分 */
+.dot[data-status="done"] {
+  background: var(--h-text-3);
 }
 
 .dot[data-status="error"] {
