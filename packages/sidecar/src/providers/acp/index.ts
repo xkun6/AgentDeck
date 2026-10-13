@@ -15,7 +15,7 @@ export {
 } from "./catalog.js";
 
 /**
- * 通用 ACP agents：内置命令目录（gemini / qwen / kimi / hermes）+ `<dataDir>/acp-agents.json` 自定义条目，
+ * 通用 ACP agents：内置命令目录（DeepSeek Harness `acp:dsh`）+ `<dataDir>/acp-agents.json` 自定义条目，
  * 每个条目一个 AcpAgentClient（kind `acp`）。
  */
 export const createAcpClients: ProviderFactory = async (ctx) => {

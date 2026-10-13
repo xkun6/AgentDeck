@@ -18,7 +18,7 @@ import {
 } from "../../../src/providers/custom/index.js";
 import { formatIssues } from "../../../src/providers/custom/schema.js";
 
-const RESERVED = reservedProfileIds(["claude", "codex", "mock", "acp:gemini", "acp:qwen"]);
+const RESERVED = reservedProfileIds(["claude", "codex", "mock", "acp:dsh"]);
 
 function issuesOf(input: unknown, reserved: ReadonlySet<string> = RESERVED) {
   const result = createProviderProfilesSchema(reserved).safeParse(input);
@@ -74,14 +74,14 @@ describe("profile 校验", () => {
       { id: "dup", extends: "claude", label: "a" },
       { id: "dup", extends: "codex", label: "b" },
       { id: "claude", extends: "claude", label: "c" },
-      { id: "gemini", extends: "acp", label: "d", command: ["gemini"] },
+      { id: "dsh", extends: "acp", label: "d", command: ["dsh"] },
       { id: "custom", extends: "codex", label: "e" },
     ]);
     expect(issues).toEqual(
       expect.arrayContaining([
         { path: "providers.1.id", message: "id「dup」重复" },
         { path: "providers.2.id", message: "id「claude」与内置 provider 冲突" },
-        { path: "providers.3.id", message: "id「gemini」与内置 provider 冲突" },
+        { path: "providers.3.id", message: "id「dsh」与内置 provider 冲突" },
         { path: "providers.4.id", message: "id「custom」与内置 provider 冲突" },
       ]),
     );

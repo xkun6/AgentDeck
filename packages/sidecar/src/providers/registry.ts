@@ -11,7 +11,7 @@ const AVAILABILITY_TIMEOUT_MS = 10_000;
 
 /**
  * 各 provider 目录导出的工厂。registry 只负责汇总，P3 的 claude / codex / acp 各自只改自己的目录。
- * 顺序即 provider.list 的返回顺序。
+ * 顺序即 provider.list 的返回顺序。mock 只在 `AGENTDECK_ENABLE_MOCK=1` 时注册（见 mock/index.ts）。
  */
 export const PROVIDER_FACTORIES: readonly ProviderFactory[] = [
   createClaudeClients,

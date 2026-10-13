@@ -16,7 +16,7 @@ describe("ApprovalDialog", () => {
     const onRespond = vi.fn().mockResolvedValue(undefined);
     const request: AgentPermissionRequest = {
       id: "p1",
-      provider: "acp:gemini",
+      provider: "acp:dsh",
       name: "execute",
       kind: "tool",
       title: "执行命令",

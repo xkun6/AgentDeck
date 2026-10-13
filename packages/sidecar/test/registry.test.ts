@@ -8,12 +8,16 @@ import { createProviderRegistry, ProviderRegistry } from "../src/providers/regis
 const ctx = { logger: createSilentLogger(), env: {} };
 
 describe("ProviderRegistry", () => {
-  test("默认工厂注册 mock 与 4 个内置 ACP agent，且 provider id 不重复", async () => {
+  test("默认工厂只注册 Claude、Codex 与内置 ACP agent（acp:dsh），不含 mock", async () => {
     const registry = await createProviderRegistry(ctx);
+    expect(registry.list().map((c) => c.provider)).toEqual(["claude", "codex", "acp:dsh"]);
+    expect(registry.get("mock")).toBeUndefined();
+  });
+
+  test("AGENTDECK_ENABLE_MOCK=1 时额外注册 mock，且 provider id 不重复", async () => {
+    const registry = await createProviderRegistry({ ...ctx, env: { AGENTDECK_ENABLE_MOCK: "1" } });
     const ids = registry.list().map((c) => c.provider);
-    expect(ids).toEqual(
-      expect.arrayContaining(["mock", "acp:gemini", "acp:qwen", "acp:kimi", "acp:hermes"]),
-    );
+    expect(ids).toEqual(["claude", "codex", "acp:dsh", "mock"]);
     expect(new Set(ids).size).toBe(ids.length);
     expect(registry.get("mock")).toBeInstanceOf(MockAgentClient);
   });

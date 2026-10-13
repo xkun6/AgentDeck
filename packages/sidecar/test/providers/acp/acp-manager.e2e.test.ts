@@ -62,7 +62,7 @@ describe("ACP provider × AgentManager", () => {
       command: [process.execPath, FAKE_AGENT_PATH],
     });
     expect(infos.map((info) => info.id)).toEqual(
-      expect.arrayContaining(["acp:gemini", "acp:qwen", "acp:kimi", "acp:hermes", "acp:fake"]),
+      expect.arrayContaining(["acp:dsh", "acp:fake"]),
     );
   });
 

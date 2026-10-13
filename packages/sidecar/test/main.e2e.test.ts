@@ -36,7 +36,8 @@ function startSidecar(env: Record<string, string | undefined>) {
   for (const key of Object.keys(childEnv)) {
     if (key.toUpperCase().startsWith("AGENTDECK_")) delete childEnv[key];
   }
-  Object.assign(childEnv, env);
+  // mock provider 只在 AGENTDECK_ENABLE_MOCK=1 时注册，本测试依赖它
+  Object.assign(childEnv, { AGENTDECK_ENABLE_MOCK: "1" }, env);
   const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
     cwd: PACKAGE_DIR,
     env: childEnv,

@@ -1,4 +1,4 @@
-// 真实 ACP CLI 冒烟（opt-in）：AGENTDECK_SMOKE=1 且 AGENTDECK_SMOKE_ACP=<provider id，如 acp:gemini 或 gemini> 时才运行。
+// 真实 ACP CLI 冒烟（opt-in）：AGENTDECK_SMOKE=1 且 AGENTDECK_SMOKE_ACP=<provider id，如 acp:dsh 或 dsh> 时才运行。
 // 自定义条目可通过 AGENTDECK_DATA_DIR 指向含 acp-agents.json 的目录。
 import type { AgentStreamEvent } from "@agentdeck/protocol";
 import { describe, expect, test } from "vitest";

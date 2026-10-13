@@ -96,6 +96,8 @@ beforeAll(async () => {
       AGENTDECK_PORT: "0",
       AGENTDECK_DATA_DIR: `${tmpRoot}data`,
       AGENTDECK_LOG_DIR: `${tmpRoot}logs`,
+      // mock provider 只在该变量为 1 时注册
+      AGENTDECK_ENABLE_MOCK: "1",
     },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,

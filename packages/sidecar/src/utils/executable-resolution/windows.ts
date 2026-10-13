@@ -47,12 +47,31 @@ function enumerateWingetPackageCandidates(
   return packageDirs.map((packageDir) => join(wingetPackages, packageDir, exeName));
 }
 
+/**
+ * PATH 命中 `.cmd` / `.bat` 且同目录有同名 `.exe` 时，把 `.exe` 排在它前面：能直接 spawn 真实 exe（shell:false）
+ * 就不经 cmd.exe，且不受 PATHEXT 顺序影响（如 DeepSeek Harness 的 bin 目录同时有 dsh.exe 与 dsh.cmd）。
+ */
+function preferSiblingExe(candidates: string[], exists: (path: string) => boolean): string[] {
+  return candidates.flatMap((candidate) => {
+    const extension = extname(candidate);
+    const lower = extension.toLowerCase();
+    if (lower !== ".cmd" && lower !== ".bat") {
+      return [candidate];
+    }
+    const exe = `${candidate.slice(0, -extension.length)}.exe`;
+    return exists(exe) ? [exe, candidate] : [candidate];
+  });
+}
+
 async function find(input: string, options: WindowsFindExecutableOptions): Promise<string | null> {
   if (hasPathSeparator(input)) {
     return findFirstProbeable(enumerateLiteralPathCandidates(input), options);
   }
 
-  const pathCandidates = await options.enumeratePathCandidates(input);
+  const pathCandidates = preferSiblingExe(
+    await options.enumeratePathCandidates(input),
+    options.exists,
+  );
   const wingetCandidates = enumerateWingetPackageCandidates(
     input,
     options.localAppData ?? process.env.LOCALAPPDATA,

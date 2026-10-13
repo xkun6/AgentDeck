@@ -97,6 +97,19 @@ describe("findExecutable", () => {
       await expect(findExecutable("foo")).resolves.toBeNull();
     });
 
+    test("prefers a working .exe over a sibling .cmd regardless of PATHEXT order", async () => {
+      for (const pathExt of [[".EXE", ".CMD"], [".CMD", ".EXE"]]) {
+        const dir = makeTempDir();
+        process.env.PATHEXT = pathExt.join(path.delimiter);
+        const exe = path.join(dir, "foo.exe");
+        copyFileSync(process.execPath, exe);
+        writeExecutable(path.join(dir, "foo.cmd"), "@echo off\r\necho 0.1\r\n");
+        prependPath(dir);
+
+        expectWindowsPathsEqual(await findExecutable("foo"), exe);
+      }
+    });
+
     test("returns a .cmd when it is the only candidate", async () => {
       const dir = makeTempDir();
       process.env.PATHEXT = ".CMD";
@@ -160,6 +173,34 @@ describe("findExecutable", () => {
     prependPath(dir);
 
     await expect(findExecutable("agentdeck-definitely-missing-command")).resolves.toBeNull();
+  });
+
+  test("Windows resolution puts a sibling .exe before a PATH .cmd candidate", async () => {
+    const files = new Set(["C:\\bin\\dsh.cmd", "C:\\bin\\dsh.exe"]);
+    const probeExecutable = vi.fn(async () => true);
+
+    await expect(
+      windowsExecutableResolution.find("dsh", {
+        enumeratePathCandidates: async () => ["C:\\bin\\dsh.cmd"],
+        probeExecutable,
+        exists: (candidate) => files.has(candidate),
+        probeTimeoutMs: 100,
+      }),
+    ).resolves.toBe("C:\\bin\\dsh.exe");
+    expect(probeExecutable).toHaveBeenCalledTimes(1);
+  });
+
+  test("Windows resolution falls back to the .cmd when the sibling .exe cannot run", async () => {
+    const files = new Set(["C:\\bin\\dsh.cmd", "C:\\bin\\dsh.exe"]);
+
+    await expect(
+      windowsExecutableResolution.find("dsh", {
+        enumeratePathCandidates: async () => ["C:\\bin\\dsh.cmd"],
+        probeExecutable: async (candidate) => !candidate.endsWith(".exe"),
+        exists: (candidate) => files.has(candidate),
+        probeTimeoutMs: 100,
+      }),
+    ).resolves.toBe("C:\\bin\\dsh.cmd");
   });
 
   test("Windows resolution skips literal path candidates that do not exist", async () => {

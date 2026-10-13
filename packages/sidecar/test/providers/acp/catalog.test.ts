@@ -39,12 +39,9 @@ afterEach(async () => {
 });
 
 describe("内置目录", () => {
-  test("gemini / qwen / kimi / hermes 四个条目与 design.md 5.1 一致", () => {
+  test("只有 DeepSeek Harness（acp:dsh）一个条目，与 design.md 5.1 一致", () => {
     expect(BUILTIN_ACP_AGENTS.map(({ id, label, command }) => ({ id, label, command }))).toEqual([
-      { id: "acp:gemini", label: "Gemini CLI", command: ["npx", "-y", "@google/gemini-cli", "--acp"] },
-      { id: "acp:qwen", label: "Qwen Code", command: ["npx", "-y", "@qwen-code/qwen-code", "--acp"] },
-      { id: "acp:kimi", label: "Kimi CLI", command: ["kimi", "acp"] },
-      { id: "acp:hermes", label: "Hermes Agent", command: ["hermes", "acp"] },
+      { id: "acp:dsh", label: "DeepSeek Harness", command: ["dsh", "--profile", "acp"] },
     ]);
   });
 });
@@ -97,24 +94,18 @@ describe("acp-agents.json 解析", () => {
     const { logger } = recordingLogger();
     const custom = parseCustomAcpAgents(
       JSON.stringify([
-        { id: "kimi", label: "Kimi 本地版", command: ["C:/tools/kimi.exe", "acp"] },
+        { id: "dsh", label: "DSH 本地版", command: ["C:/tools/dsh.exe", "--profile", "acp"] },
         { id: "mine", label: "Mine", command: ["mine"] },
       ]),
       "f",
       logger,
     );
     const merged = mergeAcpAgents(BUILTIN_ACP_AGENTS, custom, logger);
-    expect(merged.map((e) => e.id)).toEqual([
-      "acp:gemini",
-      "acp:qwen",
-      "acp:kimi",
-      "acp:hermes",
-      "acp:mine",
-    ]);
-    expect(merged[2]).toEqual({
-      id: "acp:kimi",
-      label: "Kimi 本地版",
-      command: ["C:/tools/kimi.exe", "acp"],
+    expect(merged.map((e) => e.id)).toEqual(["acp:dsh", "acp:mine"]);
+    expect(merged[0]).toEqual({
+      id: "acp:dsh",
+      label: "DSH 本地版",
+      command: ["C:/tools/dsh.exe", "--profile", "acp"],
       builtin: false,
     });
   });
@@ -135,10 +126,7 @@ describe("acp-agents.json 解析", () => {
     const { logger } = recordingLogger();
     const clients = await createAcpClients({ logger, dataDir: dir, env: process.env });
     expect(clients.map((c) => [c.provider, c.kind, c.label])).toEqual([
-      ["acp:gemini", "acp", "Gemini CLI"],
-      ["acp:qwen", "acp", "Qwen Code"],
-      ["acp:kimi", "acp", "Kimi CLI"],
-      ["acp:hermes", "acp", "Hermes Agent"],
+      ["acp:dsh", "acp", "DeepSeek Harness"],
       ["acp:mine", "acp", "Mine"],
     ]);
   });

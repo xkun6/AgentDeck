@@ -47,13 +47,13 @@ describe("id slug 生成与校验", () => {
     const reserved = reservedProfileIds([
       { id: "claude" },
       { id: "codex" },
-      { id: "acp:gemini" },
+      { id: "acp:dsh" },
       { id: "custom:mine", custom: true },
     ]);
-    expect([...reserved]).toEqual(expect.arrayContaining(["claude", "codex", "acp", "mock", "custom", "gemini"]));
+    expect([...reserved]).toEqual(expect.arrayContaining(["claude", "codex", "acp", "mock", "custom", "dsh"]));
     expect(reserved.has("mine")).toBe(false);
     expect(slugifyProfileId("Claude", reserved)).toBe("claude-2");
-    expect(slugifyProfileId("Gemini", reserved)).toBe("gemini-2");
+    expect(slugifyProfileId("DSH", reserved)).toBe("dsh-2");
     expect(slugifyProfileId("x", new Set(["x", "x-2"]))).toBe("x-3");
     expect(slugifyProfileId("b".repeat(40), new Set(["b".repeat(32)]))).toBe(`${"b".repeat(30)}-2`);
   });
@@ -281,7 +281,7 @@ describe("表单 ↔ ProviderProfile", () => {
 describe("Agent 菜单分组", () => {
   const providers: ProviderInfo[] = [
     { id: "claude", kind: "claude", label: "Claude Code", available: true },
-    { id: "acp:gemini", kind: "acp", label: "Gemini", available: false, unavailableReason: "未安装" },
+    { id: "acp:dsh", kind: "acp", label: "DeepSeek Harness", available: false, unavailableReason: "未安装" },
     { id: "custom:relay", kind: "claude", label: "我的中转", available: true, custom: true, extends: "claude" },
     { id: "custom:broken", kind: "codex", label: "坏中转", available: false, unavailableReason: "找不到 codex", custom: true, extends: "codex" },
   ];
@@ -295,7 +295,7 @@ describe("Agent 菜单分组", () => {
     const entries = buildProviderMenuEntries(providers, profiles);
     expect(entries.map((entry) => [entry.group, entry.value, entry.disabled])).toEqual([
       ["内置", "claude", false],
-      ["内置", "acp:gemini", true],
+      ["内置", "acp:dsh", true],
       ["中转", "custom:relay", false],
       ["中转", "custom:off", true],
       ["中转", "custom:broken", true],

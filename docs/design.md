@@ -9,7 +9,7 @@ AgentDeck 是一个多 Agent 编排桌面工具：
 - **调用方式**：借鉴 paseo（Apache-2.0），自己不直接调模型 API，而是驱动用户本机已安装的编程 Agent：
   - Claude Code：直接拉起用户本机 `claude` CLI，走 stream-json stdio 协议（长会话），不依赖 claude-agent-sdk
   - Codex：`codex app-server` 子进程，stdio 上的换行分隔 JSON-RPC
-  - 通用 ACP：`@agentclientprotocol/sdk` 的 `ClientSideConnection`（gemini / qwen / kimi / hermes acp 等）
+  - 通用 ACP：`@agentclientprotocol/sdk` 的 `ClientSideConnection`（内置 DeepSeek Harness `dsh --profile acp`，另可在 `acp-agents.json` / 中转中自定义）
 - **不包含**：Hermes Python Core、模型供应商配置、记忆、技能、cron、IM 接入、profiles 等 Hermes 专属功能。
 
 ## 2. 架构
@@ -333,8 +333,8 @@ packages/sidecar/
 │   ├── agent/types.ts          AgentClient / AgentSession 接口（内部用，事件类型从 protocol 导入）
 │   ├── agent/agent-manager.ts  会话注册表、seq/epoch、事件串行、文本合并、权限中转、单 turn 约束
 │   ├── agent/coalescer.ts      移植 paseo agent-stream-coalescer（60ms 合并文本）
-│   ├── providers/registry.ts   provider 注册表（mock / claude / codex / acp:*）
-│   ├── providers/mock/         假 provider：流式回显、模拟工具调用与审批，供测试与无 CLI 环境
+│   ├── providers/registry.ts   provider 注册表（claude / codex / acp:*；mock 仅在 `AGENTDECK_ENABLE_MOCK=1` 时注册）
+│   ├── providers/mock/         假 provider：流式回显、模拟工具调用与审批，供测试与开发调试；**只有 sidecar 进程环境变量 `AGENTDECK_ENABLE_MOCK=1` 时才注册**，正式环境不出现
 │   ├── providers/claude/       P3
 │   ├── providers/codex/        P3
 │   ├── providers/acp/          P3（含内置 ACP 命令目录）
@@ -381,7 +381,8 @@ interface AgentClient {
   可执行文件定位：`AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 PATH 或 `%APPDATA%
 pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；同样跳过 `node_modules` 内的 PATH 目录，只运行用户本机全局安装的 codex。
 - **ACP**：`spawn(command)` + NDJSON 流 → `ClientSideConnection`；`initialize { protocolVersion: PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile:false, writeTextFile:false }, terminal:false } }`；`newSession { cwd, mcpServers: [] }`；`prompt` 的 Promise resolve 即 turn 结束；`sessionUpdate`：`agent_message_chunk`→assistant_message、`agent_thought_chunk`→reasoning、`tool_call`/`tool_call_update`→tool_call（按 toolCallId 合并）、`plan`→todo；`requestPermission`：options 映射为 actions，按 selectedActionId 或 allow_once/allow_always、reject_once/reject_always 选；中断 `cancel { sessionId }`；模型 `unstable_setSessionModel`，失败忽略。
-  内置命令目录：`acp:gemini` = `npx -y @google/gemini-cli --acp`、`acp:qwen` = `npx -y @qwen-code/qwen-code --acp`、`acp:kimi` = `kimi acp`、`acp:hermes` = `hermes acp`；另支持用户在 `AGENTDECK_DATA_DIR/acp-agents.json` 自定义 `{ id, label, command: string[] }[]`。
+  内置命令目录只有一项：`acp:dsh`「DeepSeek Harness」= `dsh --profile acp`；另支持用户在 `AGENTDECK_DATA_DIR/acp-agents.json` 自定义 `{ id, label, command: string[] }[]`（同 id 覆盖内置项）。Windows 上 DeepSeek Harness 的 bin 目录（`%APPDATA%\DeepSeek Harness\bin`）同时有 `dsh.exe` 与 `dsh.cmd`，经 cmd 启动 `dsh --profile acp` 会挂住无输出，必须直接启动 `dsh.exe`（shell:false）：`findExecutable` 在 PATH 命中 `.cmd` / `.bat` 且同目录存在同名 `.exe` 时优先 `.exe`（不受 PATHEXT 顺序影响）。
+- **Mock**：`providers/mock/` 的 MockAgentClient 只在 sidecar 环境变量 `AGENTDECK_ENABLE_MOCK=1` 时注册（sidecar e2e 与 web 集成测试显式设置；`tauri:dev` 默认不设，需要时手动在启动环境里设置）。
 
 ### 5.2 Windows 子进程规则
 

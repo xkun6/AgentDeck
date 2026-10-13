@@ -21,20 +21,7 @@ export interface AcpAgentEntry {
 }
 
 export const BUILTIN_ACP_AGENTS: readonly AcpAgentEntry[] = [
-  {
-    id: "acp:gemini",
-    label: "Gemini CLI",
-    command: ["npx", "-y", "@google/gemini-cli", "--acp"],
-    builtin: true,
-  },
-  {
-    id: "acp:qwen",
-    label: "Qwen Code",
-    command: ["npx", "-y", "@qwen-code/qwen-code", "--acp"],
-    builtin: true,
-  },
-  { id: "acp:kimi", label: "Kimi CLI", command: ["kimi", "acp"], builtin: true },
-  { id: "acp:hermes", label: "Hermes Agent", command: ["hermes", "acp"], builtin: true },
+  { id: "acp:dsh", label: "DeepSeek Harness", command: ["dsh", "--profile", "acp"], builtin: true },
 ];
 
 const CustomEntrySchema = z.object({

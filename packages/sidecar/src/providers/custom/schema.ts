@@ -19,7 +19,7 @@ export function customProviderId(profileId: string): string {
 
 /**
  * 与内置 provider 冲突的 profile id：内置 id 本身（claude / codex / mock）以及 ACP 条目去掉 `acp:` 前缀后的名字
- * （gemini / qwen / kimi / hermes 与 acp-agents.json 中的条目），外加固定保留字。
+ * （内置 dsh 与 acp-agents.json 中的条目），外加固定保留字。
  */
 export function reservedProfileIds(builtinProviderIds: Iterable<string>): Set<string> {
   const reserved = new Set(ALWAYS_RESERVED_IDS);
