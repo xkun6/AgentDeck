@@ -128,6 +128,11 @@ export interface ClaudeTaskSystemMessage extends ClaudeSystemMessage {
   usage?: { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown };
 }
 
+/** `system` `background_tasks_changed`：当前仍存活的全部后台任务（REPLACE 语义，design.md 4.15） */
+export interface ClaudeBackgroundTasksChangedMessage extends ClaudeSystemMessage {
+  tasks?: Array<{ task_id?: unknown; task_type?: unknown; description?: unknown }>;
+}
+
 /**
  * 斜杠命令条目（initialize 应答的 commands 与 `system` `commands_changed` 消息共用；name 不带前导 /）。
  * 字段以 @anthropic-ai/claude-agent-sdk 的 SlashCommand 为准，宽松解析。

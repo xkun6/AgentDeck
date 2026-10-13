@@ -286,3 +286,64 @@ describe("readFileTail", () => {
     expect("你好世界你好世界".endsWith(result.text)).toBe(true);
   });
 });
+
+describe("ClaudeBackgroundTaskRegistry：background_tasks_changed 对账", () => {
+  const changed = (...ids: string[]) =>
+    system("background_tasks_changed", { tasks: ids.map((id) => ({ task_id: id, task_type: "local_bash", description: "x" })) });
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  test("不在存活集合里的 running 任务 2 秒后标为 completed（无 exitCode）", () => {
+    const t = setup();
+    t.registry.observe(bashStarted());
+    t.registry.observe(changed());
+    vi.advanceTimersByTime(1_999);
+    expect(t.registry.getStatus("bk1")).toBe("running");
+    t.advance(2_000);
+    vi.advanceTimersByTime(1);
+    expect(t.last()[0]).toMatchObject({ status: "completed", summary: "已结束（未收到完成通知）", endedAt: 1_002_000 });
+    expect(t.last()[0]!.exitCode).toBeUndefined();
+  });
+
+  test("定时器到期前重新出现在集合里则不标", () => {
+    const t = setup();
+    t.registry.observe(bashStarted());
+    t.registry.observe(changed());
+    vi.advanceTimersByTime(1_000);
+    t.registry.observe(changed("bk1"));
+    vi.advanceTimersByTime(5_000);
+    expect(t.registry.getStatus("bk1")).toBe("running");
+  });
+
+  test("迟到的 task_notification 覆盖为真实状态、退出码与 summary", () => {
+    const t = setup();
+    t.registry.observe(bashStarted());
+    t.registry.observe(changed());
+    vi.advanceTimersByTime(2_000);
+    expect(t.registry.getStatus("bk1")).toBe("completed");
+    t.registry.observe(system("task_notification", { task_id: "bk1", status: "failed", summary: 'Background command "x" failed (exit code 2)' }));
+    expect(t.last()[0]).toMatchObject({ status: "failed", exitCode: 2, summary: 'Background command "x" failed (exit code 2)' });
+  });
+
+  test("会话结束清理对账定时器", () => {
+    const t = setup();
+    t.registry.observe(bashStarted());
+    t.registry.observe(changed());
+    t.registry.markSessionEnded();
+    const count = t.snapshots.length;
+    vi.advanceTimersByTime(5_000);
+    expect(t.snapshots).toHaveLength(count);
+    expect(t.last()[0]).toMatchObject({ status: "stopped", error: "会话已结束" });
+  });
+
+  test("markGone / isAlive：本地标为 stopped，未收到过集合时 isAlive 为 undefined", () => {
+    const t = setup();
+    t.registry.observe(bashStarted());
+    expect(t.registry.isAlive("bk1")).toBeUndefined();
+    t.registry.observe(changed("bk1"));
+    expect(t.registry.isAlive("bk1")).toBe(true);
+    t.registry.markGone("bk1");
+    expect(t.last()[0]).toMatchObject({ status: "stopped", error: "CLI 中已不存在该任务" });
+  });
+});

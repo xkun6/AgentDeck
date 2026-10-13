@@ -918,7 +918,19 @@ export class ClaudeAgentSession implements AgentSession {
     if (!this.cli || this.closed) {
       throw new AgentRpcError("AGENT_CLOSED", "Claude 进程未运行，无法停止后台任务");
     }
-    await this.cli.stopTask(taskId);
+    try {
+      await this.cli.stopTask(taskId);
+    } catch (error) {
+      // CLI 里已无该任务（对账漏掉的）：本地标为已停止，不再把错误抛给前端
+      if (
+        this.backgroundTasks.getStatus(taskId) === "running" &&
+        this.backgroundTasks.isAlive(taskId) !== true
+      ) {
+        this.backgroundTasks.markGone(taskId);
+        return;
+      }
+      throw error;
+    }
   }
 
   /** 读后台命令输出文件尾部：只读 CLI 为该任务报告过的路径，文件不存在返回空文本 */

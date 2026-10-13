@@ -587,7 +587,8 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 - 退出码：`task_notification.summary` 形如 `Background command "…" completed (exit code 0)`，宽松正则 `exit codes+(-?d+)` 解析为 `exitCode`，解析不到不填。
 - 状态：pending / running / paused → running，completed → completed，failed → failed，killed / stopped → stopped；`endedAt` 取 `patch.end_time`，没有则取收到时刻；进度不会让已结束的任务复活，`task_updated` 明确给出的状态以它为准。
 - 输出路径：后台 Bash 的工具结果文本形如 `Command running in background with ID: bk63yjvxs. Output is being written to: C:\Users\…\tasks\bk63yjvxs.output`，用 `tool_use_id` 关联到 task_started（结果可能先于 task_started 到达，先缓存），宽松正则 `Output is being written to:\s*(.+?\.output)`；`task_notification.output_file` 作兜底。
-- 停止：控制请求 `{ subtype: "stop_task", task_id }`（30 秒默认超时），失败时按控制请求失败处理；不在本地改状态，等 CLI 的 `task_updated` / `task_notification`。
+- 停止：控制请求 `{ subtype: "stop_task", task_id }`（30 秒默认超时）；成功时不在本地改状态，等 CLI 的 `task_updated` / `task_notification`。**失败兜底**：若该任务仍为 running 且不在最新存活集合里（或从未收到过存活集合），本地标为 `stopped`（error「CLI 中已不存在该任务」）并推送，正常返回、不抛错；任务确实存活时仍抛出原错误。
+- **`background_tasks_changed` 对账**：`system` 子类型 `background_tasks_changed { tasks: [{ task_id, task_type, description }] }` 是电平信号，每当后台任务集合变化就推「当前仍存活的全部后台任务」（REPLACE 语义，按进程计，启动时不发，重复 initialize 后补发一次快照；通常先于对应的 task_* 边沿事件到达）。子代理发起的后台命令有时收不到 `task_updated` / `task_notification`，所以登记表记录最新存活集合：对 running 但不在集合里的任务启动约 2 秒的对账定时器，到期仍为 running 且仍不在最新集合里则标为 `completed`（`endedAt` 取当前时间，summary「已结束（未收到完成通知）」，不填 exitCode）并推送；期间重新出现在集合里则取消；之后迟到的 `task_updated` / `task_notification` 照常覆盖状态、退出码与 summary。会话关闭 / 进程退出时清理定时器。
 - 进程退出 / 主动重建进程 / 会话关闭时，仍为 running 的任务标为 `stopped`（error「会话已结束」）并推送；进程重启（`--resume`）后旧任务保留为已结束，新进程的任务照常登记。
 - **initialize 带 `perTaskStopAffordance: true`（行为变化）**：声明后，用户「中止」本轮（`interrupt`）时 CLI 不再连带杀掉后台任务，后台任务只能经 `agent.tasks.stop` 逐个停止（界面在输入框上方提供入口）。
 - 与现有逻辑的关系：4.11 的子代理登记与 4.12 的 `task_notification` 卡片不变，后台任务登记表是并行的另一份视图（只含后台 Shell）。

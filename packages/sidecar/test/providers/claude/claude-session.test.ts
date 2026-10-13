@@ -2034,6 +2034,25 @@ describe("后台任务（design.md 4.15）", () => {
     expect(cli.calls.stopTask).toEqual(["bk1"]);
   });
 
+  test("stopBackgroundTask：stop_task 失败时，任务不在存活集合则本地标 stopped 不抛；仍在集合则抛错", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const snapshots = collectTasks(session);
+    const cli = await launch(h, session);
+    cli.stopTask = async () => {
+      throw new Error("no such task");
+    };
+    cli.emit(taskStarted());
+    await waitUntil(() => snapshots.length > 0);
+
+    cli.emit({ type: "system", subtype: "background_tasks_changed", session_id: SESSION_ID, tasks: [{ task_id: "bk1" }] });
+    await expect(session.stopBackgroundTask!("bk1")).rejects.toThrow("no such task");
+
+    cli.emit({ type: "system", subtype: "background_tasks_changed", session_id: SESSION_ID, tasks: [] });
+    await session.stopBackgroundTask!("bk1");
+    expect(snapshots.at(-1)?.[0]).toMatchObject({ status: "stopped", error: "CLI 中已不存在该任务" });
+  });
+
   test("readBackgroundTaskOutput：只读 CLI 报告的路径，读尾部并标记截断；无路径 / 文件不存在返回空", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "agentdeck-task-out-"));
     try {

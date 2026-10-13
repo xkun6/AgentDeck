@@ -1,5 +1,5 @@
 // Claude 后台任务登记表（AgentDeck 原创，design.md 4.15）：
-// 解析 system 的 task_started / task_updated / task_progress / task_notification 与 Bash 工具结果里的输出路径，
+// 解析 system 的 background_tasks_changed（存活集合对账）/ task_started / task_updated / task_progress / task_notification 与 Bash 工具结果里的输出路径，
 // 只登记「后台 Shell」（local_bash 且 is_backgrounded 为 true，或之后 task_updated 转入后台）；子代理 / workflow / 其它类型不登记。
 import { open, stat } from "node:fs/promises";
 
@@ -9,7 +9,7 @@ import type {
   AgentBackgroundTaskStatus,
 } from "@agentdeck/protocol";
 
-import type { ClaudeOutputMessage, ClaudeTaskSystemMessage } from "./stream-json-types.js";
+import type { ClaudeBackgroundTasksChangedMessage, ClaudeOutputMessage, ClaudeTaskSystemMessage } from "./stream-json-types.js";
 
 /** 进度类变化推送的最小间隔 */
 const PROGRESS_THROTTLE_MS = 1_000;
@@ -20,6 +20,10 @@ const MAX_PENDING_COMMANDS = 200;
 const SHELL_TOOL_NAMES = new Set(["Bash", "PowerShell"]);
 /** 会话 / 进程结束时仍在运行的任务的错误文案 */
 export const SESSION_ENDED_MESSAGE = "会话已结束";
+/** 任务不在 background_tasks_changed 存活集合里后，等多久仍无结束通知就对账为已结束 */
+const RECONCILE_DELAY_MS = 2_000;
+const RECONCILED_SUMMARY = "已结束（未收到完成通知）";
+export const TASK_GONE_MESSAGE = "CLI 中已不存在该任务";
 
 interface TaskRecord {
   task: AgentBackgroundTask;
@@ -84,6 +88,10 @@ export class ClaudeBackgroundTaskRegistry {
   private readonly now: () => number;
   private lastEmitAt = 0;
   private timer: NodeJS.Timeout | null = null;
+  /** background_tasks_changed 的最新存活集合（REPLACE 语义）；从未收到过为 null */
+  private aliveTaskIds: Set<string> | null = null;
+  /** 不在存活集合里的 running 任务的对账定时器：taskId → timer */
+  private readonly reconcileTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(options: ClaudeBackgroundTaskRegistryOptions) {
     this.onChange = options.onChange;
@@ -114,6 +122,10 @@ export class ClaudeBackgroundTaskRegistry {
   /** system 消息：task_started / task_updated / task_progress / task_notification */
   observe(message: ClaudeOutputMessage): void {
     if (message.type !== "system") return;
+    if (message.subtype === "background_tasks_changed") {
+      this.onBackgroundTasksChanged(message as ClaudeBackgroundTasksChangedMessage);
+      return;
+    }
     const msg = message as ClaudeTaskSystemMessage;
     const taskId = readString(msg.task_id);
     if (!taskId) return;
@@ -167,8 +179,25 @@ export class ClaudeBackgroundTaskRegistry {
     this.pendingOutputPaths.set(toolUseId, path);
   }
 
+  /** 最新存活集合是否含该任务；从未收到过集合返回 undefined */
+  isAlive(taskId: string): boolean | undefined {
+    return this.aliveTaskIds ? this.aliveTaskIds.has(taskId) : undefined;
+  }
+
+  /** stop_task 失败且 CLI 里已无该任务：本地标为已停止并推送 */
+  markGone(taskId: string): void {
+    const record = this.records.get(taskId);
+    if (!record || record.task.status !== "running") return;
+    this.cancelReconcile(taskId);
+    record.task.status = "stopped";
+    record.task.error = TASK_GONE_MESSAGE;
+    record.task.endedAt = this.now();
+    if (record.backgrounded) this.emit(true);
+  }
+
   /** 进程 / 会话结束：仍在运行的任务标为已停止 */
   markSessionEnded(): void {
+    this.clearReconcileTimers();
     const endedAt = this.now();
     let changed = false;
     for (const record of this.records.values()) {
@@ -185,10 +214,55 @@ export class ClaudeBackgroundTaskRegistry {
     this.records.clear();
     this.pendingOutputPaths.clear();
     this.shellCommands.clear();
+    this.aliveTaskIds = null;
+    this.clearReconcileTimers();
     this.clearTimer();
   }
 
   // -------------------------------------------------------------------------
+
+  /** 电平信号：当前存活的全部后台任务（REPLACE）。running 但不在集合里的任务 2 秒后对账为已结束 */
+  private onBackgroundTasksChanged(msg: ClaudeBackgroundTasksChangedMessage): void {
+    const alive = new Set<string>();
+    for (const entry of Array.isArray(msg.tasks) ? msg.tasks : []) {
+      const id = readString(entry?.task_id);
+      if (id) alive.add(id);
+    }
+    this.aliveTaskIds = alive;
+    for (const [taskId, record] of this.records) {
+      if (!record.backgrounded || record.task.status !== "running") continue;
+      if (alive.has(taskId)) this.cancelReconcile(taskId);
+      else this.scheduleReconcile(taskId);
+    }
+  }
+
+  private scheduleReconcile(taskId: string): void {
+    if (this.reconcileTimers.has(taskId)) return;
+    const timer = setTimeout(() => {
+      this.reconcileTimers.delete(taskId);
+      const record = this.records.get(taskId);
+      if (!record || record.task.status !== "running" || this.aliveTaskIds?.has(taskId) !== false) return;
+      record.task.status = "completed";
+      record.task.endedAt = this.now();
+      record.task.summary = RECONCILED_SUMMARY;
+      if (record.backgrounded) this.emit(true);
+    }, RECONCILE_DELAY_MS);
+    timer.unref?.();
+    this.reconcileTimers.set(taskId, timer);
+  }
+
+  private cancelReconcile(taskId: string): void {
+    const timer = this.reconcileTimers.get(taskId);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconcileTimers.delete(taskId);
+    }
+  }
+
+  private clearReconcileTimers(): void {
+    for (const timer of this.reconcileTimers.values()) clearTimeout(timer);
+    this.reconcileTimers.clear();
+  }
 
   private onStarted(taskId: string, msg: ClaudeTaskSystemMessage): void {
     const toolUseId = readString(msg.tool_use_id);
