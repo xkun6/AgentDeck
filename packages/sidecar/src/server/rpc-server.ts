@@ -32,6 +32,7 @@ import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
+import type { BoardService } from "../kanban/board-service.js";
 import type { Scheduler } from "../scheduler/scheduler.js";
 import { scheduleDraftSchema } from "../scheduler/schema.js";
 import { UsageLedger } from "../usage/ledger.js";
@@ -66,6 +67,8 @@ export interface RpcServerOptions {
   snapshots?: SnapshotService;
   /** 调度器（design.md 4.25）；不传时 schedule.* 返回 NOT_SUPPORTED */
   scheduler?: Scheduler;
+  /** 看板式任务分派（design.md 4.28）；不传时 board.* 返回 NOT_SUPPORTED */
+  board?: BoardService;
   /** 会话互通 MCP 端点（design.md 4.26）；不传时 /mcp 返回 404 */
   mcp?: McpInteropEndpoint;
   logger?: Logger;
@@ -82,6 +85,29 @@ const SEARCH_LIMIT_MAX = 500;
 
 const emptyParams = z.object({}).optional();
 const agentIdParams = z.object({ agentId: z.string().min(1) });
+
+const projectPathSchema = z.string().trim().min(1);
+const projectParams = z.object({ projectPath: projectPathSchema });
+const boardStatusSchema = z.enum(["todo", "running", "review", "done", "blocked"]);
+const boardAssigneeSchema = z.object({
+  provider: z.string().min(1),
+  model: z.string().nullable().optional(),
+  modeId: z.string().nullable().optional(),
+});
+const boardSettingsPatchSchema = z.object({
+  worktreePerTask: z.boolean().optional(),
+  autoDispatch: z.boolean().optional(),
+  maxConcurrent: z.number().int().min(1).max(16).optional(),
+  defaultAssignee: boardAssigneeSchema.optional(),
+});
+const boardTaskDraftSchema = z.object({
+  id: z.string().min(1).optional(),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().max(20_000).optional(),
+  assignee: boardAssigneeSchema.nullable().optional(),
+  dependsOn: z.array(z.string().min(1)).max(100).optional(),
+  maxAttempts: z.number().int().min(1).max(10).optional(),
+});
 
 const promptSchema = z.union([
   z.string(),
@@ -223,9 +249,14 @@ export class RpcServer {
         this.broadcast(AGENT_RPC_NOTIFICATIONS.scheduleChanged, { schedules, paused }),
       onNotice: (notice) => this.broadcast(AGENT_RPC_NOTIFICATIONS.scheduleNotice, notice),
     });
+    const unsubscribeBoard = options.board?.subscribe({
+      onChanged: (projectPath, board) =>
+        this.broadcast(AGENT_RPC_NOTIFICATIONS.boardChanged, { projectPath, board }),
+    });
     this.unsubscribeManager = () => {
       unsubscribeManager();
       unsubscribeScheduler?.();
+      unsubscribeBoard?.();
     };
   }
 
@@ -277,6 +308,12 @@ export class RpcServer {
         throw new AgentRpcError("NOT_SUPPORTED", "未启用调度器");
       }
       return this.options.scheduler;
+    };
+    const requireBoard = (): BoardService => {
+      if (!this.options.board) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用看板");
+      }
+      return this.options.board;
     };
     const requireClient = (provider: string) => {
       const client = registry.get(provider);
@@ -548,6 +585,51 @@ export class RpcServer {
         AGENT_RPC_METHODS.scheduleSetPaused,
         z.object({ paused: z.boolean() }),
         (params) => ({ paused: requireScheduler().setPaused(params.paused) }),
+      ),
+      defineMethod(AGENT_RPC_METHODS.boardGet, projectParams, async (params) => ({
+        board: await requireBoard().get(params.projectPath),
+      })),
+      defineMethod(
+        AGENT_RPC_METHODS.boardUpdateSettings,
+        z.object({ projectPath: projectPathSchema, settings: boardSettingsPatchSchema }),
+        async (params) => ({
+          board: await requireBoard().updateSettings(params.projectPath, params.settings),
+        }),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.boardUpsertTask,
+        z.object({ projectPath: projectPathSchema, task: boardTaskDraftSchema }),
+        (params) => requireBoard().upsertTask(params.projectPath, params.task),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.boardDeleteTask,
+        z.object({
+          projectPath: projectPathSchema,
+          taskId: z.string().min(1),
+          removeWorktree: z.boolean().optional(),
+        }),
+        (params) => requireBoard().deleteTask(params.projectPath, params.taskId, params.removeWorktree),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.boardMoveTask,
+        z.object({
+          projectPath: projectPathSchema,
+          taskId: z.string().min(1),
+          status: boardStatusSchema,
+          order: z.number().finite().optional(),
+        }),
+        async (params) => ({
+          board: await requireBoard().moveTask(params.projectPath, params.taskId, params.status, params.order),
+        }),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.boardMerge,
+        z.object({
+          projectPath: projectPathSchema,
+          taskId: z.string().min(1),
+          removeWorktree: z.boolean(),
+        }),
+        (params) => requireBoard().merge(params.projectPath, params.taskId, params.removeWorktree),
       ),
       defineMethod(AGENT_RPC_METHODS.agentDelete, agentIdParams, async (params) => {
         await manager.deleteAgent(params.agentId);

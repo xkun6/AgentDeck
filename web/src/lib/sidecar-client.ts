@@ -27,6 +27,7 @@ import {
   type ProviderSubagentUpdate,
   type Schedule,
   type ScheduleNotice,
+  type Board,
 } from "@agentdeck/protocol";
 import { debugBus } from "./debug-bus";
 import { createSidecarSocket } from "./sidecar-socket-path";
@@ -163,6 +164,7 @@ export class SidecarClient {
   private tasksListeners = new Set<Listener<{ agentId: string; tasks: AgentBackgroundTask[] }>>();
   private scheduleChangedListeners = new Set<Listener<{ schedules: Schedule[]; paused: boolean }>>();
   private scheduleNoticeListeners = new Set<Listener<ScheduleNotice>>();
+  private boardChangedListeners = new Set<Listener<{ projectPath: string; board: Board }>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -236,6 +238,11 @@ export class SidecarClient {
   /** `schedule.changed` 通知（调度表 / 运行记录变化，design.md 4.25）。 */
   onScheduleChanged(listener: Listener<{ schedules: Schedule[]; paused: boolean }>): () => void {
     return subscribe(this.scheduleChangedListeners, listener);
+  }
+
+  /** `board.changed` 通知（看板变化，design.md 4.28）。 */
+  onBoardChanged(listener: Listener<{ projectPath: string; board: Board }>): () => void {
+    return subscribe(this.boardChangedListeners, listener);
   }
 
   /** `schedule.notice` 通知（目标循环结束 / 定时任务失败，前端转系统通知，design.md 4.25）。 */
@@ -585,6 +592,10 @@ export class SidecarClient {
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.scheduleNotice && record.params) {
       emitTo(this.scheduleNoticeListeners, record.params as ScheduleNotice);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.boardChanged && record.params) {
+      emitTo(this.boardChangedListeners, record.params as { projectPath: string; board: Board });
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.providerChanged) {
