@@ -23,7 +23,7 @@ import type {
 import type { Logger } from "../../logger.js";
 import { findExecutable } from "../../utils/executable-resolution/executable-resolution.js";
 import { AcpAgentClient } from "../acp/acp-client.js";
-import { CLAUDE_MODES, ClaudeAgentClient, type ClaudeLaunchOverride } from "../claude/claude-agent.js";
+import { CLAUDE_MODES, ClaudeAgentClient } from "../claude/claude-agent.js";
 import {
   createDefaultClaudeExecutableDeps,
   resolveClaudeExecutable,
@@ -33,7 +33,6 @@ import { CODEX_MODES, CodexAgentClient } from "../codex/codex-agent.js";
 import { resolveCodexLaunch, type CodexLaunch } from "../codex/launch.js";
 import { buildClaudeLaunchOverride, buildCodexLaunchOverride, mergeClaudeSettings } from "./launch.js";
 import {
-  addSecrets,
   collectSecrets,
   createRedactingLogger,
   redactError,
@@ -41,7 +40,6 @@ import {
   redactText,
 } from "./redact.js";
 import { customProviderId } from "./schema.js";
-import { readClaudeSettingsFile } from "./settings-file.js";
 
 export interface CustomClientDeps {
   logger: Logger;
@@ -58,59 +56,23 @@ export function createCustomProviderClient(
   profile: ProviderProfile,
   deps: CustomClientDeps,
 ): CustomProviderClient {
-  // settingsFile 的 env 值在每次读取后追加进同一个数组（logger 与会话代理按引用持有）
   const secrets = collectSecrets(profile);
-  const growable = profile.extends === "claude" && profile.settingsFile !== undefined;
-  const logger = createRedactingLogger(deps.logger, secrets, growable);
+  const logger = createRedactingLogger(deps.logger, secrets);
   const inner = deps.createInner
     ? deps.createInner(profile, logger)
-    : createInnerClient(profile, { ...deps, logger }, secrets);
+    : createInnerClient(profile, { ...deps, logger });
   return new CustomProviderClient(profile, inner, secrets);
 }
 
 /**
- * Claude 中转的启动覆盖；配置了 settingsFile 时，每次启动 / 恢复会话（及模型探测）都重新读取并合并，
- * 读到的 env 值追加进 `secrets`（原地），日志只打印顶层键名。
+ * 中转的模型发现来源：中转自身合并后的 settings（settings → 推导 env → profile.env），
+ * 不读用户 ~/.claude/settings.json（中转不应继承用户的模型设置）。
  */
-export function createCustomClaudeLaunch(
-  profile: ProviderProfile,
-  secrets: string[],
-  logger: Logger,
-): ClaudeLaunchOverride {
-  const launch: ClaudeLaunchOverride = buildClaudeLaunchOverride(profile);
-  const settingsFile = profile.settingsFile;
-  if (settingsFile) {
-    launch.resolveExtraArgs = async () => {
-      const fileSettings = await readClaudeSettingsFile(settingsFile);
-      addSecrets(secrets, collectSecrets(profile, fileSettings));
-      logger.info(
-        "%s：已读取设置文件，顶层键 [%s]；内联设置顶层键 [%s]",
-        customProviderId(profile.id),
-        Object.keys(fileSettings).join(", "),
-        Object.keys(profile.settings ?? {}).join(", "),
-      );
-      return buildClaudeLaunchOverride(profile, fileSettings).extraArgs;
-    };
-  }
-  return launch;
+export async function loadCustomClaudeSettings(profile: ProviderProfile): Promise<Record<string, unknown>> {
+  return mergeClaudeSettings(profile);
 }
 
-/**
- * 中转的模型发现来源：中转自身合并后的 settings（settingsFile → settings → 推导 env → profile.env），
- * 不读用户 ~/.claude/settings.json（中转不应继承用户的模型设置）；settingsFile 读取失败时返回 null。
- */
-export async function loadCustomClaudeSettings(
-  profile: ProviderProfile,
-): Promise<Record<string, unknown> | null> {
-  try {
-    const fileSettings = profile.settingsFile ? await readClaudeSettingsFile(profile.settingsFile) : undefined;
-    return mergeClaudeSettings(profile, fileSettings);
-  } catch {
-    return null;
-  }
-}
-
-function createInnerClient(profile: ProviderProfile, deps: CustomClientDeps, secrets: string[]): AgentClient {
+function createInnerClient(profile: ProviderProfile, deps: CustomClientDeps): AgentClient {
   const providerId = customProviderId(profile.id);
   const find = deps.findExecutable ?? ((name: string) => findExecutable(name));
   switch (profile.extends) {
@@ -121,7 +83,7 @@ function createInnerClient(profile: ProviderProfile, deps: CustomClientDeps, sec
         env: deps.env,
         providerId,
         label: profile.label,
-        launch: createCustomClaudeLaunch(profile, secrets, deps.logger),
+        launch: buildClaudeLaunchOverride(profile),
         loadSettings: () => loadCustomClaudeSettings(profile),
         ...(command
           ? { resolveExecutable: () => resolveCustomClaudeExecutable(command, deps.env, find, deps.logger) }
@@ -232,16 +194,7 @@ export class CustomProviderClient implements AgentClient {
   }
 
   async isAvailable(): Promise<AgentAvailability> {
-    let availability = await this.guard(() => this.inner.isAvailable());
-    const settingsFile = this.kind === "claude" ? this.profile.settingsFile : undefined;
-    if (availability.available && settingsFile) {
-      // settingsFile 不存在或不是 JSON 对象时不可用（每次检查都重新读取，不缓存）
-      try {
-        await readClaudeSettingsFile(settingsFile);
-      } catch (error) {
-        availability = { available: false, reason: (error as Error).message };
-      }
-    }
+    const availability = await this.guard(() => this.inner.isAvailable());
     return availability.reason !== undefined
       ? { ...availability, reason: redactText(availability.reason, this.secrets) }
       : availability;

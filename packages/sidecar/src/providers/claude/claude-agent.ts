@@ -26,7 +26,6 @@ import type {
   AgentSession,
   AgentSessionConfig,
 } from "../../agent/types.js";
-import { AgentRpcError } from "../../agent/errors.js";
 import type { Logger } from "../../logger.js";
 import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { createExternalProcessEnv } from "../../utils/process-env.js";
@@ -142,11 +141,6 @@ export interface ClaudeLaunchOverride {
   envOverlay?: Readonly<Record<string, string>>;
   /** 追加到 claude 启动参数末尾（如 --settings / --disallowedTools） */
   extraArgs?: readonly string[];
-  /**
-   * 每次启动 claude 进程（建会话 / 恢复会话 / 模型探测）前调用，返回值替代 extraArgs
-   * （如需在启动时读取 settingsFile）；抛错表示无法启动，建会话 / 恢复时映射为 PROVIDER_UNAVAILABLE。
-   */
-  resolveExtraArgs?: () => Promise<readonly string[]>;
 }
 
 export interface ClaudeAgentClientOptions {
@@ -178,7 +172,6 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly logger: Logger;
   private readonly childEnv: Record<string, string>;
   private readonly extraArgs: readonly string[];
-  private readonly resolveExtraArgs: (() => Promise<readonly string[]>) | undefined;
   private readonly loadSettings: () => Promise<Record<string, unknown> | null>;
   private readonly cliFactory: ClaudeCliFactory;
   private readonly resolveExecutable: () => Promise<ClaudeExecutableResolution>;
@@ -195,7 +188,6 @@ export class ClaudeAgentClient implements AgentClient {
     this.logger = options.logger;
     this.childEnv = buildClaudeChildEnv(options.env, options.launch);
     this.extraArgs = options.launch?.extraArgs ? [...options.launch.extraArgs] : [];
-    this.resolveExtraArgs = options.launch?.resolveExtraArgs;
     this.loadSettings =
       options.loadSettings ??
       (options.launch ? async () => null : () => readClaudeUserSettings(options.env));
@@ -257,12 +249,11 @@ export class ClaudeAgentClient implements AgentClient {
       if (!resolution.available) {
         return null;
       }
-      const extraArgs = await this.launchArgs();
       cli = this.cliFactory({
         executablePath: resolution.path,
         cwd,
         env: this.childEnv,
-        ...(extraArgs.length > 0 ? { extraArgs } : {}),
+        ...(this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
         model: null,
         permissionMode: null,
         resumeSessionId: null,
@@ -310,17 +301,11 @@ export class ClaudeAgentClient implements AgentClient {
     if (!resolution.available) {
       throw new Error(resolution.reason);
     }
-    let extraArgs: readonly string[];
-    try {
-      extraArgs = await this.launchArgs();
-    } catch (error) {
-      throw new AgentRpcError("PROVIDER_UNAVAILABLE", errorMessage(error));
-    }
     return new ClaudeAgentSession({
       logger: this.logger,
       env: this.childEnv,
       providerId: this.provider,
-      ...(extraArgs.length > 0 ? { extraArgs } : {}),
+      ...(this.extraArgs.length > 0 ? { extraArgs: this.extraArgs } : {}),
       cliFactory: this.cliFactory,
       ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       executablePath: resolution.path,
@@ -329,10 +314,6 @@ export class ClaudeAgentClient implements AgentClient {
       modeId,
       resumeSessionId,
     });
-  }
-
-  private async launchArgs(): Promise<readonly string[]> {
-    return this.resolveExtraArgs ? [...(await this.resolveExtraArgs())] : this.extraArgs;
   }
 
   /**

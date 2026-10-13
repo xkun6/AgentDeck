@@ -57,19 +57,9 @@ const baseUrlSchema = z.preprocess(
     .optional(),
 );
 
-/** 绝对路径（Windows 盘符 / UNC，或 POSIX `/` 开头）；不认 `C:foo`、`\foo` 这类相对盘符 / 根的写法 */
-export function isAbsoluteSettingsPath(value: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]/.test(value) || /^\/(?!\/)/.test(value);
-}
-
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-const settingsFileSchema = z.preprocess(
-  (value) => (typeof value === "string" ? value.trim() || undefined : value),
-  z.string().refine(isAbsoluteSettingsPath, "设置文件路径必须是绝对路径").optional(),
-);
 
 const settingsSchema = z
   .custom<Record<string, unknown>>(isPlainObject, "settings 必须是 JSON 对象")
@@ -104,17 +94,11 @@ export const providerProfileSchema = z
     command: z.array(z.string().trim().min(1, "命令参数不能为空")).optional(),
     models: z.array(modelSchema).optional(),
     disallowedTools: z.array(z.string().trim().min(1, "工具名不能为空")).optional(),
-    settingsFile: settingsFileSchema,
     settings: settingsSchema,
   })
   .superRefine((profile, ctx) => {
-    if (profile.extends !== "claude") {
-      if (profile.settingsFile !== undefined) {
-        ctx.addIssue({ code: "custom", path: ["settingsFile"], message: "只有基于 Claude Code 的中转可以使用设置文件" });
-      }
-      if (profile.settings !== undefined) {
-        ctx.addIssue({ code: "custom", path: ["settings"], message: "只有基于 Claude Code 的中转可以使用内联设置" });
-      }
+    if (profile.extends !== "claude" && profile.settings !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["settings"], message: "只有基于 Claude Code 的中转可以使用内联设置" });
     }
     if (profile.extends === "acp" && (!profile.command || profile.command.length === 0)) {
       ctx.addIssue({ code: "custom", path: ["command"], message: "ACP provider 必须填写启动命令" });
@@ -163,7 +147,6 @@ export function toProviderProfile(parsed: z.output<typeof providerProfileSchema>
     }));
   }
   if (parsed.disallowedTools !== undefined) profile.disallowedTools = [...parsed.disallowedTools];
-  if (parsed.settingsFile !== undefined) profile.settingsFile = parsed.settingsFile;
   if (parsed.settings !== undefined) profile.settings = structuredClone(parsed.settings);
   return profile;
 }

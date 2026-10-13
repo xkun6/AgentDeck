@@ -2,7 +2,7 @@
 // 支持测试连接（provider.test，只请求 /v1/models）、从接口拉取模型、整表保存（provider.config.set）。
 // 密钥只在受控输入框里遮挡显示，不打日志。
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { Braces, ChevronRight, DownloadCloud, Eye, EyeOff, FolderOpen, Plus, Star, Trash2, Zap } from "lucide-react";
+import { Braces, ChevronRight, DownloadCloud, Eye, EyeOff, Plus, Star, Trash2, Zap } from "lucide-react";
 import type { ProviderInfo, ProviderProfile, ProviderProfileExtends, ProviderTestResult } from "@agentdeck/protocol";
 import { Alert, Button, Dialog, Field, IconButton, Input, Textarea } from "@agentdeck/shared-ui";
 import { SidecarRpcError } from "@/lib/sidecar-client";
@@ -240,23 +240,10 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
   const isRemote = form.extends !== "acp";
   const isClaude = form.extends === "claude";
   const hasBaseUrl = form.baseUrl.trim().length > 0;
-  // 内联设置实时校验：非法时就地报错并禁止保存
+  // 设置 JSON 实时校验：非法时就地报错并禁止保存
   const settingsParse = parseSettingsText(form.settingsText);
   const settingsInvalid = isClaude && settingsParse.kind === "error";
-  const hasClaudeSettings = isClaude && (form.settingsFile.trim().length > 0 || settingsParse.kind === "ok");
-  const canBrowseSettings = typeof window !== "undefined" && Boolean(window.hermesDesktop?.pickJsonFile);
-
-  const browseSettingsFile = async () => {
-    const pick = window.hermesDesktop?.pickJsonFile;
-    if (!pick) return;
-    try {
-      const result = await pick({ title: "选择 Claude 设置文件" });
-      const selected = result.paths[0];
-      if (!result.canceled && selected) update({ settingsFile: selected }, "settingsFile");
-    } catch (error) {
-      setGeneralError(`打开文件对话框失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
+  const hasClaudeSettings = isClaude && settingsParse.kind === "ok";
   const filledModels = form.models.filter((model) => model.id.trim() || model.label.trim());
   const idChanged = Boolean(original && original.id !== form.id.trim());
 
@@ -282,7 +269,7 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
 
   const runTest = async (mode: "test" | "fetch") => {
     if (settingsInvalid) {
-      setGeneralError("内联设置不是合法的 JSON 对象，请先修正。");
+      setGeneralError("设置 JSON 不是合法的 JSON 对象，请先修正。");
       return;
     }
     const compacted = compactForm(form);
@@ -686,7 +673,7 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
 
             {isClaude ? (
               <FormSection
-                title="Claude 设置（settings.json）"
+                title="Claude 设置（JSON）"
                 aside={
                   <Button
                     size="sm"
@@ -703,34 +690,7 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
                 }
               >
                 <Field
-                  label="设置文件"
-                  htmlFor={fieldId("settingsFile")}
-                  error={errors.settingsFile}
-                  hint="Claude Code settings.json 的绝对路径，每次启动会话时读取；留空表示不使用"
-                >
-                  <div className={canBrowseSettings ? s.pathRow : undefined}>
-                    <Input
-                      id={fieldId("settingsFile")}
-                      value={form.settingsFile}
-                      mono
-                      placeholder="例如 C:\Users\me\.claude\relay-settings.json"
-                      invalid={Boolean(errors.settingsFile)}
-                      spellCheck={false}
-                      onChange={(event) => update({ settingsFile: event.target.value }, "settingsFile")}
-                    />
-                    {canBrowseSettings ? (
-                      <Button
-                        variant="outline"
-                        leadingIcon={<FolderOpen size={12} />}
-                        onClick={() => void browseSettingsFile()}
-                      >
-                        浏览…
-                      </Button>
-                    ) : null}
-                  </div>
-                </Field>
-                <Field
-                  label="内联 JSON"
+                  label="设置 JSON"
                   htmlFor={fieldId("settings")}
                   error={errors.settings ?? (settingsParse.kind === "error" ? settingsParse.message : undefined)}
                   hint="一个 JSON 对象，例如 env、permissions、hooks；留空表示不使用"
@@ -748,12 +708,12 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
                   />
                 </Field>
                 <ul className={s.noteList}>
-                  <li>合并顺序：设置文件 &lt; 内联 JSON &lt; 表单中的地址 / 密钥 / 环境变量。</li>
+                  <li>合并顺序：设置 JSON &lt; 表单中的地址 / 密钥 / 环境变量。</li>
                   <li>
                     作为 flag 级设置与你的用户 / 项目设置合并：env 等对象按键合并，同名项以这里为准；
                     hooks 与 permissions 规则列表会与之叠加，而不是替换。
                   </li>
-                  <li>内联 JSON 明文保存在 providers.json；合并后的设置（含文件内容）通过命令行传给 claude。</li>
+                  <li>明文保存在 AgentDeck 数据目录的 providers.json，合并后的设置通过命令行传给 claude。</li>
                 </ul>
               </FormSection>
             ) : null}
@@ -891,7 +851,7 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
                 tone="accent"
                 loading={saving}
                 disabled={!configPath || settingsInvalid}
-                title={settingsInvalid ? "内联 JSON 有误，修正后才能保存" : undefined}
+                title={settingsInvalid ? "设置 JSON 有误，修正后才能保存" : undefined}
                 onClick={() => void onSave()}
               >
                 保存

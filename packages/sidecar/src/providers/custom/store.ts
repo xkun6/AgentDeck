@@ -66,6 +66,15 @@ export async function loadProviderProfiles(
       return;
     }
     const profile = toProviderProfile(parsed.data);
+    // 旧版的 settingsFile（外部 settings.json 路径）已移除：zod 对象默认剥离未知键，该项照常加载，这里只记一条告警
+    if (typeof raw === "object" && raw !== null && "settingsFile" in raw) {
+      logger.warn(
+        "%s 第 %d 项（%s）含已不再支持的 settingsFile 字段，已忽略；请把原 settings.json 的内容粘贴到该中转的「设置 JSON」",
+        file,
+        index,
+        profile.id,
+      );
+    }
     if (reservedIds.has(profile.id)) {
       logger.warn("%s 第 %d 项 id「%s」与内置 provider 冲突，已忽略", file, index, profile.id);
       return;

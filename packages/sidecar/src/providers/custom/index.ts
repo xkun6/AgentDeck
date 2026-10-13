@@ -10,7 +10,6 @@ import { loadProviderProfiles, providersConfigPath, saveProviderProfiles } from 
 import { testProviderProfile, type ProviderTestDeps } from "./test-connection.js";
 
 export {
-  createCustomClaudeLaunch,
   createCustomProviderClient,
   CustomProviderClient,
   loadCustomClaudeSettings,
@@ -27,16 +26,14 @@ export {
   RELAY_NO_KEY_PLACEHOLDER,
   resolveDisallowedTools,
 } from "./launch.js";
-export { addSecrets, collectSecrets, createRedactingLogger, redactText } from "./redact.js";
+export { collectSecrets, createRedactingLogger, redactText } from "./redact.js";
 export {
   createProviderProfilesSchema,
   customProviderId,
-  isAbsoluteSettingsPath,
   providerProfileSchema,
   reservedProfileIds,
   toProviderProfile,
 } from "./schema.js";
-export { readClaudeSettingsFile } from "./settings-file.js";
 export {
   loadProviderProfiles,
   PROVIDERS_CONFIG_FILE,

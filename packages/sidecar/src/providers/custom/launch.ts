@@ -1,6 +1,6 @@
 // Derived from paseo packages/server/src/server/agent/providers/codex-app-server-agent.ts (Apache-2.0); modified for AgentDeck
 // 移植 normalizeOpenAICompatibleBaseUrl 与 buildCodexCustomProviderConfig 的思路；
-// AgentDeck 改动：由 ProviderProfile（baseUrl / apiKey / authMode / env / settingsFile / settings）推导，
+// AgentDeck 改动：由 ProviderProfile（baseUrl / apiKey / authMode / env / settings）推导，
 // Claude 额外生成 --settings（整份设置深合并）与 --disallowedTools（design.md 4.7）。
 import type { ProviderProfile } from "@agentdeck/protocol";
 
@@ -104,14 +104,10 @@ function derivedSettingsEnv(profile: ProviderProfile): Record<string, string> {
 
 /**
  * 合并出传给 `--settings` 的整份设置（design.md 4.7）：
- * settingsFile 内容 → profile.settings → 推导 env（含置空的另一个凭据）→ profile.env，最后做中转凭据隔离。
+ * profile.settings → 推导 env（含置空的另一个凭据）→ profile.env，最后做中转凭据隔离。
  */
-export function mergeClaudeSettings(
-  profile: ProviderProfile,
-  fileSettings?: Record<string, unknown>,
-): Record<string, unknown> {
+export function mergeClaudeSettings(profile: ProviderProfile): Record<string, unknown> {
   let merged: Record<string, unknown> = {};
-  if (fileSettings) merged = deepMergeSettings(merged, fileSettings);
   if (profile.settings) merged = deepMergeSettings(merged, profile.settings);
   const env = derivedSettingsEnv(profile);
   if (Object.keys(env).length > 0) merged = deepMergeSettings(merged, { env });
@@ -142,20 +138,18 @@ function isolateRelayCredentials(merged: Record<string, unknown>): Record<string
 /**
  * Claude 中转的启动覆盖：
  * - 进程环境：剔除继承的 ANTHROPIC_* 凭据变量，再叠加推导值与 profile.env；
- * - `--settings <json>`：settingsFile、内联 settings 与推导 env 合并成一份 flag 级设置（flag 设置优先于用户
+ * - `--settings <json>`：内联 settings 与推导 env 合并成一份 flag 级设置（flag 设置优先于用户
  *   ~/.claude/settings.json）；中转时两个凭据变量都显式写入（未提供的置空，都没有时写占位值），
  *   避免用户设置里的密钥或 OAuth 登录令牌一并发给中转；
  * - `--disallowedTools a,b`；
  * - command[1..] 作为附加参数放在最前（command[0] 由调用方用于定位可执行文件）。
- * `fileSettings` 为调用方读到的 settingsFile 内容（每次启动会话时读取）。
  * 参数经 shell:false 直接传给真实 exe，内联 JSON 不经过 cmd.exe（design.md 5.2）。
  */
 export function buildClaudeLaunchOverride(
   profile: ProviderProfile,
-  fileSettings?: Record<string, unknown>,
 ): Required<Pick<ClaudeLaunchOverride, "stripEnv" | "envOverlay" | "extraArgs">> {
   const envOverlay = deriveClaudeEnv(profile);
-  const settings = mergeClaudeSettings(profile, fileSettings);
+  const settings = mergeClaudeSettings(profile);
 
   const extraArgs = [...(profile.command?.slice(1) ?? [])];
   if (Object.keys(settings).length > 0) {

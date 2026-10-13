@@ -217,4 +217,37 @@ describe("providers.json 读写", () => {
     expect(logger.lines).toHaveLength(3);
     expect(logger.lines.join("\n")).not.toMatch(/sk-/);
   });
+
+  test("旧版 settingsFile 字段：该项照常加载、字段被忽略并记中文 warn；保存时不再写出", async () => {
+    await saveProviderProfiles(file, []);
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        providers: [
+          {
+            id: "old",
+            extends: "claude",
+            label: "旧中转",
+            settingsFile: "C:\\cfg\\relay.json",
+            settings: { model: "opus" },
+          },
+          // 非 claude 的旧数据同样不因该字段校验失败
+          { id: "oldcodex", extends: "codex", label: "旧 Codex", settingsFile: "relay.json" },
+        ],
+      }),
+    );
+    const logger = recordingLogger();
+    const loaded = await loadProviderProfiles(file, logger, RESERVED);
+    expect(loaded).toEqual([
+      { id: "old", extends: "claude", label: "旧中转", settings: { model: "opus" } },
+      { id: "oldcodex", extends: "codex", label: "旧 Codex" },
+    ]);
+    expect(logger.lines).toHaveLength(2);
+    expect(logger.lines[0]).toMatch(/已不再支持的 settingsFile 字段，已忽略.*「设置 JSON」/);
+    expect(logger.lines.join("\n")).not.toMatch(/cfg/);
+
+    await saveProviderProfiles(file, loaded);
+    expect(readFileSync(file, "utf8")).not.toContain("settingsFile");
+  });
 });

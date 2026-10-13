@@ -1,7 +1,7 @@
 // 自定义 provider / 三方中转（design.md 4.7）的前端纯逻辑：
 // - id slug 生成与校验；
 // - 启动命令的切分（支持引号）与回显；
-// - 表单状态 ↔ ProviderProfile 互转（空字段省略、默认模型单选、Claude 设置文件 / 内联 JSON）；
+// - 表单状态 ↔ ProviderProfile 互转（空字段省略、默认模型单选、Claude 设置 JSON）；
 // - provider.config.set / provider.test 校验错误（data.issues）路径 → 表单字段；
 // - Agent 菜单的「内置 / 中转」分组。
 // 本文件不做任何 IO，也不打印密钥。
@@ -195,9 +195,7 @@ export interface ProviderFormState {
   /** ACP：启动命令；Claude / Codex：可执行文件覆盖。一行，空格分隔，支持引号 */
   commandText: string;
   env: ProviderFormEnv[];
-  /** 仅 Claude：settings.json 的绝对路径（留空表示不用） */
-  settingsFile: string;
-  /** 仅 Claude：内联设置的 JSON 文本（留空表示不用） */
+  /** 仅 Claude：设置 JSON 文本（留空表示不用） */
   settingsText: string;
 }
 
@@ -223,7 +221,6 @@ export function emptyProviderForm(extendsValue: ProviderProfileExtends = "claude
     disallowedToolsText: "",
     commandText: "",
     env: [],
-    settingsFile: "",
     settingsText: "",
   };
 }
@@ -250,24 +247,18 @@ export function profileToForm(profile: ProviderProfile): ProviderFormState {
     disallowedToolsText: (profile.disallowedTools ?? []).join(", "),
     commandText: profile.command ? joinCommandLine(profile.command) : "",
     env: Object.entries(profile.env ?? {}).map(([name, value]) => ({ key: newRowKey("env"), name, value })),
-    settingsFile: profile.settingsFile ?? "",
     settingsText: profile.settings ? JSON.stringify(profile.settings, null, 2) : "",
   };
 }
 
-// ── Claude 设置（settings.json） ────────────────────────────────────────────
-
-/** 绝对路径（Windows 盘符 / UNC，或 POSIX `/` 开头），与 sidecar 规则一致。 */
-export function isAbsoluteSettingsPath(value: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]/.test(value) || /^\/(?!\/)/.test(value);
-}
+// ── Claude 设置（JSON） ─────────────────────────────────────────────────────
 
 export type SettingsTextParse =
   | { kind: "empty" }
   | { kind: "ok"; value: Record<string, unknown> }
   | { kind: "error"; message: string };
 
-/** 内联设置文本：留空表示不使用；否则必须是 JSON 对象。 */
+/** 设置 JSON 文本：留空表示不使用；否则必须是 JSON 对象。 */
 export function parseSettingsText(text: string): SettingsTextParse {
   if (!text.trim()) return { kind: "empty" };
   let value: unknown;
@@ -289,9 +280,9 @@ export function formatSettingsText(text: string): string | null {
   return parsed.kind === "ok" ? JSON.stringify(parsed.value, null, 2) : null;
 }
 
-/** 列表「含设置」标记：基于 Claude Code 且配置了设置文件或内联设置。 */
+/** 列表「含设置」标记：基于 Claude Code 且配置了设置 JSON。 */
 export function profileHasClaudeSettings(profile: ProviderProfile): boolean {
-  return profile.extends === "claude" && Boolean(profile.settingsFile || profile.settings);
+  return profile.extends === "claude" && Boolean(profile.settings);
 }
 
 function isBlankModel(model: ProviderFormModel): boolean {
@@ -322,8 +313,6 @@ export function formToProfile(form: ProviderFormState): ProviderProfile {
   if (form.extends === "claude") {
     profile.authMode = form.authMode;
     if (form.customDisallowedTools) profile.disallowedTools = splitToolList(form.disallowedToolsText);
-    const settingsFile = form.settingsFile.trim();
-    if (settingsFile) profile.settingsFile = settingsFile;
     // 非法 JSON 由 validateProviderForm 拦下；这里只写入能解析成对象的内容
     const settings = parseSettingsText(form.settingsText);
     if (settings.kind === "ok") profile.settings = settings.value;
@@ -404,10 +393,6 @@ export function validateProviderForm(form: ProviderFormState): ProviderFormError
     errors.command = "ACP 中转必须填写启动命令";
   }
   if (form.extends === "claude") {
-    const settingsFile = form.settingsFile.trim();
-    if (settingsFile && !isAbsoluteSettingsPath(settingsFile)) {
-      errors.settingsFile = "设置文件路径必须是绝对路径";
-    }
     const settings = parseSettingsText(form.settingsText);
     if (settings.kind === "error") errors.settings = settings.message;
   }

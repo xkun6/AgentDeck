@@ -309,17 +309,17 @@ interface ProviderProfile {
 - 已删除 / 停用 provider 的会话：运行中继续使用旧 client；关闭或 dormant 后恢复返回 `PROVIDER_NOT_FOUND`。
 
 **Claude 中转的整份设置（settings）**（仅 `extends: "claude"`）：
-- `ProviderProfile` 增加 `settingsFile?: string`（绝对路径，指向一个 Claude Code settings.json）与 `settings?: Record<string, unknown>`（内联 JSON 对象）。两者可同时使用；其它 extends 填写时校验失败。
-- 合并顺序（后者覆盖前者）：`settingsFile` 内容 → `settings` → 中转推导的 env（baseUrl / apiKey / 置空另一个凭据）→ `profile.env`。对象按键深合并，数组与标量整体替换。合并结果作为**一份** JSON 通过 `--settings` 传入（flag 级，优先级高于用户 / 项目 / local 设置，低于企业策略）。
+- `ProviderProfile` 增加 `settings?: Record<string, unknown>`（JSON 对象，明文保存在 `providers.json`）；其它 extends 填写时校验失败。前端表单只有一个「设置 JSON」输入框。
+- 不支持外部设置文件：早期版本的 `settingsFile` 字段已移除。`providers.json` 中仍带该字段的项照常加载（zod 对象默认剥离未知键），该字段被忽略并记一条中文 warn（提示把原 settings.json 内容粘贴到「设置 JSON」）；下次保存时不再写出。`provider.config.set` 传入该字段同样被剥离、不报错。
+- 合并顺序（后者覆盖前者）：`settings` → 中转推导的 env（baseUrl / apiKey / 置空另一个凭据）→ `profile.env`。对象按键深合并，数组与标量整体替换。合并结果作为**一份** JSON 通过 `--settings` 传入（flag 级，优先级高于用户 / 项目 / local 设置，低于企业策略）。
 - 表单未填 baseUrl / apiKey 时不推导，settings 中 `env` 里的 `ANTHROPIC_BASE_URL` / 凭据照常生效（启动前仍会剔除继承环境中的同名变量）；`provider.test` 未填 baseUrl / apiKey 时回退使用合并后 settings.env 中的值。
-- **中转凭据隔离**（`launch.ts` 的 `isolateRelayCredentials`，启动与 `provider.test` 共用）：合并后（settingsFile → settings → 表单推导 → profile.env）有效 `ANTHROPIC_BASE_URL` 非空即为中转。中转时 `--settings` 的 env 必须同时显式写出 `ANTHROPIC_AUTH_TOKEN` 与 `ANTHROPIC_API_KEY`：profile 自己提供的保留，未提供 / 空白的写 `""`；两者都未提供时 `ANTHROPIC_AUTH_TOKEN` 写占位值 `agentdeck-no-key`。非中转原样不动。表单填了 apiKey 时仍会把未选用的那种凭据压成 `""`（即使 settings 里给了它）。
+- **中转凭据隔离**（`launch.ts` 的 `isolateRelayCredentials`，启动与 `provider.test` 共用）：合并后（settings → 表单推导 → profile.env）有效 `ANTHROPIC_BASE_URL` 非空即为中转。中转时 `--settings` 的 env 必须同时显式写出 `ANTHROPIC_AUTH_TOKEN` 与 `ANTHROPIC_API_KEY`：profile 自己提供的保留，未提供 / 空白的写 `""`；两者都未提供时 `ANTHROPIC_AUTH_TOKEN` 写占位值 `agentdeck-no-key`。非中转原样不动。表单填了 apiKey 时仍会把未选用的那种凭据压成 `""`（即使 settings 里给了它）。
   - 依据（Claude Code 2.1.296 实测）：中转且两个凭据都为空时，claude 会把 claude.ai OAuth 令牌（`$CLAUDE_CONFIG_DIR/.credentials.json` 的 `claudeAiOauth.accessToken` 或环境变量 `CLAUDE_CODE_OAUTH_TOKEN`）作为 Bearer 发给中转；只要设置了任一凭据就不再发送 OAuth。只置空另一个凭据而不显式写出时，用户 settings 中的另一个凭据会随请求外发。
   - `provider.test` 只用 profile 自己提供的凭据；占位值不算凭据，无凭据时不带鉴权头；不读取 `~/.claude` 或进程环境中的凭据。
   - 继承环境中的 `CLAUDE_CODE_OAUTH_TOKEN` 目前未剔除，依靠上述占位值 / 中转自身凭据压住。
-- `settingsFile` 每次启动会话时读取：不存在或不是合法 JSON 对象 → `provider.list` 中该项不可用（`unavailableReason` 为中文原因），启动 / 恢复返回 `PROVIDER_UNAVAILABLE`。`provider.config.set` 只校验其为绝对路径，不要求文件已存在。
 - `--settings` 与用户 settings 之间按 Claude Code 自身规则合并（Claude Code 2.1.296 实测）：`env` 按键合并、同名键以 flag 为准；`hooks` 跨来源叠加（两边的 hook 都执行）；`permissions.allow` 跨来源叠加（deny 推断同理，未单独测）。
 - WebSearch 默认禁用的条件：表单 baseUrl 或合并后 settings.env 中的 `ANTHROPIC_BASE_URL` 任一非空，且未显式给出 `disallowedTools`。
-- settingsFile 在建会话、恢复会话、模型探测前都会重新读取；模型探测读取失败时回退静态别名而不报错；`isAvailable` 先检查 CLI 再检查文件。合并后的整份设置（含文件内容与其中密钥）会出现在 claude 的命令行中。文件选择由前端直接调用 dialog 插件的 open。
+- 合并后的整份设置（含其中密钥）会出现在 claude 的命令行中。
 - 脱敏：`settings.env` 的值与 `profile.env` 同样规则脱敏；日志中不打印 settings 全文。
 
 ### 4.8 编程 Agent 可执行文件路径（Rust 命令 + sidecar 共用）

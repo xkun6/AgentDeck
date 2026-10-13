@@ -5,7 +5,6 @@ import {
   emptyProviderForm,
   formatSettingsText,
   formToProfile,
-  isAbsoluteSettingsPath,
   issuePathToField,
   joinCommandLine,
   mapIssuesToForm,
@@ -353,14 +352,12 @@ describe("Claude 设置（settings.json）", () => {
     expect(formatSettingsText("")).toBeNull();
   });
 
-  it("formToProfile：空值不写入；路径去空白；内联 JSON 解析为对象；非 claude 不提交", () => {
-    expect(formToProfile(form({ settingsFile: "  ", settingsText: " " }))).not.toHaveProperty("settingsFile");
-    expect(formToProfile(form({ settingsFile: "  ", settingsText: " " }))).not.toHaveProperty("settings");
-    expect(
-      formToProfile(form({ settingsFile: "  C:\\cfg\\relay.json ", settingsText: '{ "env": { "API_TIMEOUT_MS": "600000" } }' })),
-    ).toMatchObject({ settingsFile: "C:\\cfg\\relay.json", settings: { env: { API_TIMEOUT_MS: "600000" } } });
-    const codex = formToProfile(form({ extends: "codex", settingsFile: "/x.json", settingsText: "{}" }));
-    expect(codex).not.toHaveProperty("settingsFile");
+  it("formToProfile：空值不写入；设置 JSON 解析为对象；非 claude 不提交", () => {
+    expect(formToProfile(form({ settingsText: " " }))).not.toHaveProperty("settings");
+    expect(formToProfile(form({ settingsText: '{ "env": { "API_TIMEOUT_MS": "600000" } }' }))).toMatchObject({
+      settings: { env: { API_TIMEOUT_MS: "600000" } },
+    });
+    const codex = formToProfile(form({ extends: "codex", settingsText: "{}" }));
     expect(codex).not.toHaveProperty("settings");
     // 非法 JSON 不写入（保存前由 validateProviderForm 拦下）
     expect(formToProfile(form({ settingsText: "{ bad" }))).not.toHaveProperty("settings");
@@ -372,38 +369,26 @@ describe("Claude 设置（settings.json）", () => {
       extends: "claude",
       label: "S",
       authMode: "auth_token",
-      settingsFile: "/home/me/relay.json",
       settings: { env: { A: "1" }, permissions: { allow: ["Bash(ls)"] } },
     };
     const state = profileToForm(profile);
-    expect(state.settingsFile).toBe("/home/me/relay.json");
     expect(state.settingsText).toBe(JSON.stringify(profile.settings, null, 2));
     expect(formToProfile(state)).toEqual(profile);
   });
 
-  it("validateProviderForm：设置文件须为绝对路径、内联 JSON 须为对象；非 claude 不校验", () => {
-    expect(validateProviderForm(form({ settingsFile: "relay.json" })).settingsFile).toBe("设置文件路径必须是绝对路径");
-    expect(validateProviderForm(form({ settingsFile: "C:relay.json" })).settingsFile).toBeTruthy();
-    expect(validateProviderForm(form({ settingsFile: "C:\\cfg\\relay.json" })).settingsFile).toBeUndefined();
-    expect(validateProviderForm(form({ settingsFile: "\\\\server\\share\\relay.json" })).settingsFile).toBeUndefined();
-    expect(validateProviderForm(form({ settingsFile: "/etc/relay.json" })).settingsFile).toBeUndefined();
+  it("validateProviderForm：设置 JSON 须为对象；非 claude 不校验", () => {
     expect(validateProviderForm(form({ settingsText: "[]" })).settings).toContain("JSON 对象");
     expect(validateProviderForm(form({ settingsText: "{ bad" })).settings).toMatch(/^不是合法的 JSON/);
-    expect(validateProviderForm(form({ extends: "codex", settingsFile: "x", settingsText: "{" }))).toEqual({});
+    expect(validateProviderForm(form({ extends: "codex", settingsText: "{" }))).toEqual({});
   });
 
-  it("isAbsoluteSettingsPath 与 issues 路径映射", () => {
-    expect(isAbsoluteSettingsPath("D:/a.json")).toBe(true);
-    expect(isAbsoluteSettingsPath("\\a.json")).toBe(false);
-    expect(isAbsoluteSettingsPath("./a.json")).toBe(false);
-    expect(issuePathToField("providers.0.settingsFile", 0)).toBe("settingsFile");
+  it("settings 的 issues 路径映射", () => {
     expect(issuePathToField("providers.0.settings", 0)).toBe("settings");
     expect(issuePathToField("profile.settings.env", null)).toBe("settings");
   });
 
-  it("profileHasClaudeSettings：只有基于 Claude Code 且配置了文件或内联设置才标记", () => {
+  it("profileHasClaudeSettings：只有基于 Claude Code 且配置了设置 JSON 才标记", () => {
     expect(profileHasClaudeSettings({ id: "a", extends: "claude", label: "A" })).toBe(false);
-    expect(profileHasClaudeSettings({ id: "a", extends: "claude", label: "A", settingsFile: "/a.json" })).toBe(true);
     expect(profileHasClaudeSettings({ id: "a", extends: "claude", label: "A", settings: {} })).toBe(true);
     expect(profileHasClaudeSettings({ id: "a", extends: "codex", label: "A", settings: {} })).toBe(false);
   });

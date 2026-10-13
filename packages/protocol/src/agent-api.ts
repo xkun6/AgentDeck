@@ -63,11 +63,9 @@ export interface ProviderProfile {
   /** 仅 claude */
   disallowedTools?: string[];
   /**
-   * 仅 claude（其它 extends 填写时校验失败）：Claude Code settings.json 的绝对路径，每次启动 / 恢复会话时读取。
-   * 合并顺序：settingsFile → settings → 推导 env → env，结果作为一份 JSON 经 `--settings` 传入。
+   * 仅 claude（其它 extends 填写时校验失败）：Claude Code 设置（JSON 对象），明文保存在 providers.json。
+   * 合并顺序：settings → 推导 env → env，结果作为一份 JSON 经 `--settings` 传入。
    */
-  settingsFile?: string;
-  /** 仅 claude：内联的 Claude Code 设置（JSON 对象），在 settingsFile 之后合并 */
   settings?: Record<string, unknown>;
 }
 

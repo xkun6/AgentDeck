@@ -306,12 +306,6 @@
 }
 
 /* ── Claude 设置 ──────────────────────────────────────────────────────── */
-.pathRow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  min-width: 0;
-}
 .settingsText {
   min-height: 128px;
   max-height: 320px;

@@ -247,10 +247,7 @@ export function AgentProvidersRoute() {
                             tone="info"
                             variant="outline"
                             size="sm"
-                            title={[
-                              profile.settingsFile ? `设置文件：${profile.settingsFile}` : null,
-                              profile.settings ? "内联 JSON 设置" : null,
-                            ].filter(Boolean).join("；")}
+                            title="JSON 设置"
                           >
                             含设置
                           </Badge>
