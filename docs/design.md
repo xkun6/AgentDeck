@@ -126,6 +126,8 @@ sidecar 入口：
 | `settings.get` / `settings.set` | `{}` / `{ patch }` | `SidecarSettings`（sidecar 设置，见 4.24） |
 | `snapshot.list` / `snapshot.diff` / `snapshot.restore` / `snapshot.storage` / `snapshot.prune` | 见 4.24 | 按回合 git 快照（影子仓库） |
 | `schedule.list` / `schedule.upsert` / `schedule.delete` / `schedule.runNow` / `schedule.runs` / `schedule.setPaused` | 见 4.25 | 定时任务、心跳、目标循环 |
+| `group.create` / `group.list` / `group.get` / `group.delete` | 见 4.27 | 并行协作组（扇出 + 汇总） |
+| `board.get` / `board.updateSettings` / `board.upsertTask` / `board.deleteTask` / `board.moveTask` / `board.merge` | 见 4.28 | 看板式任务分派 |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -843,6 +845,82 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 **前端**：
 - 新增「自动化」页（侧栏入口 + 命令面板）：按类型分组的任务列表（名称、目标、下次触发时间 / 状态、启用开关、立即运行、编辑、删除）、运行记录、顶部「全部暂停」开关。新建 / 编辑弹窗按类型切换表单（cron 表达式带常用预设与下次 5 次触发预览）。
 - 会话详情：该会话有心跳或目标循环时，在输入框上方显示状态条（如「目标循环 3/10 · 停止」/「心跳：空闲 30 分钟后发送」），可停止 / 继续。会话右键菜单「设置目标循环…」「设置心跳…」。
+
+### 4.26 会话互通：sidecar 作为 MCP 服务端（Agent 发起的委派）
+
+**端点**：sidecar 在同一 HTTP 服务上提供 MCP Streamable HTTP 端点 `POST http://127.0.0.1:<port>/mcp`（无状态模式，响应直接返回 JSON，不需要 SSE），使用官方 `@modelcontextprotocol/sdk` 的服务端实现。鉴权：每个会话一个随机 `interopToken`（只在 sidecar 内存中，重启后重新生成），请求头 `Authorization: Bearer <interopToken>`；sidecar 据此识别调用方 agentId。token 不匹配 → HTTP 401。`settings.interop.enabled` 为 false 时不注入、端点返回 404。
+
+**注入**（会话进程每次拉起 / 恢复时注入当前端口与 token）：
+- Claude：追加参数 `--mcp-config <内联 JSON>`，内容 `{"mcpServers":{"agentdeck":{"type":"http","url":"http://127.0.0.1:<port>/mcp","headers":{"Authorization":"Bearer <token>"}}}}`（shell:false 传参）。
+- Codex：经 `thread/start` / `thread/resume` / `thread/fork` 的 `config` 注入 `mcp_servers.agentdeck = { url, http_headers: { Authorization: "Bearer <token>" } }`（键名以本机 codex 0.162.1 实际支持的为准，实现前实测并在此补记；若不支持 http_headers 则用 `bearer_token_env_var` + 子进程环境变量）。
+- ACP：agent 的 initialize 应答声明 `mcpCapabilities.http` 时，`newSession` / `loadSession` 的 `mcpServers` 传 `[{ type: "http", name: "agentdeck", url, headers: [{ name: "Authorization", value: "Bearer <token>" }] }]`；不支持则不注入。
+- 日志与诊断包中 token 一律脱敏。
+
+**工具**（名称前缀由 CLI 自行加，如 `mcp__agentdeck__list_agents`）：
+| 工具 | 参数 | 返回 |
+|---|---|---|
+| `list_providers` | — | 可用 provider（id、label、可用性） |
+| `list_agents` | `{ includeArchived?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId） |
+| `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */ }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字 |
+| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, title?, worktree?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600）返回 `status: "running"` |
+| `send_to_agent` | `{ agentId, message, wait?: boolean, timeoutSec?: number }` | 同上；目标忙 → 工具错误「目标会话正在运行」 |
+| `wait_agent` | `{ agentId, timeoutSec?: number }` | 等到目标当前回合结束，返回最后一条助手消息 |
+| `cancel_agent` | `{ agentId }` | 中断目标会话当前回合 |
+
+**安全约束**：
+- 不能对自己调用 `send_to_agent` / `wait_agent`；委派深度（parent 链长度）上限 3，单个会话同时运行的子会话上限 8，超出返回工具错误。
+- `delegate` 的 `modeId` 若为危险模式（`AgentMode.dangerous`）一律拒绝；缺省用 provider 默认模式。子会话的权限请求照常出现在 AgentDeck 界面由用户审批。
+- `send_to_agent` 只允许发给调用方的子孙会话，或用户明确标记为「允许被其它会话调用」的会话（快照字段 `interopTarget?: boolean`，经 `agent.update` 设置）；否则返回工具错误。
+- 工具调用的结果只包含文本，不包含 token、apiKey 等。
+
+**快照**：`AgentSnapshot` 增加 `parentAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
+
+**前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关。
+
+### 4.27 界面发起的并行协作（扇出 + 汇总）
+
+**共用 worktree 工具**：`packages/sidecar/src/git/worktree.ts`（4.26 先实现，4.27 / 4.28 复用）：`addWorktree({ repoCwd, path, branch })`（基于当前 HEAD，`git worktree add <path> -b <branch>`，要求 repoCwd 在 git 仓库内）、`removeWorktree({ repoCwd, path, branch, deleteBranch })`、`diffStat({ cwd })`；git 定位与 spawn 规则复用 4.24 的 `snapshots/git.ts`。worktree 统一放在 `<AGENTDECK_DATA_DIR>/worktrees/` 下。
+
+**协作组**：
+```ts
+interface AgentGroup {
+  id: string; title: string; prompt: string; cwd: string; createdAt: number;
+  members: Array<{ agentId: string; provider: AgentProviderId; model?: string | null; worktree?: { path: string; branch: string } }>;
+  chair?: { provider: AgentProviderId; model?: string | null; mode: "synthesize" | "review"; agentId?: string };
+  status: "running" | "chairing" | "done" | "failed";
+}
+```
+- 存储 `<AGENTDECK_DATA_DIR>/groups/<id>.json`。
+- `group.create { title?, prompt, cwd, members: Array<{ provider, model?, modeId?, thinkingOptionId? }> /* 2–6 个 */, worktree: "none" | "per-member", chair?: { provider, model?, mode } }` → `{ group }`：
+  - `per-member` 时要求 cwd 在 git 仓库内，为每个成员执行 `git worktree add <AGENTDECK_DATA_DIR>/worktrees/<groupId>/<n> -b agentdeck/<groupId>/<n>`（基于当前 HEAD），成员会话 cwd 指向该 worktree；失败则回滚已建 worktree 并返回 `INTERNAL_ERROR`。
+  - 成员会话快照 `groupId` + `origin: "group"`，同时发送同一 prompt。
+  - 全部成员首个回合结束（任一失败不阻塞其余）后若配置了 chair：新建汇总会话（cwd 为原 cwd），发送汇总提示——`synthesize`：「以下是 N 个 Agent 对同一任务的回答，请综合出一个最佳答案，并指出各自的优缺点」；`review`：「请评审以下 N 个方案，给出排序与理由」——附各成员最后一条助手消息（各上限 20k 字）与（per-member 时）各 worktree 的 `git diff --stat`。状态依次为 running → chairing → done。
+- `group.list {}`、`group.get { id }`、`group.delete { id, removeWorktrees: boolean }`（成员会话不删除，只解除 groupId；removeWorktrees 时 `git worktree remove --force` 并删分支）；通知 `group.changed { group }`。
+
+**前端**：新建会话页增加「并行协作」入口：多选 Agent（每个可选模型 / 模式）、是否每个成员独立 worktree、汇总设置；协作视图页：成员会话并排（每列复用只读时间线 + 状态，点击进入完整会话），底部汇总结果；per-member 时每列提供「查看 diff」（复用现有 git 审阅面板，cwd 指向成员 worktree）。侧边栏把同组会话聚在一个可折叠的协作组下。
+
+### 4.28 看板式任务分派
+
+**数据**：每个项目（规范化的项目根路径）一个看板，存 `<AGENTDECK_DATA_DIR>/boards/<sha1(path) 前 16 位>.json`：
+```ts
+interface Board { projectPath: string; settings: { worktreePerTask: boolean /* 默认 true（git 仓库时） */; autoDispatch: boolean /* 默认 false */; maxConcurrent: number /* 默认 2 */; defaultAssignee: { provider: AgentProviderId; model?: string | null; modeId?: string | null } }; tasks: BoardTask[] }
+interface BoardTask {
+  id: string; title: string; description: string;
+  status: "todo" | "running" | "review" | "done" | "blocked";
+  assignee?: { provider: AgentProviderId; model?: string | null; modeId?: string | null };
+  dependsOn?: string[]; agentId?: string; worktree?: { path: string; branch: string };
+  attempts: number; maxAttempts: number /* 默认 2 */; blockedReason?: string; order: number; createdAt: number; updatedAt: number;
+}
+```
+**派发**：
+- 任务被拖到 running（或 `autoDispatch` 时，依赖全部 done 的 todo 按 order 自动派发，受 `maxConcurrent` 限制）：按设置建 worktree（规则同 4.27，分支 `agentdeck/task-<id>`），新建会话（`origin: "kanban"`），发送提示：任务标题 + 描述 +「完成后在最后单独一行输出 TASK_DONE；无法完成时输出 TASK_BLOCKED: <原因>」。
+- 回合结束：末行 `TASK_DONE` → review；`TASK_BLOCKED: …` → blocked（记录原因）；两者都没有 → review（交给人工判断）；`turn_failed` → `attempts + 1`，未到 `maxAttempts` 则在同一会话发送「上次执行失败：<错误>，请重试」，到达则 blocked。
+- review → done 时可选「合并到项目当前分支」：在项目根执行 `git merge --no-ff agentdeck/task-<id>`，冲突则 `git merge --abort` 并把任务留在 review、返回冲突文件列表；成功后可选删除 worktree 与分支。
+- 用户手动改任务状态总是允许（运行中的任务移出 running 时先中断会话）。
+
+**RPC**：`board.get { projectPath }` → `{ board }`（不存在则返回空看板）；`board.updateSettings { projectPath, settings }`；`board.upsertTask { projectPath, task }`；`board.deleteTask { projectPath, taskId, removeWorktree?: boolean }`；`board.moveTask { projectPath, taskId, status, order? }`；`board.merge { projectPath, taskId, removeWorktree: boolean }` → `{ ok, conflicts?: string[] }`；通知 `board.changed { projectPath, board }`。
+
+**前端**：项目详情页新增「看板」标签：五列（待办 / 运行中 / 待评审 / 完成 / 阻塞），卡片可拖拽（列间移动与列内排序）、显示指派的 Agent 与会话实时状态；点击卡片打开详情抽屉（编辑标题描述、指派、依赖、查看会话、查看 diff、合并）；看板设置（worktree、自动派发、并发上限、默认指派）。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
