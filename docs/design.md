@@ -89,7 +89,7 @@ sidecar 入口：
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
 - `GET /health`（无需 token）→ `{ "ok": true, "version": "..." }`
 - 每个 WS 文本帧是一个 JSON-RPC 2.0 对象。客户端发请求，服务端回响应；服务端主动推送用**通知**（无 id）。
-- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
+- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
 
 ### 4.1 请求方法
 
@@ -113,6 +113,9 @@ sidecar 入口：
 | `agent.commands` | `{ agentId }` | `{ commands: AgentSlashCommand[] }`（见 4.14） |
 | `agent.mcp.status` | `{ agentId }` | `AgentMcpStatusResult`（见 4.14） |
 | `agent.mcp.reconnect` | `{ agentId, serverName? }` | `AgentMcpStatusResult`（重连后的最新状态，见 4.14） |
+| `agent.tasks.list` | `{ agentId }` | `{ tasks: AgentBackgroundTask[] }`（见 4.15） |
+| `agent.tasks.stop` | `{ agentId, taskId }` | `{}`（见 4.15） |
+| `agent.tasks.output` | `{ agentId, taskId, maxBytes? }` | `{ text, truncated, size }`（见 4.15） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -123,6 +126,7 @@ sidecar 入口：
 | `agent.stream` | `AgentStreamEnvelope` = `{ agentId, seq, epoch, timestamp, event: AgentStreamEvent }` |
 | `agent.state` | `{ agent: AgentSnapshot }`（创建、状态变化、模型/模式变化、关闭时推送） |
 | `agent.subagents.update` | `ProviderSubagentUpdate`（见 4.11） |
+| `agent.tasks.update` | `{ agentId, tasks: AgentBackgroundTask[] }`（后台任务整表，见 4.15） |
 
 `seq` 每个 agent 从 1 自增；`epoch` 是 sidecar 进程启动时生成的随机串，用来让前端识别 sidecar 重启。断线重连后前端调用 `agent.timeline { sinceSeq }` 补齐。
 
@@ -529,6 +533,50 @@ export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: Ag
 - Claude / Codex 会话中输入 `/mcp` 在前端本地拦截，打开 MCP 面板（`agent.mcp.status` / `agent.mcp.reconnect`），**不发给 Agent**；面板按 `reconnect` 决定是逐个服务器「重连」（server）还是一个「重新加载全部」（all）。
 - 手动压缩 = 发送 `/compact`（Claude 由 CLI 处理，Codex 由 sidecar 拦截为 `thread/compact/start`）。
 
+### 4.15 后台任务（仅 Claude；Codex / ACP 不支持）
+
+Claude 用 `run_in_background` 跑的后台命令、后台子代理与 workflow 在 CLI 里都是 task。AgentDeck 把它们登记成「后台任务」，供界面按会话列出、看进度与输出、单独停止。任务表只存在 sidecar 内存，不落盘、不随会话恢复（sidecar 重启后为空）。
+
+**类型**（`agent-api.ts`）：
+```ts
+export type AgentBackgroundTaskKind = "command" | "agent" | "workflow" | "other";   // local_bash / local_agent / local_workflow / 其它
+export type AgentBackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";  // pending / paused 归 running；killed 归 stopped
+export interface AgentBackgroundTask {
+  taskId: string; kind: AgentBackgroundTaskKind; description: string; status: AgentBackgroundTaskStatus;
+  startedAt: number; endedAt?: number;          // 毫秒时间戳
+  summary?: string; error?: string; lastToolName?: string;
+  usage?: { totalTokens?: number; toolUses?: number; durationMs?: number };
+  hasOutput?: boolean;                          // 有可读的命令输出文件（只对 command）
+}
+export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; size: number }
+```
+
+**RPC / 通知**：
+- `agent.tasks.list { agentId }` → `{ tasks }`：有活会话且实现了 `listBackgroundTasks` 时取会话的任务表，否则取 AgentManager 缓存的最近一次快照（没有为 `[]`）；不恢复会话；agent 不存在 → `AGENT_NOT_FOUND`。
+- `agent.tasks.stop { agentId, taskId }` → `{}`：会话进程未运行（dormant / closed）→ `AGENT_CLOSED`（不为此恢复会话）；会话没实现 → `NOT_SUPPORTED`；taskId 未知 → `TASK_NOT_FOUND`；任务已结束则什么也不做。成功只表示已发出停止请求，终态由随后的 `agent.tasks.update` 带回。
+- `agent.tasks.output { agentId, taskId, maxBytes? }` → `{ text, truncated, size }`：读输出文件**尾部**，`maxBytes` 缺省 64KB、上限 256KB（超过按上限；非正整数为 `-32602`），按 UTF-8 解码；文件超过 maxBytes 时 `truncated: true` 并丢弃不完整首行；`size` 为文件当前总字节数；没有输出路径或文件不存在返回空文本。错误码同 stop。**只读 CLI 为该任务报告过的路径**，不接受前端传路径。
+- 通知 `agent.tasks.update { agentId, tasks }`：整表推送，向所有连接广播，前端按 agentId 过滤。登记 / 状态 / 输出路径变化立即推；`task_progress` 这类进度变化节流到约 1 秒一次（尾部补发最新整表）。
+- `TASK_NOT_FOUND` 是新增的业务错误码（`AgentRpcBusinessErrorCode`）。
+
+**sidecar 内部**：
+- `AgentSession` 增加可选 `listBackgroundTasks()` / `stopBackgroundTask(taskId)` / `readBackgroundTaskOutput(taskId, maxBytes)`；内部流事件 `{ type: "provider_background_tasks"; tasks }`（整表快照，不进时间线、不占 seq、不落盘，`AgentSessionEvent` 的第三种）。AgentManager 在事件尾链里缓存到该 agent 并经监听器 `onTasks` 推给 RpcServer 广播。
+- 自定义中转（4.7）的会话包装层转发这三个方法与事件，描述 / 摘要 / 错误 / 输出文本按 4.7 规则脱敏。
+
+**Claude**（`providers/claude/background-tasks.ts` 的登记表）：
+- 数据来源（协议见 4.11 的 task 消息，2.1.296 实测，类型参考 SDK 的 SDKTaskStarted / Updated / Progress / NotificationMessage）：`task_started { task_id, tool_use_id?, description, task_type?, subagent_type?, is_backgrounded? }`、`task_updated { task_id, patch: { status?, description?, end_time?, error?, is_backgrounded? } }`、`task_progress { task_id, usage: { total_tokens, tool_uses, duration_ms }, last_tool_name?, summary? }`、`task_notification { task_id, status: completed | failed | stopped, output_file, summary, usage? }`。
+- 只登记**后台**任务：`local_bash` 登记（前台命令通常不发 task_started；发了 `is_backgrounded: false` 的也登记，后台命令的识别以此为准）；`local_agent` / `local_workflow` / 其它 task_type 仅在 `is_backgrounded` 为 true（或之后 `task_updated` 的 patch 转为 true）时登记；没有 task_type 时有 subagent_type 才算子代理。`skip_transcript` 的任务也登记（这是任务面板）。未登记的任务仍在表里跟踪，转入后台时才出现。
+- 状态：pending / running / paused → running，completed → completed，failed → failed，killed / stopped → stopped；`endedAt` 取 `patch.end_time`，没有则取收到时刻；进度不会让已结束的任务复活，`task_updated` 明确给出的状态以它为准。
+- 输出路径：后台 Bash 的工具结果文本形如 `Command running in background with ID: bk63yjvxs. Output is being written to: C:\Users\…\tasks\bk63yjvxs.output`，用 `tool_use_id` 关联到 task_started（结果可能先于 task_started 到达，先缓存），宽松正则 `Output is being written to:\s*(.+?\.output)`；`task_notification.output_file` 对 command 作兜底。子代理 / workflow 的 `output_file` 是 JSONL transcript，不作为「输出」，`hasOutput` 只对 command。
+- 停止：控制请求 `{ subtype: "stop_task", task_id }`（30 秒默认超时），失败时按控制请求失败处理；不在本地改状态，等 CLI 的 `task_updated` / `task_notification`。
+- 进程退出 / 主动重建进程 / 会话关闭时，仍为 running 的任务标为 `stopped`（error「会话已结束」）并推送；进程重启（`--resume`）后旧任务保留为已结束，新进程的任务照常登记。
+- **initialize 带 `perTaskStopAffordance: true`（行为变化）**：声明后，用户「中止」本轮（`interrupt`）时 CLI 不再连带杀掉后台任务，后台任务只能经 `agent.tasks.stop` 逐个停止（界面在输入框上方提供入口）。
+- 与现有逻辑的关系：4.11 的子代理登记与 4.12 的 `task_notification` 卡片不变，后台任务登记表是并行的另一份视图。
+
+**前端**：
+- 进入会话时 `agent.tasks.list` 拉一次（断线重连后重拉），之后由 `agent.tasks.update` 整表替换（按 agentId 存）。
+- 输入框上方、子代理药丸旁的「后台任务」药丸：有运行中显示「后台任务 N 运行中」，否则「N 个已结束」，没有任务不渲染；展开列出每个任务（类型图标、描述、状态、耗时、子代理 / workflow 的 token 与工具次数），操作「输出」（`hasOutput`）与「停止」（running）；「清除已结束」只在前端隐藏。
+- 「输出」对话框：等宽字体显示尾部，任务运行中每 2 秒刷新并保持滚动在底部（用户上滚暂停），`truncated` 时提示「已截断，仅显示最后 N KB」，任务结束后停止轮询。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -588,7 +636,7 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14），默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14）、`stop_task { task_id }`（见 4.15），默认 30 秒超时；initialize 带 `forwardSubagentText` 与 `perTaskStopAffordance`（见 4.11 / 4.15）；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。

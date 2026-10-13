@@ -1,7 +1,7 @@
 // 直接驱动用户本机 claude 可执行文件的 stream-json 会话（AgentDeck 原创实现）。
 // 一个实例对应一个长生命周期 claude 子进程：
 // - stdin 每行写一个 JSON（用户消息 / 控制请求 / 对 CLI 控制请求的应答）；stdout 逐行解析；
-// - 我们发出的控制请求（initialize / interrupt / set_model / set_permission_mode / mcp_status / mcp_reconnect）
+// - 我们发出的控制请求（initialize / interrupt / set_model / set_permission_mode / mcp_status / mcp_reconnect / stop_task）
 //   按 request_id 关联应答，带超时；
 // - CLI 发来的 can_use_tool 交给 canUseTool 回调，应答回写 stdin；control_cancel_request 触发对应 AbortSignal；
 // - close 时结束 stdin 并 tree-kill 整棵进程树；进程意外退出时消息迭代以错误结束，绝不抛到 sidecar 进程级。
@@ -72,6 +72,8 @@ export interface ClaudeCliHandle extends AsyncIterable<ClaudeOutputMessage> {
   mcpStatus(): Promise<ClaudeMcpStatusResponse>;
   /** 重连单个 MCP 服务器；失败时 reject */
   mcpReconnect(serverName: string): Promise<void>;
+  /** 停止单个后台任务（design.md 4.15）；任务的终态由随后的 task_updated / task_notification 带回 */
+  stopTask(taskId: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -196,10 +198,12 @@ export class ClaudeCliSession implements ClaudeCliHandle {
     lines.on("line", (line) => this.handleLine(line));
     lines.on("close", () => this.onStreamClosed());
 
-    // forwardSubagentText：CLI 才会转发子代理（sidechain）的完整 assistant 消息（design.md 4.11）
+    // forwardSubagentText：CLI 才会转发子代理（sidechain）的完整 assistant 消息（design.md 4.11）；
+    // perTaskStopAffordance：用户中止本轮时 CLI 不再连带杀掉后台任务，交给逐个停止（design.md 4.15）
     this.initialized = this.request({
       subtype: "initialize",
       forwardSubagentText: true,
+      perTaskStopAffordance: true,
     }) as Promise<ClaudeInitializeResponse>;
     // 调用方可以不关心 initialize 结果；失败只在等待它的地方体现
     this.initialized.catch(() => undefined);
@@ -231,6 +235,10 @@ export class ClaudeCliSession implements ClaudeCliHandle {
 
   async mcpReconnect(serverName: string): Promise<void> {
     await this.request({ subtype: "mcp_reconnect", serverName }, MCP_RECONNECT_TIMEOUT_MS);
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    await this.request({ subtype: "stop_task", task_id: taskId });
   }
 
   close(): Promise<void> {

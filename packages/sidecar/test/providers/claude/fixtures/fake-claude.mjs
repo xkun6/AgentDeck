@@ -239,7 +239,7 @@ function handleControlRequest(message) {
   switch (request?.subtype) {
     case "initialize":
       // forwardSubagentText 原样回显，便于测试确认 initialize 打开了子代理文本转发
-      ok({ models: [{ value: "default", displayName: "Default" }, { value: "haiku", displayName: "Haiku" }], argv, forwardSubagentText: request.forwardSubagentText });
+      ok({ models: [{ value: "default", displayName: "Default" }, { value: "haiku", displayName: "Haiku" }], argv, forwardSubagentText: request.forwardSubagentText, perTaskStopAffordance: request.perTaskStopAffordance });
       return;
     case "interrupt":
       ok({ still_queued: [] });
@@ -254,6 +254,14 @@ function handleControlRequest(message) {
           usage: {},
         });
         hangingUuid = null;
+      }
+      return;
+    case "stop_task":
+      // 只认识 bk1：其它任务以 error 应答（与真实 CLI 一致）
+      if (request.task_id === "bk1") {
+        ok({});
+      } else {
+        send({ type: "control_response", response: { subtype: "error", request_id: requestId, error: `No task found with ID: ${request.task_id}` } });
       }
       return;
     case "set_model":

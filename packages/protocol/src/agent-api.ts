@@ -130,6 +130,31 @@ export interface AgentMcpServer {
 }
 /** server = 可按服务器单独重连（Claude）；all = 只能整体重新加载（Codex） */
 export type AgentMcpReconnectScope = "server" | "all";
+/** 后台任务（design.md 4.15）：Claude 的后台命令 / 后台子代理 / workflow */
+export type AgentBackgroundTaskKind = "command" | "agent" | "workflow" | "other";
+export type AgentBackgroundTaskStatus = "running" | "completed" | "failed" | "stopped";
+export interface AgentBackgroundTask {
+  taskId: string;
+  kind: AgentBackgroundTaskKind;
+  description: string;
+  status: AgentBackgroundTaskStatus;
+  /** 毫秒时间戳 */
+  startedAt: number;
+  endedAt?: number;
+  summary?: string;
+  error?: string;
+  lastToolName?: string;
+  usage?: { totalTokens?: number; toolUses?: number; durationMs?: number };
+  /** 有可读的命令输出文件（只对 command） */
+  hasOutput?: boolean;
+}
+export interface AgentBackgroundTaskOutput {
+  text: string;
+  /** 文件超过 maxBytes，只返回了尾部 */
+  truncated: boolean;
+  /** 输出文件当前总字节数 */
+  size: number;
+}
 export interface AgentMcpStatusResult {
   servers: AgentMcpServer[];
   reconnect: AgentMcpReconnectScope;
@@ -398,6 +423,7 @@ export type AgentRpcBusinessErrorCode =
   | "TURN_IN_PROGRESS"
   | "PERMISSION_NOT_FOUND"
   | "NOT_SUPPORTED"
+  | "TASK_NOT_FOUND"
   | "INTERNAL_ERROR";
 
 // ---------------------------------------------------------------------------
@@ -424,6 +450,9 @@ export const AGENT_RPC_METHODS = {
   agentCommands: "agent.commands",
   agentMcpStatus: "agent.mcp.status",
   agentMcpReconnect: "agent.mcp.reconnect",
+  agentTasksList: "agent.tasks.list",
+  agentTasksStop: "agent.tasks.stop",
+  agentTasksOutput: "agent.tasks.output",
   providerConfigGet: "provider.config.get",
   providerConfigSet: "provider.config.set",
   providerTest: "provider.test",
@@ -435,6 +464,7 @@ export const AGENT_RPC_NOTIFICATIONS = {
   agentRemoved: "agent.removed",
   providerChanged: "provider.changed",
   agentSubagentsUpdate: "agent.subagents.update",
+  agentTasksUpdate: "agent.tasks.update",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -516,6 +546,18 @@ export interface AgentRpcMethods {
     params: { agentId: string; serverName?: string };
     result: AgentMcpStatusResult;
   };
+  /** 后台任务列表（仅 Claude；其它 provider 返回 []，design.md 4.15） */
+  "agent.tasks.list": { params: { agentId: string }; result: { tasks: AgentBackgroundTask[] } };
+  /** 停止单个后台任务；会话进程未运行 → AGENT_CLOSED，不支持 → NOT_SUPPORTED，任务未知 → TASK_NOT_FOUND */
+  "agent.tasks.stop": {
+    params: { agentId: string; taskId: string };
+    result: Record<string, never>;
+  };
+  /** 读后台命令输出文件的尾部：maxBytes 缺省 64KB、上限 256KB */
+  "agent.tasks.output": {
+    params: { agentId: string; taskId: string; maxBytes?: number };
+    result: AgentBackgroundTaskOutput;
+  };
   /** 含明文 apiKey（仅本机 token 鉴权的连接可见，前端负责遮挡显示）；未设 AGENTDECK_DATA_DIR 时 path 为 null */
   "provider.config.get": {
     params: AgentRpcEmptyParams;
@@ -542,6 +584,8 @@ export interface AgentRpcNotifications {
   "provider.changed": Record<string, never>;
   /** provider 子代理描述 / 时间线变化（design.md 4.11），向所有连接广播，前端按 agentId 过滤 */
   "agent.subagents.update": ProviderSubagentUpdate;
+  /** 后台任务整表推送（design.md 4.15），向所有连接广播，前端按 agentId 过滤 */
+  "agent.tasks.update": { agentId: string; tasks: AgentBackgroundTask[] };
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

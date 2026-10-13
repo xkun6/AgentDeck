@@ -10,6 +10,8 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 
 import type {
+  AgentBackgroundTask,
+  AgentBackgroundTaskOutput,
   AgentMcpServer,
   AgentMcpServerStatus,
   AgentMcpStatusResult,
@@ -48,6 +50,7 @@ import {
   type ClaudeCliFactory,
   type ClaudeCliHandle,
 } from "./claude-cli-session.js";
+import { ClaudeBackgroundTaskRegistry, readFileTail } from "./background-tasks.js";
 import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
 import { ClaudeTaskProtocolSource } from "./subagents/live-source.js";
 import { foldSubagentObservations, type SubagentObservation } from "./subagents/observation.js";
@@ -559,6 +562,10 @@ export class ClaudeAgentSession implements AgentSession {
   private readonly subagentToolInputs = new Map<string, Record<string, unknown>>();
   /** 子代理父卡片的最近一次推送（按 callId）：后续推送在此合并，保留 log 且终态不回退 */
   private readonly subAgentCards = new Map<string, ToolCallTimelineItem>();
+  /** 后台任务登记表（design.md 4.15）：变化时推 provider_background_tasks 整表快照 */
+  private readonly backgroundTasks = new ClaudeBackgroundTaskRegistry({
+    onChange: (tasks) => this.emit({ type: "provider_background_tasks", tasks }),
+  });
   private readonly taskProtocolSource = new ClaudeTaskProtocolSource({
     getToolInput: (toolUseId) => this.subagentToolInputs.get(toolUseId) ?? null,
   });
@@ -765,6 +772,8 @@ export class ClaudeAgentSession implements AgentSession {
     }
     this.closed = true;
     await this.teardownCli();
+    this.backgroundTasks.markSessionEnded();
+    this.backgroundTasks.reset();
     this.sidechainTracker.clear();
     this.taskProtocolSource.reset();
     this.listeners.clear();
@@ -841,6 +850,36 @@ export class ClaudeAgentSession implements AgentSession {
       throw new AgentRpcError("NOT_SUPPORTED", "Claude 需要指定要重连的 MCP 服务器（serverName）");
     }
     await this.requireLiveCli().mcpReconnect(serverName);
+  }
+
+  /** 后台任务（design.md 4.15）：当前任务表 */
+  listBackgroundTasks(): AgentBackgroundTask[] {
+    return this.backgroundTasks.list();
+  }
+
+  /** 停止单个后台任务（stop_task 控制请求）；已结束的任务不做事 */
+  async stopBackgroundTask(taskId: string): Promise<void> {
+    this.requireBackgroundTask(taskId);
+    if (this.backgroundTasks.getStatus(taskId) !== "running") {
+      return;
+    }
+    if (!this.cli || this.closed) {
+      throw new AgentRpcError("AGENT_CLOSED", "Claude 进程未运行，无法停止后台任务");
+    }
+    await this.cli.stopTask(taskId);
+  }
+
+  /** 读后台命令输出文件尾部：只读 CLI 为该任务报告过的路径，文件不存在返回空文本 */
+  async readBackgroundTaskOutput(taskId: string, maxBytes: number): Promise<AgentBackgroundTaskOutput> {
+    this.requireBackgroundTask(taskId);
+    const path = this.backgroundTasks.getOutputPath(taskId);
+    return path ? readFileTail(path, maxBytes) : { text: "", truncated: false, size: 0 };
+  }
+
+  private requireBackgroundTask(taskId: string): void {
+    if (!this.backgroundTasks.has(taskId)) {
+      throw new AgentRpcError("TASK_NOT_FOUND", `未找到后台任务：${taskId}`);
+    }
   }
 
   private requireLiveCli(): ClaudeCliHandle {
@@ -968,9 +1007,10 @@ export class ClaudeAgentSession implements AgentSession {
     if (failure) {
       this.logger.warn("Claude Code 消息流异常结束：%s", failure);
     }
-    // 进程丢失：它拥有的子代理（含后台）全部失败
+    // 进程丢失：它拥有的子代理（含后台）全部失败，后台任务标为已停止
     this.sidechainTracker.clear();
     this.emitSubagentObservations(this.taskProtocolSource.failRunningTasks());
+    this.backgroundTasks.markSessionEnded();
     const turn = this.activeTurn;
     this.failCompaction(turn, "Claude Code 进程已退出");
     if (turn) {
@@ -996,6 +1036,7 @@ export class ClaudeAgentSession implements AgentSession {
         // 主动重建进程（切换思考强度 / 中断失败）：旧进程里仍在运行的子代理（如后台子代理）随之结束
         this.sidechainTracker.clear();
         this.emitSubagentObservations(this.taskProtocolSource.failRunningTasks());
+        this.backgroundTasks.markSessionEnded();
       }
     }
   }
@@ -1005,6 +1046,9 @@ export class ClaudeAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   private handleMessage(message: ClaudeOutputMessage): void {
+    if (message.type === "user") {
+      this.observeBackgroundOutputPaths(message);
+    }
     const parentToolUseId = readParentToolUseId(message);
     if (parentToolUseId) {
       // 子代理（sidechain）内部输出不进主时间线，改写入子代理时间线（design.md 4.11）
@@ -1530,7 +1574,19 @@ export class ClaudeAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   /** task_started / task_updated / task_progress / task_notification */
+  /** 后台 Bash 的工具结果里带输出文件路径（子代理发起的命令也一样，所以不论 parent_tool_use_id） */
+  private observeBackgroundOutputPaths(message: ClaudeUserOutputMessage): void {
+    const content = message.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content as ClaudeContentBlock[]) {
+      if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+        this.backgroundTasks.observeToolResult(block.tool_use_id, toolResultText(block.content));
+      }
+    }
+  }
+
   private handleTaskAnnouncement(message: ClaudeOutputMessage): void {
+    this.backgroundTasks.observe(message);
     if (message.type === "system" && message.subtype === "task_notification") {
       this.handleNonSubagentTaskNotification(message as ClaudeTaskSystemMessage);
     }

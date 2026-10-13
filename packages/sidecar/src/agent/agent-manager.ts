@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type {
+  AgentBackgroundTask,
+  AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
   AgentModelDefinition,
   AgentPermissionResponse,
@@ -36,6 +38,9 @@ import type {
 
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
 const PREVIEW_MAX_CHARS = 120;
+/** agent.tasks.output 的 maxBytes 缺省 / 上限 */
+export const TASK_OUTPUT_DEFAULT_BYTES = 64 * 1024;
+export const TASK_OUTPUT_MAX_BYTES = 256 * 1024;
 export const RESUME_NOT_SUPPORTED_MESSAGE = "该会话无法恢复，请新建会话";
 
 export interface AgentClientLookup {
@@ -48,6 +53,8 @@ export interface AgentManagerListener {
   onRemoved?(agentId: string): void;
   /** provider 子代理变化（design.md 4.11） */
   onSubagent?(update: ProviderSubagentUpdate): void;
+  /** 后台任务整表变化（design.md 4.15） */
+  onTasks?(agentId: string, tasks: AgentBackgroundTask[]): void;
 }
 
 export interface AgentManagerOptions {
@@ -98,6 +105,8 @@ interface ManagedAgent {
   closing: Promise<void> | null;
   /** 已从注册表删除 */
   removed: boolean;
+  /** 最近一次推送的后台任务表（内存缓存，design.md 4.15） */
+  backgroundTasks: AgentBackgroundTask[];
   /** 建会话时取到的模型目录（切换模型后校验思考强度用）；null 表示尚未取到 */
   models: AgentModelDefinition[] | null;
 }
@@ -380,6 +389,47 @@ export class AgentManager {
     }
     await session.reconnectMcp(serverName);
     return session.getMcpStatus();
+  }
+
+  /** design.md 4.15：后台任务列表；有活会话且实现了 listBackgroundTasks 时取会话的，否则取缓存；不恢复会话 */
+  listBackgroundTasks(agentId: string): AgentBackgroundTask[] {
+    const agent = this.requireAgent(agentId);
+    const session = agent.closed ? null : agent.session;
+    return session?.listBackgroundTasks ? session.listBackgroundTasks() : [...agent.backgroundTasks];
+  }
+
+  /** design.md 4.15：停止单个后台任务；需要会话进程在运行，不为此恢复会话 */
+  async stopBackgroundTask(agentId: string, taskId: string): Promise<void> {
+    const session = this.requireTaskSession(agentId);
+    if (!session.stopBackgroundTask) {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持后台任务");
+    }
+    await session.stopBackgroundTask(taskId);
+  }
+
+  /** design.md 4.15：读后台命令输出尾部；maxBytes 缺省 64KB、上限 256KB */
+  async readBackgroundTaskOutput(
+    agentId: string,
+    taskId: string,
+    maxBytes?: number,
+  ): Promise<AgentBackgroundTaskOutput> {
+    const session = this.requireTaskSession(agentId);
+    if (!session.readBackgroundTaskOutput) {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持后台任务");
+    }
+    return session.readBackgroundTaskOutput(
+      taskId,
+      Math.min(maxBytes ?? TASK_OUTPUT_DEFAULT_BYTES, TASK_OUTPUT_MAX_BYTES),
+    );
+  }
+
+  private requireTaskSession(agentId: string): AgentSession {
+    const agent = this.requireAgent(agentId);
+    const session = agent.closed ? null : agent.session;
+    if (!session) {
+      throw new AgentRpcError("AGENT_CLOSED", "会话进程未运行，无法操作后台任务");
+    }
+    return session;
   }
 
   async cancel(agentId: string): Promise<void> {
@@ -833,6 +883,14 @@ export class AgentManager {
   }
 
   private processEvent(agent: ManagedAgent, rawEvent: AgentSessionEvent): void {
+    if (rawEvent.type === "provider_background_tasks") {
+      // 后台任务整表快照：缓存并广播，不进主时间线、不占 seq、不落盘
+      if (!agent.removed) {
+        agent.backgroundTasks = rawEvent.tasks;
+        this.emitTasks(agent.id, rawEvent.tasks);
+      }
+      return;
+    }
     if (rawEvent.type === "provider_subagent") {
       // 子代理事件写入子代理 store，不进主时间线、不占 seq
       this.applySubagentEvent(agent, rawEvent.event);
@@ -1042,6 +1100,16 @@ export class AgentManager {
     }
   }
 
+  private emitTasks(agentId: string, tasks: AgentBackgroundTask[]): void {
+    for (const listener of this.listeners) {
+      try {
+        listener.onTasks?.(agentId, tasks);
+      } catch (error) {
+        this.logger.error("agent.tasks.update 监听器出错：%s", String(error));
+      }
+    }
+  }
+
   private emitSubagentUpdate(update: ProviderSubagentUpdate): void {
     for (const listener of this.listeners) {
       try {
@@ -1101,6 +1169,7 @@ function newManagedAgent(
     resuming: null,
     closing: null,
     removed: false,
+    backgroundTasks: [],
     models: null,
   };
 }

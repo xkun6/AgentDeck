@@ -184,6 +184,8 @@ export class RpcServer {
       onState: (agent) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentState, { agent }),
       onRemoved: (agentId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentRemoved, { agentId }),
       onSubagent: (update) => this.broadcast(AGENT_RPC_NOTIFICATIONS.agentSubagentsUpdate, update),
+      onTasks: (agentId, tasks) =>
+        this.broadcast(AGENT_RPC_NOTIFICATIONS.agentTasksUpdate, { agentId, tasks }),
     });
   }
 
@@ -347,6 +349,27 @@ export class RpcServer {
         AGENT_RPC_METHODS.agentMcpReconnect,
         z.object({ agentId: z.string().min(1), serverName: z.string().min(1).optional() }),
         (params) => manager.reconnectMcp(params.agentId, params.serverName),
+      ),
+      defineMethod(AGENT_RPC_METHODS.agentTasksList, agentIdParams, (params) => ({
+        tasks: manager.listBackgroundTasks(params.agentId),
+      })),
+      defineMethod(
+        AGENT_RPC_METHODS.agentTasksStop,
+        z.object({ agentId: z.string().min(1), taskId: z.string().min(1) }),
+        async (params) => {
+          await manager.stopBackgroundTask(params.agentId, params.taskId);
+          return {};
+        },
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentTasksOutput,
+        z.object({
+          agentId: z.string().min(1),
+          taskId: z.string().min(1),
+          maxBytes: z.number().int().positive().optional(),
+        }),
+        (params) =>
+          manager.readBackgroundTaskOutput(params.agentId, params.taskId, params.maxBytes),
       ),
       ...this.createProviderConfigMethods(),
     ];

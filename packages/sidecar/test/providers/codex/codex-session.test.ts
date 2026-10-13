@@ -44,7 +44,7 @@ async function newSession(client = makeClient(), modeId?: string): Promise<Agent
 function collect(session: AgentSession): AgentStreamEvent[] {
   const events: AgentStreamEvent[] = [];
   session.subscribe((e) => {
-    if (e.type !== "provider_subagent") events.push(e);
+    if (e.type !== "provider_subagent" && e.type !== "provider_background_tasks") events.push(e);
   });
   return events;
 }

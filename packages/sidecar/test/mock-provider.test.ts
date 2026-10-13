@@ -8,7 +8,7 @@ import { splitIntoChunks } from "../src/providers/mock/mock-agent.js";
 function collect(session: { subscribe(cb: (e: AgentSessionEvent) => void): () => void }) {
   const events: AgentStreamEvent[] = [];
   session.subscribe((e) => {
-    if (e.type !== "provider_subagent") events.push(e);
+    if (e.type !== "provider_subagent" && e.type !== "provider_background_tasks") events.push(e);
   });
   return events;
 }

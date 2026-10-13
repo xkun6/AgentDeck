@@ -195,6 +195,7 @@ describe("Claude 中转：--settings 与 --disallowedTools", () => {
         setPermissionMode: async () => undefined,
         mcpStatus: async () => ({}),
         mcpReconnect: async () => undefined,
+        stopTask: async () => undefined,
         close: async () => finish(),
         async *[Symbol.asyncIterator]() {
           await done;

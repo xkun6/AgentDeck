@@ -33,7 +33,7 @@ export interface ClaudeUserInput {
 /** 我们发给 CLI 的控制请求体 */
 export type ClaudeOutgoingControl =
   /** forwardSubagentText：让 CLI 转发子代理的完整 assistant 消息（与 Agent SDK 相同，design.md 4.11） */
-  | { subtype: "initialize"; forwardSubagentText?: boolean }
+  | { subtype: "initialize"; forwardSubagentText?: boolean; perTaskStopAffordance?: boolean }
   | { subtype: "interrupt" }
   | { subtype: "set_model"; model?: string }
   /** mode 也可能是用户设置里的其它 CLI 模式（切回基础模式时） */
@@ -41,7 +41,9 @@ export type ClaudeOutgoingControl =
   /** MCP 服务器状态（应答见 ClaudeMcpStatusResponse，design.md 4.14） */
   | { subtype: "mcp_status" }
   /** 重连单个 MCP 服务器；失败时控制应答为 error */
-  | { subtype: "mcp_reconnect"; serverName: string };
+  | { subtype: "mcp_reconnect"; serverName: string }
+  /** 停止单个后台任务（design.md 4.15） */
+  | { subtype: "stop_task"; task_id: string };
 
 /** 对 CLI 控制请求的应答（写入 stdin） */
 export interface ClaudeControlResponseOut {
@@ -102,16 +104,26 @@ export interface ClaudeTaskSystemMessage extends ClaudeSystemMessage {
   task_type?: unknown;
   prompt?: unknown;
   skip_transcript?: unknown;
+  /** task_started */
+  is_backgrounded?: unknown;
   /** task_updated */
-  patch?: { status?: unknown; is_backgrounded?: unknown };
+  patch?: {
+    status?: unknown;
+    description?: unknown;
+    end_time?: unknown;
+    error?: unknown;
+    is_backgrounded?: unknown;
+  };
   /** task_notification */
   status?: unknown;
   /** task_notification：如 `Background command "…" completed (exit code 0)` */
   summary?: unknown;
   /** task_notification：任务输出文件 */
   output_file?: unknown;
+  /** task_progress */
+  last_tool_name?: unknown;
   /** task_progress / task_notification */
-  usage?: { total_tokens?: unknown };
+  usage?: { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown };
 }
 
 /**

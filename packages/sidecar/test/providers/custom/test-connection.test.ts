@@ -12,7 +12,7 @@ import {
   redactText,
   testProviderProfile,
 } from "../../../src/providers/custom/index.js";
-import { redactEvent } from "../../../src/providers/custom/redact.js";
+import { redactBackgroundTask, redactEvent } from "../../../src/providers/custom/redact.js";
 
 interface Seen {
   method: string;
@@ -170,6 +170,25 @@ describe("脱敏", () => {
     expect(
       redactEvent({ type: "timeline", item: { type: "error", message: "bad sk-abc" } }, ["sk-abc"]),
     ).toEqual({ type: "timeline", item: { type: "error", message: "bad ***" } });
+  });
+
+  test("redactBackgroundTask：描述 / 摘要 / 错误脱敏", () => {
+    const task = {
+      taskId: "bk1",
+      kind: "command" as const,
+      description: "curl -H sk-abc",
+      status: "failed" as const,
+      startedAt: 1,
+      summary: "sk-abc 失败",
+      error: "401 sk-abc",
+    };
+    expect(redactBackgroundTask(task, ["sk-abc"])).toEqual({
+      ...task,
+      description: "curl -H ***",
+      summary: "*** 失败",
+      error: "401 ***",
+    });
+    expect(redactBackgroundTask(task, [])).toBe(task);
   });
 
   test("createRedactingLogger：格式化参数里的密钥也被替换", () => {

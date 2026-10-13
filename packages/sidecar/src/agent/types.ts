@@ -1,6 +1,8 @@
 // Derived from paseo packages/server/src/server/agent/agent-sdk-types.ts (Apache-2.0); modified for AgentDeck
 // sidecar 内部的 Agent 适配接口（design.md 第 5 节，精简版）。事件与数据类型从 @agentdeck/protocol 导入。
 import type {
+  AgentBackgroundTask,
+  AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
   AgentMode,
   AgentModelDefinition,
@@ -45,8 +47,17 @@ export interface ProviderSubagentStreamEvent {
   event: ProviderSubagentInputEvent;
 }
 
+/** 会话内部流事件：后台任务整表快照（design.md 4.15），不进时间线、不占 seq、不落盘 */
+export interface ProviderBackgroundTasksStreamEvent {
+  type: "provider_background_tasks";
+  tasks: AgentBackgroundTask[];
+}
+
 /** AgentSession.subscribe 回调收到的事件 */
-export type AgentSessionEvent = AgentStreamEvent | ProviderSubagentStreamEvent;
+export type AgentSessionEvent =
+  | AgentStreamEvent
+  | ProviderSubagentStreamEvent
+  | ProviderBackgroundTasksStreamEvent;
 
 export interface AgentSessionConfig {
   cwd: string;
@@ -77,7 +88,7 @@ export interface AgentSession {
     prompt: AgentPromptInput,
     opts?: { clientMessageId?: string },
   ): Promise<{ turnId: string }>;
-  /** 回调可能收到内部事件 `provider_subagent`（只有支持子代理的 provider 会发） */
+  /** 回调可能收到内部事件 `provider_subagent` / `provider_background_tasks`（只有 Claude 会发） */
   subscribe(cb: (e: AgentSessionEvent) => void): () => void;
   getPendingPermissions(): AgentPermissionRequest[];
   respondToPermission(requestId: string, r: AgentPermissionResponse): Promise<void>;
@@ -97,6 +108,12 @@ export interface AgentSession {
   getMcpStatus?(): Promise<AgentMcpStatusResult>;
   /** 重连 MCP：作用域为 server 时重连 serverName，为 all 时忽略 serverName、整体重新加载 */
   reconnectMcp?(serverName?: string): Promise<void>;
+  /** 后台任务（仅 Claude，design.md 4.15）：当前任务表；任务变化通过 `provider_background_tasks` 事件推送 */
+  listBackgroundTasks?(): AgentBackgroundTask[];
+  /** 停止单个后台任务；任务未知抛 TASK_NOT_FOUND */
+  stopBackgroundTask?(taskId: string): Promise<void>;
+  /** 读任务输出文件尾部（只读 CLI 报告过的路径）；任务未知抛 TASK_NOT_FOUND */
+  readBackgroundTaskOutput?(taskId: string, maxBytes: number): Promise<AgentBackgroundTaskOutput>;
 }
 
 export interface AgentAvailability {

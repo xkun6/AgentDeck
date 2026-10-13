@@ -55,7 +55,7 @@ function compact(lines: string[]): string[] {
 async function runTurn(session: AgentSession, prompt: string, timeoutMs = 240_000) {
   const events: AgentStreamEvent[] = [];
   const unsubscribe = session.subscribe((e) => {
-    if (e.type === "provider_subagent") return;
+    if (e.type === "provider_subagent" || e.type === "provider_background_tasks") return;
     events.push(e);
     if (e.type === "permission_requested") {
       void session.respondToPermission(e.request.id, { behavior: "allow" });

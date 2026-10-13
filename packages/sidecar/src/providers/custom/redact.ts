@@ -1,7 +1,7 @@
 // 自定义 provider 的日志 / 错误脱敏（design.md 4.7：日志与错误信息中不得出现 apiKey、env 与 settings.env 的值）。
 import { format } from "node:util";
 
-import type { AgentStreamEvent, ProviderProfile } from "@agentdeck/protocol";
+import type { AgentBackgroundTask, AgentStreamEvent, ProviderProfile } from "@agentdeck/protocol";
 
 import type { ProviderSubagentStreamEvent } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
@@ -80,6 +80,22 @@ export function createRedactingLogger(base: Logger, secrets: readonly string[]):
 }
 
 /** 会话事件中会展示给用户 / 落盘的错误文本脱敏 */
+/** 后台任务的描述 / 摘要 / 错误同样脱敏（design.md 4.7 / 4.15） */
+export function redactBackgroundTask(
+  task: AgentBackgroundTask,
+  secrets: readonly string[],
+): AgentBackgroundTask {
+  if (secrets.length === 0) {
+    return task;
+  }
+  return {
+    ...task,
+    description: redactText(task.description, secrets),
+    ...(task.summary !== undefined ? { summary: redactText(task.summary, secrets) } : {}),
+    ...(task.error !== undefined ? { error: redactText(task.error, secrets) } : {}),
+  };
+}
+
 /** 子代理时间线里的错误条目同样脱敏（design.md 4.7 / 4.11） */
 export function redactSubagentEvent(
   event: ProviderSubagentStreamEvent,

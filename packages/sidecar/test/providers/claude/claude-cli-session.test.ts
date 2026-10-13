@@ -168,6 +168,8 @@ describe("ClaudeCliSession（假 claude 脚本）", () => {
     expect(init.models).toHaveLength(2);
     // initialize 打开子代理文本转发（design.md 4.11）
     expect(init.forwardSubagentText).toBe(true);
+    // 声明逐个停止后台任务（design.md 4.15）
+    expect((init as { perTaskStopAffordance?: unknown }).perTaskStopAffordance).toBe(true);
     expect(init.argv).toEqual(buildClaudeCliArgs({ model: null, permissionMode: "default", resumeSessionId: null }));
 
     const iterator = session[Symbol.asyncIterator]();
@@ -288,6 +290,13 @@ describe("ClaudeCliSession（假 claude 脚本）", () => {
     await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
   });
 
+  test("stop_task 控制请求：带 task_id，未知任务时 reject", async () => {
+    const session = start();
+    await session.initialized;
+    await expect(session.stopTask("bk1")).resolves.toBeUndefined();
+    await expect(session.stopTask("nope")).rejects.toThrow(/stop_task.*No task found with ID: nope/);
+  });
+
   test("mcp_status / mcp_reconnect 控制请求：应答原样返回，重连带 serverName，失败时 reject", async () => {
     const session = start();
     await session.initialized;
@@ -352,7 +361,7 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
     const session = await client.createSession({ cwd });
     const events: AgentStreamEvent[] = [];
     session.subscribe((event) => {
-      if (event.type === "provider_subagent") return;
+      if (event.type === "provider_subagent" || event.type === "provider_background_tasks") return;
       events.push(event);
       if (event.type === "permission_requested") {
         void session.respondToPermission(event.request.id, {
@@ -400,7 +409,7 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
     const subagentEvents: ProviderSubagentInputEvent[] = [];
     session.subscribe((event) => {
       if (event.type === "provider_subagent") subagentEvents.push(event.event);
-      else events.push(event);
+      else if (event.type !== "provider_background_tasks") events.push(event);
     });
     try {
       await session.startTurn("subagent");
@@ -475,7 +484,7 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
     const subagentEvents: ProviderSubagentInputEvent[] = [];
     session.subscribe((event) => {
       if (event.type === "provider_subagent") subagentEvents.push(event.event);
-      else events.push(event);
+      else if (event.type !== "provider_background_tasks") events.push(event);
     });
     try {
       const { turnId } = await session.startTurn("background");
@@ -525,7 +534,7 @@ describe("ClaudeAgentClient + 假 claude 脚本（端到端）", () => {
     const session = await createClient().createSession({ cwd });
     const events: AgentStreamEvent[] = [];
     session.subscribe((event) => {
-      if (event.type !== "provider_subagent") events.push(event);
+      if (event.type !== "provider_subagent" && event.type !== "provider_background_tasks") events.push(event);
     });
     try {
       const { turnId } = await session.startTurn("background-race");

@@ -3,6 +3,8 @@
 import path from "node:path";
 
 import type {
+  AgentBackgroundTask,
+  AgentBackgroundTaskOutput,
   AgentMcpStatusResult,
   AgentMode,
   AgentModelDefinition,
@@ -40,6 +42,7 @@ import {
   collectSecrets,
   createRedactingLogger,
   redactError,
+  redactBackgroundTask,
   redactEvent,
   redactSubagentEvent,
   redactText,
@@ -302,6 +305,9 @@ class RedactingSession implements AgentSession {
   listCommands?: () => Promise<AgentSlashCommand[]>;
   getMcpStatus?: () => Promise<AgentMcpStatusResult>;
   reconnectMcp?: (serverName?: string) => Promise<void>;
+  listBackgroundTasks?: () => AgentBackgroundTask[];
+  stopBackgroundTask?: (taskId: string) => Promise<void>;
+  readBackgroundTaskOutput?: (taskId: string, maxBytes: number) => Promise<AgentBackgroundTaskOutput>;
 
   constructor(
     private readonly inner: AgentSession,
@@ -335,6 +341,21 @@ class RedactingSession implements AgentSession {
     if (inner.reconnectMcp) {
       this.reconnectMcp = (serverName) => this.guard(() => inner.reconnectMcp!(serverName));
     }
+    // 后台任务的命令描述 / 输出可能带中转密钥：与 timeline 同样脱敏
+    if (inner.listBackgroundTasks) {
+      this.listBackgroundTasks = () =>
+        inner.listBackgroundTasks!().map((task) => redactBackgroundTask(task, secrets));
+    }
+    if (inner.stopBackgroundTask) {
+      this.stopBackgroundTask = (taskId) => this.guard(() => inner.stopBackgroundTask!(taskId));
+    }
+    if (inner.readBackgroundTaskOutput) {
+      this.readBackgroundTaskOutput = (taskId, maxBytes) =>
+        this.guard(async () => {
+          const output = await inner.readBackgroundTaskOutput!(taskId, maxBytes);
+          return { ...output, text: redactText(output.text, secrets) };
+        });
+    }
   }
 
   get provider(): string {
@@ -350,13 +371,17 @@ class RedactingSession implements AgentSession {
   }
 
   subscribe(cb: (e: AgentSessionEvent) => void): () => void {
-    return this.inner.subscribe((event) =>
+    return this.inner.subscribe((event) => {
+      if (event.type === "provider_background_tasks") {
+        cb({ ...event, tasks: event.tasks.map((task) => redactBackgroundTask(task, this.secrets)) });
+        return;
+      }
       cb(
         event.type === "provider_subagent"
           ? redactSubagentEvent(event, this.secrets)
           : redactEvent(event, this.secrets),
-      ),
-    );
+      );
+    });
   }
 
   getPendingPermissions(): AgentPermissionRequest[] {

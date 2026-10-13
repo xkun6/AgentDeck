@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentModelDefinition, AgentStreamEvent, ToolCallTimelineItem } from "@agentdeck/protocol";
+import type {
+  AgentBackgroundTask,
+  AgentModelDefinition,
+  AgentStreamEvent,
+  ToolCallTimelineItem,
+} from "@agentdeck/protocol";
 import { describe, expect, test, vi } from "vitest";
 
 import type { AgentSession } from "../../../src/agent/types.js";
@@ -35,6 +40,7 @@ class FakeCli implements ClaudeCliHandle {
     setPermissionMode: [] as ClaudePermissionMode[],
     mcpStatus: 0,
     mcpReconnect: [] as string[],
+    stopTask: [] as string[],
     close: 0,
   };
   mcpStatusResponse: ClaudeMcpStatusResponse = {};
@@ -125,6 +131,10 @@ class FakeCli implements ClaudeCliHandle {
     this.calls.mcpReconnect.push(serverName);
   }
 
+  async stopTask(taskId: string): Promise<void> {
+    this.calls.stopTask.push(taskId);
+  }
+
   async close(): Promise<void> {
     this.calls.close += 1;
     this.end();
@@ -193,7 +203,7 @@ function canUseTool(
 function collect(session: AgentSession): AgentStreamEvent[] {
   const events: AgentStreamEvent[] = [];
   session.subscribe((event) => {
-    if (event.type !== "provider_subagent") events.push(event);
+    if (event.type !== "provider_subagent" && event.type !== "provider_background_tasks") events.push(event);
   });
   return events;
 }
@@ -1728,5 +1738,154 @@ describe("斜杠命令与 MCP（design.md 4.14）", () => {
     expect(h.clis[0]!.calls.mcpReconnect).toEqual(["fs"]);
     await expect(session.reconnectMcp!()).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
     expect(h.clis[0]!.calls.mcpReconnect).toEqual(["fs"]);
+  });
+});
+
+describe("后台任务（design.md 4.15）", () => {
+  const taskStarted = (extra: Record<string, unknown> = {}) => ({
+    type: "system",
+    subtype: "task_started",
+    session_id: SESSION_ID,
+    task_id: "bk1",
+    tool_use_id: "toolu_b",
+    description: "pnpm build",
+    task_type: "local_bash",
+    ...extra,
+  });
+
+  function collectTasks(session: AgentSession): AgentBackgroundTask[][] {
+    const snapshots: AgentBackgroundTask[][] = [];
+    session.subscribe((event) => {
+      if (event.type === "provider_background_tasks") snapshots.push(event.tasks);
+    });
+    return snapshots;
+  }
+
+  /** 先启动 claude 进程（getMcpStatus 不发用户消息），返回假进程 */
+  async function launch(h: Harness, session: AgentSession): Promise<FakeCli> {
+    await session.getMcpStatus!();
+    return h.clis.at(-1)!;
+  }
+
+  test("登记 local_bash，从工具结果取到输出路径；状态由 task_updated / task_notification 更新", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const snapshots = collectTasks(session);
+    const cli = await launch(h, session);
+
+    cli.emit(taskStarted());
+    cli.emit(
+      msg.toolResult(
+        "toolu_b",
+        "Command running in background with ID: bk1. Output is being written to: C:\t\bk1.output",
+      ),
+    );
+    await waitUntil(() => snapshots.at(-1)?.[0]?.hasOutput === true);
+    expect(snapshots.at(-1)).toMatchObject([{ taskId: "bk1", kind: "command", status: "running", hasOutput: true }]);
+
+    cli.emit({
+      type: "system",
+      subtype: "task_notification",
+      session_id: SESSION_ID,
+      task_id: "bk1",
+      tool_use_id: "toolu_b",
+      status: "completed",
+      summary: "done",
+      output_file: "C:\t\bk1.output",
+    });
+    await waitUntil(() => snapshots.at(-1)?.[0]?.status === "completed");
+    expect(session.listBackgroundTasks!()).toMatchObject([{ taskId: "bk1", status: "completed", summary: "done" }]);
+  });
+
+  test("前台子代理不登记；task_updated 转入后台后登记", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const snapshots = collectTasks(session);
+    const cli = await launch(h, session);
+    cli.emit(
+      taskStarted({ task_id: "a1", tool_use_id: "toolu_a", task_type: "local_agent", subagent_type: "Explore", is_backgrounded: false }),
+    );
+    cli.emit({ type: "system", subtype: "task_progress", session_id: SESSION_ID, task_id: "a1", usage: { total_tokens: 3 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(snapshots).toHaveLength(0);
+    expect(session.listBackgroundTasks!()).toEqual([]);
+
+    cli.emit({ type: "system", subtype: "task_updated", session_id: SESSION_ID, task_id: "a1", patch: { is_backgrounded: true } });
+    await waitUntil(() => snapshots.length > 0);
+    expect(snapshots.at(-1)).toMatchObject([{ taskId: "a1", kind: "agent", status: "running" }]);
+  });
+
+  test("stopBackgroundTask：发 stop_task；未知任务 TASK_NOT_FOUND；已结束任务不再发", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const snapshots = collectTasks(session);
+    const cli = await launch(h, session);
+    cli.emit(taskStarted());
+    await waitUntil(() => snapshots.length > 0);
+
+    await session.stopBackgroundTask!("bk1");
+    expect(cli.calls.stopTask).toEqual(["bk1"]);
+    await expect(session.stopBackgroundTask!("nope")).rejects.toMatchObject({ code: "TASK_NOT_FOUND" });
+
+    cli.emit({ type: "system", subtype: "task_updated", session_id: SESSION_ID, task_id: "bk1", patch: { status: "killed" } });
+    await waitUntil(() => snapshots.at(-1)?.[0]?.status === "stopped");
+    await session.stopBackgroundTask!("bk1");
+    expect(cli.calls.stopTask).toEqual(["bk1"]);
+  });
+
+  test("readBackgroundTaskOutput：只读 CLI 报告的路径，读尾部并标记截断；无路径 / 文件不存在返回空", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "agentdeck-task-out-"));
+    try {
+      const file = path.join(dir, "bk1.output");
+      writeFileSync(file, "aaaa1\nbbbb2\ncccc3\n");
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const snapshots = collectTasks(session);
+      const cli = await launch(h, session);
+      cli.emit(taskStarted(), taskStarted({ task_id: "bk2", tool_use_id: "toolu_c" }));
+      await waitUntil(() => (snapshots.at(-1)?.length ?? 0) === 2);
+      await expect(session.readBackgroundTaskOutput!("bk1", 1024)).resolves.toEqual({
+        text: "",
+        truncated: false,
+        size: 0,
+      });
+
+      cli.emit(msg.toolResult("toolu_b", `Command running in background with ID: bk1. Output is being written to: ${file}`));
+      await waitUntil(() => snapshots.at(-1)?.[0]?.hasOutput === true);
+      await expect(session.readBackgroundTaskOutput!("bk1", 1024)).resolves.toEqual({
+        text: "aaaa1\nbbbb2\ncccc3\n",
+        truncated: false,
+        size: 18,
+      });
+      await expect(session.readBackgroundTaskOutput!("bk1", 9)).resolves.toEqual({
+        text: "cccc3\n",
+        truncated: true,
+        size: 18,
+      });
+      await expect(session.readBackgroundTaskOutput!("nope", 9)).rejects.toMatchObject({ code: "TASK_NOT_FOUND" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claude 进程退出：仍在运行的任务标为已停止（会话已结束）并推送；关闭会话同理", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const snapshots = collectTasks(session);
+    const cli = await launch(h, session);
+    cli.emit(taskStarted());
+    await waitUntil(() => snapshots.length > 0);
+    cli.end();
+    await waitUntil(() => snapshots.at(-1)?.[0]?.status === "stopped");
+    expect(snapshots.at(-1)).toMatchObject([{ taskId: "bk1", status: "stopped", error: "会话已结束" }]);
+
+    // 进程重启后旧任务保留，新任务照常登记；close 再把仍在运行的标为已停止
+    const second = await h.client.createSession({ cwd: "." });
+    const secondSnapshots = collectTasks(second);
+    const secondCli = await launch(h, second);
+    secondCli.emit(taskStarted({ task_id: "bk9" }));
+    await waitUntil(() => secondSnapshots.length > 0);
+    await second.close();
+    expect(secondSnapshots.at(-1)).toMatchObject([{ taskId: "bk9", status: "stopped", error: "会话已结束" }]);
   });
 });
