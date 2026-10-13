@@ -123,6 +123,9 @@ sidecar 入口：
 | `usage.summary` | `{ sinceMs?, untilMs? }` | `UsageSummary`（跨会话用量统计，见 4.20） |
 | `agent.steer` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{}`（运行中插话，见 4.22） |
 | `agent.fork` | `{ agentId, throughSeq?, title? }` | `{ agent: AgentSnapshot }`（会话分叉，见 4.23） |
+| `settings.get` / `settings.set` | `{}` / `{ patch }` | `SidecarSettings`（sidecar 设置，见 4.24） |
+| `snapshot.list` / `snapshot.diff` / `snapshot.restore` / `snapshot.storage` / `snapshot.prune` | 见 4.24 | 按回合 git 快照（影子仓库） |
+| `schedule.list` / `schedule.upsert` / `schedule.delete` / `schedule.runNow` / `schedule.runs` / `schedule.setPaused` | 见 4.25 | 定时任务、心跳、目标循环 |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -766,6 +769,72 @@ interface UsageSummary {
 - Claude 进程懒启动：native 分叉后新会话暂时没有自己的原生 id（`persistence` 为 null），首次拉起进程带 `--resume <原 id> --fork-session [--resume-session-at <uuid>]`，拿到新 `session_id`（`thread_started`）后后续重启一律 `--resume <新 id>`。拿到新 id 之前若 sidecar 重启，meta 里的 `pendingFork { handle, nativeRef? }`（同 `pendingForkContext`，不进快照）让该会话仍可恢复：恢复时再次调用 `forkSession`。Codex 在 fork 时立即 `thread/fork`，失败即 `PROVIDER_UNAVAILABLE`（此时新会话尚未登记，无需回滚）；Claude 的原生失败体现在首次 send 的 `turn_failed`。
 - summary 注入：transcript 只含用户 / 助手文本与工具一行摘要（已撤回的用户消息、思考、待办、压缩、错误、系统提示不计入）；时间线里的用户消息仍是用户自己输入的文本，注入文本只发给 provider。`startTurn` 成功后才清除 `pendingForkContext` 并落盘。
 - 前端：分叉 notice 之外，消息 `metadata.seq` 记下对应时间线 seq（用户消息 = 自己的 seq，助手消息 = 首个输出事件的 seq），「从这里分叉」传它；进行中的回合（最后一条用户消息起）不显示该操作；会话右键菜单「分叉会话」在会话运行中禁用。
+
+### 4.24 sidecar 设置与按回合自动 git 快照（影子仓库）
+
+**sidecar 设置**：`<AGENTDECK_DATA_DIR>/sidecar-settings.json`（原子写入），RPC `settings.get {}` → `SidecarSettings`、`settings.set { patch: Partial<SidecarSettings> }` → `SidecarSettings`，变化后广播 `settings.changed { settings }`。
+```ts
+interface SidecarSettings {
+  snapshots: { enabled: boolean /* 默认 true */; maxFiles: number /* 默认 20000 */; maxFileBytes: number /* 默认 5 MB */ };
+  interop: { enabled: boolean /* 默认 true，见 4.26 */ };
+}
+```
+
+**影子仓库**：
+- 位置 `<AGENTDECK_DATA_DIR>/snapshots/<sha1(规范化 cwd) 前 16 位>/repo`（bare 形式的 GIT_DIR），同目录 `meta.json` 记录 `{ cwd }`。所有命令形如 `git --git-dir=<repo> --work-tree=<cwd> …`，并设置 `GIT_CONFIG_NOSYSTEM=1`、`core.autocrlf=false`、`core.quotepath=false`、`user.name/email=AgentDeck`；spawn 一律 `windowsHide: true`、`shell:false`。git 不可用时快照功能静默关闭（日志记一次 warn）。
+- 排除：`<repo>/info/exclude` 写入默认规则（`.git/`、`node_modules/`、`target/`、`dist/`、`build/`、`.venv/`、`__pycache__/`、`*.log` 等），工作目录自身的 `.gitignore` 照常生效；超过 `maxFileBytes` 的文件不纳入（`git add` 前用 `git ls-files -o -m --exclude-standard` 列出候选并过滤，经 `--pathspec-from-file` 添加）。候选文件数超过 `maxFiles` 时本回合跳过快照，并在该回合记录 `skipped: "too_many_files"`。
+- 同一 cwd 的 git 操作在 sidecar 内串行（按 repo 加锁）。
+
+**时机**：每个回合（含 origin background）`turn_started` 时拍「回合前」快照，回合结束（completed / failed / canceled）时拍「回合后」快照；两次树相同则不新建提交（复用上一次）。快照提交挂在 `refs/agentdeck/<agentId>` 上，提交信息含 agentId / turnId。
+
+**索引**：`<agentDir>/snapshots.json`：`Array<{ turnId: string; seq: number /* 本回合 turn_started 的 seq */; startedAt: number; before: string | null; after: string | null; changedFiles: Array<{ path: string; status: "A" | "M" | "D" | "R" }>; skipped?: "too_many_files" | "git_unavailable" | "disabled" }>`。
+
+**RPC**：
+- `snapshot.list { agentId }` → `{ turns: SnapshotTurn[] }`（即上面的索引，按回合顺序）。
+- `snapshot.diff { agentId, turnId, path?: string, against?: "after" | "current" }` → `{ diff: string, truncated: boolean }`：`before` 与 `after`（默认）或当前工作区的 unified diff，上限 512 KB。
+- `snapshot.restore { agentId, turnId, paths?: string[] }` → `{ restored: string[], deleted: string[], backupCommit: string }`：把文件恢复到该回合**开始前**的状态。步骤：先对当前工作区拍一个「恢复前」快照（提交挂 `refs/agentdeck/restore`，供再次恢复）；再对 `before` 与当前之间的差异逐个处理——当前存在而 `before` 中没有的文件删除，其余从 `before` 检出；`paths` 给出时只处理这些路径。同一 cwd 上任一会话有进行中的回合 → `TURN_IN_PROGRESS`。
+- `snapshot.storage {}` → `{ repos: Array<{ cwd: string; bytes: number }> }`；`snapshot.prune { cwd }` → `{}`：删除该 cwd 的影子仓库与各会话索引里对应的快照引用（索引项标记 `pruned: true`）。
+
+**前端**：
+- 每个已结束、有文件变化的回合末尾显示「本回合修改了 N 个文件」小条，点击在右侧预览栏打开快照面板：文件列表（状态标记）+ diff（复用现有 diff 渲染）+「回滚到本回合之前」（确认弹窗列出将恢复 / 删除的文件）。
+- 会话右键菜单「快照历史」打开同一面板（按回合列出）。
+- 设置页（「高级」）新增「文件快照」：开关、上限设置、各工作目录占用空间与「清理」。
+
+### 4.25 调度器：定时任务、心跳、目标循环
+
+**存储**：`<AGENTDECK_DATA_DIR>/schedules.json`（原子写入，内容 `{ version: 1, paused: boolean, schedules: Schedule[] }`）；运行记录追加到 `<AGENTDECK_DATA_DIR>/schedule-runs.jsonl`。
+
+```ts
+type ScheduleTarget =
+  | { type: "agent"; agentId: string }
+  | { type: "new"; provider: AgentProviderId; cwd: string; model?: string | null; modeId?: string | null; thinkingOptionId?: string | null; title?: string };
+
+type Schedule = {
+  id: string; name: string; enabled: boolean; createdAt: number; updatedAt: number;
+} & (
+  | { kind: "cron"; trigger: { cron: string } | { everyMinutes: number } | { at: number }; target: ScheduleTarget; prompt: string; onBusy: "skip" | "wait" }
+  | { kind: "heartbeat"; agentId: string; idleMinutes: number; prompt: string; maxRuns?: number; runs: number }
+  | { kind: "goal"; agentId: string; goal: string; doneMarker: string /* 默认 "GOAL_DONE" */; maxIterations: number; iterations: number;
+      judge?: { provider: AgentProviderId; model?: string | null }; stopOnFailure: boolean; state: "running" | "done" | "stopped" | "exhausted" | "failed" }
+);
+interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId?: string; outcome: "sent" | "skipped_busy" | "skipped_paused" | "missed" | "failed" | "done"; message?: string }
+```
+
+**语义**：
+- cron：5 段表达式（分 时 日 月 周，本地时区），用 `croner` 解析；`everyMinutes` ≥ 1；`at` 为一次性，触发后自动 `enabled: false`。应用未运行期间错过的触发不补跑（一次性任务过期记一条 `missed`）。到点向目标发送 prompt：`agent` 目标走与 `agent.send` 相同的路径（dormant / closed 可恢复则自动恢复）；`new` 目标每次新建一个会话（快照 `origin: "schedule"`）。目标忙时 `skip` 记 `skipped_busy`，`wait` 等到空闲再发（最多等 30 分钟，超时记 `skipped_busy`）。
+- heartbeat：目标会话最近一次回合结束后空闲满 `idleMinutes` 时发送 prompt，每次空闲期只触发一次；达到 `maxRuns` 后自动停用。
+- goal（目标循环）：启用时立即向会话发送首条提示「目标：<goal>\n请持续推进直到完成。完成时在回复最后单独一行输出 <doneMarker>。」；之后每次该会话的回合结束：
+  - 回合最后一条助手消息末行等于 doneMarker → `state: "done"`；配置了 `judge` 时，改为新建一个隐藏的评判会话（快照 `origin: "judge"`，不在侧栏显示），发送目标与最后回复，要求只回答 `DONE` 或 `CONTINUE: <理由>`，DONE 即完成；
+  - 否则 `iterations + 1`，未达 `maxIterations` 就发送「继续推进目标：<goal>。完成时在最后单独一行输出 <doneMarker>。」，达到则 `state: "exhausted"`；
+  - `turn_failed` 且 `stopOnFailure` → `state: "failed"`；用户在该会话手动发送消息或中断时，循环暂停为 `stopped`（用户可在界面继续）。
+- 全局暂停：`schedules.json` 的 `paused` 为 true 时所有触发记 `skipped_paused`，不发送。
+- 结束（done / exhausted / failed）与定时任务失败时发系统通知（沿用现有通知设置）。
+
+**RPC**：`schedule.list {}` → `{ schedules, paused }`；`schedule.upsert { schedule }`（无 id 为新建，zod 校验，cron 非法为 `-32602`）→ `{ schedule }`；`schedule.delete { id }`；`schedule.runNow { id }`；`schedule.runs { id?, limit? }` → `{ runs }`（默认 100，按时间倒序）；`schedule.setPaused { paused }` → `{ paused }`；通知 `schedule.changed { schedules, paused }`。
+
+**前端**：
+- 新增「自动化」页（侧栏入口 + 命令面板）：按类型分组的任务列表（名称、目标、下次触发时间 / 状态、启用开关、立即运行、编辑、删除）、运行记录、顶部「全部暂停」开关。新建 / 编辑弹窗按类型切换表单（cron 表达式带常用预设与下次 5 次触发预览）。
+- 会话详情：该会话有心跳或目标循环时，在输入框上方显示状态条（如「目标循环 3/10 · 停止」/「心跳：空闲 30 分钟后发送」），可停止 / 继续。会话右键菜单「设置目标循环…」「设置心跳…」。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
