@@ -24,6 +24,13 @@ export interface ProviderInfo {
   custom?: boolean;
   extends?: ProviderProfileExtends;
   description?: string;
+  /** provider 能力（design.md 4.22 / 4.23）：steer = 支持运行中插话；fork 由 4.23 填写 */
+  capabilities?: ProviderCapabilities;
+}
+
+export interface ProviderCapabilities {
+  steer?: boolean;
+  fork?: "native" | "summary";
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +251,14 @@ export interface ToolCallTimelineItem {
 }
 
 export type AgentTimelineItem =
-  | { type: "user_message"; text: string; messageId?: string; clientMessageId?: string }
+  | {
+      type: "user_message";
+      text: string;
+      messageId?: string;
+      clientMessageId?: string;
+      /** 运行中插话（design.md 4.22）：归属当前回合，不开新回合 */
+      steer?: true;
+    }
   | { type: "assistant_message"; text: string; messageId?: string; source?: "command" } // 增量 chunk，前端按 messageId/顺序拼接
   | { type: "reasoning"; text: string } // 增量 chunk
   | ToolCallTimelineItem // 同 callId 多次推送，后者覆盖前者
@@ -455,6 +469,7 @@ export const AGENT_RPC_METHODS = {
   agentSend: "agent.send",
   agentCancel: "agent.cancel",
   agentRetract: "agent.retract",
+  agentSteer: "agent.steer",
   agentPermissionRespond: "agent.permission.respond",
   agentSetModel: "agent.setModel",
   agentSetMode: "agent.setMode",
@@ -518,6 +533,11 @@ export interface AgentRpcMethods {
   "agent.retract": {
     params: { agentId: string };
     result: { prompt: AgentPromptInput; clientMessageId?: string };
+  };
+  /** 运行中插话（design.md 4.22）：投递给进行中的回合；无回合 / provider 不支持 → NOT_SUPPORTED */
+  "agent.steer": {
+    params: { agentId: string; prompt: AgentPromptInput; clientMessageId?: string };
+    result: Record<string, never>;
   };
   /** 只改元数据（design.md 4.17）：title 为 null / 空串 = 清除自定义标题；不改 updatedAt、不恢复会话 */
   "agent.update": {

@@ -487,6 +487,57 @@ export class AgentManager {
   }
 
   /**
+   * design.md 4.22：运行中插话。校验当前有进行中的（非自发）回合且 provider 支持后，把 user_message
+   * （steer: true，归属当前 turnId）占位进事件链，provider.steer 成功后才写入；失败不落盘。
+   */
+  async steer(agentId: string, prompt: AgentPromptInput, clientMessageId?: string): Promise<void> {
+    const agent = this.requireAgent(agentId);
+    // 先等已到达的事件处理完，activeTurnId 才准确
+    await agent.tail;
+    const turnId = agent.snapshot.activeTurnId;
+    const session = agent.closed ? null : agent.session;
+    if (!session || !turnId || agent.finishedTurnIds.has(turnId)) {
+      throw new AgentRpcError("NOT_SUPPORTED", "当前没有进行中的回合");
+    }
+    if (!session.steer) {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持运行中插话");
+    }
+    if (agent.backgroundTurnId === turnId) {
+      throw new AgentRpcError("NOT_SUPPORTED", "CLI 自发轮次进行中不支持插话，请直接发送消息");
+    }
+    let settleUserMessage!: (sent: boolean) => void;
+    const userMessageSent = new Promise<boolean>((resolve) => {
+      settleUserMessage = resolve;
+    });
+    const userMessage: AgentStreamEvent = {
+      type: "timeline",
+      turnId,
+      item: {
+        type: "user_message",
+        text: promptToText(prompt),
+        ...(clientMessageId !== undefined ? { clientMessageId } : {}),
+        steer: true,
+      },
+    };
+    this.runInChain(agent, async () => {
+      if (await userMessageSent) {
+        this.processEvent(agent, userMessage);
+      }
+    });
+    try {
+      await session.steer(
+        prompt,
+        clientMessageId !== undefined ? { clientMessageId } : undefined,
+      );
+    } catch (error) {
+      settleUserMessage(false);
+      throw error;
+    }
+    settleUserMessage(true);
+    await agent.tail;
+  }
+
+  /**
    * design.md 4.16：Agent 首次响应前撤回本轮用户消息。校验与写入 user_message_retracted
    * 在同一事件链任务内完成（与输出事件串行，避免竞态），随后走与 cancel 相同的中断路径。
    */

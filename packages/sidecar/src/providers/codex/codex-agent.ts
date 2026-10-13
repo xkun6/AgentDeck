@@ -577,6 +577,8 @@ export class CodexAgentClient implements AgentClient {
   readonly provider: string;
   readonly kind = "codex" as const;
   readonly label: string;
+  /** 支持 turn/steer（design.md 4.22） */
+  readonly capabilities = { steer: true } as const;
 
   private readonly sessions = new Set<CodexAgentSession>();
   /** 已应用 launch 覆盖的环境（解析可执行文件与拉起 app-server 共用） */
@@ -1036,6 +1038,32 @@ export class CodexAgentSession implements AgentSession {
       this.deps.logger.warn("[codex] 未拿到原生 turnId，直接在本地结束回合");
     }
     this.finishTurn(turn, { type: "turn_canceled", turnId: turn.turnId, reason: "interrupted" });
+  }
+
+  /** 运行中插话（design.md 4.22）：turn/steer，错误（含 review / compact 回合不可插话）原样转成中文消息 */
+  async steer(prompt: AgentPromptInput, opts?: { clientMessageId?: string }): Promise<void> {
+    const turn = this.active;
+    if (!turn || turn.finished) {
+      throw new Error("当前没有进行中的回合");
+    }
+    const nativeTurnId = turn.nativeTurnId ?? (await this.waitForNativeTurnId(turn));
+    const client = this.client;
+    if (!nativeTurnId || !client || client.isClosed || !this.threadId || turn.finished) {
+      throw new Error("Codex 回合尚未就绪，无法插话");
+    }
+    const params: JsonRecord = {
+      threadId: this.threadId,
+      input: this.buildUserInput(prompt),
+      expectedTurnId: nativeTurnId,
+    };
+    if (opts?.clientMessageId) {
+      params.clientUserMessageId = opts.clientMessageId;
+    }
+    try {
+      await client.request("turn/steer", params, TURN_START_TIMEOUT_MS);
+    } catch (error) {
+      throw new Error(`Codex 插话失败：${errorMessage(error)}`);
+    }
   }
 
   async setModel(modelId: string | null): Promise<void> {

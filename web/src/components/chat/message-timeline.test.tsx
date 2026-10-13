@@ -419,3 +419,60 @@ describe("MessageTimeline 撤回操作（design.md 4.16）", () => {
     expect(html).toMatch(/<button[^>]*disabled[^>]*>.*撤回/);
   });
 });
+
+describe("MessageTimeline 插话与重试（design.md 4.21 / 4.22）", () => {
+  const user: ChatMessage = { id: "u1", role: "user", createdAt: 1, text: "做事", status: "complete" };
+  const notice: ChatMessage = {
+    id: "n1",
+    role: "system",
+    createdAt: 2,
+    text: "已中断本轮",
+    status: "complete",
+    retryUserMessageId: "u1",
+  };
+
+  it("steer 块渲染为带「插话」标注的内联气泡", () => {
+    const html = renderTimeline(
+      <MessageTimeline
+        messages={[
+          user,
+          {
+            id: "a1",
+            role: "assistant",
+            createdAt: 2,
+            status: "complete",
+            blocks: [
+              { type: "text", text: "开始" },
+              { type: "steer", text: "顺便做 B" },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain("steer-bubble");
+    expect(html).toContain("插话");
+    expect(html).toContain("顺便做 B");
+  });
+
+  it("retryNoticeId 命中的提示显示「重试」，最后一条用户消息显示「再次发送」并带提示", () => {
+    const html = renderTimeline(
+      <MessageTimeline
+        messages={[user, notice]}
+        retryNoticeId="n1"
+        onRetry={() => undefined}
+        resendMessageId="u1"
+        resendHint="图片未保存，仅重发文字"
+        onResend={() => undefined}
+      />,
+    );
+    expect(html).toContain("重试");
+    expect(html).toContain("再次发送");
+    expect(html).toContain("图片未保存，仅重发文字");
+  });
+
+  it("没有传 retryNoticeId / resendMessageId 时不出现这两个按钮", () => {
+    const html = renderTimeline(<MessageTimeline messages={[user, notice]} />);
+    expect(html).not.toContain("重试");
+    expect(html).not.toContain("再次发送");
+  });
+});

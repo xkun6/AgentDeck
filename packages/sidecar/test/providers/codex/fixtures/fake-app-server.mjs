@@ -304,6 +304,13 @@ async function handleRequest(msg) {
     case "config/mcpServer/reload":
       respond(id, {});
       return;
+    case "turn/steer":
+      if (!activeTurn || activeTurn.id !== params?.expectedTurnId) {
+        respondError(id, -32600, "expected turn id mismatch");
+        return;
+      }
+      respond(id, { turnId: activeTurn.id });
+      return;
     case "turn/interrupt":
       if (!activeTurn || activeTurn.id !== params?.turnId) {
         respondError(id, -32600, "no active turn to interrupt");

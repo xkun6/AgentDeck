@@ -105,6 +105,7 @@ fn failed(token: String, error: String) -> SidecarStatusPayload {
         version: None,
         status: SidecarStatus::Failed,
         error: Some(error),
+        pid: None,
     }
 }
 
@@ -209,6 +210,7 @@ async fn launch(app: &AppHandle) -> SidecarStatusPayload {
             version: None,
             status: SidecarStatus::Starting,
             error: None,
+            pid: None,
         },
     );
 
@@ -228,6 +230,7 @@ async fn launch(app: &AppHandle) -> SidecarStatusPayload {
                 version: Some(handle.version.clone()),
                 status: SidecarStatus::Ready,
                 error: None,
+                pid: Some(handle.child_pid()),
             };
             let previous = match app.state::<AppState>().inner.lock() {
                 Ok(mut inner) => inner.sidecar.replace(handle),

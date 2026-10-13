@@ -2109,3 +2109,45 @@ describe("后台任务（design.md 4.15）", () => {
     expect(secondSnapshots.at(-1)).toMatchObject([{ taskId: "bk9", status: "stopped", error: "会话已结束" }]);
   });
 });
+
+describe("ClaudeAgentSession 运行中插话（design.md 4.22）", () => {
+  test("capabilities.steer 为真；没有进行中的回合时 steer 报错", async () => {
+    const h = createHarness();
+    expect(h.client.capabilities).toEqual({ steer: true });
+    const session = await h.client.createSession({ cwd: "." });
+    await expect(session.steer!("插话")).rejects.toThrow("当前没有可插话的用户回合");
+  });
+
+  test("steer 写入带新 uuid 的 user 消息；回合仍以原 uuid 的 result 结束，过期的插话 result 不影响下一轮", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("第一条");
+    const cli = h.clis[0]!;
+    const first = cli.received[0]!;
+    cli.emit(msg.init(), msg.assistant("m1", [{ type: "text", text: "处理中" }]));
+
+    await session.steer!("请补充一句");
+    expect(cli.received).toHaveLength(2);
+    const steered = cli.received[1]!;
+    expect(steered.uuid).not.toBe(first.uuid);
+    expect(steered.message.content).toEqual([{ type: "text", text: "请补充一句" }]);
+    // 插话不开新回合
+    expect(events.filter((e) => e.type === "turn_started")).toHaveLength(1);
+    expect(terminalEvents(events)).toHaveLength(0);
+
+    // 被吸收：只有原 uuid 的 result，回合正常结束
+    cli.emit(msg.result(first.uuid));
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(terminalEvents(events)[0]).toMatchObject({ type: "turn_completed" });
+
+    // 下一轮里到达的插话消息 uuid 的 result（未被吸收的兜底场景）不能提前结束新回合
+    await session.startTurn("第二条");
+    const second = cli.received[2]!;
+    cli.emit(msg.result(steered.uuid));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(terminalEvents(events)).toHaveLength(1);
+    cli.emit(msg.result(second.uuid));
+    await waitUntil(() => terminalEvents(events).length === 2);
+  });
+});

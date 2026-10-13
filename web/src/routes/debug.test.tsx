@@ -43,7 +43,7 @@ describe("DebugSection", () => {
   it("渲染各分区，显示 sidecar 日志与端口但不显示 token", async () => {
     window.agentdeckDesktop = {
       windowType: "tauri",
-      sidecarStatus: async () => ({ wsUrl: "ws://127.0.0.1:8123/ws", token: "SECRET-TOKEN", version: "1.2.3", status: "ready", error: null }),
+      sidecarStatus: async () => ({ wsUrl: "ws://127.0.0.1:8123/ws", token: "SECRET-TOKEN", version: "1.2.3", status: "ready", error: null, pid: 4242 }),
       debugPaths: async () => ({ dataDir: "D:/data", logDir: "D:/data/logs" }),
       logTail: async () => ({ path: "D:/data/logs/sidecar.log", text: "t [info] hello\nt [error] bad thing", truncated: false, size: 30 }),
       openWorkspacePath: vi.fn(async () => ({ ok: true, status: 200, body: "" })),
@@ -61,6 +61,7 @@ describe("DebugSection", () => {
     expect(screen.getByText(/前端坏了/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText("D:/data/logs", { selector: "span" })).toBeTruthy());
     await waitFor(() => expect(screen.getByText("8123")).toBeTruthy());
+    expect(screen.getByText("4242")).toBeTruthy();
     expect(document.body.textContent).not.toContain("SECRET-TOKEN");
 
     await waitFor(() => expect(screen.getByLabelText("sidecar 日志").textContent).toContain("hello"));

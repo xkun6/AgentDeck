@@ -16,7 +16,9 @@ import {
 import {
   chatRuntimeBySessionAtom,
   createEmptyChatRuntime,
+  resendableUserMessage,
   retractableUserMessageId,
+  retryableTurn,
   type PendingApproval,
 } from "@/stores/chat";
 import { useRetractMessage, type RetractPrefill } from "@/hooks/use-retract-message";
@@ -44,7 +46,7 @@ import { useComposerTimer } from "@/hooks/use-composer-timer";
 import { useStallWatchdog } from "@/hooks/use-stall-watchdog";
 import { agentProviderLabel } from "@/lib/agent-session-display";
 import { isRuntimeRunning } from "@/lib/session-activity";
-import { prepareAgentPrompt } from "@/lib/agent-prompt";
+import { prepareAgentPrompt, promptFromUserMessage, type PreparedAgentPrompt } from "@/lib/agent-prompt";
 import { isLocalMcpCommand, isLocalStatusCommand, mergeSlashCommands, supportsLocalMcpCommand } from "@/lib/slash-commands";
 import { applyAgentSelectionChange, type AgentSelection } from "@/lib/agent-selection";
 import {
@@ -260,9 +262,8 @@ export function DetailRoute() {
   const providerKind = providersQuery.data?.find((provider) => provider.id === snapshot?.provider)?.kind
     ?? (snapshot?.provider === "claude" || snapshot?.provider === "codex" ? snapshot.provider : undefined);
 
-  const submitPayload = useCallback(async (payload: ComposerSubmitPayload) => {
+  const sendPrepared = useCallback(async (prepared: PreparedAgentPrompt) => {
     if (!taskId) return;
-    const prepared = await prepareAgentPrompt(payload);
     try {
       await actions.sendPrompt(taskId, prepared.prompt, {
         displayText: prepared.displayText,
@@ -276,6 +277,10 @@ export function DetailRoute() {
       throw error;
     }
   }, [actions, providerDisabled, taskId]);
+
+  const submitPayload = useCallback(async (payload: ComposerSubmitPayload) => {
+    await sendPrepared(await prepareAgentPrompt(payload));
+  }, [sendPrepared]);
 
   const onSend = useCallback(async (payload: ComposerSubmitPayload) => {
     if (!taskId) return;
@@ -296,6 +301,13 @@ export function DetailRoute() {
     }
     await submitPayload(payload);
   }, [providerKind, runtimeIsBusy, submitPayload, taskId]);
+
+  // 运行中插话（design.md 4.22）：投递给进行中的回合，provider 不支持时输入框只显示「排队」
+  const onSteer = useCallback(async (payload: ComposerSubmitPayload) => {
+    if (!taskId) return;
+    const prepared = await prepareAgentPrompt(payload);
+    await actions.steerPrompt(taskId, prepared.prompt);
+  }, [actions, taskId]);
 
   // ---- 发送队列（空闲时自动发出 / 立即发送 / 编辑 / 删除） ----------------------
   const queuedPrompts = useQueuedPrompts(taskId);
@@ -381,6 +393,26 @@ export function DetailRoute() {
     return true;
   }, [retractMessageId, retraction]);
 
+  // 重试 / 再次发送（design.md 4.21）：取前端运行时里最后一条用户消息的 parts（含图片）重新发送
+  const resendMessage = resendableUserMessage(runtime);
+  const resendPrepared = useMemo(
+    () => (resendMessage ? promptFromUserMessage(resendMessage) : null),
+    [resendMessage],
+  );
+  const retryInfo = retryableTurn(runtime);
+  const [resending, setResending] = useState(false);
+  const onResend = useCallback(async () => {
+    if (!resendPrepared || resending) return;
+    setResending(true);
+    try {
+      await sendPrepared(resendPrepared);
+    } catch {
+      // 失败提示已由 sendPrompt 写进时间线
+    } finally {
+      setResending(false);
+    }
+  }, [resendPrepared, resending, sendPrepared]);
+
   const onQueueDelete = useCallback((id: string) => {
     removeQueuedPrompt(taskId, id);
   }, [taskId]);
@@ -417,6 +449,7 @@ export function DetailRoute() {
     if (list.some((provider) => provider.id === snapshot.provider)) return list;
     return [...list, { id: snapshot.provider, kind: "acp", label: agentProviderLabel(snapshot.provider), available: true }];
   }, [providersQuery.data, snapshot]);
+  const steerSupported = providers?.find((provider) => provider.id === snapshot?.provider)?.capabilities?.steer === true;
   const providerLabel = providers?.find((provider) => provider.id === snapshot?.provider)?.label
     ?? snapshot?.provider
     ?? "";
@@ -534,6 +567,9 @@ export function DetailRoute() {
               }
             : null;
 
+  const resendAvailable = resendPrepared !== null && !runtimeIsBusy && !unrecoverable && !notFound && !missing && !resuming;
+  const resendHint = resendMessage?.restored === true ? "图片未保存，仅重发文字" : undefined;
+
   const hasActiveComposerPrefill = composerPrefill.sessionId === taskId && composerPrefill.nonce > 0;
   const composerInitial = hasActiveComposerPrefill ? composerPrefill.text : storedComposerDraft;
   const composerInitialNonce = hasActiveComposerPrefill ? composerPrefill.nonce : 0;
@@ -616,6 +652,12 @@ export function DetailRoute() {
             retractMessageId={retractMessageId}
             onRetract={() => void retraction.run()}
             retractDisabled={retraction.retracting}
+            retryNoticeId={resendAvailable && retryInfo?.userMessageId === resendMessage?.id ? retryInfo?.noticeId : undefined}
+            onRetry={() => void onResend()}
+            resendMessageId={resendAvailable ? resendMessage?.id : undefined}
+            resendHint={resendHint}
+            onResend={() => void onResend()}
+            resendDisabled={resending}
           />
           <div className={s.composerArea}>
             {retraction.notice ? (
@@ -688,6 +730,8 @@ export function DetailRoute() {
               onEmptyArrowUp={onEmptyArrowUp}
               onDraftChange={onComposerDraftChange}
               onSend={onSend}
+              queueWhileLoading
+              onSteer={steerSupported ? onSteer : undefined}
               loadingPlaceholder={composerLoadingPlaceholder}
               showMeta={false}
               loading={runtimeIsBusy}

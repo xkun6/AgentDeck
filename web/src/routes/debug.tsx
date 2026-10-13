@@ -204,7 +204,7 @@ export function DebugSection({ showHeading = true }: { showHeading?: boolean }) 
           <Field label="sidecar 版本" value={status.data?.version ?? "—"} />
           <Field label="端口" value={sidecarPort(status.data?.wsUrl) ?? "—"} />
           <Field label="前端连接" value={connection} />
-          <Field label="pid" value="—" />
+          <Field label="pid" value={status.data?.pid != null ? String(status.data.pid) : "—"} />
         </div>
         {status.data?.error ? <div className={s.message} data-tone="error">{status.data.error}</div> : null}
         {message ? <div className={s.message} data-tone={message.tone}>{message.text}</div> : null}

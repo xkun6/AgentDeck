@@ -87,11 +87,12 @@ export class ProviderRegistry {
       this.list().map(async (client): Promise<ProviderInfo> => {
         const base: Pick<
           ProviderInfo,
-          "id" | "kind" | "label" | "custom" | "extends" | "description"
+          "id" | "kind" | "label" | "custom" | "extends" | "description" | "capabilities"
         > = {
           id: client.provider,
           kind: client.kind,
           label: client.label,
+          ...(client.capabilities ? { capabilities: client.capabilities } : {}),
           ...(client.custom
             ? {
                 custom: true,

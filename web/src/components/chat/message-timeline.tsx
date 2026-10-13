@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
-import { AlertTriangle, ChevronRight, Info, Undo2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Info, RotateCcw, Undo2 } from "lucide-react";
 import { ASSISTANT_FALLBACK_NAME, assistantAvatarDataUrlAtom, showReasoningAtom } from "@/stores/ui";
 import { AGENT_COMPACTION_NOTICE_PREFIX } from "@/stores/chat";
 import type { AssistantMessageStats, ChatMessage, ChatToolItem } from "./chat-types";
@@ -43,6 +43,15 @@ interface MessageTimelineProps {
   retractMessageId?: string;
   onRetract?: () => void;
   retractDisabled?: boolean;
+  /** 回合以失败 / 中断结束时，该回合末尾提示消息的 id：其上显示「重试」（design.md 4.21）。 */
+  retryNoticeId?: string;
+  onRetry?: () => void;
+  /** 最后一条用户消息 id：显示「再次发送」；hint 为提示（如「图片未保存，仅重发文字」）。 */
+  resendMessageId?: string;
+  resendHint?: string;
+  onResend?: () => void;
+  /** 重试 / 再次发送进行中 */
+  resendDisabled?: boolean;
 }
 
 interface TurnAnchor {
@@ -540,6 +549,17 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
       return;
     }
 
+    if (block.type === "steer") {
+      // 运行中插话（design.md 4.22）：当前助手消息流里的内联用户气泡
+      items.push(
+        <div key={`steer-${index}`} className={s.steerBubble} data-testid="steer-bubble">
+          <span className={s.steerLabel}>插话</span>
+          <span className={s.steerText}>{block.text}</span>
+        </div>,
+      );
+      return;
+    }
+
     if (block.type === "image") {
       items.push(
         <div key={`image-${index}`} className={s.imageBlock}>
@@ -763,6 +783,10 @@ interface MessageBubbleProps {
   compact?: boolean;
   onRetract?: () => void;
   retractDisabled?: boolean;
+  onRetry?: () => void;
+  onResend?: () => void;
+  resendHint?: string;
+  resendDisabled?: boolean;
 }
 
 function MessageBubble({
@@ -774,6 +798,10 @@ function MessageBubble({
   compact = false,
   onRetract,
   retractDisabled = false,
+  onRetry,
+  onResend,
+  resendHint,
+  resendDisabled = false,
 }: MessageBubbleProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
   const assistantAvatarDataUrl = useAtomValue(assistantAvatarDataUrlAtom);
@@ -830,6 +858,18 @@ function MessageBubble({
             ) : (
               <SystemNoticeText text={text} />
             )}
+            {onRetry ? (
+              <button
+                type="button"
+                className={s.retryButton}
+                onClick={onRetry}
+                disabled={resendDisabled}
+                title={resendHint}
+              >
+                <RotateCcw size={12} aria-hidden />
+                重试
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -918,6 +958,18 @@ function MessageBubble({
                 撤回
               </button>
             ) : null}
+            {isUser && onResend ? (
+              <button
+                type="button"
+                className={s.retractButton}
+                onClick={onResend}
+                disabled={resendDisabled}
+                title={resendHint}
+              >
+                <RotateCcw size={12} aria-hidden />
+                再次发送
+              </button>
+            ) : null}
           </span>
           {messageStats ? <MessageStatsFooter stats={messageStats} /> : null}
         </div>
@@ -939,6 +991,12 @@ export function MessageTimeline({
   retractMessageId,
   onRetract,
   retractDisabled,
+  retryNoticeId,
+  onRetry,
+  resendMessageId,
+  resendHint,
+  onResend,
+  resendDisabled,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1338,6 +1396,10 @@ export function MessageTimeline({
                 compact={compact}
                 onRetract={retractMessageId === message.id ? onRetract : undefined}
                 retractDisabled={retractDisabled}
+                onRetry={retryNoticeId === message.id ? onRetry : undefined}
+                onResend={resendMessageId === message.id ? onResend : undefined}
+                resendHint={resendHint}
+                resendDisabled={resendDisabled}
               />
             </div>
           );

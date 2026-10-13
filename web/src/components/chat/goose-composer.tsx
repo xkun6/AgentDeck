@@ -76,6 +76,16 @@ interface GooseComposerProps {
     payload: ComposerSubmitPayload,
     controls: ComposerSubmitControls,
   ) => void | Promise<void>;
+  /** 运行中（`loading`）仍可提交：onSend 即「排队」，宿主负责入队（会话页使用）。 */
+  queueWhileLoading?: boolean;
+  /**
+   * 运行中插话（design.md 4.22）：只有提供时，`loading` 状态下才显示「插话」（Ctrl+Enter）；
+   * `loading` 时 onSend 即「排队」。
+   */
+  onSteer?: (
+    payload: ComposerSubmitPayload,
+    controls: ComposerSubmitControls,
+  ) => void | Promise<void>;
   onStop?: () => void | Promise<void>;
   placeholder?: string;
   initial?: string;
@@ -130,6 +140,8 @@ export function ComposerErrorMessage({ message }: { message: string }) {
 
 export function GooseComposer({
   onSend,
+  onSteer,
+  queueWhileLoading = false,
   onStop,
   placeholder,
   initial = "",
@@ -181,10 +193,13 @@ export function GooseComposer({
   const controlsDisabled = disabled || loading;
   const submitText = value.trim();
   const displayedTextLength = value.length;
+  // 运行中（loading）也可提交：onSend 排队、onSteer 插话（design.md 4.22）
   const canSend =
     (submitText.length > 0 || attachments.length > 0) &&
-    !controlsDisabled &&
+    !disabled &&
+    (!loading || queueWhileLoading) &&
     !hasProcessingAttachment;
+  const canSteer = loading && Boolean(onSteer) && canSend;
   const resolvedPlaceholder = placeholder ?? `发送消息，${submitHint}…`;
 
   // ---- 斜杠命令补全 ----
@@ -488,7 +503,7 @@ export function GooseComposer({
     );
   };
 
-  const send = async () => {
+  const submit = async (handler: typeof onSend) => {
     if (!canSend) return;
     const payload: ComposerSubmitPayload = {
       text: submitText,
@@ -499,7 +514,7 @@ export function GooseComposer({
     setSubmitError("");
     markAttachmentsProcessing();
     try {
-      await onSend?.(payload, { updateAttachment });
+      await handler?.(payload, { updateAttachment });
       onDraftChange?.("");
       setValue("");
       setAttachments((current) => {
@@ -510,6 +525,9 @@ export function GooseComposer({
       restoreAttachmentState(error);
     }
   };
+
+  const send = () => submit(onSend);
+  const steer = () => (canSteer ? submit(onSteer) : Promise.resolve());
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const isComposing = isComposerComposing({
@@ -555,6 +573,20 @@ export function GooseComposer({
     ) {
       event.preventDefault();
       return;
+    }
+
+    if (loading && queueWhileLoading && event.key === "Enter" && event.ctrlKey && !event.altKey) {
+      // 运行中：Ctrl+Enter 插话；Ctrl+Shift+Enter 排队（design.md 4.22）
+      if (!event.shiftKey && onSteer) {
+        event.preventDefault();
+        void steer();
+        return;
+      }
+      if (event.shiftKey) {
+        event.preventDefault();
+        void send();
+        return;
+      }
     }
 
     const shouldSubmit = shouldSubmitComposerKey({
@@ -791,6 +823,34 @@ export function GooseComposer({
           <div className={s.rightTools}>
             {toolbarTrailing}
             {loading ? <span className={s.liveDot} aria-hidden="true" /> : null}
+            {loading && queueWhileLoading && onSend ? (
+              <>
+                <button
+                  className={s.sendButton}
+                  type="button"
+                  data-ready={canSend}
+                  onClick={() => void send()}
+                  disabled={!canSend}
+                  aria-label="排队"
+                  title="排队：本轮结束后自动发送（Enter 或 Ctrl+Shift+Enter）"
+                >
+                  <span>排队</span>
+                </button>
+                {onSteer ? (
+                  <button
+                    className={s.sendButton}
+                    type="button"
+                    data-ready={canSteer}
+                    onClick={() => void steer()}
+                    disabled={!canSteer}
+                    aria-label="插话"
+                    title="插话：投递给正在进行的回合（Ctrl+Enter）"
+                  >
+                    <span>插话</span>
+                  </button>
+                ) : null}
+              </>
+            ) : null}
             {loading && onStop ? (
               <button
                 className={s.sendButton}

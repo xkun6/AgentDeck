@@ -224,6 +224,8 @@ export class ClaudeAgentClient implements AgentClient {
   readonly provider: string;
   readonly kind = "claude" as const;
   readonly label: string;
+  /** 2.1.296 实测：回合进行中写入的 user 消息会在当前回合内被吸收（design.md 4.22） */
+  readonly capabilities = { steer: true } as const;
 
   private readonly logger: Logger;
   private readonly childEnv: Record<string, string>;
@@ -657,6 +659,22 @@ export class ClaudeAgentSession implements AgentSession {
       });
     }
     return { turnId };
+  }
+
+  /**
+   * 运行中插话（design.md 4.22）：向 stdin 再写一条带新 uuid 的 user 消息。实测 CLI 在当前回合内吸收它
+   * （工具结果返回后并入同一轮，不单独出带该 uuid 的 result），回合仍以原 uuid 的 result 结束；
+   * 万一没被吸收而排在后面单独执行，其 result 的 uuid 与当前回合不符，会被 handleResult 忽略。
+   */
+  async steer(prompt: AgentPromptInput): Promise<void> {
+    if (this.closed) {
+      throw new Error("Claude 会话已关闭");
+    }
+    const turn = this.activeTurn;
+    if (!turn || turn.userMessageUuid === null) {
+      throw new Error("当前没有可插话的用户回合");
+    }
+    this.ensureCli().sendUserMessage(toClaudeUserInput(prompt, this.sessionId));
   }
 
   subscribe(cb: (event: AgentSessionEvent) => void): () => void {

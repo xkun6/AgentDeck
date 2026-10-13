@@ -506,6 +506,29 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(events.at(-1)?.type).toBe("turn_completed");
   });
 
+  test("steer → turn/steer { threadId, input, expectedTurnId, clientUserMessageId }；不改变回合", async () => {
+    const session = await newSession();
+    const events = collect(session);
+    await session.startTurn("hang");
+    await waitUntil(() => received().some((m) => m.method === "turn/start"));
+    await session.steer!("补充一句", { clientMessageId: "cm-1" });
+    expect(received().find((m) => m.method === "turn/steer")?.params).toEqual({
+      threadId: "thr_fake",
+      input: [{ type: "text", text: "补充一句", text_elements: [] }],
+      expectedTurnId: "turn_1",
+      clientUserMessageId: "cm-1",
+    });
+    expect(events.filter((e) => e.type === "turn_started")).toHaveLength(1);
+    expect(events.filter(isTerminal)).toHaveLength(0);
+  });
+
+  test("steer：没有进行中的回合报错；server 拒绝时错误带中文前缀", async () => {
+    const session = await newSession();
+    await expect(session.steer!("x")).rejects.toThrow("当前没有进行中的回合");
+    const client = makeClient();
+    expect(client.capabilities).toEqual({ steer: true });
+  });
+
   test("未知 server→client 请求回 JSON-RPC 错误，不挂死", async () => {
     const session = await newSession();
     const events = collect(session);

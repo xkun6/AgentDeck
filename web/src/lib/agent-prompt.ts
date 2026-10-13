@@ -2,7 +2,7 @@
 // - 文本原样发送；
 // - 图片附件读成 base64 作为 image part（浏览器 File 用 FileReader，本机路径走 read_file_data_url）；
 // - 其它文件 / 目录以路径引用的形式附在文本末尾，由 Agent 自己读取。
-import type { AgentPromptInput } from "@agentdeck/protocol";
+import type { AgentPromptInput, AgentUIMessage } from "@agentdeck/protocol";
 import type { ComposerAttachment, ComposerSubmitPayload } from "@/components/chat/composer-types";
 import type { ImageEntry } from "@/stores/chat";
 import { buildComposerDisplayText } from "./composer-prompt";
@@ -83,6 +83,43 @@ export async function prepareAgentPrompt(payload: ComposerSubmitPayload): Promis
   return {
     prompt,
     displayText: buildComposerDisplayText(payload),
+    displayImages,
+  };
+}
+
+/**
+ * 重试 / 再次发送（design.md 4.21）：从前端运行时里的用户消息取 parts 还原 prompt。
+ * 文本 part 拼接，data URL 形式的图片 part 还原成 base64 图片；由时间线重建的消息（restored）
+ * 没有图片，只剩文本。没有可发送内容时返回 null。
+ */
+export function promptFromUserMessage(message: AgentUIMessage): PreparedAgentPrompt | null {
+  const texts: string[] = [];
+  const images: AgentPromptPart[] = [];
+  const displayImages: ImageEntry[] = [];
+  for (const part of message.parts) {
+    if (part.type === "text") {
+      if (part.text) texts.push(part.text);
+      continue;
+    }
+    if (part.type !== "image") continue;
+    const url = typeof part.url === "string" ? part.url : undefined;
+    const parsed = url ? parseDataUrl(url) : null;
+    if (!url || !parsed) continue;
+    const mimeType = typeof part.mimeType === "string" && part.mimeType ? part.mimeType : parsed.mimeType;
+    images.push({ type: "image", data: parsed.data, mimeType });
+    displayImages.push({
+      url,
+      mimeType,
+      ...(typeof part.name === "string" ? { name: part.name } : {}),
+      ...(typeof part.alt === "string" ? { alt: part.alt } : {}),
+      ...(typeof part.title === "string" ? { title: part.title } : {}),
+    });
+  }
+  const text = texts.join("\n");
+  if (!text && images.length === 0) return null;
+  return {
+    prompt: images.length ? [...(text ? [{ type: "text" as const, text }] : []), ...images] : text,
+    displayText: text,
     displayImages,
   };
 }

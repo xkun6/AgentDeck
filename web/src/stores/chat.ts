@@ -42,6 +42,7 @@ export type AssistantTurnBlock =
   | { type: "progress"; text: string }
   | { type: "image"; image: ImageEntry }
   | { type: "tool"; tool: ToolEntry }
+  | { type: "steer"; text: string }
   | { type: "moa_reference"; label: string; text: string; index?: number; count?: number };
 
 export interface PendingApproval {
@@ -89,6 +90,8 @@ export interface ChatSessionRuntime {
   retractedTurnId?: string;
   /** AgentDeck：最近一段 assistant_message 的 messageId（不同 messageId 分段拼接）。 */
   agentTextMessageId?: string;
+  /** AgentDeck：进行中的回合是 CLI 自发轮次（origin background，design.md 4.12），不提供重试（4.21）。 */
+  activeTurnBackground?: boolean;
 }
 
 export type ChatRuntimeBySession = Record<string, ChatSessionRuntime>;
@@ -562,6 +565,21 @@ function reduceAgentTimelineItem(
   const { agentId, timestamp, seq } = envelope;
   switch (item.type) {
     case "user_message": {
+      if (item.steer) {
+        // 运行中插话（design.md 4.22）：不开新一轮，作为内联气泡并入当前助手消息流
+        return withActiveAgentAssistant(runtime, envelope, turnId, (message) => ({
+          ...message,
+          status: "streaming",
+          parts: [
+            ...withoutProgressParts(message.parts),
+            {
+              type: "steer",
+              text: item.text,
+              ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+            },
+          ],
+        }));
+      }
       const optimisticId = item.clientMessageId;
       if (optimisticId && runtime.messages.some((message) => message.id === optimisticId)) {
         // 本地乐观消息已在：只确认状态，不重复插入
@@ -580,6 +598,8 @@ function reduceAgentTimelineItem(
             createdAt: timestamp,
             status: "complete",
             parts: [{ type: "text", text: item.text }],
+            // 由时间线重建：图片没有落盘，再次发送只能重发文字（design.md 4.21）
+            restored: true,
           },
         ],
       };
@@ -719,6 +739,53 @@ function retractAgentUserMessage(
   return { ...runtime, messages, activeAssistantId: activeKept, retractedTurnId: turnId };
 }
 
+/** design.md 4.21：失败 / 中断的回合可重试，取该回合前最近一条用户消息；CLI 自发轮次不提供。 */
+function retryUserMessageIdFor(runtime: ChatSessionRuntime): string | undefined {
+  if (runtime.activeTurnBackground) return undefined;
+  for (let index = runtime.messages.length - 1; index >= 0; index -= 1) {
+    const message = runtime.messages[index]!;
+    if (message.role === "user") return message.id;
+  }
+  return undefined;
+}
+
+/** 给回合末尾的提示消息打上「可重试」标记（retryFor = 用户消息 id）。 */
+function withRetryMark(
+  runtime: ChatSessionRuntime,
+  noticeId: string,
+  userMessageId: string | undefined,
+): ChatSessionRuntime {
+  if (!userMessageId) return runtime;
+  return updateMessage(runtime, noticeId, (message) => ({ ...message, retryFor: userMessageId }));
+}
+
+/**
+ * design.md 4.21：空闲时，最后一条用户消息之后若有以 turn_failed / turn_canceled 结束该回合留下的提示，
+ * 返回提示消息 id 与对应用户消息 id（用于在回合末尾显示「重试」）。
+ */
+export function retryableTurn(
+  runtime: ChatSessionRuntime | undefined,
+): { noticeId: string; userMessageId: string } | undefined {
+  if (!runtime || isStreamingStatus(runtime.streamStatus)) return undefined;
+  const { messages } = runtime;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user") return undefined;
+    if (typeof message.retryFor === "string") return { noticeId: message.id, userMessageId: message.retryFor };
+  }
+  return undefined;
+}
+
+/** design.md 4.21：空闲时的最后一条用户消息（悬停提供「再次发送」）。 */
+export function resendableUserMessage(runtime: ChatSessionRuntime | undefined): AgentUIMessage | undefined {
+  if (!runtime || isStreamingStatus(runtime.streamStatus)) return undefined;
+  for (let index = runtime.messages.length - 1; index >= 0; index -= 1) {
+    const message = runtime.messages[index]!;
+    if (message.role === "user") return message;
+  }
+  return undefined;
+}
+
 function reduceAgentEventInner(
   runtime: ChatSessionRuntime,
   envelope: AgentStreamEnvelope,
@@ -745,6 +812,7 @@ function reduceAgentEventInner(
           agentTextMessageId: undefined,
           turnStartedAt: active ? runtime.turnStartedAt ?? timestamp : timestamp,
           turnFirstTokenAt: undefined,
+          activeTurnBackground: event.origin === "background",
           statusMessage: "",
           statusKind: undefined,
           statusUpdatedAt: undefined,
@@ -760,23 +828,33 @@ function reduceAgentEventInner(
       return finishAgentTurn(runtime, timestamp, "complete", event.usage);
 
     case "turn_failed": {
+      const retryUserId = retryUserMessageIdFor(runtime);
       const finished = finishAgentTurn(runtime, timestamp, "error", undefined);
       const base = event.error || "Agent 执行失败";
       const text = event.code === "PROCESS_EXITED"
         ? `${base}（Agent 进程已退出，请新建会话继续）`
         : base;
-      return appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, text, "error");
+      return withRetryMark(
+        appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, text, "error"),
+        `agent-notice-${seq}`,
+        retryUserId,
+      );
     }
 
     case "user_message_retracted":
       return retractAgentUserMessage(runtime, event.turnId, event.clientMessageId);
 
     case "turn_canceled": {
+      const retryUserId = retryUserMessageIdFor(runtime);
       const finished = finishAgentTurn(runtime, timestamp, "canceled", undefined);
       if (runtime.retractedTurnId === event.turnId) {
         return { ...finished, retractedTurnId: undefined };
       }
-      return appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, "已中断本轮", "info");
+      return withRetryMark(
+        appendAgentNotice(finished, agentId, `agent-notice-${seq}`, timestamp, "已中断本轮", "info"),
+        `agent-notice-${seq}`,
+        retryUserId,
+      );
     }
 
     case "permission_requested": {
@@ -899,6 +977,7 @@ export const startAgentPromptAtom = atom(
         turnStartedAt: now,
         turnFirstTokenAt: undefined,
         activeAssistantId: assistantId,
+        activeTurnBackground: false,
       })),
     );
   },
