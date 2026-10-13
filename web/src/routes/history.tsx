@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAtomValue, useSetAtom } from "jotai";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useAtomValue } from "jotai";
+import { useSearchParams } from "react-router-dom";
 import { LoadingState, StatusDot } from "@agentdeck/shared-ui";
 import { Search, Trash2, X } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
-import { activeSessionIdAtom } from "@/stores/ui";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
@@ -24,6 +23,8 @@ import {
   workspaceNameFromPath,
 } from "@/lib/workspaces";
 import { TopBar } from "@/components/top-bar/top-bar";
+import { useSessionActions } from "@/hooks/use-context-actions";
+import { EntityContextMenu } from "@/components/context-menu/entity-context-menu";
 import s from "./history.module.css";
 
 type StatusFilter = "all" | "running" | "idle" | "dormant" | "error" | "closed";
@@ -57,14 +58,13 @@ interface Row {
 }
 
 export function HistoryRoute() {
-  const navigate = useNavigate();
-  const setActiveId = useSetAtom(activeSessionIdAtom);
   const agents = useAtomValue(agentListAtom);
   const loaded = useAtomValue(agentListLoadedAtom);
   const connection = useAtomValue(sidecarConnectionAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const { data: providers } = useAgentProviders();
   const deleteSession = useDeleteAgentSession();
+  const sessionActions = useSessionActions();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   // 从项目详情跳转时带 ?workspace=，只看该项目的会话
@@ -132,10 +132,7 @@ export function HistoryRoute() {
     return groups;
   }, [filtered]);
 
-  const goSession = (agent: AgentSnapshot) => {
-    setActiveId(agent.id);
-    navigate(`/tasks/${encodeURIComponent(agent.id)}`);
-  };
+  const goSession = sessionActions.openSession;
 
   const loading = !loaded && connection !== "error" && connection !== "closed";
 
@@ -225,8 +222,8 @@ export function HistoryRoute() {
                 const sec = Math.floor(agent.updatedAt / 1000);
                 const updated = isToday(sec) ? timeOfDay(sec) : relativeTime(sec);
                 return (
+                  <EntityContextMenu key={agent.id} items={() => sessionActions.buildMenu(agent, title)}>
                   <div
-                    key={agent.id}
                     className={s.convRow}
                     data-status={kind === "error" ? "failed" : kind}
                     role="button"
@@ -269,6 +266,7 @@ export function HistoryRoute() {
                       <Trash2 size={12} aria-hidden="true" />
                     </button>
                   </div>
+                  </EntityContextMenu>
                 );
               })}
             </section>

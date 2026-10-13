@@ -22,12 +22,12 @@ import {
   readSessionWorkspaceMap,
   readWorkspaceProjects,
   rememberWorkspaceProject,
-  removeWorkspaceProject,
   subscribeWorkspaceChanges,
-  togglePinnedWorkspaceProject,
   type WorkspaceProject,
 } from "@/lib/workspaces";
 import { useConfirm } from "@/lib/use-confirm";
+import { useProjectActions } from "@/hooks/use-context-actions";
+import { EntityContextMenu } from "@/components/context-menu/entity-context-menu";
 import { sessionTokens } from "@/components/panel/panel-session";
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
 import s from "./projects.module.css";
@@ -116,7 +116,8 @@ export function ProjectsRoute() {
   const [pinnedProjectPaths, setPinnedProjectPaths] = useState(readPinnedWorkspaceProjectPaths);
   const [searchQuery, setSearchQuery] = useState("");
   const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
-  const { confirm, prompt } = useConfirm();
+  const { prompt } = useConfirm();
+  const actions = useProjectActions();
 
   useEffect(() => {
     return subscribeWorkspaceChanges(() => {
@@ -202,36 +203,22 @@ export function ProjectsRoute() {
     }
   }, [desktopAvailable, prompt]);
 
-  const handleOpenInFinder = useCallback(async (project: WorkspaceProject) => {
+  const handleOpenInFinder = useCallback((project: WorkspaceProject) => {
     setOpenMenuPath(null);
-    try {
-      if (window.hermesDesktop?.openWorkspacePath) {
-        const result = await window.hermesDesktop.openWorkspacePath({ path: project.path });
-        if (!result.ok) console.error("Failed to open project:", result.body);
-      }
-    } catch (error) {
-      console.error("Failed to open project:", error);
-    }
-  }, []);
+    void actions.openInExplorer(project);
+  }, [actions]);
 
   const handleTogglePin = useCallback((project: WorkspaceProject) => {
     setOpenMenuPath(null);
-    setPinnedProjectPaths(togglePinnedWorkspaceProject(project.path));
-  }, []);
+    setPinnedProjectPaths(actions.togglePin(project));
+  }, [actions]);
 
   const handleDelete = useCallback(async (project: WorkspaceProject) => {
     setOpenMenuPath(null);
-    const confirmed = await confirm({
-      title: "删除项目",
-      body: `确认删除项目「${project.name}」？该工作区下的会话会被解除关联，但会话本身不会删除。`,
-      confirmLabel: "删除",
-      danger: true,
-    });
-    if (!confirmed) return;
-    removeWorkspaceProject(project.path);
+    if (!(await actions.deleteProject(project))) return;
     setProjects(readWorkspaceProjects());
     setPinnedProjectPaths(readPinnedWorkspaceProjectPaths());
-  }, [confirm]);
+  }, [actions]);
 
   const goProject = useCallback(
     (project: WorkspaceProject) => {
@@ -312,8 +299,8 @@ export function ProjectsRoute() {
                   const { project } = item;
                   const pinned = pinnedProjectPaths.has(project.path);
                   return (
+                    <EntityContextMenu key={project.path} items={() => actions.buildMenu(project)}>
                     <tr
-                      key={project.path}
                       onClick={() => goProject(project)}
                       data-active={openMenuPath === project.path ? "true" : undefined}
                     >
@@ -361,6 +348,7 @@ export function ProjectsRoute() {
                         </Popover.Root>
                       </td>
                     </tr>
+                    </EntityContextMenu>
                   );
                 })}
               </tbody>

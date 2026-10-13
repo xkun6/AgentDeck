@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { useSetAtom } from "jotai";
 import { useSidecarBridge } from "@/hooks/use-agent-session";
 import { readUiValue } from "@/lib/ui-store";
+import { installNativeContextMenuBlocker } from "@/lib/block-native-context-menu";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { AppShell } from "@/components/app-shell/app-shell";
 import { CommandPalette } from "@/components/command-palette";
@@ -84,6 +85,7 @@ export function App() {
   useEffect(() => {
     hydrateTheme(readUiValue<Partial<ThemeConfig>>("hermes-theme", DEFAULT_THEME_CONFIG));
   }, [hydrateTheme]);
+  useEffect(() => installNativeContextMenuBlocker(), []);
 
   return <div lang="zh-CN" data-hermes-platform={platform}><MainApp /></div>;
 }

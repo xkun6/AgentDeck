@@ -14,3 +14,4 @@ export { cn, type ClassValue } from "./utils/cn";
 export * from "./components";
 export * as Dialog from "./composites/dialog";
 export * as Popover from "./composites/popover";
+export * as ContextMenu from "./composites/context-menu";

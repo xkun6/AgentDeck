@@ -21,14 +21,13 @@ import {
   normalizeWorkspacePath,
   readSessionWorkspaceMap,
   readWorkspaceProjects,
-  removeWorkspaceProject,
   subscribeWorkspaceChanges,
   type WorkspaceProject,
 } from "@/lib/workspaces";
 import { TopBar, TopBarActionButton } from "@/components/top-bar/top-bar";
 import { WorktreePanel } from "@/components/projects/worktree-panel";
 import { sessionTokens } from "@/components/panel/panel-session";
-import { useConfirm } from "@/lib/use-confirm";
+import { useProjectActions } from "@/hooks/use-context-actions";
 import s from "./project-detail.module.css";
 
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
@@ -99,7 +98,7 @@ export function ProjectDetailRoute() {
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [sessionWorkspaceMap, setSessionWorkspaceMap] = useState(readSessionWorkspaceMap);
   const [menuOpen, setMenuOpen] = useState(false);
-  const { confirm } = useConfirm();
+  const actions = useProjectActions();
 
   useEffect(() => {
     return subscribeWorkspaceChanges(() => {
@@ -148,36 +147,20 @@ export function ProjectDetailRoute() {
   const desktopAvailable = typeof window !== "undefined" && !!window.hermesDesktop;
 
   const goNewTask = useCallback(() => {
-    if (!workspacePath) return;
-    navigate(`/?workspace=${encodeURIComponent(workspacePath)}`);
-  }, [navigate, workspacePath]);
-
-  const handleOpenInFinder = useCallback(async () => {
-    setMenuOpen(false);
     if (!project) return;
-    try {
-      if (window.hermesDesktop?.openWorkspacePath) {
-        const result = await window.hermesDesktop.openWorkspacePath({ path: project.path });
-        if (!result.ok) console.error("Failed to open project:", result.body);
-      }
-    } catch (error) {
-      console.error("Failed to open project:", error);
-    }
-  }, [project]);
+    actions.newChat(project);
+  }, [actions, project]);
+
+  const handleOpenInFinder = useCallback(() => {
+    setMenuOpen(false);
+    if (project) void actions.openInExplorer(project);
+  }, [actions, project]);
 
   const handleDelete = useCallback(async () => {
     setMenuOpen(false);
     if (!project) return;
-    const confirmed = await confirm({
-      title: "删除项目",
-      body: `确认删除项目「${project.name}」？该工作区下的会话会被解除关联，但会话本身不会删除。`,
-      confirmLabel: "删除",
-      danger: true,
-    });
-    if (!confirmed) return;
-    removeWorkspaceProject(project.path);
-    navigate("/projects");
-  }, [confirm, navigate, project]);
+    if (await actions.deleteProject(project)) navigate("/projects");
+  }, [actions, navigate, project]);
 
   if (!workspacePath) {
     return (

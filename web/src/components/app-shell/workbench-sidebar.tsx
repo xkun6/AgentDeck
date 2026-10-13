@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtomValue } from "jotai";
 import { useNavigate, useLocation } from "react-router-dom";
 import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { Folder, MessageSquare, Plus, TerminalSquare, Trash2 } from "lucide-react";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom } from "@/stores/agents";
-import { activeSessionIdAtom } from "@/stores/ui";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
@@ -24,6 +23,8 @@ import {
   workspaceNameFromPath,
   type WorkspaceProject,
 } from "@/lib/workspaces";
+import { useProjectActions, useSessionActions } from "@/hooks/use-context-actions";
+import { EntityContextMenu, type ContextMenuEntry } from "@/components/context-menu/entity-context-menu";
 import s from "./workbench-sidebar.module.css";
 
 function sectionLabel(index: number, label: string): string {
@@ -46,10 +47,12 @@ interface SessionRowProps {
   tooltip: string;
   onClick: () => void;
   onDelete: () => void;
+  menuItems: () => ContextMenuEntry[];
 }
 
-function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick, onDelete }: SessionRowProps) {
+function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick, onDelete, menuItems }: SessionRowProps) {
   return (
+    <EntityContextMenu items={menuItems}>
     <div
       className={s.sessionRow}
       data-active={active ? "true" : undefined}
@@ -92,17 +95,19 @@ function SessionRow({ title, tone, active, meta, projectName, tooltip, onClick, 
         <Trash2 size={12} aria-hidden="true" />
       </button>
     </div>
+    </EntityContextMenu>
   );
 }
 
 export function WorkbenchSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const setActiveId = useSetAtom(activeSessionIdAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const agents = useAtomValue(agentListAtom);
   const { data: providers } = useAgentProviders();
   const deleteSession = useDeleteAgentSession();
+  const sessionActions = useSessionActions();
+  const projectActions = useProjectActions();
   const [projects, setProjects] = useState<WorkspaceProject[]>(readWorkspaceProjects);
   const [pinnedProjectPaths, setPinnedProjectPaths] = useState(readPinnedWorkspaceProjectPaths);
 
@@ -151,10 +156,7 @@ export function WorkbenchSidebar() {
     if (stalePaths.length > 0) setPinnedProjectPaths(unpinWorkspaceProjects(stalePaths));
   }, [pinnedProjectPaths, projects]);
 
-  const goSession = (agent: AgentSnapshot) => {
-    setActiveId(agent.id);
-    navigate(`/tasks/${encodeURIComponent(agent.id)}`);
-  };
+  const goSession = sessionActions.openSession;
 
   const activeSessionId = location.pathname.startsWith("/tasks/")
     ? decodeURIComponent(location.pathname.slice("/tasks/".length))
@@ -175,6 +177,7 @@ export function WorkbenchSidebar() {
         tooltip={`${title}\n${provider} · ${status}\n${agent.cwd}`}
         onClick={() => goSession(agent)}
         onDelete={() => void deleteSession(agent, title)}
+        menuItems={() => sessionActions.buildMenu(agent, title)}
       />
     );
   };
@@ -262,19 +265,20 @@ export function WorkbenchSidebar() {
             pinnedProjects.map((proj) => {
               const target = `/projects/${encodeURIComponent(proj.path)}`;
               return (
-                <button
-                  type="button"
-                  key={proj.path}
-                  className={s.sideItem}
-                  data-active={location.pathname === target ? "true" : undefined}
-                  onClick={() => navigate(target)}
-                  title={proj.path}
-                >
-                  <span className={s.sideItemIcon}>
-                    <Folder size={16} />
-                  </span>
-                  <span className={s.sideItemLabel}>{proj.name}</span>
-                </button>
+                <EntityContextMenu key={proj.path} items={() => projectActions.buildMenu(proj)}>
+                  <button
+                    type="button"
+                    className={s.sideItem}
+                    data-active={location.pathname === target ? "true" : undefined}
+                    onClick={() => navigate(target)}
+                    title={proj.path}
+                  >
+                    <span className={s.sideItemIcon}>
+                      <Folder size={16} />
+                    </span>
+                    <span className={s.sideItemLabel}>{proj.name}</span>
+                  </button>
+                </EntityContextMenu>
               );
             })
           )}
