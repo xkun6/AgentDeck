@@ -1,7 +1,8 @@
 // 直接驱动用户本机 claude 可执行文件的 stream-json 会话（AgentDeck 原创实现）。
 // 一个实例对应一个长生命周期 claude 子进程：
 // - stdin 每行写一个 JSON（用户消息 / 控制请求 / 对 CLI 控制请求的应答）；stdout 逐行解析；
-// - 我们发出的控制请求（initialize / interrupt / set_model / set_permission_mode）按 request_id 关联应答，带超时；
+// - 我们发出的控制请求（initialize / interrupt / set_model / set_permission_mode / mcp_status / mcp_reconnect）
+//   按 request_id 关联应答，带超时；
 // - CLI 发来的 can_use_tool 交给 canUseTool 回调，应答回写 stdin；control_cancel_request 触发对应 AbortSignal；
 // - close 时结束 stdin 并 tree-kill 整棵进程树；进程意外退出时消息迭代以错误结束，绝不抛到 sidecar 进程级。
 import type { ChildProcess } from "node:child_process";
@@ -18,6 +19,7 @@ import type {
   ClaudeCanUseToolRequest,
   ClaudeControlResponseOut,
   ClaudeInitializeResponse,
+  ClaudeMcpStatusResponse,
   ClaudeOutgoingControl,
   ClaudeOutputMessage,
   ClaudePermissionMode,
@@ -25,6 +27,8 @@ import type {
 } from "./stream-json-types.js";
 
 const DEFAULT_CONTROL_TIMEOUT_MS = 30_000;
+/** 重连 MCP 服务器可能要重新拉起服务进程，放宽到 60 秒 */
+const MCP_RECONNECT_TIMEOUT_MS = 60_000;
 const KILL_GRACEFUL_TIMEOUT_MS = 1_500;
 const KILL_FORCE_TIMEOUT_MS = 1_500;
 /** 进程 exit 后等 stdout / stderr 读完的上限（孙进程可能继承管道导致 close 迟迟不来） */
@@ -64,6 +68,10 @@ export interface ClaudeCliHandle extends AsyncIterable<ClaudeOutputMessage> {
   setModel(model: string | null): Promise<void>;
   /** 一般为 ClaudePermissionMode；切回基础模式时也可能是用户设置里的其它 CLI 模式 */
   setPermissionMode(mode: string): Promise<void>;
+  /** MCP 服务器状态（design.md 4.14） */
+  mcpStatus(): Promise<ClaudeMcpStatusResponse>;
+  /** 重连单个 MCP 服务器；失败时 reject */
+  mcpReconnect(serverName: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -217,6 +225,14 @@ export class ClaudeCliSession implements ClaudeCliHandle {
     await this.request({ subtype: "set_permission_mode", mode });
   }
 
+  async mcpStatus(): Promise<ClaudeMcpStatusResponse> {
+    return (await this.request({ subtype: "mcp_status" })) as ClaudeMcpStatusResponse;
+  }
+
+  async mcpReconnect(serverName: string): Promise<void> {
+    await this.request({ subtype: "mcp_reconnect", serverName }, MCP_RECONNECT_TIMEOUT_MS);
+  }
+
   close(): Promise<void> {
     if (!this.closePromise) {
       this.closePromise = this.doClose();
@@ -272,13 +288,16 @@ export class ClaudeCliSession implements ClaudeCliHandle {
     stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
-  private request(body: ClaudeOutgoingControl): Promise<Record<string, unknown>> {
+  private request(
+    body: ClaudeOutgoingControl,
+    timeoutMs = this.controlTimeoutMs,
+  ): Promise<Record<string, unknown>> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingControls.delete(requestId);
         reject(new Error(`Claude Code 控制请求超时：${body.subtype}`));
-      }, this.controlTimeoutMs);
+      }, timeoutMs);
       this.pendingControls.set(requestId, { subtype: body.subtype, resolve, reject, timer });
       try {
         this.write({ type: "control_request", request_id: requestId, request: body });

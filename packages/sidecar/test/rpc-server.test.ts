@@ -379,6 +379,23 @@ describe("mock 会话", () => {
     expect(invalid.error?.code).toBe(-32602);
   });
 
+  test("agent.commands / agent.mcp.*：mock 无命令；不支持 MCP 返回 NOT_SUPPORTED；参数校验（design.md 4.14）", async () => {
+    const agent = await createAgent();
+    await expect(client.call("agent.commands", { agentId: agent.id })).resolves.toEqual({
+      commands: [],
+    });
+    const status = await expectRpcError(client.call("agent.mcp.status", { agentId: agent.id }));
+    expect(status.error.data?.code).toBe("NOT_SUPPORTED");
+    const reconnect = await expectRpcError(
+      client.call("agent.mcp.reconnect", { agentId: agent.id, serverName: "fs" }),
+    );
+    expect(reconnect.error.data?.code).toBe("NOT_SUPPORTED");
+    const invalid = await client.request("agent.mcp.reconnect", { agentId: agent.id, serverName: "" });
+    expect(invalid.error?.code).toBe(-32602);
+    const missing = await expectRpcError(client.call("agent.commands", { agentId: "missing" }));
+    expect(missing.error.data?.code).toBe("AGENT_NOT_FOUND");
+  });
+
   test("未知 agent 返回 AGENT_NOT_FOUND", async () => {
     const error = await expectRpcError(client.call("agent.timeline", { agentId: "missing" }));
     expect(error.error.data?.code).toBe("AGENT_NOT_FOUND");

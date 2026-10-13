@@ -113,6 +113,28 @@ export interface AgentModelDefinition {
   defaultThinkingOptionId?: string;
 }
 
+/** 斜杠命令（name 不带前导 /；design.md 4.14） */
+export interface AgentSlashCommand {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  aliases?: string[];
+}
+export type AgentMcpServerStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
+export interface AgentMcpServer {
+  name: string;
+  status: AgentMcpServerStatus;
+  error?: string;
+  scope?: string;
+  toolCount?: number;
+}
+/** server = 可按服务器单独重连（Claude）；all = 只能整体重新加载（Codex） */
+export type AgentMcpReconnectScope = "server" | "all";
+export interface AgentMcpStatusResult {
+  servers: AgentMcpServer[];
+  reconnect: AgentMcpReconnectScope;
+}
+
 export type AgentPromptInput =
   | string
   | Array<
@@ -399,6 +421,9 @@ export const AGENT_RPC_METHODS = {
   agentDelete: "agent.delete",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
+  agentCommands: "agent.commands",
+  agentMcpStatus: "agent.mcp.status",
+  agentMcpReconnect: "agent.mcp.reconnect",
   providerConfigGet: "provider.config.get",
   providerConfigSet: "provider.config.set",
   providerTest: "provider.test",
@@ -478,6 +503,18 @@ export interface AgentRpcMethods {
       limit?: number;
     };
     result: { rows: ProviderSubagentTimelineRow[]; hasOlder: boolean; hasNewer: boolean };
+  };
+  /** 斜杠命令列表（按 name 去重）；dormant / closed 会话走 provider 目录，不恢复会话（design.md 4.14） */
+  "agent.commands": { params: { agentId: string }; result: { commands: AgentSlashCommand[] } };
+  /** MCP 服务器状态；dormant / closed 且可恢复时先自动恢复会话（design.md 4.14） */
+  "agent.mcp.status": { params: { agentId: string }; result: AgentMcpStatusResult };
+  /**
+   * 重连 MCP 并返回重连后的最新状态（design.md 4.14）。
+   * reconnect 为 server（Claude）时必须带 serverName；all（Codex）忽略 serverName，整体重新加载。
+   */
+  "agent.mcp.reconnect": {
+    params: { agentId: string; serverName?: string };
+    result: AgentMcpStatusResult;
   };
   /** 含明文 apiKey（仅本机 token 鉴权的连接可见，前端负责遮挡显示）；未设 AGENTDECK_DATA_DIR 时 path 为 null */
   "provider.config.get": {

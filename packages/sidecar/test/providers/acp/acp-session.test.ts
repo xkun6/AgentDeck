@@ -412,6 +412,20 @@ describe("AcpAgentSession 模型与模式", () => {
     expect(assistantText(events)).toContain("模式:plan");
   });
 
+  test("available_commands_update → listCommands（input.hint 为 argumentHint，按 name 去重）；不出时间线；不实现 MCP", async () => {
+    const { session, events } = await open();
+    await expect(session.listCommands!()).resolves.toEqual([]);
+    await session.startTurn("scenario:commands");
+    await waitForTerminal(events);
+    await expect(session.listCommands!()).resolves.toEqual([
+      { name: "init", description: "初始化项目" },
+      { name: "review", description: "审查改动", argumentHint: "<文件>" },
+    ]);
+    expect(timelineItems(events)).toEqual([]);
+    expect(session.getMcpStatus).toBeUndefined();
+    expect(session.reconnectMcp).toBeUndefined();
+  });
+
   test("current_mode_update → mode_changed", async () => {
     const { session, events } = await open();
     await session.startTurn("scenario:mode");

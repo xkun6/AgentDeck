@@ -376,6 +376,76 @@ describe("CodexAgentSession（假 app-server）", () => {
     ]);
   });
 
+  test("发送 /compact 改调 thread/compact/start（不调 turn/start），回合正常完成并产生压缩事件", async () => {
+    const session = await newSession();
+    const events = collect(session);
+    const { turnId } = await session.startTurn("  /compact " + String.fromCharCode(10));
+    await waitUntil(() => events.some(isTerminal));
+    expect(events.filter(isTerminal)).toEqual([{ type: "turn_completed", turnId }]);
+    expect(events.filter((e) => e.type === "thread_started")).toHaveLength(1);
+    expect(
+      events.flatMap((e) => (e.type === "timeline" && e.item.type === "compaction" ? [e.item.status] : [])),
+    ).toEqual(["running", "completed"]);
+    const methods = received().map((m) => m.method);
+    expect(methods).not.toContain("turn/start");
+    expect(received().find((m) => m.method === "thread/compact/start")?.params).toEqual({ threadId: "thr_fake" });
+
+    // 只有一个 text 块的数组同样拦截；带其它文字的照常走 turn/start
+    const second = await session.startTurn([{ type: "text", text: "/compact" }]);
+    await waitUntil(() => events.filter(isTerminal).length === 2);
+    expect(events.filter(isTerminal)[1]).toEqual({ type: "turn_completed", turnId: second.turnId });
+    expect(received().filter((m) => m.method === "thread/compact/start")).toHaveLength(2);
+
+    const third = await session.startTurn("/compact 只保留结论");
+    await waitUntil(() => events.filter(isTerminal).length === 3);
+    expect(events.filter(isTerminal)[2]).toMatchObject({ type: "turn_completed", turnId: third.turnId });
+    const turnStarts = received().filter((m) => m.method === "turn/start");
+    expect(turnStarts).toHaveLength(1);
+    expect(turnStarts[0]!.params.input[0].text).toBe("/compact 只保留结论");
+    expect(received().filter((m) => m.method === "thread/compact/start")).toHaveLength(2);
+  });
+
+  test("listCommands / fetchCatalog 只给 compact", async () => {
+    const session = await newSession();
+    await expect(session.listCommands!()).resolves.toEqual([
+      { name: "compact", description: "压缩当前对话上下文" },
+    ]);
+    const catalog = await makeClient().fetchCatalog({ cwd: tmpDir });
+    expect(catalog.commands).toEqual([{ name: "compact", description: "压缩当前对话上下文" }]);
+  });
+
+  test("getMcpStatus：mcpServerStatus/list 翻页汇总并映射状态；线程不存在时先建线程；reconnectMcp 调 config/mcpServer/reload", async () => {
+    const session = await newSession();
+    expect(received().some((m) => m.method === "thread/start")).toBe(false);
+    await expect(session.getMcpStatus!()).resolves.toEqual({
+      reconnect: "all",
+      servers: [
+        { name: "fs", status: "connected", toolCount: 2 },
+        { name: "gh", status: "needs-auth", toolCount: 0 },
+        { name: "bad", status: "failed", error: "spawn ENOENT", toolCount: 0 },
+        { name: "slow", status: "pending", toolCount: 0 },
+      ],
+    });
+    const lists = received().filter((m) => m.method === "mcpServerStatus/list");
+    expect(lists.map((m) => m.params)).toEqual([
+      { threadId: "thr_fake", detail: "toolsAndAuthOnly" },
+      { threadId: "thr_fake", detail: "toolsAndAuthOnly", cursor: "page2" },
+    ]);
+    expect(received().filter((m) => m.method === "thread/start")).toHaveLength(1);
+
+    // serverName 被忽略：只能整体重新加载
+    await session.reconnectMcp!("fs");
+    const reloads = received().filter((m) => m.method === "config/mcpServer/reload");
+    expect(reloads).toHaveLength(1);
+    expect(reloads[0]!.params).toBeUndefined();
+
+    // 之后的回合复用已建的线程
+    const events = collect(session);
+    await session.startTurn("hello");
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().filter((m) => m.method === "thread/start")).toHaveLength(1);
+  });
+
   test("interrupt → turn/interrupt { threadId, turnId } 并发 turn_canceled", async () => {
     const session = await newSession();
     const events = collect(session);

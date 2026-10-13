@@ -2,6 +2,7 @@
 // 用法：node fake-app-server.mjs app-server
 // 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
 // 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
+// thread/compact/start 按 compact 剧本开一个回合；mcpServerStatus/list 分两页返回三个服务器；config/mcpServer/reload 回 {}。
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
 
@@ -255,6 +256,37 @@ async function handleRequest(msg) {
       await scenario(turnId);
       return;
     }
+    case "thread/compact/start": {
+      // 手动压缩：应答 {} 后像普通回合一样推 turn/started → contextCompaction item → turn/completed
+      const turnId = `turn_${++turnCounter}`;
+      activeTurn = { id: turnId };
+      respond(id, {});
+      await sleep(5);
+      notify("turn/started", { threadId: THREAD_ID, turn: turnObj(turnId, "inProgress") });
+      await scenarios.compact(turnId);
+      return;
+    }
+    case "mcpServerStatus/list": {
+      const server = (name, runtimeStatus, tools, toolsError = null) => ({
+        name, runtimeStatus, pluginId: null, httpOrigin: null, serverInfo: null, serverCapabilities: null,
+        tools, toolsError, resources: [], resourceTemplates: [], authStatus: "unsupported",
+      });
+      if (!params?.cursor) {
+        respond(id, {
+          data: [
+            server("fs", "connected", { read: { name: "read" }, write: { name: "write" } }),
+            server("gh", "authenticationRequired", {}),
+          ],
+          nextCursor: "page2",
+        });
+      } else {
+        respond(id, { data: [server("bad", "failed", {}, "spawn ENOENT"), server("slow", null, {})], nextCursor: null });
+      }
+      return;
+    }
+    case "config/mcpServer/reload":
+      respond(id, {});
+      return;
     case "turn/interrupt":
       if (!activeTurn || activeTurn.id !== params?.turnId) {
         respondError(id, -32600, "no active turn to interrupt");

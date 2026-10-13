@@ -3,12 +3,14 @@
 import path from "node:path";
 
 import type {
+  AgentMcpStatusResult,
   AgentMode,
   AgentModelDefinition,
   AgentPermissionRequest,
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentSlashCommand,
   ProviderProfile,
   ProviderProfileExtends,
 } from "@agentdeck/protocol";
@@ -30,7 +32,7 @@ import {
   type ClaudeExecutableResolution,
 } from "../claude/claude-executable.js";
 import { claudeStandardThinkingOptions, withThinkingOptions } from "../claude/thinking-options.js";
-import { CODEX_MODES, CodexAgentClient } from "../codex/codex-agent.js";
+import { CODEX_MODES, CODEX_SLASH_COMMANDS, CodexAgentClient } from "../codex/codex-agent.js";
 import { thinkingOptionsFromIds } from "../shared/thinking-options.js";
 import { resolveCodexLaunch, type CodexLaunch } from "../codex/launch.js";
 import { buildClaudeLaunchOverride, buildCodexLaunchOverride, mergeClaudeSettings } from "./launch.js";
@@ -205,13 +207,25 @@ export class CustomProviderClient implements AgentClient {
       : availability;
   }
 
-  async fetchCatalog(opts?: {
-    cwd?: string;
-  }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
+  async fetchCatalog(opts?: { cwd?: string }): Promise<{
+    models: AgentModelDefinition[];
+    modes: AgentMode[];
+    commands?: AgentSlashCommand[];
+  }> {
     if (this.staticModels && this.kind !== "acp") {
-      // claude / codex 的模式是固定列表：不必为拿模式启动 CLI（静态模型替代动态发现）
-      const modes = this.kind === "claude" ? CLAUDE_MODES : CODEX_MODES;
-      return { models: structuredClone(this.staticModels), modes: structuredClone(modes) };
+      // claude / codex 的模式是固定列表：不必为拿模式启动 CLI（静态模型替代动态发现）；
+      // 因此 claude 此时拿不到斜杠命令（只有起会话后才有），codex 的命令是固定列表（design.md 4.14）
+      if (this.kind === "claude") {
+        return {
+          models: structuredClone(this.staticModels),
+          modes: structuredClone(CLAUDE_MODES),
+        };
+      }
+      return {
+        models: structuredClone(this.staticModels),
+        modes: structuredClone(CODEX_MODES),
+        commands: structuredClone([...CODEX_SLASH_COMMANDS]),
+      };
     }
     const catalog = await this.guard(() => this.inner.fetchCatalog(opts));
     if (!this.staticModels) {
@@ -285,6 +299,9 @@ class RedactingSession implements AgentSession {
   setModel?: (modelId: string | null) => Promise<void>;
   setMode?: (modeId: string) => Promise<void>;
   setThinking?: (thinkingOptionId: string | null) => Promise<{ notice?: string } | void>;
+  listCommands?: () => Promise<AgentSlashCommand[]>;
+  getMcpStatus?: () => Promise<AgentMcpStatusResult>;
+  reconnectMcp?: (serverName?: string) => Promise<void>;
 
   constructor(
     private readonly inner: AgentSession,
@@ -298,6 +315,25 @@ class RedactingSession implements AgentSession {
     }
     if (inner.setThinking) {
       this.setThinking = (thinkingOptionId) => this.guard(() => inner.setThinking!(thinkingOptionId));
+    }
+    if (inner.listCommands) {
+      this.listCommands = () => this.guard(() => inner.listCommands!());
+    }
+    if (inner.getMcpStatus) {
+      // MCP 错误信息可能带上中转地址里的密钥：与 timeline 同样脱敏
+      this.getMcpStatus = () =>
+        this.guard(async () => {
+          const status = await inner.getMcpStatus!();
+          return {
+            ...status,
+            servers: status.servers.map((server) =>
+              server.error ? { ...server, error: redactText(server.error, secrets) } : server,
+            ),
+          };
+        });
+    }
+    if (inner.reconnectMcp) {
+      this.reconnectMcp = (serverName) => this.guard(() => inner.reconnectMcp!(serverName));
     }
   }
 

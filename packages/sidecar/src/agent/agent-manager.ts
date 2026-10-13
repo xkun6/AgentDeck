@@ -1,10 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type {
+  AgentMcpStatusResult,
   AgentModelDefinition,
   AgentPermissionResponse,
   AgentPromptInput,
   AgentProviderId,
+  AgentSlashCommand,
   AgentSnapshot,
   AgentStatus,
   AgentStreamEnvelope,
@@ -24,6 +26,7 @@ import {
   type SubagentTimelinePage,
   type SubagentTimelineQuery,
 } from "./provider-subagent-store.js";
+import { dedupeSlashCommands } from "./slash-commands.js";
 import type {
   AgentClient,
   AgentSession,
@@ -277,27 +280,10 @@ export class AgentManager {
     if (agent.sending || (busy && !inBackgroundTurn)) {
       throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束或先取消");
     }
-    if (agent.session === null) {
-      this.refreshClient(agent);
-      this.assertResumable(agent);
-    } else if (agent.closed) {
-      throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
-    }
 
     agent.sending = true;
     try {
-      if (agent.session === null) {
-        agent.resuming = this.resumeAgent(agent);
-        try {
-          await agent.resuming;
-        } finally {
-          agent.resuming = null;
-        }
-      }
-      const session = agent.session as AgentSession | null;
-      if (agent.closed || !session) {
-        throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agentId}`);
-      }
+      const session = await this.ensureSession(agent);
       // user_message 先在事件链中占位（排在 startTurn 期间 provider 发出的事件之前），
       // startTurn 成功返回后才写入；失败则不写，避免留下没有回合的用户消息（design.md 4.4）
       let settleUserMessage!: (sent: boolean) => void;
@@ -348,6 +334,52 @@ export class AgentManager {
     } finally {
       agent.sending = false;
     }
+  }
+
+  /**
+   * design.md 4.14：斜杠命令（按 name 去重）。有活会话且实现了 listCommands 时用它，
+   * 否则（dormant / closed / 未实现）取 provider 目录的 commands；不为此恢复会话。
+   */
+  async listCommands(agentId: string): Promise<AgentSlashCommand[]> {
+    const agent = this.requireAgent(agentId);
+    const session = agent.closed ? null : agent.session;
+    if (session?.listCommands) {
+      try {
+        return dedupeSlashCommands(await session.listCommands());
+      } catch (error) {
+        this.logger.warn("获取 agent %s 的斜杠命令失败，改用目录：%s", agent.id, errorMessage(error));
+      }
+    }
+    const client = this.registry.get(agent.snapshot.provider) ?? agent.client;
+    if (!client) {
+      return [];
+    }
+    const catalog = await client
+      .fetchCatalog({ cwd: agent.snapshot.cwd })
+      .catch((error: unknown) => {
+        this.logger.warn("获取 %s 模型目录失败：%s", agent.snapshot.provider, errorMessage(error));
+        return null;
+      });
+    return dedupeSlashCommands(catalog?.commands ?? []);
+  }
+
+  /** design.md 4.14：MCP 服务器状态；dormant / closed 且可恢复时先恢复会话，不受单 turn 约束 */
+  async getMcpStatus(agentId: string): Promise<AgentMcpStatusResult> {
+    const session = await this.ensureSession(this.requireAgent(agentId));
+    if (!session.getMcpStatus) {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持查看 MCP 服务器");
+    }
+    return session.getMcpStatus();
+  }
+
+  /** design.md 4.14：重连 MCP 后返回最新状态；会话处理同 getMcpStatus */
+  async reconnectMcp(agentId: string, serverName?: string): Promise<AgentMcpStatusResult> {
+    const session = await this.ensureSession(this.requireAgent(agentId));
+    if (!session.reconnectMcp || !session.getMcpStatus) {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持重连 MCP 服务器");
+    }
+    await session.reconnectMcp(serverName);
+    return session.getMcpStatus();
   }
 
   async cancel(agentId: string): Promise<void> {
@@ -629,6 +661,28 @@ export class AgentManager {
       throw new AgentRpcError("NOT_SUPPORTED", RESUME_NOT_SUPPORTED_MESSAGE);
     }
     throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agent.id}`);
+  }
+
+  /**
+   * 返回可用的会话：未加载（dormant / closed）且可恢复时先恢复（design.md 4.5），并发调用共用同一次恢复
+   * （agent.resuming）；不可恢复按 assertResumable 报错，关闭中返回 AGENT_CLOSED。
+   */
+  private async ensureSession(agent: ManagedAgent): Promise<AgentSession> {
+    if (agent.session === null && !agent.resuming) {
+      this.refreshClient(agent);
+      this.assertResumable(agent);
+      agent.resuming = this.resumeAgent(agent).finally(() => {
+        agent.resuming = null;
+      });
+    }
+    if (agent.resuming) {
+      await agent.resuming;
+    }
+    const session = agent.session as AgentSession | null;
+    if (agent.closed || !session) {
+      throw new AgentRpcError("AGENT_CLOSED", `agent 已关闭：${agent.id}`);
+    }
+    return session;
   }
 
   /** dormant / closed → starting → idle；失败时回到原状态并写 lastError */

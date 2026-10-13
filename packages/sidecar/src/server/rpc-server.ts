@@ -239,10 +239,13 @@ export class RpcServer {
       defineMethod(
         AGENT_RPC_METHODS.providerListModels,
         z.object({ provider: z.string().min(1), cwd: z.string().optional() }),
-        (params) =>
-          requireClient(params.provider).fetchCatalog(
+        async (params) => {
+          // 目录里的 commands 只供 agent.commands 使用，不出现在本方法的结果里（design.md 4.14）
+          const { models, modes } = await requireClient(params.provider).fetchCatalog(
             params.cwd !== undefined ? { cwd: params.cwd } : undefined,
-          ),
+          );
+          return { models, modes };
+        },
       ),
       defineMethod(
         AGENT_RPC_METHODS.agentCreate,
@@ -333,6 +336,17 @@ export class RpcServer {
             ...(params.cursorSeq !== undefined ? { cursorSeq: params.cursorSeq } : {}),
             ...(params.limit !== undefined ? { limit: params.limit } : {}),
           }),
+      ),
+      defineMethod(AGENT_RPC_METHODS.agentCommands, agentIdParams, async (params) => ({
+        commands: await manager.listCommands(params.agentId),
+      })),
+      defineMethod(AGENT_RPC_METHODS.agentMcpStatus, agentIdParams, (params) =>
+        manager.getMcpStatus(params.agentId),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.agentMcpReconnect,
+        z.object({ agentId: z.string().min(1), serverName: z.string().min(1).optional() }),
+        (params) => manager.reconnectMcp(params.agentId, params.serverName),
       ),
       ...this.createProviderConfigMethods(),
     ];

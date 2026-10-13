@@ -10,6 +10,9 @@ import os from "node:os";
 import path from "node:path";
 
 import type {
+  AgentMcpServer,
+  AgentMcpServerStatus,
+  AgentMcpStatusResult,
   AgentMode,
   AgentModelDefinition,
   AgentThinkingOption,
@@ -18,6 +21,7 @@ import type {
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentSlashCommand,
   AgentStreamEvent,
   AgentUsage,
   ToolCallDetail,
@@ -62,6 +66,60 @@ const MODEL_LIST_TIMEOUT_MS = 15_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const NATIVE_TURN_ID_WAIT_MS = 2_000;
 const MODEL_LIST_MAX_PAGES = 5;
+const MCP_STATUS_TIMEOUT_MS = 30_000;
+const MCP_RELOAD_TIMEOUT_MS = 60_000;
+const MCP_STATUS_MAX_PAGES = 20;
+
+/**
+ * Codex 的斜杠命令（design.md 4.14）：只有 /compact，由 sidecar 拦截改调 thread/compact/start；
+ * 其它 Codex TUI 命令 app-server 不支持。
+ */
+export const CODEX_SLASH_COMMANDS: readonly AgentSlashCommand[] = [
+  { name: "compact", description: "压缩当前对话上下文" },
+];
+
+/** prompt 去掉首尾空白后恰好是 `/compact`（字符串，或只有一个 text 块且无图片） */
+export function isCodexCompactPrompt(prompt: AgentPromptInput): boolean {
+  if (typeof prompt === "string") {
+    return prompt.trim() === "/compact";
+  }
+  const [only] = prompt;
+  return prompt.length === 1 && only?.type === "text" && only.text.trim() === "/compact";
+}
+
+/** mcpServerStatus/list 的 runtimeStatus → AgentMcpServerStatus（notStarted / starting / null 等归为 pending） */
+function toMcpServerStatus(runtimeStatus: unknown): AgentMcpServerStatus {
+  switch (runtimeStatus) {
+    case "connected":
+      return "connected";
+    case "authenticationRequired":
+      return "needs-auth";
+    case "failed":
+    case "cancelled":
+      return "failed";
+    case "disabled":
+      return "disabled";
+    default:
+      return "pending";
+  }
+}
+
+/** mcpServerStatus/list 的一项 → AgentMcpServer；没有 name 返回 null */
+export function mapCodexMcpServer(entry: unknown): AgentMcpServer | null {
+  const record = asRecord(entry);
+  const name = str(record?.name);
+  if (!record || !name) {
+    return null;
+  }
+  const tools = asRecord(record.tools);
+  const error = str(record.toolsError);
+  return {
+    name,
+    status: toMcpServerStatus(record.runtimeStatus),
+    ...(error ? { error } : {}),
+    ...(tools ? { toolCount: Object.keys(tools).length } : {}),
+  };
+}
 
 export const DEFAULT_CODEX_MODE_ID = "auto";
 
@@ -529,10 +587,13 @@ export class CodexAgentClient implements AgentClient {
     }
   }
 
-  async fetchCatalog(opts?: {
-    cwd?: string;
-  }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
+  async fetchCatalog(opts?: { cwd?: string }): Promise<{
+    models: AgentModelDefinition[];
+    modes: AgentMode[];
+    commands?: AgentSlashCommand[];
+  }> {
     const modes = CODEX_MODES.map((mode) => ({ ...mode }));
+    const commands = CODEX_SLASH_COMMANDS.map((command) => ({ ...command }));
     let client: CodexAppServerClient | null = null;
     try {
       const launch = await this.requireLaunch();
@@ -541,10 +602,10 @@ export class CodexAgentClient implements AgentClient {
         env: this.env,
       });
       const models = await listCodexModels(client, this.provider);
-      return { models, modes };
+      return { models, modes, commands };
     } catch (error) {
       this.logger.warn("[codex] 获取模型列表失败：%s", errorMessage(error));
-      return { models: [], modes };
+      return { models: [], modes, commands };
     } finally {
       await client?.dispose().catch(() => undefined);
     }
@@ -696,6 +757,8 @@ export class CodexAgentSession implements AgentSession {
   private connecting: Promise<CodexAppServerClient> | null = null;
   private threadId: string | null;
   private threadLoaded = false;
+  /** 进行中的 thread/start / thread/resume（回合与 MCP 查询可能并发调用 ensureThread） */
+  private threadLoading: Promise<void> | null = null;
   private threadAnnounced = false;
   private model: string | null;
   private modeId: string;
@@ -808,6 +871,25 @@ export class CodexAgentSession implements AgentSession {
     }
     if (turn.finished) {
       return; // 准备期间已被中断或关闭
+    }
+
+    if (isCodexCompactPrompt(prompt)) {
+      // 手动压缩（design.md 4.14）：改调 thread/compact/start；原生 turnId、contextCompaction item 与
+      // turn/completed 都像普通回合一样经通知到达
+      try {
+        await client.request(
+          "thread/compact/start",
+          { threadId: this.threadId },
+          TURN_START_TIMEOUT_MS,
+        );
+      } catch (error) {
+        this.finishTurn(turn, {
+          type: "turn_failed",
+          turnId: turn.turnId,
+          error: `Codex thread/compact/start 失败：${errorMessage(error)}`,
+        });
+      }
+      return;
     }
 
     const params: JsonRecord = {
@@ -924,6 +1006,46 @@ export class CodexAgentSession implements AgentSession {
     this.thinkingOptionId = normalizeThinkingOptionId(thinkingOptionId);
     this.emit({ type: "thinking_option_changed", thinkingOptionId: this.thinkingOptionId });
     return this.active && !this.active.finished ? { notice: THINKING_APPLIES_NEXT_TURN_NOTICE } : {};
+  }
+
+  /** design.md 4.14：只有 /compact（sidecar 拦截） */
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    return CODEX_SLASH_COMMANDS.map((command) => ({ ...command }));
+  }
+
+  /** mcpServerStatus/list 翻页汇总；线程尚不存在时先建线程。只能整体重新加载（reconnect: all） */
+  async getMcpStatus(): Promise<AgentMcpStatusResult> {
+    const client = await this.ensureClient();
+    await this.ensureThread();
+    const servers: AgentMcpServer[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
+      const response = asRecord(
+        await client.request(
+          "mcpServerStatus/list",
+          { threadId: this.threadId, detail: "toolsAndAuthOnly", ...(cursor ? { cursor } : {}) },
+          MCP_STATUS_TIMEOUT_MS,
+        ),
+      );
+      const data: unknown[] = Array.isArray(response?.data) ? response.data : [];
+      for (const entry of data) {
+        const server = mapCodexMcpServer(entry);
+        if (server) {
+          servers.push(server);
+        }
+      }
+      cursor = str(response?.nextCursor) ?? null;
+      if (!cursor) {
+        break;
+      }
+    }
+    return { servers, reconnect: "all" };
+  }
+
+  /** config/mcpServer/reload：从磁盘重载 MCP 配置并整体生效；没有按服务器重连，忽略 serverName */
+  async reconnectMcp(): Promise<void> {
+    const client = await this.ensureClient();
+    await client.request("config/mcpServer/reload", undefined, MCP_RELOAD_TIMEOUT_MS);
   }
 
   /**
@@ -1044,7 +1166,16 @@ export class CodexAgentSession implements AgentSession {
     );
   }
 
-  private async ensureThread(): Promise<void> {
+  private ensureThread(): Promise<void> {
+    if (!this.threadLoading) {
+      this.threadLoading = this.loadThread().finally(() => {
+        this.threadLoading = null;
+      });
+    }
+    return this.threadLoading;
+  }
+
+  private async loadThread(): Promise<void> {
     const client = await this.ensureClient();
     if (this.threadLoaded) {
       return;

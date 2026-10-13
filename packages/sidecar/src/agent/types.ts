@@ -1,6 +1,7 @@
 // Derived from paseo packages/server/src/server/agent/agent-sdk-types.ts (Apache-2.0); modified for AgentDeck
 // sidecar 内部的 Agent 适配接口（design.md 第 5 节，精简版）。事件与数据类型从 @agentdeck/protocol 导入。
 import type {
+  AgentMcpStatusResult,
   AgentMode,
   AgentModelDefinition,
   AgentPermissionRequest,
@@ -9,6 +10,7 @@ import type {
   AgentPromptInput,
   AgentProviderId,
   AgentProviderKind,
+  AgentSlashCommand,
   AgentStreamEvent,
   AgentTimelineItem,
   ProviderProfileExtends,
@@ -89,6 +91,12 @@ export interface AgentSession {
    * 正在运行一轮时返回 notice（中文提示）。
    */
   setThinking?(thinkingOptionId: string | null): Promise<{ notice?: string } | void>;
+  /** 斜杠命令列表（design.md 4.14）；未实现时 AgentManager 退回 provider 目录的 commands */
+  listCommands?(): Promise<AgentSlashCommand[]>;
+  /** MCP 服务器状态（design.md 4.14） */
+  getMcpStatus?(): Promise<AgentMcpStatusResult>;
+  /** 重连 MCP：作用域为 server 时重连 serverName，为 all 时忽略 serverName、整体重新加载 */
+  reconnectMcp?(serverName?: string): Promise<void>;
 }
 
 export interface AgentAvailability {
@@ -105,9 +113,14 @@ export interface AgentClient {
   /** 来自 providers.json 的自定义 provider（design.md 4.7）；内置 provider 不设置 */
   readonly custom?: { extends: ProviderProfileExtends; description?: string };
   isAvailable(): Promise<AgentAvailability>;
+  /** commands 只供 agent.commands 在会话未加载时使用，不出现在 provider.listModels 的结果里 */
   fetchCatalog(opts?: {
     cwd?: string;
-  }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }>;
+  }): Promise<{
+    models: AgentModelDefinition[];
+    modes: AgentMode[];
+    commands?: AgentSlashCommand[];
+  }>;
   createSession(cfg: AgentSessionConfig): Promise<AgentSession>;
   resumeSession?(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession>;
   shutdown?(): Promise<void>;

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentModelDefinition, AgentStreamEvent, ToolCallTimelineItem } from "@agentdeck/protocol";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentSession } from "../../../src/agent/types.js";
 import { createSilentLogger } from "../../../src/logger.js";
@@ -15,6 +15,7 @@ import {
 } from "../../../src/providers/claude/index.js";
 import type {
   ClaudeInitializeResponse,
+  ClaudeMcpStatusResponse,
   ClaudeOutputMessage,
   ClaudePermissionMode,
   ClaudePermissionResult,
@@ -32,8 +33,11 @@ class FakeCli implements ClaudeCliHandle {
     interrupt: 0,
     setModel: [] as (string | null)[],
     setPermissionMode: [] as ClaudePermissionMode[],
+    mcpStatus: 0,
+    mcpReconnect: [] as string[],
     close: 0,
   };
+  mcpStatusResponse: ClaudeMcpStatusResponse = {};
   initialized: Promise<ClaudeInitializeResponse> = Promise.resolve({});
   interruptImpl: () => Promise<void> = async () => undefined;
   onUser: (message: ClaudeUserInput, cli: FakeCli) => void = () => undefined;
@@ -110,6 +114,15 @@ class FakeCli implements ClaudeCliHandle {
 
   async setPermissionMode(mode: ClaudePermissionMode): Promise<void> {
     this.calls.setPermissionMode.push(mode);
+  }
+
+  async mcpStatus(): Promise<ClaudeMcpStatusResponse> {
+    this.calls.mcpStatus += 1;
+    return this.mcpStatusResponse;
+  }
+
+  async mcpReconnect(serverName: string): Promise<void> {
+    this.calls.mcpReconnect.push(serverName);
   }
 
   async close(): Promise<void> {
@@ -1601,5 +1614,119 @@ describe("ClaudeAgentSession", () => {
     await expect(session.startTurn("again")).rejects.toThrow("已关闭");
     await session.close(); // 幂等
     expect(h.clis[0]!.calls.close).toBe(1);
+  });
+});
+
+describe("斜杠命令与 MCP（design.md 4.14）", () => {
+  const commandsResponse = {
+    models: [{ value: "default", displayName: "Default" }],
+    commands: [
+      { name: "compact", description: "Clear history but keep a summary", argumentHint: "<instructions>" },
+      { name: "mcp", description: "Manage MCP servers" },
+      { name: "compact", description: "重复项按 name 去重" },
+      { name: "review", description: "Review", aliases: ["r", 1] },
+      { description: "缺 name" },
+      "bogus",
+    ],
+  } as unknown as ClaudeInitializeResponse;
+  const expectedCommands = [
+    { name: "compact", description: "Clear history but keep a summary", argumentHint: "<instructions>" },
+    { name: "mcp", description: "Manage MCP servers" },
+    { name: "review", description: "Review", aliases: ["r"] },
+  ];
+
+  test("fetchCatalog 顺带返回 initialize 的斜杠命令（去重、跳过非法项），命令按 cwd 缓存", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.initialized = Promise.resolve(commandsResponse);
+    });
+    const first = await h.client.fetchCatalog({ cwd: "J:\a" });
+    expect(first.commands).toEqual(expectedCommands);
+    await h.client.fetchCatalog({ cwd: "J:\a" });
+    expect(h.clis).toHaveLength(1);
+    // 换 cwd：项目级命令可能不同，再探测一次
+    await h.client.fetchCatalog({ cwd: "J:\b" });
+    expect(h.clis).toHaveLength(2);
+    expect(h.clis[1]!.options.cwd).toBe("J:\b");
+    // 不传 cwd：模型已缓存，不为命令单独探测
+    const noCwd = await h.client.fetchCatalog();
+    expect(h.clis).toHaveLength(2);
+    expect(noCwd.commands).toBeUndefined();
+  });
+
+  test("listCommands：进程未启动时退回目录（不启动会话进程）；之后用 initialize 应答；commands_changed 整体替换", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.initialized = Promise.resolve(commandsResponse);
+      cli.onUser = replyText("好的");
+    });
+    const session = await h.client.createSession({ cwd: "J:\w" });
+    expect(await session.listCommands!()).toEqual(expectedCommands);
+    // 只起了一个探测进程，没有发用户消息
+    expect(h.clis).toHaveLength(1);
+    expect(h.clis[0]!.received).toHaveLength(0);
+
+    const events = collect(session);
+    await session.startTurn("hi");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(h.clis).toHaveLength(2);
+    expect(await session.listCommands!()).toEqual(expectedCommands);
+
+    const before = events.length;
+    h.clis[1]!.emit({
+      type: "system",
+      subtype: "commands_changed",
+      session_id: SESSION_ID,
+      uuid: "cc",
+      commands: [{ name: "clear", description: "清空" }, { name: "clear" }],
+    });
+    await vi.waitFor(async () =>
+      expect(await session.listCommands!()).toEqual([{ name: "clear", description: "清空" }]),
+    );
+    // 不影响时间线
+    expect(events).toHaveLength(before);
+  });
+
+  test("getMcpStatus：映射 mcp_status（非法 status 归 pending、toolCount）；进程未启动时启动但不发消息", async () => {
+    const h = createHarness();
+    h.setup((cli) => {
+      cli.mcpStatusResponse = {
+        mcpServers: [
+          { name: "fs", status: "connected", scope: "user", tools: [{ name: "read" }, { name: "write" }] },
+          { name: "gh", status: "needs-auth" },
+          { name: "bad", status: "failed", error: "spawn ENOENT" },
+          { name: "odd", status: "weird" },
+          { status: "connected" },
+        ],
+      };
+    });
+    const session = await h.client.createSession({ cwd: "." });
+    await expect(session.getMcpStatus!()).resolves.toEqual({
+      reconnect: "server",
+      servers: [
+        { name: "fs", status: "connected", scope: "user", toolCount: 2 },
+        { name: "gh", status: "needs-auth" },
+        { name: "bad", status: "failed", error: "spawn ENOENT" },
+        { name: "odd", status: "pending" },
+      ],
+    });
+    expect(h.clis).toHaveLength(1);
+    expect(h.clis[0]!.received).toHaveLength(0);
+
+    // 之后的回合复用同一进程
+    h.clis[0]!.onUser = replyText("好的");
+    const events = collect(session);
+    await session.startTurn("x");
+    await waitUntil(() => terminalEvents(events).length === 1);
+    expect(h.clis).toHaveLength(1);
+  });
+
+  test("reconnectMcp：发 mcp_reconnect 带 serverName；缺 serverName 返回 NOT_SUPPORTED", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    await session.reconnectMcp!("fs");
+    expect(h.clis[0]!.calls.mcpReconnect).toEqual(["fs"]);
+    await expect(session.reconnectMcp!()).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+    expect(h.clis[0]!.calls.mcpReconnect).toEqual(["fs"]);
   });
 });

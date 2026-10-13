@@ -193,6 +193,8 @@ describe("Claude 中转：--settings 与 --disallowedTools", () => {
         interrupt: async () => undefined,
         setModel: async () => undefined,
         setPermissionMode: async () => undefined,
+        mcpStatus: async () => ({}),
+        mcpReconnect: async () => undefined,
         close: async () => finish(),
         async *[Symbol.asyncIterator]() {
           await done;

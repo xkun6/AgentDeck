@@ -9,6 +9,7 @@ import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   type AgentCapabilities,
+  type AvailableCommand,
   type PermissionOption,
   type PromptResponse,
   type RequestPermissionRequest,
@@ -26,12 +27,14 @@ import type {
   AgentPersistenceHandle,
   AgentPromptInput,
   AgentProviderId,
+  AgentSlashCommand,
   AgentStreamEvent,
   AgentUsage,
 } from "@agentdeck/protocol";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import { AgentRpcError } from "../../agent/errors.js";
+import { dedupeSlashCommands } from "../../agent/slash-commands.js";
 import type { AgentSession } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { spawnProcess } from "../../utils/spawn.js";
@@ -129,6 +132,8 @@ export class AcpAgentSession implements AgentSession {
   /** 建会话时 thought_level 的 currentValue：思考强度设回 null（跟随 Agent）时恢复成它 */
   private defaultThoughtValue: string | null = null;
   private usage: AgentUsage = {};
+  /** 最近一次 available_commands_update 给出的斜杠命令（design.md 4.14） */
+  private commands: AgentSlashCommand[] = [];
 
   private active: ActiveTurn | null = null;
   private threadStartedEmitted = false;
@@ -576,6 +581,29 @@ export class AcpAgentSession implements AgentSession {
     }
   }
 
+  /** design.md 4.14：最近一次 available_commands_update 的列表，没收到过为空 */
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    return this.commands;
+  }
+
+  private applyAvailableCommands(commands: AvailableCommand[]): void {
+    this.commands = dedupeSlashCommands(
+      commands.flatMap((command) => {
+        if (typeof command?.name !== "string" || !command.name) {
+          return [];
+        }
+        const hint = command.input && "hint" in command.input ? command.input.hint : undefined;
+        return [
+          {
+            name: command.name,
+            ...(command.description ? { description: command.description } : {}),
+            ...(typeof hint === "string" && hint ? { argumentHint: hint } : {}),
+          },
+        ];
+      }),
+    );
+  }
+
   // -------------------------------------------------------------------------
   // agent → client
   // -------------------------------------------------------------------------
@@ -589,6 +617,9 @@ export class AcpAgentSession implements AgentSession {
       }
       if (update.sessionUpdate === "config_option_update") {
         this.applyConfigOptionUpdate(update.configOptions, false);
+      }
+      if (update.sessionUpdate === "available_commands_update") {
+        this.applyAvailableCommands(update.availableCommands);
       }
       return;
     }
@@ -659,9 +690,11 @@ export class AcpAgentSession implements AgentSession {
       case "config_option_update":
         this.applyConfigOptionUpdate(update.configOptions, true);
         return;
+      case "available_commands_update":
+        this.applyAvailableCommands(update.availableCommands);
+        return;
       default:
-        // user_message_chunk（user_message 由 AgentManager 统一记录）、available_commands_update、
-        // session_info_update：忽略
+        // user_message_chunk（user_message 由 AgentManager 统一记录）、session_info_update：忽略
         return;
     }
   }

@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type {
+  AgentMcpStatusResult,
   AgentPermissionRequest,
   AgentPersistenceHandle,
+  AgentSlashCommand,
   AgentSnapshot,
   AgentStreamEnvelope,
   AgentStreamEvent,
@@ -96,17 +98,23 @@ class FakeSession implements AgentSession {
 interface FakeClientOptions {
   resumable?: boolean;
   resume?: (handle: AgentPersistenceHandle) => Promise<AgentSession>;
+  /** fetchCatalog 返回的斜杠命令（design.md 4.14） */
+  commands?: AgentSlashCommand[];
 }
 
 function fakeClient(options: FakeClientOptions = {}) {
   const sessions: FakeSession[] = [];
   const resumeCalls: AgentPersistenceHandle[] = [];
+  const catalogCalls: Array<{ cwd?: string } | undefined> = [];
   const client: AgentClient = {
     provider: "fake",
     kind: "mock",
     label: "Fake",
     isAvailable: async () => ({ available: true }),
-    fetchCatalog: async () => ({ models: [], modes: [] }),
+    fetchCatalog: async (opts) => {
+      catalogCalls.push(opts);
+      return { models: [], modes: [], ...(options.commands ? { commands: options.commands } : {}) };
+    },
     createSession: async () => {
       const session = new FakeSession();
       sessions.push(session);
@@ -124,7 +132,7 @@ function fakeClient(options: FakeClientOptions = {}) {
       return session;
     };
   }
-  return { client, sessions, resumeCalls };
+  return { client, sessions, resumeCalls, catalogCalls };
 }
 
 function createManager(client: AgentClient, dataDir?: string, now?: () => number) {
@@ -541,5 +549,104 @@ describe("agent.delete", () => {
     const { client } = fakeClient();
     const { manager } = createManager(client, seeded.dataDir);
     await expect(manager.restore()).resolves.toBe(0);
+  });
+});
+
+describe("斜杠命令与 MCP（design.md 4.14）", () => {
+  const MCP_STATUS: AgentMcpStatusResult = {
+    servers: [{ name: "fs", status: "connected", toolCount: 2 }],
+    reconnect: "server",
+  };
+
+  /** 带斜杠命令与 MCP 方法的假会话 */
+  class McpSession extends FakeSession {
+    reconnects: Array<string | undefined> = [];
+    async listCommands(): Promise<AgentSlashCommand[]> {
+      return [{ name: "live" }, { name: "live", description: "重名" }];
+    }
+    async getMcpStatus(): Promise<AgentMcpStatusResult> {
+      return MCP_STATUS;
+    }
+    async reconnectMcp(serverName?: string): Promise<void> {
+      this.reconnects.push(serverName);
+    }
+  }
+
+  test("agent.commands：dormant 走 fetchCatalog（按 name 去重）且不恢复会话", async () => {
+    const seeded = await seedDormant({
+      commands: [{ name: "compact", description: "压缩" }, { name: "compact" }, { name: "mcp" }],
+    });
+    const { manager, agentId, resumeCalls, catalogCalls } = seeded;
+    await expect(manager.listCommands(agentId)).resolves.toEqual([
+      { name: "compact", description: "压缩" },
+      { name: "mcp" },
+    ]);
+    expect(catalogCalls.at(-1)).toEqual({ cwd: "/work" });
+    expect(resumeCalls).toHaveLength(0);
+    expect(manager.getAgent(agentId).status).toBe("dormant");
+    await expect(manager.listCommands("missing")).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+  });
+
+  test("agent.commands：活会话实现了 listCommands 时用它；未实现时退回目录", async () => {
+    const withList = fakeClient({ commands: [{ name: "catalog" }] });
+    withList.client.createSession = async () => new McpSession();
+    const a = createManager(withList.client);
+    const live = await a.manager.createAgent({ provider: "fake", cwd: "/w" });
+    await expect(a.manager.listCommands(live.id)).resolves.toEqual([{ name: "live" }]);
+
+    const plain = fakeClient({ commands: [{ name: "catalog" }] });
+    const b = createManager(plain.client);
+    const other = await b.manager.createAgent({ provider: "fake", cwd: "/w" });
+    await expect(b.manager.listCommands(other.id)).resolves.toEqual([{ name: "catalog" }]);
+  });
+
+  test("agent.mcp.*：dormant 先自动恢复再查询 / 重连；回合进行中也可用", async () => {
+    const seeded = await seedDormant({
+      resume: async (handle) => new McpSession(handle.sessionId),
+    });
+    const { manager, agentId, resumeCalls } = seeded;
+    await expect(manager.getMcpStatus(agentId)).resolves.toEqual(MCP_STATUS);
+    expect(resumeCalls).toHaveLength(1);
+    expect(manager.getAgent(agentId).status).toBe("idle");
+
+    await manager.sendPrompt(agentId, "跑一轮");
+    expect(manager.getAgent(agentId).status).toBe("running");
+    await expect(manager.reconnectMcp(agentId, "fs")).resolves.toEqual(MCP_STATUS);
+    expect(resumeCalls).toHaveLength(1);
+  });
+
+  test("agent.mcp.*：并发调用只恢复一次", async () => {
+    let release!: (session: AgentSession) => void;
+    const seeded = await seedDormant({
+      resume: () =>
+        new Promise<AgentSession>((resolve) => {
+          release = resolve;
+        }),
+    });
+    const { manager, agentId, resumeCalls } = seeded;
+    const first = manager.getMcpStatus(agentId);
+    const second = manager.getMcpStatus(agentId);
+    await vi.waitFor(() => expect(resumeCalls).toHaveLength(1));
+    release(new McpSession(resumeCalls[0]!.sessionId));
+    await expect(Promise.all([first, second])).resolves.toEqual([MCP_STATUS, MCP_STATUS]);
+    expect(resumeCalls).toHaveLength(1);
+  });
+
+  test("agent.mcp.*：会话未实现返回 NOT_SUPPORTED；不可恢复按原规则报错", async () => {
+    const seeded = await seedDormant();
+    await expect(seeded.manager.getMcpStatus(seeded.agentId)).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: "该 Agent 不支持查看 MCP 服务器",
+    });
+    await expect(seeded.manager.reconnectMcp(seeded.agentId, "fs")).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: "该 Agent 不支持重连 MCP 服务器",
+    });
+
+    const unresumable = await seedDormant({ resumable: false });
+    await expect(unresumable.manager.getMcpStatus(unresumable.agentId)).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: RESUME_NOT_SUPPORTED_MESSAGE,
+    });
   });
 });

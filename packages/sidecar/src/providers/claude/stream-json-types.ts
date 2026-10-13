@@ -37,7 +37,11 @@ export type ClaudeOutgoingControl =
   | { subtype: "interrupt" }
   | { subtype: "set_model"; model?: string }
   /** mode 也可能是用户设置里的其它 CLI 模式（切回基础模式时） */
-  | { subtype: "set_permission_mode"; mode: string };
+  | { subtype: "set_permission_mode"; mode: string }
+  /** MCP 服务器状态（应答见 ClaudeMcpStatusResponse，design.md 4.14） */
+  | { subtype: "mcp_status" }
+  /** 重连单个 MCP 服务器；失败时控制应答为 error */
+  | { subtype: "mcp_reconnect"; serverName: string };
 
 /** 对 CLI 控制请求的应答（写入 stdin） */
 export interface ClaudeControlResponseOut {
@@ -108,6 +112,34 @@ export interface ClaudeTaskSystemMessage extends ClaudeSystemMessage {
   output_file?: unknown;
   /** task_progress / task_notification */
   usage?: { total_tokens?: unknown };
+}
+
+/**
+ * 斜杠命令条目（initialize 应答的 commands 与 `system` `commands_changed` 消息共用；name 不带前导 /）。
+ * 字段以 @anthropic-ai/claude-agent-sdk 的 SlashCommand 为准，宽松解析。
+ */
+export interface ClaudeSlashCommandEntry {
+  name?: unknown;
+  description?: unknown;
+  argumentHint?: unknown;
+  aliases?: unknown;
+}
+
+/** `system` `commands_changed` 消息：可用斜杠命令变化，整体替换（design.md 4.14） */
+export interface ClaudeCommandsChangedMessage extends ClaudeSystemMessage {
+  commands?: unknown;
+}
+
+/** mcp_status 控制请求的应答（字段以 Agent SDK 的 McpServerStatus 为准，只声明用到的） */
+export interface ClaudeMcpStatusResponse {
+  mcpServers?: Array<{
+    name?: unknown;
+    /** connected / failed / needs-auth / pending / disabled */
+    status?: unknown;
+    error?: unknown;
+    scope?: unknown;
+    tools?: unknown;
+  }>;
 }
 
 /** Messages API 流式事件（message_start / content_block_delta / message_delta 等）中用到的字段 */
@@ -197,6 +229,8 @@ export interface ClaudeInitializeResponse {
   }>;
   /** 进程当前的权限模式；未传 --permission-mode 启动时即用户设置的默认模式 */
   current_permission_mode?: unknown;
+  /** 可用的斜杠命令（内置命令、skill、项目 / 用户命令；可能重名，design.md 4.14） */
+  commands?: ClaudeSlashCommandEntry[];
 }
 
 // ---------------------------------------------------------------------------

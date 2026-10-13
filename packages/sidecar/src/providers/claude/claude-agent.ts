@@ -10,6 +10,9 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 
 import type {
+  AgentMcpServer,
+  AgentMcpServerStatus,
+  AgentMcpStatusResult,
   AgentMode,
   AgentModelDefinition,
   AgentPermissionAction,
@@ -17,6 +20,7 @@ import type {
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentSlashCommand,
   AgentStreamEvent,
   AgentTimelineItem,
   AgentUsage,
@@ -24,6 +28,8 @@ import type {
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 
+import { AgentRpcError } from "../../agent/errors.js";
+import { dedupeSlashCommands } from "../../agent/slash-commands.js";
 import type {
   AgentAvailability,
   AgentClient,
@@ -66,10 +72,12 @@ import {
 import type {
   ClaudeAssistantMessage,
   ClaudeCanUseTool,
+  ClaudeCommandsChangedMessage,
   ClaudeCompactBoundaryMessage,
   ClaudeContentBlock,
   ClaudeImageMediaType,
   ClaudeInitializeResponse,
+  ClaudeMcpStatusResponse,
   ClaudeOutputMessage,
   ClaudePermissionMode,
   ClaudePermissionResult,
@@ -136,6 +144,15 @@ const AVAILABILITY_CACHE_MS = 60_000;
 /** 模型列表来自 claude 的 initialize 应答，成功结果缓存 10 分钟 */
 const MODEL_CACHE_MS = 10 * 60_000;
 const MODEL_PROBE_TIMEOUT_MS = 15_000;
+/** 斜杠命令按 cwd 缓存的目录数上限（超出丢最早的） */
+const COMMAND_CACHE_MAX_ENTRIES = 32;
+const MCP_SERVER_STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
+  "connected",
+  "failed",
+  "needs-auth",
+  "pending",
+  "disabled",
+]);
 
 /** 父进程若本身运行在 Claude Code 里，这些变量会让子 claude 认为自己嵌套在另一个会话中 */
 const PARENT_SESSION_ENV_VARS = [
@@ -214,7 +231,10 @@ export class ClaudeAgentClient implements AgentClient {
   private readonly dataDir: string | undefined;
   private cached: { at: number; key: string; promise: Promise<ClaudeExecutableResolution> } | null = null;
   private modelCache: { at: number; models: AgentModelDefinition[] } | null = null;
-  private modelProbe: Promise<AgentModelDefinition[] | null> | null = null;
+  /** 斜杠命令与 cwd 有关（项目级 skill / 命令），按 cwd 单独缓存；模型不分 cwd */
+  private readonly commandCache = new Map<string, { at: number; commands: AgentSlashCommand[] }>();
+  /** 进行中的探测（按 cwd） */
+  private readonly probes = new Map<string, Promise<ClaudeProbeResult | null>>();
 
   constructor(options: ClaudeAgentClientOptions) {
     this.provider = options.providerId ?? CLAUDE_PROVIDER_ID;
@@ -247,13 +267,17 @@ export class ClaudeAgentClient implements AgentClient {
   /**
    * 模型优先取 claude initialize 应答里的列表，拿不到时退回静态别名；
    * 再追加 Claude 设置里的具体模型（每次重新读取设置），`default` 的描述写明当前生效的模型。
+   * 同一应答里的斜杠命令作为 commands 返回（design.md 4.14；拿不到时省略）。
    */
-  async fetchCatalog(opts?: {
-    cwd?: string;
-  }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }> {
+  async fetchCatalog(opts?: { cwd?: string }): Promise<{
+    models: AgentModelDefinition[];
+    modes: AgentMode[];
+    commands?: AgentSlashCommand[];
+  }> {
+    const probed = await this.loadProbe(opts?.cwd);
     // initialize 应答里的模型已按 CLI 报告定好档位（含「不支持」）；静态别名与设置发现的模型按清单 / 标准组补档位
     const models =
-      (await this.loadModels(opts?.cwd)) ?? CLAUDE_MODELS.map((model) => withClaudeThinkingOptions(model));
+      probed.models ?? CLAUDE_MODELS.map((model) => withClaudeThinkingOptions(model));
     const decided = new Set(models.map((model) => model.id));
     const settings = await this.loadSettings().catch(() => null);
     return {
@@ -263,23 +287,43 @@ export class ClaudeAgentClient implements AgentClient {
         this.provider,
       ).map((model) => (decided.has(model.id) ? model : withClaudeThinkingOptions(model))),
       modes: CLAUDE_MODES.map((mode) => ({ ...mode })),
+      ...(probed.commands ? { commands: probed.commands } : {}),
     };
   }
 
-  private async loadModels(cwd: string | undefined): Promise<AgentModelDefinition[] | null> {
-    if (this.modelCache && Date.now() - this.modelCache.at < MODEL_CACHE_MS) {
-      return this.modelCache.models;
+  /**
+   * 模型（不分 cwd）与该 cwd 的斜杠命令都命中缓存时不起探测进程；否则按 cwd 探测一次（并发共用）。
+   * 未传 cwd 时只要模型命中缓存就不为命令单独探测。
+   */
+  private async loadProbe(cwd: string | undefined): Promise<ClaudeProbeResult> {
+    const now = Date.now();
+    const key = cwd ?? os.homedir();
+    const models =
+      this.modelCache && now - this.modelCache.at < MODEL_CACHE_MS ? this.modelCache.models : null;
+    const cached = this.commandCache.get(key);
+    const commands = cached && now - cached.at < MODEL_CACHE_MS ? cached.commands : null;
+    if (models && (commands || cwd === undefined)) {
+      return { models, commands };
     }
-    if (!this.modelProbe) {
-      this.modelProbe = this.probeModels(cwd ?? os.homedir()).finally(() => {
-        this.modelProbe = null;
+    let probe = this.probes.get(key);
+    if (!probe) {
+      probe = this.probe(key).finally(() => {
+        this.probes.delete(key);
       });
+      this.probes.set(key, probe);
     }
-    return this.modelProbe;
+    const probed = await probe;
+    return {
+      models: models ?? probed?.models ?? null,
+      commands: commands ?? probed?.commands ?? null,
+    };
   }
 
-  /** 起一个临时 claude 进程，只发 initialize（不发用户消息，不消耗额度），读出模型列表后立即结束 */
-  private async probeModels(cwd: string): Promise<AgentModelDefinition[] | null> {
+  /**
+   * 起一个临时 claude 进程，只发 initialize（不发用户消息，不消耗额度），读出模型列表与斜杠命令后立即结束。
+   * 失败返回 null（不缓存）。
+   */
+  private async probe(cwd: string): Promise<ClaudeProbeResult | null> {
     let cli: ClaudeCliHandle | null = null;
     try {
       const resolution = await this.resolve();
@@ -299,11 +343,20 @@ export class ClaudeAgentClient implements AgentClient {
         controlTimeoutMs: MODEL_PROBE_TIMEOUT_MS,
         ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
       });
-      const models = mapInitializeModels(await cli.initialized, this.provider);
+      const response = await cli.initialized;
+      const models = mapInitializeModels(response, this.provider);
       if (models) {
         this.modelCache = { at: Date.now(), models };
       }
-      return models;
+      const commands = parseClaudeSlashCommands(response.commands);
+      if (commands) {
+        this.commandCache.delete(cwd);
+        this.commandCache.set(cwd, { at: Date.now(), commands });
+        if (this.commandCache.size > COMMAND_CACHE_MAX_ENTRIES) {
+          this.commandCache.delete(this.commandCache.keys().next().value!);
+        }
+      }
+      return { models, commands };
     } catch (error) {
       this.logger.warn("获取 Claude Code 模型列表失败，使用内置别名：%s", errorMessage(error));
       return null;
@@ -355,6 +408,7 @@ export class ClaudeAgentClient implements AgentClient {
       modeId,
       thinkingOptionId,
       resumeSessionId,
+      loadCatalogCommands: async () => (await this.loadProbe(cfg.cwd)).commands ?? [],
     });
   }
 
@@ -387,6 +441,12 @@ export class ClaudeAgentClient implements AgentClient {
   }
 }
 
+/** 探测进程 initialize 应答的结果；null 表示应答里没有可用条目 */
+interface ClaudeProbeResult {
+  models: AgentModelDefinition[] | null;
+  commands: AgentSlashCommand[] | null;
+}
+
 export interface ClaudeAgentSessionOptions {
   logger: Logger;
   /** 已清洗的子进程环境 */
@@ -405,6 +465,8 @@ export interface ClaudeAgentSessionOptions {
   /** 思考强度，null / 缺省表示跟随 Claude Code 设置（不传 --effort） */
   thinkingOptionId?: string | null;
   resumeSessionId: string | null;
+  /** claude 进程尚未启动时 listCommands 的退回来源（provider 目录的 commands） */
+  loadCatalogCommands?: () => Promise<AgentSlashCommand[]>;
 }
 
 interface ActiveTurn {
@@ -448,6 +510,7 @@ export class ClaudeAgentSession implements AgentSession {
   private readonly terminateProcess: ProcessTerminator | undefined;
   private readonly executablePath: string;
   private readonly cwd: string;
+  private readonly loadCatalogCommands: (() => Promise<AgentSlashCommand[]>) | undefined;
 
   private sessionId: string | null;
   private threadStarted = false;
@@ -465,6 +528,8 @@ export class ClaudeAgentSession implements AgentSession {
   private cliRestartNeeded = false;
 
   private cli: ClaudeCliHandle | null = null;
+  /** 最近一次 initialize 应答或 commands_changed 给出的斜杠命令（design.md 4.14）；null 为尚未取到 */
+  private commands: AgentSlashCommand[] | null = null;
 
   private activeTurn: ActiveTurn | null = null;
   /** 没有进行中的回合时到达的后台任务完成提示，下一轮开始后再发（design.md 4.12） */
@@ -521,6 +586,7 @@ export class ClaudeAgentSession implements AgentSession {
     this.mode = options.modeId;
     this.thinkingOptionId = normalizeThinkingOptionId(options.thinkingOptionId);
     this.sessionId = options.resumeSessionId;
+    this.loadCatalogCommands = options.loadCatalogCommands;
   }
 
   get id(): string | null {
@@ -745,6 +811,45 @@ export class ClaudeAgentSession implements AgentSession {
     return this.activeTurn ? { notice: THINKING_APPLIES_NEXT_TURN_NOTICE } : {};
   }
 
+  /**
+   * 斜杠命令（design.md 4.14）：最近一次 commands_changed 的列表，否则 initialize 应答里的；
+   * claude 进程尚未启动时不为此启动，退回 provider 目录的 commands。
+   */
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    const cli = this.cli;
+    if (this.commands === null && cli) {
+      const response = await cli.initialized.catch(() => null);
+      if (this.commands === null && this.cli === cli) {
+        this.commands = parseClaudeSlashCommands(response?.commands);
+      }
+    }
+    if (this.commands !== null) {
+      return this.commands;
+    }
+    return this.loadCatalogCommands ? this.loadCatalogCommands() : [];
+  }
+
+  /** MCP 服务器状态（mcp_status 控制请求）；claude 进程未启动时先启动（不发用户消息） */
+  async getMcpStatus(): Promise<AgentMcpStatusResult> {
+    const response = await this.requireLiveCli().mcpStatus();
+    return { servers: mapClaudeMcpServers(response), reconnect: "server" };
+  }
+
+  /** Claude 可按服务器单独重连，必须指定 serverName */
+  async reconnectMcp(serverName?: string): Promise<void> {
+    if (!serverName) {
+      throw new AgentRpcError("NOT_SUPPORTED", "Claude 需要指定要重连的 MCP 服务器（serverName）");
+    }
+    await this.requireLiveCli().mcpReconnect(serverName);
+  }
+
+  private requireLiveCli(): ClaudeCliHandle {
+    if (this.closed) {
+      throw new Error("Claude 会话已关闭");
+    }
+    return this.ensureCli();
+  }
+
   /** 切回进入 plan 之前的模式；之前为跟随设置时切回基础模式，快照 modeId 回到 null */
   private async leavePlanMode(): Promise<void> {
     const previous = this.modeBeforePlan;
@@ -804,6 +909,11 @@ export class ClaudeAgentSession implements AgentSession {
         const current = response.current_permission_mode;
         if (launchMode === null && this.cli === cli && typeof current === "string" && current) {
           this.baseMode = current;
+        }
+        // 新进程的命令列表取代旧的（包括之前 commands_changed 的）
+        const commands = parseClaudeSlashCommands(response.commands);
+        if (commands && this.cli === cli) {
+          this.commands = commands;
         }
       },
       (error: unknown) => {
@@ -924,6 +1034,14 @@ export class ClaudeAgentSession implements AgentSession {
           }
         } else if (message.subtype === "compact_boundary") {
           this.handleCompactBoundary(message as ClaudeCompactBoundaryMessage);
+        } else if (message.subtype === "commands_changed") {
+          // 可用斜杠命令变化：整体替换缓存，不影响时间线（design.md 4.14）
+          const commands = parseClaudeSlashCommands(
+            (message as ClaudeCommandsChangedMessage).commands,
+          );
+          if (commands) {
+            this.commands = commands;
+          }
         }
         this.handleTaskAnnouncement(message);
         return;
@@ -1625,6 +1743,61 @@ export function mapInitializeModels(
     models.unshift(withClaudeThinkingOptions({ ...builtinDefault, provider: providerId }));
   }
   return models;
+}
+
+/**
+ * initialize 应答 / commands_changed 的 commands → AgentSlashCommand[]（宽松解析，非法项跳过，按 name 去重）；
+ * 不是数组返回 null。
+ */
+export function parseClaudeSlashCommands(value: unknown): AgentSlashCommand[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const commands: AgentSlashCommand[] = [];
+  for (const entry of value as unknown[]) {
+    if (!isRecord(entry) || typeof entry.name !== "string" || !entry.name.trim()) {
+      continue;
+    }
+    const aliases = Array.isArray(entry.aliases)
+      ? entry.aliases.filter((alias): alias is string => typeof alias === "string" && alias !== "")
+      : [];
+    commands.push({
+      name: entry.name.trim(),
+      ...(typeof entry.description === "string" && entry.description
+        ? { description: entry.description }
+        : {}),
+      ...(typeof entry.argumentHint === "string" && entry.argumentHint
+        ? { argumentHint: entry.argumentHint }
+        : {}),
+      ...(aliases.length > 0 ? { aliases } : {}),
+    });
+  }
+  return dedupeSlashCommands(commands);
+}
+
+/** mcp_status 应答 → AgentMcpServer[]：status 非法值归为 pending，toolCount 为 tools 数组长度 */
+export function mapClaudeMcpServers(response: ClaudeMcpStatusResponse): AgentMcpServer[] {
+  if (!Array.isArray(response.mcpServers)) {
+    return [];
+  }
+  const servers: AgentMcpServer[] = [];
+  for (const entry of response.mcpServers as unknown[]) {
+    if (!isRecord(entry) || typeof entry.name !== "string" || !entry.name) {
+      continue;
+    }
+    const status =
+      typeof entry.status === "string" && MCP_SERVER_STATUSES.has(entry.status)
+        ? (entry.status as AgentMcpServerStatus)
+        : "pending";
+    servers.push({
+      name: entry.name,
+      status,
+      ...(typeof entry.error === "string" && entry.error ? { error: entry.error } : {}),
+      ...(typeof entry.scope === "string" && entry.scope ? { scope: entry.scope } : {}),
+      ...(Array.isArray(entry.tools) ? { toolCount: entry.tools.length } : {}),
+    });
+  }
+  return servers;
 }
 
 export function toClaudeUserInput(

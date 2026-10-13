@@ -260,6 +260,17 @@ function handleControlRequest(message) {
     case "set_permission_mode":
       ok({ echo: request });
       return;
+    case "mcp_status":
+      ok({ mcpServers: [{ name: "fs", status: "connected", scope: "user", tools: [{ name: "read" }] }] });
+      return;
+    case "mcp_reconnect":
+      // 只认识 fs：其它服务器以 error 应答（与真实 CLI 一致）
+      if (request.serverName === "fs") {
+        ok({});
+      } else {
+        send({ type: "control_response", response: { subtype: "error", request_id: requestId, error: `Server not found: ${request.serverName}` } });
+      }
+      return;
     default:
       send({
         type: "control_response",

@@ -288,6 +288,16 @@ describe("ClaudeCliSession（假 claude 脚本）", () => {
     await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
   });
 
+  test("mcp_status / mcp_reconnect 控制请求：应答原样返回，重连带 serverName，失败时 reject", async () => {
+    const session = start();
+    await session.initialized;
+    await expect(session.mcpStatus()).resolves.toEqual({
+      mcpServers: [{ name: "fs", status: "connected", scope: "user", tools: [{ name: "read" }] }],
+    });
+    await expect(session.mcpReconnect("fs")).resolves.toBeUndefined();
+    await expect(session.mcpReconnect("nope")).rejects.toThrow(/mcp_reconnect.*Server not found: nope/);
+  });
+
   test("控制请求超时", async () => {
     const session = start({
       env: { ...buildClaudeChildEnv(process.env), FAKE_CLAUDE_SILENT: "1" },

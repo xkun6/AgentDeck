@@ -282,6 +282,18 @@ class FakeAgent {
         await this.update(sessionId, { sessionUpdate: "config_option_update", configOptions: this.configOptions(state) });
         return { stopReason: "end_turn" };
       }
+      case "commands": {
+        // available_commands_update：含重名项（缺 name 的项会被 SDK 的 schema 校验整条拒绝，不在此模拟）
+        await this.update(sessionId, {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [
+            { name: "init", description: "初始化项目" },
+            { name: "review", description: "审查改动", input: { hint: "<文件>" } },
+            { name: "init", description: "重名" },
+          ],
+        });
+        return { stopReason: "end_turn" };
+      }
       case "mode": {
         state.mode = "plan";
         await this.update(sessionId, { sessionUpdate: "current_mode_update", currentModeId: "plan" });

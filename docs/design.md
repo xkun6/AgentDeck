@@ -110,6 +110,9 @@ sidecar 入口：
 | `agent.timeline` | `{ agentId, sinceSeq? }` | `{ epoch, entries: AgentStreamEnvelope[] }` |
 | `agent.subagents.list` | `{ agentId }` | `{ subagents: ProviderSubagentDescriptor[] }`（见 4.11） |
 | `agent.subagents.timeline` | `{ agentId, subagentId, direction?, cursorSeq?, limit? }` | `{ rows, hasOlder, hasNewer }`（见 4.11） |
+| `agent.commands` | `{ agentId }` | `{ commands: AgentSlashCommand[] }`（见 4.14） |
+| `agent.mcp.status` | `{ agentId }` | `AgentMcpStatusResult`（见 4.14） |
+| `agent.mcp.reconnect` | `{ agentId, serverName? }` | `AgentMcpStatusResult`（重连后的最新状态，见 4.14） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -489,6 +492,43 @@ Claude Code 的后台子代理（`Agent` 工具 `run_in_background`）与后台�
 - Codex：ThreadItem `contextCompaction`（兼容 `context_compaction`）的 `item/started` → running、`item/completed` → completed（compactionId = item.id），不产生工具卡片；旧版 `thread/compacted` 通知在本回合没见过 contextCompaction item 时补一条 completed。
 - 前端：每个 compactionId 对应一条居中分隔线样式的系统提示（消息 id `agent-compaction-<compactionId>`）：running「正在压缩上下文…」，completed 原地改为「上下文已自动压缩 / 上下文已手动压缩」（有 preTokens 时附「（压缩前 约 84.1k tokens）」），failed「上下文压缩失败」。提示插在当前回合尚无内容的助手消息之前，否则追加在末尾。completed 时清掉运行时 usage 的 `contextWindowUsedTokens`，输入框的上下文用量指示器随之隐藏，直到下一次 usage 到达。
 
+### 4.14 斜杠命令与 MCP 状态
+
+**类型**（`agent-api.ts`）：
+```ts
+export interface AgentSlashCommand { name: string; description?: string; argumentHint?: string; aliases?: string[] }   // name 不带前导 /
+export type AgentMcpServerStatus = "connected" | "failed" | "needs-auth" | "pending" | "disabled";
+export interface AgentMcpServer { name: string; status: AgentMcpServerStatus; error?: string; scope?: string; toolCount?: number }
+export type AgentMcpReconnectScope = "server" | "all";   // server = 可按服务器单独重连（Claude）；all = 只能整体重新加载（Codex）
+export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: AgentMcpReconnectScope }
+```
+
+**RPC**：
+- `agent.commands { agentId }` → `{ commands }`：结果按 name 去重（保留第一次出现）。有活会话且 provider 实现了 `listCommands` 时用它（失败记日志后退回目录）；否则（dormant / closed / 未实现）取 `client.fetchCatalog({ cwd })` 的 `commands`，没有则 `[]`。**不为此恢复会话**。agent 不存在 → `AGENT_NOT_FOUND`。
+- `agent.mcp.status { agentId }` → `AgentMcpStatusResult`；`agent.mcp.reconnect { agentId, serverName? }` → 重连后再查一次的最新状态。需要活会话：dormant / closed 且可恢复时按 4.5 的规则先自动恢复（与 `agent.send` 共用同一次恢复，并发调用只恢复一次）；不可恢复按 4.5 返回 `NOT_SUPPORTED`（dormant）/ `AGENT_CLOSED`（closed）。会话没实现 → `NOT_SUPPORTED`（「该 Agent 不支持查看 MCP 服务器」/「该 Agent 不支持重连 MCP 服务器」）。**不受单 turn 约束**：回合进行中也可查询 / 重连。`serverName` 传空字符串为 `-32602`。
+- `AgentClient.fetchCatalog` 的返回值增加可选 `commands`（sidecar 内部）；`provider.listModels` 的结果**不含** commands，保持 `{ models, modes }`。
+
+**Claude**：
+- 来源：`initialize` 控制应答的 `commands: Array<{ name; description; argumentHint; aliases? }>`（内置命令、skill、项目 / 用户命令，可能重名）；CLI 中途推 `system` `commands_changed { commands }` 时**整体替换**缓存（不进时间线）。宽松解析：name 非空字符串才收，description / argumentHint 为空不带，aliases 只留非空字符串；按 name 去重。
+- `listCommands`：最近一次 `commands_changed` 的列表，否则会话进程 initialize 应答里的（进程重启后以新进程的应答为准）。claude 进程是懒启动的（首轮才拉起），尚未启动时**不为此启动**，退回 provider 目录的 commands。
+- `fetchCatalog`：模型探测的临时进程（只发 initialize）顺带读出 commands。commands 与 cwd 相关（项目级 skill / 命令），而模型缓存不分 cwd，所以 commands **按 cwd 单独缓存** 10 分钟（最多 32 个目录）：模型与该 cwd 的命令都命中缓存才不起探测进程，否则按该 cwd 探测一次（同一 cwd 的并发探测共用）；未传 cwd 时只要模型命中就不为命令单独探测。代价：换一个新目录的第一次 `provider.listModels` 会多起一次探测进程（不对话、不计费）。
+- MCP：控制请求 `{ subtype: "mcp_status" }` → `{ mcpServers: Array<{ name; status; error?; scope?; tools?: { name }[]; … }> }`，映射为 `AgentMcpServer`（status 不在五个合法值内归为 `pending`，toolCount = tools 数组长度），`reconnect: "server"`；`{ subtype: "mcp_reconnect", serverName }` 重连单个服务器，超时 60 秒，失败时控制应答为 error（以中文前缀转成 `INTERNAL_ERROR`）。MCP 需要运行中的 claude 进程：未启动时先拉起（不发用户消息，之后的回合复用该进程）。**Claude 的 reconnect 必须带 serverName**，缺省返回 `NOT_SUPPORTED`（「Claude 需要指定要重连的 MCP 服务器（serverName）」）。
+- `/compact` 不需要专门代码：作为普通 user 消息发送即触发压缩，result 照常回显 user_message_uuid，压缩事件见 4.13。
+
+**Codex**：
+- 斜杠命令只有 `[{ name: "compact", description: "压缩当前对话上下文" }]`（`listCommands` 与 `fetchCatalog` 相同；带静态模型的 codex 中转同样返回）。
+- `/compact` 拦截：`startTurn` 的 prompt 去掉首尾空白后**恰好**是 `/compact`（字符串，或只有一个 text 块且无图片）时，不调 `turn/start`，改调 `thread/compact/start { threadId }`（→ `{}`）；复用 ensureClient / ensureThread、首轮 `thread_started`、失败以 `turn_failed` 结束等普通回合路径。原生 turnId 由随后的 `turn/started` 通知设置，`contextCompaction` item → compaction（4.13），`turn/completed` 结束回合。`/compact 其它文字` 等其它情况照常走 `turn/start`。
+- `getMcpStatus`：`mcpServerStatus/list { threadId, detail: "toolsAndAuthOnly", cursor? }`，有 `nextCursor` 就继续翻页（最多 20 页）汇总；线程尚不存在时先建线程（与回合并发时共用同一次 thread/start）。runtimeStatus 映射：connected → connected、authenticationRequired → needs-auth、failed / cancelled → failed、disabled → disabled、其余（notStarted / starting / null）→ pending；error 取 `toolsError`；toolCount = tools 的键数；`reconnect: "all"`。
+- `reconnectMcp`：忽略 serverName，调 `config/mcpServer/reload`（无 params，→ `{}`）：从磁盘重载 MCP 配置并整体生效，没有按服务器重连。
+
+**ACP**：sessionUpdate `available_commands_update { availableCommands: Array<{ name; description; input?: { hint } }> }` 缓存为 `AgentSlashCommand[]`（argumentHint = input.hint，按 name 去重；loadSession 重放期间收到的同样记录），`listCommands` 返回缓存（没收到过为 `[]`）。ACP 不实现 MCP 方法（`NOT_SUPPORTED`）。ACP 的 `fetchCatalog` 不带 commands。
+
+**自定义中转**（4.7）：会话包装层转发 `listCommands` / `getMcpStatus` / `reconnectMcp`，MCP 的 error 文本按 4.7 规则脱敏。基于 claude 且配了静态 `models` 的中转，`fetchCatalog` 不起探测进程，因此会话未加载时 `agent.commands` 为空（会话运行后照常有命令）。
+
+**前端约定**：
+- Claude / Codex 会话中输入 `/mcp` 在前端本地拦截，打开 MCP 面板（`agent.mcp.status` / `agent.mcp.reconnect`），**不发给 Agent**；面板按 `reconnect` 决定是逐个服务器「重连」（server）还是一个「重新加载全部」（all）。
+- 手动压缩 = 发送 `/compact`（Claude 由 CLI 处理，Codex 由 sidecar 拦截为 `thread/compact/start`）。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -527,13 +567,17 @@ interface AgentSession {
   setMode?(modeId: string): Promise<void>;
   /** 4.10：null = 跟随 CLI；运行中切换时返回 notice */
   setThinking?(thinkingOptionId: string | null): Promise<{ notice?: string } | void>;
+  /** 4.14：斜杠命令 / MCP 状态 / MCP 重连 */
+  listCommands?(): Promise<AgentSlashCommand[]>;
+  getMcpStatus?(): Promise<AgentMcpStatusResult>;
+  reconnectMcp?(serverName?: string): Promise<void>;
 }
 interface AgentClient {
   readonly provider: AgentProviderId;
   readonly kind: AgentProviderKind;
   readonly label: string;
   isAvailable(): Promise<{ available: boolean; reason?: string }>;
-  fetchCatalog(opts?: { cwd?: string }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[] }>;
+  fetchCatalog(opts?: { cwd?: string }): Promise<{ models: AgentModelDefinition[]; modes: AgentMode[]; commands?: AgentSlashCommand[] }>;   // commands 见 4.14
   createSession(cfg: { cwd: string; model?: string; modeId?: string; thinkingOptionId?: string | null }): Promise<AgentSession>;
   resumeSession?(handle: AgentPersistenceHandle, cfg: { cwd: string }): Promise<AgentSession>;
   shutdown?(): Promise<void>;
@@ -544,7 +588,7 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`，默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14），默认 30 秒超时；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
@@ -577,7 +621,7 @@ Claude：
 - modeId 为 null（前端「默认模式」）时**不传** `--permission-mode`，跟随用户 Claude 设置中的默认模式；initialize 应答的 `current_permission_mode` 记为会话「基础模式」。跟随设置时直接进入 plan（新建选计划模式或恢复）：先不带参数启动读取基础模式，再立即发 `set_permission_mode plan`。
 - 批准计划后切回进入 plan 之前的模式；之前为 null 则切回基础模式且快照 modeId 回到 null；基础模式未知或本身为 plan 时退回 `default`。
 - 子进程环境额外剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SSE_PORT`、`CLAUDE_AGENT_SDK_VERSION`（不设置 `CLAUDE_CODE_ENTRYPOINT`）；子代理内部消息（带 `parent_tool_use_id`）不进主时间线，改写入子代理时间线（见 4.11）；AskUserQuestion 暂按普通工具权限处理。
-- `fetchCatalog` 起一个临时 claude 进程只发 `initialize`（不对话、不计费），读取应答中的 `models`（value / displayName / description）后关闭；成功结果缓存 10 分钟，失败回退静态别名（default / sonnet / opus / haiku），`default` 保留中文标签。
+- `fetchCatalog` 起一个临时 claude 进程只发 `initialize`（不对话、不计费），读取应答中的 `models`（value / displayName / description）与 `commands`（4.14）后关闭；成功结果缓存 10 分钟（commands 按 cwd 缓存），失败回退静态别名（default / sonnet / opus / haiku），`default` 保留中文标签。
 - 设置模型发现（参照 paseo）：之后追加用户 Claude 设置（`$CLAUDE_CONFIG_DIR/settings.json`，否则 `~/.claude/settings.json`；允许 BOM，读取失败忽略，只读）中顶层 `model` 与 `env` 的 `ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` / `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL`，去重并保留原样 id；只读 settings 文件中的 env，不读进程环境。带 `[1m]` 的显示名追加「· 1M 上下文」。「默认模型」说明为「跟随 Claude Code 设置（当前：X）」，X 取 `env.ANTHROPIC_MODEL`，否则取 `model`。设置每次 fetchCatalog 重读，探测结果仍缓存 10 分钟。
 - 1M 上下文的实际表达（实测）：选 `opus[1m]` 时请求体 model 为去掉后缀的 `claude-opus-5-5`，另带 beta 头 `context-1m-2025-08-07`；选 `opus` 则不带该 beta 头。
 - 中转：配了静态 `models` 时只用静态列表；未配时按中转合并后的 settings 追加，不读用户 settings。注意中转的 claude 运行时仍加载用户 settings（`--setting-sources user,...`），中转未设 `model` 时用户设置中的 model 仍会生效。
