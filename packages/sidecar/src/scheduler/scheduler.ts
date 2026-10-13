@@ -1071,12 +1071,16 @@ export class Scheduler {
   }
 
   private record(run: Omit<ScheduleRun, "ts">): void {
-    void this.store.appendRun({ ...run, ts: this.now() });
+    void this.store.appendRun({ ...run, ts: this.now() }).catch((error: unknown) => {
+      this.logger.error("追加运行记录失败：%s", errorMessage(error));
+    });
     this.emitChanged();
   }
 
   private persist(): void {
-    void this.store.save({ paused: this.paused, schedules: this.snapshotSchedules() });
+    void this.store.save({ paused: this.paused, schedules: this.snapshotSchedules() }).catch((error: unknown) => {
+      this.logger.error("持久化调度失败：%s", errorMessage(error));
+    });
   }
 
   private snapshotSchedules(): Schedule[] {

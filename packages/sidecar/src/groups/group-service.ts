@@ -602,7 +602,9 @@ export class GroupService {
   }
 
   private persist(group: AgentGroup): void {
-    void this.store.save(structuredClone(group));
+    void this.store.save(structuredClone(group)).catch((error: unknown) => {
+      this.logger.error("持久化协作组 %s 失败：%s", group.id, errorMessage(error));
+    });
     const snapshot = structuredClone(group);
     for (const listener of this.listeners) {
       try {

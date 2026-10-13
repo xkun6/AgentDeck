@@ -263,7 +263,8 @@ describe("并行扇出与汇总", () => {
     await settle(() => expect(h.service.get(group.id).status).toBe("done"));
     expect(h.manager.listAgents()).toHaveLength(2);
     expect(h.changed.at(-1)!.status).toBe("done");
-    // 已落盘
+    // 广播先于落盘；stop() 会等待挂起的写入完成
+    await h.service.stop();
     const stored = JSON.parse(readFileSync(path.join(h.dataDir, "groups", `${group.id}.json`), "utf8")) as AgentGroup;
     expect(stored.status).toBe("done");
   });

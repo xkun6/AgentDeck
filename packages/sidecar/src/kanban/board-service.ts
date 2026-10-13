@@ -503,7 +503,9 @@ export class BoardService {
   }
 
   private commit(board: Board): void {
-    void this.store.save(cloneBoard(board));
+    void this.store.save(cloneBoard(board)).catch((error: unknown) => {
+      this.logger.error("持久化看板失败：%s", errorMessage(error));
+    });
     const snapshot = cloneBoard(board);
     for (const listener of this.listeners) {
       try {
