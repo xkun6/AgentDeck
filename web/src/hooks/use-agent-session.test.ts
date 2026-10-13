@@ -5,6 +5,7 @@ import type { AgentBackgroundTask, AgentSnapshot } from "@agentdeck/protocol";
 import { SidecarRpcError, type SidecarClient } from "@/lib/sidecar-client";
 import {
   AgentSendError,
+  bindSchedulesToStore,
   bindSidecarToStore,
   createAgentSessionActions,
   describeAgentSendError,
@@ -17,6 +18,7 @@ import {
 import { AGENT_RESUMING_PROGRESS, agentPendingAssistantId, chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentSnapshotsAtom, lastRemovedAgentAtom, upsertAgentSnapshotAtom } from "@/stores/agents";
 import { backgroundTasksByAgentAtom } from "@/stores/background-tasks";
+import { schedulesStateAtom } from "@/stores/schedules";
 
 const AGENT = "agent-d";
 
@@ -350,6 +352,60 @@ describe("删除会话", () => {
     expect(store.get(agentSnapshotsAtom)[AGENT]).toBeUndefined();
     expect(store.get(lastRemovedAgentAtom)).toEqual({ agentId: AGENT, nonce: 1 });
     unbind();
+  });
+});
+
+describe("调度器绑定与动作（design.md 4.25）", () => {
+  const schedule = {
+    id: "s1", name: "x", enabled: true, createdAt: 1, updatedAt: 1, kind: "heartbeat", agentId: "a", idleMinutes: 5, prompt: "p", runs: 0,
+  } as const;
+
+  it("schedule.changed 整表写入 store；每次拉到 agent.list 后重新拉 schedule.list；notice 触发通知", async () => {
+    const store = createStore();
+    let onChanged: (value: { schedules: unknown[]; paused: boolean }) => void = () => {};
+    let onAgents: () => void = () => {};
+    const request = vi.fn(async () => ({ schedules: [schedule], paused: true }));
+    const client = {
+      request,
+      onScheduleChanged: (listener: typeof onChanged) => { onChanged = listener; return () => {}; },
+      onScheduleNotice: () => () => {},
+      onAgents: (listener: () => void) => { onAgents = listener; return () => {}; },
+    } as unknown as SidecarClient;
+    const unbind = bindSchedulesToStore(client, store);
+
+    onAgents();
+    await vi.waitFor(() => expect(store.get(schedulesStateAtom).loaded).toBe(true));
+    expect(request).toHaveBeenCalledWith("schedule.list");
+    expect(store.get(schedulesStateAtom)).toMatchObject({ schedules: [schedule], paused: true });
+
+    onChanged({ schedules: [], paused: false });
+    expect(store.get(schedulesStateAtom)).toMatchObject({ schedules: [], paused: false });
+    unbind();
+  });
+
+  it("动作：upsert / delete / runNow / runs / setPaused 对应的 RPC 参数", async () => {
+    const store = createStore();
+    const client = fakeClient(async (method) => {
+      if (method === "schedule.upsert") return { schedule };
+      if (method === "schedule.runs") return { runs: [{ scheduleId: "s1", ts: 1, outcome: "sent" }] };
+      if (method === "schedule.setPaused") return { paused: true };
+      return {};
+    });
+    const actions = createAgentSessionActions(client, store);
+    expect(await actions.upsertSchedule(schedule)).toEqual(schedule);
+    await actions.deleteSchedule("s1");
+    await actions.runScheduleNow("s1");
+    expect(await actions.listScheduleRuns("s1", 20)).toHaveLength(1);
+    await actions.listScheduleRuns();
+    expect(await actions.setSchedulesPaused(true)).toBe(true);
+    expect(client.request.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ["schedule.upsert", { schedule }],
+      ["schedule.delete", { id: "s1" }],
+      ["schedule.runNow", { id: "s1" }],
+      ["schedule.runs", { id: "s1", limit: 20 }],
+      ["schedule.runs", {}],
+      ["schedule.setPaused", { paused: true }],
+    ]);
   });
 });
 

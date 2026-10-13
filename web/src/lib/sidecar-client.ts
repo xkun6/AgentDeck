@@ -25,6 +25,8 @@ import {
   type AgentStreamEnvelope,
   type AgentBackgroundTask,
   type ProviderSubagentUpdate,
+  type Schedule,
+  type ScheduleNotice,
 } from "@agentdeck/protocol";
 import { debugBus } from "./debug-bus";
 import { createSidecarSocket } from "./sidecar-socket-path";
@@ -159,6 +161,8 @@ export class SidecarClient {
   private providerChangedListeners = new Set<Listener<void>>();
   private subagentListeners = new Set<Listener<ProviderSubagentUpdate>>();
   private tasksListeners = new Set<Listener<{ agentId: string; tasks: AgentBackgroundTask[] }>>();
+  private scheduleChangedListeners = new Set<Listener<{ schedules: Schedule[]; paused: boolean }>>();
+  private scheduleNoticeListeners = new Set<Listener<ScheduleNotice>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -227,6 +231,16 @@ export class SidecarClient {
   /** `agent.subagents.update` 通知（provider 子代理描述 / 时间线变化，design.md 4.11）。 */
   onSubagentUpdate(listener: Listener<ProviderSubagentUpdate>): () => void {
     return subscribe(this.subagentListeners, listener);
+  }
+
+  /** `schedule.changed` 通知（调度表 / 运行记录变化，design.md 4.25）。 */
+  onScheduleChanged(listener: Listener<{ schedules: Schedule[]; paused: boolean }>): () => void {
+    return subscribe(this.scheduleChangedListeners, listener);
+  }
+
+  /** `schedule.notice` 通知（目标循环结束 / 定时任务失败，前端转系统通知，design.md 4.25）。 */
+  onScheduleNotice(listener: Listener<ScheduleNotice>): () => void {
+    return subscribe(this.scheduleNoticeListeners, listener);
   }
 
   /** `agent.tasks.update` 通知（后台任务整表，design.md 4.15）。 */
@@ -563,6 +577,14 @@ export class SidecarClient {
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.agentTasksUpdate && record.params) {
       emitTo(this.tasksListeners, record.params as { agentId: string; tasks: AgentBackgroundTask[] });
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.scheduleChanged && record.params) {
+      emitTo(this.scheduleChangedListeners, record.params as { schedules: Schedule[]; paused: boolean });
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.scheduleNotice && record.params) {
+      emitTo(this.scheduleNoticeListeners, record.params as ScheduleNotice);
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.providerChanged) {

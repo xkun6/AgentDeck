@@ -26,6 +26,9 @@ import type {
   ProviderSubagentDescriptor,
   ProviderSubagentTimelineRow,
   ProviderTestResult,
+  Schedule,
+  ScheduleDraft,
+  ScheduleRun,
   UsageSummary,
 } from "@agentdeck/protocol";
 import {
@@ -69,6 +72,8 @@ import {
   type SubagentTimelineCache,
 } from "@/stores/subagents";
 import { invalidateProviderQueries } from "@/lib/agent-query-keys";
+import { notifyFromSchedule } from "@/lib/notifications";
+import { replaceSchedulesAtom } from "@/stores/schedules";
 
 type JotaiStore = ReturnType<typeof createStore>;
 
@@ -246,6 +251,24 @@ export function bindProviderChangesToQueries(
   });
 }
 
+/**
+ * 调度器（design.md 4.25）：每次（重）连成功后拉一次 schedule.list，之后由 schedule.changed 整表替换；
+ * schedule.notice（目标循环结束 / 定时任务失败）转成系统通知。
+ */
+export function bindSchedulesToStore(client: SidecarClient, store: JotaiStore): () => void {
+  const unsubscribers = [
+    client.onScheduleChanged((value) => store.set(replaceSchedulesAtom, value)),
+    client.onScheduleNotice((notice) => notifyFromSchedule(notice)),
+    client.onAgents(() => {
+      client
+        .request("schedule.list")
+        .then((value) => store.set(replaceSchedulesAtom, value))
+        .catch(() => {});
+    }),
+  ];
+  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+}
+
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -253,10 +276,12 @@ export function useSidecarBridge(): void {
   useEffect(() => {
     const client = getSidecarClient();
     const unbind = bindSidecarToStore(client, store);
+    const unbindSchedules = bindSchedulesToStore(client, store);
     const unbindProviders = bindProviderChangesToQueries(client, queryClient);
     client.connect().catch(() => {});
     return () => {
       unbind();
+      unbindSchedules();
       unbindProviders();
     };
   }, [queryClient, store]);
@@ -542,6 +567,42 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       store.set(upsertAgentSnapshotAtom, agent);
       store.set(ensureChatSessionAtom, agent.id);
       return agent;
+    },
+
+    /** schedule.list：调度表与全局暂停状态，写入 store 并返回（design.md 4.25）。 */
+    async listSchedules(): Promise<{ schedules: Schedule[]; paused: boolean }> {
+      const value = await client.request("schedule.list");
+      store.set(replaceSchedulesAtom, value);
+      return value;
+    },
+
+    /** schedule.upsert：无 id 为新建；cron 非法 / 参数非法为 -32602，目标会话不存在为 AGENT_NOT_FOUND。 */
+    async upsertSchedule(schedule: ScheduleDraft): Promise<Schedule> {
+      const result = await client.request("schedule.upsert", { schedule });
+      return result.schedule;
+    },
+
+    async deleteSchedule(id: string): Promise<void> {
+      await client.request("schedule.delete", { id });
+    },
+
+    /** schedule.runNow：cron / heartbeat 立即发送一次；goal 继续循环。结果见运行记录。 */
+    async runScheduleNow(id: string): Promise<void> {
+      await client.request("schedule.runNow", { id });
+    },
+
+    /** schedule.runs：运行记录，按时间倒序（缺省 100 条）。 */
+    async listScheduleRuns(id?: string, limit?: number): Promise<ScheduleRun[]> {
+      const { runs } = await client.request("schedule.runs", {
+        ...(id ? { id } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return runs;
+    },
+
+    async setSchedulesPaused(paused: boolean): Promise<boolean> {
+      const result = await client.request("schedule.setPaused", { paused });
+      return result.paused;
     },
 
     /** agent.timeline：取会话全部时间线条目（dormant / closed 也可取，不恢复会话），供导出使用。 */

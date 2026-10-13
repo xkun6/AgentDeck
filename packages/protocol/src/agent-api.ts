@@ -404,8 +404,117 @@ export interface AgentSnapshot {
   pinned?: boolean;
   /** 归档（design.md 4.17）；缺省视为 false */
   archived?: boolean;
+  /**
+   * 会话来源（design.md 4.25 / 4.26）：缺省 = 用户新建（"user"）；"schedule" = 定时任务新建；
+   * "judge" = 目标循环的隐藏评判会话（前端侧栏与历史页默认不显示）；"delegate" / "group" / "kanban" 见 4.26。
+   */
+  origin?: AgentOrigin;
   createdAt: number;
   updatedAt: number;
+}
+
+export type AgentOrigin = "user" | "delegate" | "group" | "schedule" | "judge" | "kanban";
+
+// ---------------------------------------------------------------------------
+// 4.25 调度器：定时任务、心跳、目标循环
+// ---------------------------------------------------------------------------
+
+export type ScheduleTarget =
+  | { type: "agent"; agentId: string }
+  | {
+      type: "new";
+      provider: AgentProviderId;
+      cwd: string;
+      model?: string | null;
+      modeId?: string | null;
+      thinkingOptionId?: string | null;
+      title?: string;
+    };
+
+export type ScheduleTrigger = { cron: string } | { everyMinutes: number } | { at: number };
+
+export type GoalState = "running" | "done" | "stopped" | "exhausted" | "failed";
+
+export interface ScheduleBase {
+  id: string;
+  name: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CronSchedule extends ScheduleBase {
+  kind: "cron";
+  trigger: ScheduleTrigger;
+  target: ScheduleTarget;
+  prompt: string;
+  onBusy: "skip" | "wait";
+}
+
+export interface HeartbeatSchedule extends ScheduleBase {
+  kind: "heartbeat";
+  agentId: string;
+  idleMinutes: number;
+  prompt: string;
+  maxRuns?: number;
+  runs: number;
+}
+
+export interface GoalSchedule extends ScheduleBase {
+  kind: "goal";
+  agentId: string;
+  goal: string;
+  /** 默认 "GOAL_DONE" */
+  doneMarker: string;
+  maxIterations: number;
+  iterations: number;
+  judge?: { provider: AgentProviderId; model?: string | null };
+  stopOnFailure: boolean;
+  state: GoalState;
+}
+
+export type Schedule = CronSchedule | HeartbeatSchedule | GoalSchedule;
+
+/** `schedule.upsert` 入参：无 id 为新建；服务端补齐时间戳与计数字段 */
+export type ScheduleDraft =
+  | (Omit<CronSchedule, "id" | "enabled" | "createdAt" | "updatedAt"> &
+      Partial<Pick<CronSchedule, "id" | "enabled">>)
+  | (Omit<HeartbeatSchedule, "id" | "enabled" | "createdAt" | "updatedAt" | "runs"> &
+      Partial<Pick<HeartbeatSchedule, "id" | "enabled" | "runs">>)
+  | (Omit<
+      GoalSchedule,
+      | "id"
+      | "enabled"
+      | "createdAt"
+      | "updatedAt"
+      | "iterations"
+      | "state"
+      | "doneMarker"
+      | "stopOnFailure"
+    > &
+      Partial<
+        Pick<
+          GoalSchedule,
+          "id" | "enabled" | "iterations" | "state" | "doneMarker" | "stopOnFailure"
+        >
+      >);
+
+export interface ScheduleRun {
+  scheduleId: string;
+  ts: number;
+  agentId?: string;
+  turnId?: string;
+  outcome: "sent" | "skipped_busy" | "skipped_paused" | "missed" | "failed" | "done";
+  message?: string;
+}
+
+/** `schedule.notice`：目标循环结束 / 定时任务失败，由前端转成系统通知 */
+export interface ScheduleNotice {
+  scheduleId: string;
+  name: string;
+  kind: "done" | "exhausted" | "failed";
+  message: string;
+  agentId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +685,12 @@ export const AGENT_RPC_METHODS = {
   agentUpdate: "agent.update",
   agentSearch: "agent.search",
   usageSummary: "usage.summary",
+  scheduleList: "schedule.list",
+  scheduleUpsert: "schedule.upsert",
+  scheduleDelete: "schedule.delete",
+  scheduleRunNow: "schedule.runNow",
+  scheduleRuns: "schedule.runs",
+  scheduleSetPaused: "schedule.setPaused",
   agentSubagentsList: "agent.subagents.list",
   agentSubagentsTimeline: "agent.subagents.timeline",
   agentCommands: "agent.commands",
@@ -597,6 +712,8 @@ export const AGENT_RPC_NOTIFICATIONS = {
   providerChanged: "provider.changed",
   agentSubagentsUpdate: "agent.subagents.update",
   agentTasksUpdate: "agent.tasks.update",
+  scheduleChanged: "schedule.changed",
+  scheduleNotice: "schedule.notice",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -657,6 +774,19 @@ export interface AgentRpcMethods {
     params: { sinceMs?: number; untilMs?: number } | undefined;
     result: UsageSummary;
   };
+  /** 调度器（design.md 4.25） */
+  "schedule.list": {
+    params: AgentRpcEmptyParams;
+    result: { schedules: Schedule[]; paused: boolean };
+  };
+  /** 无 id 为新建；cron 非法 / 参数非法 → -32602；目标会话不存在 → AGENT_NOT_FOUND */
+  "schedule.upsert": { params: { schedule: ScheduleDraft }; result: { schedule: Schedule } };
+  "schedule.delete": { params: { id: string }; result: Record<string, never> };
+  /** cron / heartbeat：立即发送一次；goal：继续循环。不等待发送完成，结果见运行记录 */
+  "schedule.runNow": { params: { id: string }; result: Record<string, never> };
+  /** 默认 100，按时间倒序 */
+  "schedule.runs": { params: { id?: string; limit?: number }; result: { runs: ScheduleRun[] } };
+  "schedule.setPaused": { params: { paused: boolean }; result: { paused: boolean } };
   "agent.permission.respond": {
     params: { agentId: string; requestId: string; response: AgentPermissionResponse };
     result: Record<string, never>;
@@ -750,6 +880,10 @@ export interface AgentRpcNotifications {
   "agent.subagents.update": ProviderSubagentUpdate;
   /** 后台任务整表推送（design.md 4.15），向所有连接广播，前端按 agentId 过滤 */
   "agent.tasks.update": { agentId: string; tasks: AgentBackgroundTask[] };
+  /** 调度表 / 运行记录变化（design.md 4.25），向所有连接广播 */
+  "schedule.changed": { schedules: Schedule[]; paused: boolean };
+  /** 目标循环结束 / 定时任务失败（design.md 4.25），前端据此弹系统通知 */
+  "schedule.notice": ScheduleNotice;
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

@@ -7,6 +7,7 @@ import { Dialog } from "@agentdeck/shared-ui";
 import {
   BarChart3,
   Bell,
+  CalendarClock,
   Bot,
   FileText,
   Folder,
@@ -34,6 +35,7 @@ import {
   type CommandPaletteItem,
   type CommandPaletteSession,
 } from "@/lib/command-palette";
+import { isHiddenAgent } from "@/lib/session-list";
 import { isCommandPaletteShortcut } from "@/lib/command-palette-shortcut";
 import {
   readWorkspaceProjects,
@@ -49,6 +51,7 @@ const GROUP_ITEM_LIMIT = 8;
 
 const ICONS: Record<CommandPaletteIconKey, LucideIcon> = {
   agents: Bot,
+  automation: CalendarClock,
   console: TerminalSquare,
   env: Wrench,
   file: FileText,
@@ -131,7 +134,7 @@ export function CommandPalette() {
   const runtimes = useAtomValue(chatRuntimeBySessionAtom);
   const providersQuery = useAgentProviders();
   const sessions = useMemo<CommandPaletteSession[]>(
-    () => agents.map((agent) => ({
+    () => agents.filter((agent) => !isHiddenAgent(agent)).map((agent) => ({
       id: agent.id,
       title: agentDisplayTitle(agent, runtimes[agent.id], providersQuery.data),
       subtitle: [agentProviderLabel(agent.provider, providersQuery.data), agent.cwd].filter(Boolean).join(" · "),

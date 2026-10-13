@@ -9,6 +9,7 @@ export type CommandPaletteGroupId =
 
 export type CommandPaletteIconKey =
   | "agents"
+  | "automation"
   | "console"
   | "env"
   | "file"
@@ -100,6 +101,7 @@ export const COMMAND_PALETTE_COMMANDS: readonly CommandPaletteItem[] = [
   command("command-projects", "项目 / 工作空间", "/projects · 查看已登记项目", ["project", "workspace", "folder", "cwd", "工作区", "目录"], "project", "/projects", 2),
   command("command-console", "终端", "/console · 在工作区打开终端", ["console", "terminal", "command", "shell", "终端", "命令行"], "console", "/console", 3),
   command("command-usage", "用量统计", "/usage · 跨会话 tokens、费用与性能", ["usage", "stats", "statistics", "token", "tokens", "cost", "用量", "统计", "费用", "花费"], "usage", "/usage", 3),
+  command("command-automation", "自动化", "/automation · 定时任务、心跳与目标循环", ["automation", "schedule", "cron", "heartbeat", "goal", "loop", "自动化", "定时", "心跳", "目标", "循环"], "automation", "/automation", 3),
   command("command-agent-providers", "Agent 与中转", "/agent-providers · 管理三方中转与 Agent 可用状态", ["agents", "providers", "relay", "proxy", "claude", "codex", "acp", "中转", "接口", "密钥"], "agents", "/agent-providers", 4),
   command("command-coding-agents", "编程 Agent", "/coding-agents · 检测已安装的 Agent CLI", ["agents", "claude", "codex", "acp", "cli", "编程", "检测"], "agents", "/coding-agents", 4),
   command("command-env", "环境检测", "/env · 检查本机 CLI 与可选工具", ["env", "environment", "tools", "diagnostics", "环境", "检测"], "env", "/env", 5),

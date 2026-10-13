@@ -8,6 +8,7 @@ import type {
   AgentModelDefinition,
   AgentPermissionResponse,
   AgentPersistenceHandle,
+  AgentOrigin,
   AgentPromptInput,
   AgentProviderId,
   AgentSlashCommand,
@@ -65,6 +66,8 @@ export interface AgentManagerListener {
   onSubagent?(update: ProviderSubagentUpdate): void;
   /** 后台任务整表变化（design.md 4.15） */
   onTasks?(agentId: string, tasks: AgentBackgroundTask[]): void;
+  /** 用户（非调度器内部）对会话发消息 / 插话 / 中断（design.md 4.25：目标循环据此暂停） */
+  onUserAction?(agentId: string, kind: "send" | "steer" | "cancel"): void;
 }
 
 export interface AgentManagerOptions {
@@ -89,6 +92,8 @@ export interface CreateAgentParams {
   /** null / 省略 = 跟随 CLI 自身设置（design.md 4.10） */
   thinkingOptionId?: string | null;
   title?: string;
+  /** 会话来源（design.md 4.25）；缺省 = 用户新建，不写入快照 */
+  origin?: AgentOrigin;
 }
 
 interface SentTurn {
@@ -238,6 +243,7 @@ export class AgentManager {
       provider: params.provider,
       cwd: params.cwd,
       ...(params.title !== undefined ? { title: params.title } : {}),
+      ...(params.origin !== undefined ? { origin: params.origin } : {}),
       model: params.model ?? null,
       modeId: params.modeId ?? null,
       thinkingOptionId,
@@ -319,6 +325,8 @@ export class AgentManager {
     agentId: string,
     prompt: AgentPromptInput,
     clientMessageId?: string,
+    /** internal = 调度器发出的消息（design.md 4.25），不算用户介入 */
+    opts?: { internal?: boolean },
   ): Promise<{ turnId: string }> {
     const agent = this.requireAgent(agentId);
     // 恢复期间也持有 sending：并发 send 只触发一次恢复，其余按单 turn 约束返回 TURN_IN_PROGRESS。
@@ -330,6 +338,9 @@ export class AgentManager {
       throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束或先取消");
     }
 
+    if (!opts?.internal) {
+      this.emitUserAction(agentId, "send");
+    }
     agent.sending = true;
     try {
       // 向已归档会话发消息自动取消归档（design.md 4.17），随后续的 agent.state 一并推送
@@ -514,6 +525,7 @@ export class AgentManager {
     if (!agent.snapshot.activeTurnId && agent.snapshot.status !== "running" && !agent.sending) {
       return;
     }
+    this.emitUserAction(agentId, "cancel");
     await agent.session?.interrupt();
     await agent.tail;
   }
@@ -537,6 +549,7 @@ export class AgentManager {
     if (agent.backgroundTurnId === turnId) {
       throw new AgentRpcError("NOT_SUPPORTED", "CLI 自发轮次进行中不支持插话，请直接发送消息");
     }
+    this.emitUserAction(agentId, "steer");
     let settleUserMessage!: (sent: boolean) => void;
     const userMessageSent = new Promise<boolean>((resolve) => {
       settleUserMessage = resolve;
@@ -1545,6 +1558,16 @@ export class AgentManager {
         listener.onSubagent?.(update);
       } catch (error) {
         this.logger.error("agent.subagents.update 监听器出错：%s", String(error));
+      }
+    }
+  }
+
+  private emitUserAction(agentId: string, kind: "send" | "steer" | "cancel"): void {
+    for (const listener of this.listeners) {
+      try {
+        listener.onUserAction?.(agentId, kind);
+      } catch (error) {
+        this.logger.error("用户操作监听器出错：%s", String(error));
       }
     }
   }

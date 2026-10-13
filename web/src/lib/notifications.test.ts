@@ -372,6 +372,29 @@ describe("shouldPlayFallbackSound", () => {
   });
 });
 
+describe("decideScheduleNotification（design.md 4.25）", () => {
+  const notice = { scheduleId: "s1", name: "修测试", kind: "done" as const, message: "目标已完成" };
+
+  it("目标完成 / 达到上限 / 失败给出不同标题", async () => {
+    const { decideScheduleNotification } = await loadNotifications();
+    expect(decideScheduleNotification(notice, settings())).toEqual({
+      kind: "complete", title: "目标循环已完成", body: "「修测试」 · 目标已完成",
+    });
+    expect(decideScheduleNotification({ ...notice, kind: "exhausted" }, settings())).toMatchObject({
+      kind: "error", title: "目标循环已达最大轮数",
+    });
+    expect(decideScheduleNotification({ ...notice, kind: "failed" }, settings())).toMatchObject({
+      kind: "error", title: "自动化任务失败",
+    });
+  });
+
+  it("遵守总闸与「任务完成」开关", async () => {
+    const { decideScheduleNotification } = await loadNotifications();
+    expect(decideScheduleNotification(notice, settings({ system: false, sound: false }))).toBeNull();
+    expect(decideScheduleNotification(notice, settings({ onComplete: false }))).toBeNull();
+  });
+});
+
 describe("notifyFromAgentEvent", () => {
   class FakeAudioContext {
     static created = 0;

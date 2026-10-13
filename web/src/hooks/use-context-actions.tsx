@@ -2,7 +2,7 @@
 // 右键菜单与「⋯」菜单共用这里的动作，避免逻辑复制。
 import { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { useSetAtom } from "jotai";
+import { useSetAtom, useStore } from "jotai";
 import {
   Archive,
   ArchiveRestore,
@@ -17,6 +17,8 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Repeat,
+  Timer,
   Trash2,
 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
@@ -25,6 +27,7 @@ import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import { useExportSession } from "@/hooks/use-export-session";
 import { activeSessionIdAtom } from "@/stores/ui";
+import { scheduleDialogAtom, schedulesStateAtom } from "@/stores/schedules";
 import { agentProviderLabel } from "@/lib/agent-session-display";
 import { useConfirm } from "@/lib/use-confirm";
 import {
@@ -165,6 +168,8 @@ export function useSessionActions() {
   const exportSession = useExportSession();
   const forkSession = useForkSession();
   const actions = useAgentSession();
+  const store = useStore();
+  const setScheduleDialog = useSetAtom(scheduleDialogAtom);
   const { confirm, prompt } = useConfirm();
 
   /** agent.update 失败时用应用内提示框反馈。 */
@@ -217,6 +222,19 @@ export function useSessionActions() {
     [navigate, setActiveId],
   );
 
+  /** 打开目标循环 / 心跳弹窗（design.md 4.25）：该会话已有同类任务时直接编辑它。 */
+  const openScheduleDialog = useCallback(
+    (agentId: string, kind: "goal" | "heartbeat") => {
+      const existing = store
+        .get(schedulesStateAtom)
+        .schedules.find((schedule) => schedule.kind === kind && schedule.agentId === agentId);
+      setScheduleDialog(
+        existing ? { kind, schedule: existing, lockKind: true } : { kind, agentId, lockKind: true },
+      );
+    },
+    [setScheduleDialog, store],
+  );
+
   const buildMenu = useCallback(
     (agent: AgentSnapshot, title: string): ContextMenuEntry[] => {
       const cwd = normalizeWorkspacePath(agent.cwd || readSessionWorkspaceMap()[agent.id]);
@@ -247,6 +265,18 @@ export function useSessionActions() {
           disabled: running,
           onSelect: () => void forkSession(agent.id),
         },
+        {
+          key: "goal-loop",
+          label: "设置目标循环…",
+          icon: <Repeat size={ICON} />,
+          onSelect: () => openScheduleDialog(agent.id, "goal"),
+        },
+        {
+          key: "heartbeat",
+          label: "设置心跳…",
+          icon: <Timer size={ICON} />,
+          onSelect: () => openScheduleDialog(agent.id, "heartbeat"),
+        },
         { key: "copy-title", label: "复制会话标题", icon: <Copy size={ICON} />, onSelect: () => void copyText(title) },
         ...(cwd
           ? [{ key: "copy-cwd", label: "复制工作目录", icon: <Copy size={ICON} />, onSelect: () => void copyText(cwd) }]
@@ -274,7 +304,7 @@ export function useSessionActions() {
         },
       ];
     },
-    [deleteSession, exportSession, forkSession, navigate, openSession, renameSession, updateSession],
+    [deleteSession, exportSession, forkSession, navigate, openScheduleDialog, openSession, renameSession, updateSession],
   );
 
   return { openSession, buildMenu };

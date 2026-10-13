@@ -10,6 +10,8 @@ import { AgentStore } from "./agent/agent-store.js";
 import { createLogger, type Logger } from "./logger.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
+import { Scheduler } from "./scheduler/scheduler.js";
+import { ScheduleStore } from "./scheduler/store.js";
 import { RpcServer } from "./server/rpc-server.js";
 import { UsageLedger } from "./usage/ledger.js";
 import { withTimeout } from "./utils/promise-timeout.js";
@@ -89,6 +91,7 @@ async function main(): Promise<void> {
 
   let registry: ProviderRegistry | null = null;
   let manager: AgentManager | null = null;
+  let scheduler: Scheduler | null = null;
   let server: RpcServer | null = null;
   let parentTimer: NodeJS.Timeout | null = null;
   let shuttingDown = false;
@@ -105,6 +108,7 @@ async function main(): Promise<void> {
     try {
       await withTimeout(
         (async () => {
+          await scheduler?.stop();
           // manager.shutdown 先落盘、再关闭会话、最后再落盘一次
           await manager?.shutdown();
           await registry?.shutdown();
@@ -188,6 +192,17 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error("恢复历史会话失败：%s", String(error));
   }
+  // 调度器（design.md 4.25）：定时任务 / 心跳 / 目标循环；启动失败只记日志，不影响 sidecar 启动
+  scheduler = new Scheduler({
+    manager,
+    store: new ScheduleStore({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) }),
+    logger,
+  });
+  try {
+    await scheduler.start();
+  } catch (error) {
+    logger.error("启动调度器失败：%s", String(error));
+  }
   server = new RpcServer({
     token: config.token,
     version: SIDECAR_VERSION,
@@ -195,6 +210,7 @@ async function main(): Promise<void> {
     registry,
     providerConfig,
     usage,
+    scheduler,
     logger,
   });
 

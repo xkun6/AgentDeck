@@ -137,6 +137,8 @@ sidecar 入口：
 | `agent.state` | `{ agent: AgentSnapshot }`（创建、状态变化、模型/模式变化、关闭时推送） |
 | `agent.subagents.update` | `ProviderSubagentUpdate`（见 4.11） |
 | `agent.tasks.update` | `{ agentId, tasks: AgentBackgroundTask[] }`（后台任务整表，见 4.15） |
+| `schedule.changed` | `{ schedules: Schedule[], paused }`（调度表 / 运行记录变化，见 4.25） |
+| `schedule.notice` | `ScheduleNotice`（目标循环结束 / 定时任务失败，前端转系统通知，见 4.25） |
 
 `seq` 每个 agent 从 1 自增；`epoch` 是 sidecar 进程启动时生成的随机串，用来让前端识别 sidecar 重启。断线重连后前端调用 `agent.timeline { sinceSeq }` 补齐。
 
@@ -835,6 +837,20 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 **前端**：
 - 新增「自动化」页（侧栏入口 + 命令面板）：按类型分组的任务列表（名称、目标、下次触发时间 / 状态、启用开关、立即运行、编辑、删除）、运行记录、顶部「全部暂停」开关。新建 / 编辑弹窗按类型切换表单（cron 表达式带常用预设与下次 5 次触发预览）。
 - 会话详情：该会话有心跳或目标循环时，在输入框上方显示状态条（如「目标循环 3/10 · 停止」/「心跳：空闲 30 分钟后发送」），可停止 / 继续。会话右键菜单「设置目标循环…」「设置心跳…」。
+
+**实现补充（落地时确定）**：
+- 协议：`AgentSnapshot.origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`（缺省 = user，4.26 共用）；`agent.create` 内部支持 origin（调度器新建会话写 `schedule`，评判会话写 `judge`），RPC 参数不开放。`schedule.upsert` 入参为 `ScheduleDraft`（无 id 新建；`runs` / `iterations` / `state` / `doneMarker`（默认 `GOAL_DONE`）/ `stopOnFailure`（默认 true）/ `onBusy`（默认 skip）可省略）。目标会话不存在 → `AGENT_NOT_FOUND`；`schedule.delete` / `runNow` 的 id 不存在、`schedule.runs` 的 `limit` 不在 1–1000 → `-32602`。
+- 计时：单个定时器睡到最近一次触发，最长 30 秒（兼顾系统时间回拨 / 休眠，回拨时重算下次触发）。触发时刻已过去超过 90 秒（休眠唤醒、时间前跳）记一条 `missed`，不补跑；`everyMinutes` 的基准是应用启动 / 保存 / 上次触发的时刻；`at` 已过期时 upsert 拒绝启用（`-32602`），启动时遇到过期的 `at` 记 `missed` 并停用。
+- 内部发送标记：`AgentManager.sendPrompt(agentId, prompt, clientMessageId?, { internal: true })` 表示调度器发出，不算用户介入；非内部的 `agent.send` / `agent.steer` / `agent.cancel` 会触发 `AgentManagerListener.onUserAction(agentId, kind)`，目标循环据此转为 `stopped`。
+- `schedule.runNow`：cron 不受全局暂停影响（用户显式操作），心跳同；不等待发送完成（`onBusy: wait` 最长 30 分钟），结果见运行记录。goal 的 `runNow` = 继续循环（与 upsert `enabled: true, state: "running"` 等价）。
+- 目标循环：`enabled` 与 `state === "running"` 恒同步（进入 done / stopped / exhausted / failed 时 `enabled` 置 false；界面的启用开关 = 继续 / 停止）；`iterations` 表示已完成但未达成目标的回合数；从 stopped 继续时 `iterations > 0` 发「继续推进目标…」，`iterations === 0` 与终态（done / exhausted / failed）重新开始时重置为 0 并重发首条提示。同一会话最多一个进行中的目标循环；启动时会话正在运行 → `TURN_IN_PROGRESS`。CLI 自发轮次（`origin: "background"`）不计入。`turn_canceled` → stopped；`turn_failed` 且 `stopOnFailure: false` 时按未完成继续。重启 sidecar 后进行中的目标循环转为 `stopped`（无法确认循环是否仍在进行），用户可在界面继续。全局暂停时的目标发送记 `skipped_paused` 并转 `stopped`。
+- judge：评判会话（`origin: "judge"`，cwd 取被评会话）完成一次判定后由调度器删除（`agent.delete`）；评判失败 / 超时（10 分钟）/ 回复无法解析一律按「未完成」处理（首个非空行以 `DONE` 开头才算完成）。配置了 judge 时不再检查末行 doneMarker。前端侧栏、历史页（两个视图）与命令面板过滤 `origin === "judge"`（`lib/session-list.ts` 的 `isHiddenAgent`）。
+- 心跳：每次回合结束（包括心跳自己触发的回合）开始新的空闲期，所以持续空闲时每隔 `idleMinutes` 触发一次，直到 `maxRuns`；应用启动时空闲起点取启动时刻（不补跑）；用户活动（任何回合开始）重置计时。达到 `maxRuns` 后 `enabled: false`，重新启用时 `runs` 归零。
+- 会话被删除（`agent.removed`）：指向它的 heartbeat / goal / agent 目标 cron 立即 `enabled: false`（goal `state: "failed"`），记 `failed`（message「目标会话已删除」）并发失败通知；启动时发现目标已不存在同样处理。
+- 通知：新增通知 `schedule.notice { scheduleId, name, kind: "done" | "exhausted" | "failed", message, agentId? }`（不复用 `schedule.changed`）。sidecar 在目标循环完成 / 达到 `maxIterations` / 失败、以及定时任务发送失败 / 目标丢失时广播，前端（`lib/notifications.ts` 的 `notifyFromSchedule`）按现有通知设置（总闸与「任务完成」开关）调用 `desktopNotify`。`schedule.changed` 在调度表或运行记录每次变化时广播；前端每次（重）连成功后拉一次 `schedule.list`。
+- 下次触发时间：选择**前端用 croner 计算**（cron 表达式显示下次触发时间，弹窗预览未来 5 次；`everyMinutes` 的基准点在 sidecar 内存里，列表只显示「每 N 分钟」；`at` 显示触发时间），`schedule.list` 不返回 `nextRunAt`。
+- 存储：`schedules.json` 损坏（非法 JSON）记日志并备份为 `schedules.json.bad` 后视为空；单条无法解析的调度项跳过；`schedule-runs.jsonl` 超过 5000 行时启动时裁剪为最近 2000 行。未设置 `AGENTDECK_DATA_DIR` 时只在内存保存。全局暂停存在 `schedules.json` 的 `paused`（不依赖 `settings.*`）。
+- 前端入口：全局弹窗由 `scheduleDialogAtom` 驱动（`ScheduleDialogHost` 挂在应用根部），自动化页与会话右键菜单共用；右键「设置目标循环… / 设置心跳…」在该会话已有同类任务时直接编辑它。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

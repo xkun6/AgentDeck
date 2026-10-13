@@ -8,7 +8,7 @@
 // decideNotification / shouldPlayFallbackSound 是纯函数，便于 vitest 全矩阵
 // 覆盖；所有副作用都 fire-and-forget 且错误吞掉，绝不影响聊天主流程。
 
-import type { AgentStreamEnvelope } from "@agentdeck/protocol";
+import type { AgentStreamEnvelope, ScheduleNotice } from "@agentdeck/protocol";
 import type { ChatSessionRuntime } from "@/stores/chat";
 import { readNotificationSettings, type NotificationSettings } from "@/stores/ui";
 import type { DesktopNotifyResult } from "@/lib/runtime";
@@ -231,5 +231,59 @@ export function notifyFromAgentEvent(
       .catch(() => {});
   } catch {
     // 通知永远不能影响聊天主流程。
+  }
+}
+
+// ── 调度器通知（design.md 4.25）──────────────────────────────────────────
+
+export interface ScheduleNotificationAction {
+  kind: "complete" | "error";
+  title: string;
+  body: string;
+}
+
+/** 目标循环结束 / 定时任务失败 → 通知内容；遵守通知总闸与「任务完成」开关。纯函数。 */
+export function decideScheduleNotification(
+  notice: ScheduleNotice,
+  settings: NotificationSettings,
+): ScheduleNotificationAction | null {
+  if (!settings.system && !settings.sound) return null;
+  if (!settings.onComplete) return null;
+  const name = truncate(notice.name, SESSION_TITLE_CHARS);
+  const body = truncate(notice.message, MAX_BODY_CHARS);
+  const detail = `「${name}」${body ? ` · ${body}` : ""}`;
+  switch (notice.kind) {
+    case "done":
+      return { kind: "complete", title: "目标循环已完成", body: detail };
+    case "exhausted":
+      return { kind: "error", title: "目标循环已达最大轮数", body: detail };
+    default:
+      return { kind: "error", title: "自动化任务失败", body: detail };
+  }
+}
+
+export function notifyFromSchedule(notice: ScheduleNotice): void {
+  try {
+    const bridge = window.agentdeckDesktop;
+    if (typeof bridge?.desktopNotify !== "function") return;
+    const settings = readNotificationSettings();
+    const action = decideScheduleNotification(notice, settings);
+    if (!action) return;
+    void bridge
+      .desktopNotify({
+        kind: action.kind,
+        title: action.title,
+        body: action.body,
+        showSystemNotification: settings.system,
+        withSound: settings.sound,
+        respectFocus: settings.onlyBackground,
+        requestAttention: true,
+      })
+      .then((result) => {
+        if (result && shouldPlayFallbackSound(settings, result)) playChime();
+      })
+      .catch(() => {});
+  } catch {
+    // 通知永远不能影响主流程。
   }
 }
