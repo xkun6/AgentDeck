@@ -130,7 +130,6 @@ sidecar 入口：
 | `group.create` / `group.list` / `group.get` / `group.delete` | 见 4.27 | 并行协作组（扇出 + 汇总） |
 | `board.get` / `board.updateSettings` / `board.upsertTask` / `board.deleteTask` / `board.moveTask` / `board.merge` | 见 4.28 | 看板式任务分派 |
 | `remote.status` / `remote.pairing.create` / `remote.devices.revoke` | 见 4.31 | 远程网关（手机接入）；远程客户端不可调用 |
-| `client.presence` | `{ kind: "desktop" \| "mobile", visible: boolean }` | `{}`（客户端在线 / 可见状态，见 4.31） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -1025,18 +1024,22 @@ interface AgentRateLimits {
 
 ### 4.31 远程网关（安卓 App 接入）
 
-> 状态：sidecar 侧与桌面设置页已实现（M1）；手机端见 `docs/mobile.md`（M2 起）。实现位置：`packages/remote`（帧 / offer / 客户端握手，sidecar 与手机共用）、`packages/sidecar/src/remote/`（store / pairing / addresses / gateway / service / presence / attention）。握手与加密参照 paseo `packages/relay/src/{crypto,encrypted-channel}.ts`（tweetnacl box），在其基础上增加一次性配对密钥、设备凭据、服务端挑战与递增计数 nonce（防重放）。
+> 状态：sidecar 侧与桌面设置页已实现（M1）；手机端见 `docs/mobile.md`（M2 起）。实现位置：`packages/remote`（帧 / offer / 客户端握手，sidecar 与手机共用）、`packages/sidecar/src/remote/`（store / pairing / addresses / gateway / service / attention）。握手与加密参照 paseo `packages/relay/src/{crypto,encrypted-channel}.ts`（tweetnacl box），在其基础上增加一次性配对密钥、设备凭据、服务端挑战与递增计数 nonce（防重放）。
 
 **原则**：原有 `127.0.0.1` 的 `/rpc`、`/mcp` 不变、不对外；手机走另起的远程监听，默认关闭。v1 只支持局域网与 Tailscale 直连，不做 relay 中转、不做 FCM 推送。
 
 **设置**（4.24 的 `SidecarSettings` 增加，经 `settings.get` / `settings.set` 读写）：
 ```ts
-remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535 */ }
+remote: {
+  enabled: boolean /* 默认 false */;
+  port: number /* 默认 47631，1024–65535 */;
+}
 ```
 - `enabled` 由 false 变 true 时在 `0.0.0.0:<port>` 起独立 HTTP 服务，只接受 `GET /remote` 的 WS 升级，其余路径 404，不提供 `/health`；变 false 时关闭监听并断开所有远程连接；`port` 变化时在新端口重启。端口被占用（或无权限）时不影响 sidecar 本身，`remote.status.error` 给出中文原因，`listening: false`；之后再 `settings.set`（换端口或重新启用）会重试。
 - `settings.set` 在网关启停完成后才返回，因此紧随其后的 `remote.status` 反映最终结果。与网关无关的设置变化不会重启网关。
 - 未设置数据目录（`AGENTDECK_DATA_DIR`）时不能启用：设置仍可写入（只在内存），但网关不启动，`remote.status.error` 提示。
 - 首次监听时 Windows 防火墙会对 node.exe 弹窗，前端设置页提示用户允许「专用网络」。
+- **网络类别检测**（真机测试发现：有线网卡被 Windows 标为「公用」时，即使在弹窗里允许了专用网络，手机仍被防火墙挡住）：Rust 命令 `network_categories` → `Array<{ address: string; interfaceAlias: string; category: "public" | "private" | "domain" | "unknown" }>`。Windows 上用 PowerShell 的 `Get-NetIPAddress -AddressFamily IPv4` 与 `Get-NetConnectionProfile` 按 `InterfaceAlias` 关联（无需管理员权限，`CREATE_NO_WINDOW`，超时 5 秒，失败返回空数组）；其它平台返回空数组。「手机连接」页对 `remote.status.addresses` 中所在网卡为 `public` 的地址标红并提示：「该网络被 Windows 标为『公用』，防火墙会阻止手机连接。请在 设置 → 网络和 Internet → 该网络 中改为『专用网络』」。
 
 **存储**（`<AGENTDECK_DATA_DIR>/remote/`，原子写入；未设置数据目录时远程网关不可启用）：
 - `daemon-keypair.json`：`{ publicKey, secretKey }`（`nacl.box.keyPair()`，base64），首次启用时生成，之后不变（换钥匙 = 所有设备需重新配对）。
@@ -1094,10 +1097,10 @@ interface RemoteStatus {
 - `beforeSeq`（≥ 1）必须与 `limit` 一起给；单独给 `beforeSeq`、`limit` 越界（非 1–2000 的整数）同样是 `-32602`。回合起点按时间线上的 `user_message`（非插话）判定，其后紧跟的同回合 `turn_started` 不再单独算起点；CLI 自发轮次等没有 `user_message` 的回合以 `turn_started` 为起点。一个回合比 `limit` 还长时整回合返回。
 - 手机打开会话取 `{ limit: 300 }`，向上滚动到顶取 `{ beforeSeq: 当前最早 seq, limit: 300 }`；断线重连仍用 `sinceSeq` 补齐。
 
-**在线状态与通知（attention）**：
-- 客户端在连接成功、可见性变化时调用 `client.presence { kind, visible }`，可见期间每 30 秒再调用一次作为心跳。远程连接的 `kind` 一律按 `mobile` 处理。
-- sidecar 在以下事件发生时决定是否向远程客户端发 `client.attention`：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。
-- 判定：最近 120 秒内有 `kind: "desktop"` 且 `visible: true` 的心跳 → 不发（用户在电脑前）；否则发给所有已认证的远程连接。presence 按连接记录（kind / visible / 最近心跳），连接断开即移除该记录；同时有多个桌面窗口时任一可见即算在电脑前。
+**通知（attention）**：
+- sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。
+- 是否提醒完全由手机端决定（见下文手机端处理与 `docs/mobile.md`）。
+- 改动背景：v1 原设计用 `client.presence` 上报桌面窗口可见性，「桌面可见则不发」。真机测试发现 WebView2 在最小化、隐藏到托盘后 `document.visibilityState` 仍为 `visible`，手机永远收不到通知；且「人在不在电脑前」本身难以可靠判断。按用户决定（2026-10-14）删除 `client.presence` 与在线判定，改为手机端三档设置。
 - 摘要文本（`body`）：完成 = 「本轮已完成」；失败 = 「本轮失败：」+ 错误信息；审批 = 「Agent 请求审批：」+ 请求标题（`question` / `plan` / `mode` 类用固定句式）；调度 = `schedule.notice.message`。全部压成单行并截断到 120 字，只引用标题 / 错误 / 工具名，不含工具输入输出原文。`title` 取会话标题（缺省取首条消息预览，再缺省「未命名会话」）或调度名。
 ```ts
 interface AttentionNotice {
@@ -1109,12 +1112,17 @@ interface AttentionNotice {
   timestamp: number;
 }
 ```
-- 手机收到后：App 在前台且正停留在该会话 → 忽略；App 在前台其它页面 → 应用内提示；App 在后台 → Android 本地通知，点击跳转到对应会话。桌面端现有通知逻辑不变，只在其可见性变化时补发 `client.presence`。
+- 手机收到后按手机端设置「通知」（存手机本地，默认「总是通知」）处理：
+  | 设置 | App 在后台 | App 在前台 |
+  |---|---|---|
+  | 总是通知（`always`，默认） | Android 本地通知，点击跳转到对应会话 | 停在该会话 → 忽略；其它页面 → 应用内提示条 |
+  | 仅在前台时（`foreground`） | 不通知 | 同上 |
+  | 从不通知（`never`） | 不通知 | 不提示 |
+- 桌面端现有通知逻辑不变。
 
 **桌面前端（设置页「手机连接」，路径 `/remote`，侧栏「设置」下）**：
 - 内容：启用开关与端口（1024–65535）、`remote.status.error`、可用地址列表（局域网 / Tailscale 标签）、「生成配对二维码」（调用 `remote.pairing.create`，用 `qrcode` 把 `offerUrl` 渲染成 SVG，白底黑码不随主题变色，显示 5 分钟倒计时，过期后「重新生成」；有新设备配对成功或网关停止监听时自动收起）、已配对设备（名称、配对时间、最近在线、在线 / 离线、吊销需二次确认）。启用后提示 Windows 防火墙需对 node.exe 允许「专用网络」。
 - 实时刷新：`sidecar-client` 的 `onRemoteChanged` 订阅 `remote.changed`，`useSidecarBridge` 把载荷直接写入 `remote.status` 的查询缓存；页面还会在改设置 / 吊销后主动失效重取。
-- 在线状态：`useSidecarBridge` 同时挂 `bindDesktopPresence`——连接成功（含重连）、`visibilitychange` 时上报 `client.presence { kind: "desktop", visible }`，窗口可见期间每 30 秒心跳一次。
 - 调试面板的脱敏规则覆盖 `agentdeck://pair#…` 链接与 `deviceSecret` / `pairingSecret` 字段。
 
 ## 5. sidecar 内部结构（packages/sidecar）
