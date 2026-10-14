@@ -1,5 +1,5 @@
 // client.attention 的应用内提示条（design.md 4.31）：前台且在其它页面时弹出，点击跳转到对应会话。
-// App 在后台时交给 attention.ts 里预留的本地通知处理器（M3）。
+// App 在后台时交给 attention.ts 里注册的本地通知处理器（native/local-notifications.ts）。
 import { useEffect, useRef, useState } from "react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { SidecarClient } from "@/lib/sidecar-client";

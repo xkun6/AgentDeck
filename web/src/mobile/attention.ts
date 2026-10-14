@@ -1,5 +1,5 @@
 // client.attention 的前台处理（design.md 4.31）：
-// 前台且正停在该会话 → 忽略；前台在其它页面 → 应用内提示条（点击跳转）；后台 → 交给本地通知处理器（M3 接入，M2 只预留）。
+// 前台且正停在该会话 → 忽略；前台在其它页面 → 应用内提示条（点击跳转）；后台 → 交给本地通知处理器（main.tsx 注册 BackgroundNotifier）。
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { MobileRoute } from "./route";
 
@@ -19,7 +19,7 @@ export type BackgroundAttentionHandler = (notice: AttentionNotice) => void;
 
 let backgroundHandler: BackgroundAttentionHandler | null = null;
 
-/** M3：前台服务 + 本地通知在这里注册；未注册时后台收到的 attention 直接丢弃 */
+/** 本地通知在这里注册（main.tsx）；未注册时后台收到的 attention 直接丢弃 */
 export function setBackgroundAttentionHandler(handler: BackgroundAttentionHandler | null): void {
   backgroundHandler = handler;
 }

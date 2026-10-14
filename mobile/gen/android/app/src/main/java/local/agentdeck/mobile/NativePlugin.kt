@@ -1,10 +1,17 @@
 package local.agentdeck.mobile
 
 import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.webkit.WebView
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -14,7 +21,12 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 // 手改部分（非 Tauri 生成）：AgentDeck 本地插件 native 的 Kotlin 实现，Rust 侧见 mobile/src/native.rs。
-// 提供前台服务启停（保活）、电池优化白名单状态 / 申请、应用系统设置页。
+// 提供前台服务启停（保活）、电池优化白名单状态 / 申请、应用系统设置页，以及后台提醒通知（带会话 id 的点击跳转）。
+//
+// 为什么提醒通知不走 tauri-plugin-notification 的 show：它在 Android 上点击回调的 payload 不含自定义 extra / 通知 id
+// （2.6.0 的 sourceJson 从未赋值），无法知道该跳哪个会话；这里自己发通知，PendingIntent 带 agentId，
+// 点击经 onNewIntent 以事件 notificationClicked 转给前端，冷启动（进程已被杀）则由 takeLaunchTarget 取走。
+// 通知权限的申请仍用 tauri-plugin-notification 的 requestPermission。
 
 @InvokeArg
 class KeepAliveArgs {
@@ -22,8 +34,117 @@ class KeepAliveArgs {
   var wakeLock: Boolean = false
 }
 
+@InvokeArg
+class AttentionArgs {
+  var id: Int = 0
+  var title: String = ""
+  var body: String = ""
+  /** finished / failed / permission / schedule，决定通知 channel */
+  var kind: String = "finished"
+  var agentId: String? = null
+}
+
 @TauriPlugin
 class NativePlugin(private val activity: Activity) : Plugin(activity) {
+  /** 冷启动时由点击通知拉起的目标；被前端取走一次后清空 */
+  private var launchTarget: JSObject? = null
+
+  override fun load(webView: WebView) {
+    super.load(webView)
+    launchTarget = targetOf(activity.intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    targetOf(intent)?.let { trigger("notificationClicked", it) }
+  }
+
+  private fun targetOf(intent: Intent?): JSObject? {
+    if (intent == null || !intent.getBooleanExtra(EXTRA_FROM_ATTENTION, false)) return null
+    val target = JSObject()
+    target.put("agentId", intent.getStringExtra(EXTRA_AGENT_ID))
+    return target
+  }
+
+  @Command
+  fun takeLaunchTarget(invoke: Invoke) {
+    val result = JSObject()
+    result.put("target", launchTarget)
+    launchTarget = null
+    activity.intent?.removeExtra(EXTRA_FROM_ATTENTION)
+    invoke.resolve(result)
+  }
+
+  @Command
+  fun notificationStatus(invoke: Invoke) {
+    val result = JSObject()
+    result.put("enabled", NotificationManagerCompat.from(activity).areNotificationsEnabled())
+    invoke.resolve(result)
+  }
+
+  /** 发一条 attention 提醒；同 id 的通知会被覆盖（前端另按 notice.id 去重） */
+  @Command
+  fun showAttention(invoke: Invoke) {
+    val args = invoke.parseArgs(AttentionArgs::class.java)
+    ensureChannels()
+    val open = PendingIntent.getActivity(
+      activity,
+      args.id,
+      Intent(activity, MainActivity::class.java)
+        .setAction(Intent.ACTION_MAIN)
+        .addCategory(Intent.CATEGORY_LAUNCHER)
+        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        .putExtra(EXTRA_FROM_ATTENTION, true)
+        .putExtra(EXTRA_AGENT_ID, args.agentId),
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+    val channel = channelOf(args.kind)
+    val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(activity, channel) else Notification.Builder(activity)
+    builder
+      .setContentTitle(args.title)
+      .setContentText(args.body)
+      .setStyle(Notification.BigTextStyle().bigText(args.body))
+      .setSmallIcon(R.drawable.ic_stat_agentdeck)
+      .setContentIntent(open)
+      .setAutoCancel(true)
+    if (Build.VERSION.SDK_INT < 26) {
+      // 8.0 以前没有 channel：用优先级区分，待审批更高
+      @Suppress("DEPRECATION")
+      builder.setPriority(if (args.kind == "permission") Notification.PRIORITY_HIGH else Notification.PRIORITY_DEFAULT)
+        .setDefaults(Notification.DEFAULT_ALL)
+    }
+    val manager = activity.getSystemService(Activity.NOTIFICATION_SERVICE) as NotificationManager
+    try {
+      manager.notify(args.id, builder.build())
+      invoke.resolve()
+    } catch (e: Exception) {
+      invoke.reject("发送通知失败：${e.message}")
+    }
+  }
+
+  private fun channelOf(kind: String): String =
+    when (kind) {
+      "permission" -> CHANNEL_PERMISSION
+      "schedule" -> CHANNEL_SCHEDULE
+      else -> CHANNEL_RESULT
+    }
+
+  /** 与前台服务的常驻通知（agentdeck_keepalive，低优先级静音）分开：待审批高优先级，完成 / 失败与定时任务默认优先级 */
+  private fun ensureChannels() {
+    if (Build.VERSION.SDK_INT < 26) return
+    val manager = activity.getSystemService(NotificationManager::class.java)
+    fun create(id: String, name: String, description: String, importance: Int) {
+      if (manager.getNotificationChannel(id) != null) return
+      val channel = NotificationChannel(id, name, importance)
+      channel.description = description
+      channel.enableVibration(true)
+      manager.createNotificationChannel(channel)
+    }
+    create(CHANNEL_PERMISSION, "待审批", "Agent 请求审批工具调用或回答问题时提醒", NotificationManager.IMPORTANCE_HIGH)
+    create(CHANNEL_RESULT, "完成与失败", "会话本轮完成或失败时提醒", NotificationManager.IMPORTANCE_DEFAULT)
+    create(CHANNEL_SCHEDULE, "定时任务", "定时任务失败或目标循环结束时提醒", NotificationManager.IMPORTANCE_DEFAULT)
+  }
+
   /** 启动（或更新文案）前台服务；调用时 App 在前台，不会触发 Android 12+ 的后台启动限制 */
   @Command
   fun keepaliveStart(invoke: Invoke) {
@@ -83,5 +204,13 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
     } catch (e: Exception) {
       invoke.reject("无法打开应用设置：${e.message}")
     }
+  }
+
+  companion object {
+    const val CHANNEL_PERMISSION = "agentdeck_permission"
+    const val CHANNEL_RESULT = "agentdeck_result"
+    const val CHANNEL_SCHEDULE = "agentdeck_schedule"
+    const val EXTRA_FROM_ATTENTION = "local.agentdeck.mobile.FROM_ATTENTION"
+    const val EXTRA_AGENT_ID = "local.agentdeck.mobile.AGENT_ID"
   }
 }

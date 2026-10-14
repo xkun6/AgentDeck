@@ -11,6 +11,7 @@ import { NewSession } from "./new-session";
 import { PairScreen } from "./pair-screen";
 import type { PreferencesStore } from "./preferences";
 import { detectDeviceName } from "./platform";
+import { useNotificationClicks } from "./native/use-notification-clicks";
 import { navTabOf, type MobileRoute } from "./route";
 import { SessionDetail } from "./session-detail";
 import { SessionList } from "./session-list";
@@ -38,6 +39,7 @@ export function MobileApp({ hosts, manager, prefs, pairOverrides }: MobileAppPro
   const hostsState = useSyncExternalStore(hosts.subscribe, hosts.getState);
   const connection = useSyncExternalStore(manager.subscribe, manager.getSnapshot);
   const { route, navigate, back } = useHashRoute();
+  useNotificationClicks(navigate);
   const autoScanNext = useRef(false);
   const autoConnected = useRef(false);
 

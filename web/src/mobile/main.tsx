@@ -17,7 +17,9 @@ import { MobileApp } from "./mobile-app";
 import { createHostStorage } from "./platform";
 import { createPreferencesStore } from "./preferences";
 import { KeepAliveController } from "./native/keepalive-controller";
+import { BackgroundNotifier } from "./native/local-notifications";
 import { keepaliveStart, keepaliveStop } from "./native/native-plugin";
+import { setBackgroundAttentionHandler } from "./attention";
 import "@/styles/global.css";
 
 // 手机上即使在 Tauri 壳里也不是桌面：显式声明，避免任何代码按 platform==="tauri" 去调桌面命令
@@ -25,7 +27,7 @@ window.__AGENTDECK_RUNTIME__ = { platform: "web" };
 applyPlatformToDOM("web");
 applyThemeToDOM(DEFAULT_THEME_CONFIG);
 
-// 持久化只用 localStorage；桌面通知出口关闭（后台本地通知在 M3 经 configureNotifier / setBackgroundAttentionHandler 接入）
+// 持久化只用 localStorage；桌面通知出口关闭（后台提醒走 setBackgroundAttentionHandler → 本地通知，见 bootstrap）
 configureUiStoreBackend("local-storage");
 configureNotifier(null);
 
@@ -35,6 +37,15 @@ async function bootstrap() {
   await hosts.load();
   const manager = new ConnectionManager(hosts, queryClient);
   const prefs = createPreferencesStore();
+  // 后台收到 client.attention → 本地通知；首次连上电脑（App 在前台）时申请通知权限
+  const notifier = new BackgroundNotifier();
+  setBackgroundAttentionHandler((notice) => void notifier.notify(notice));
+  let permissionRequested = false;
+  manager.subscribe(() => {
+    if (permissionRequested || manager.getSnapshot().phase !== "open") return;
+    permissionRequested = true;
+    void notifier.ensurePermission();
+  });
   // 后台保持连接：随连接状态与开关启停前台服务（非 Tauri 环境下原生调用是 no-op）
   new KeepAliveController(
     {
