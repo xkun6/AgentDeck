@@ -25,6 +25,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 use tokio::sync::{mpsc, Notify};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -95,10 +96,20 @@ pub async fn connect_sidecar_stream(state: &AppState) -> Result<SidecarWebSocket
             urlencoding::encode(&status.token)
         )
     };
-    tokio_tungstenite::connect_async(url)
+    tokio_tungstenite::connect_async_with_config(url, Some(relay_ws_config()), false)
         .await
         .map(|(ws, _)| ws)
         .map_err(|e| AppError::SidecarWs(e.to_string()))
+}
+
+/// 中继的 WS 帧/消息上限（256 MiB）。
+const RELAY_MAX_BYTES: usize = 256 << 20;
+
+/// 默认 16 MiB 的帧上限会让 `agent.timeline` 的大响应把中继打断，导致断线重连循环。
+fn relay_ws_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(RELAY_MAX_BYTES))
+        .max_frame_size(Some(RELAY_MAX_BYTES))
 }
 
 /// Open the sidecar WebSocket from Rust and start relaying frames.
@@ -204,6 +215,7 @@ pub async fn sidecar_ws_open(
                             break;
                         }
                         Some(Err(e)) => {
+                            log::warn!("sidecar WS 中继读取出错，断开：{e}");
                             reason = e.to_string();
                             break;
                         }
@@ -272,4 +284,16 @@ pub async fn sidecar_ws_close(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_ws_config_放宽到_256_mib() {
+        let cfg = relay_ws_config();
+        assert_eq!(cfg.max_message_size, Some(256 << 20));
+        assert_eq!(cfg.max_frame_size, Some(256 << 20));
+    }
 }

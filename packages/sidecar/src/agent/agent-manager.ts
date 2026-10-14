@@ -36,6 +36,7 @@ import {
 } from "./provider-subagent-store.js";
 import { dedupeSlashCommands } from "./slash-commands.js";
 import { searchSources, type SearchResult } from "./timeline-search.js";
+import { compactToolCallUpdates, toolCallId } from "./timeline-compact.js";
 import { limitTimelineItem } from "./timeline-limits.js";
 import type {
   AgentClient,
@@ -118,6 +119,11 @@ interface SentTurn {
   retracted: boolean;
 }
 
+interface ToolCallSlot {
+  first: AgentStreamEnvelope;
+  last: AgentStreamEnvelope;
+}
+
 interface ManagedAgent {
   id: string;
   /** 历史会话的 provider 可能已不存在 */
@@ -128,6 +134,8 @@ interface ManagedAgent {
   /** null：历史会话的 timeline 尚未从磁盘读取（首次 agent.timeline / 恢复时惰性加载） */
   entries: AgentStreamEnvelope[] | null;
   entriesLoading: Promise<AgentStreamEnvelope[]> | null;
+  /** 内存时间线里每个 callId 的首条与最新一条（design.md 4.5）；与 entries 同生共死 */
+  toolCallIndex: Map<string, ToolCallSlot> | null;
   /** 事件尾链：保证同一 agent 的事件按到达顺序串行处理 */
   tail: Promise<void>;
   unsubscribe: () => void;
@@ -281,6 +289,7 @@ export class AgentManager {
       ...newManagedAgent(id, client, snapshot),
       session,
       entries: [],
+      toolCallIndex: new Map(),
       closed: false,
       models: catalog?.models ?? null,
     };
@@ -759,6 +768,7 @@ export class AgentManager {
       ...newManagedAgent(id, client, snapshot),
       session,
       entries: copied,
+      toolCallIndex: buildToolCallIndex(copied),
       closed: false,
       models: origin.models,
     };
@@ -1310,6 +1320,7 @@ export class AgentManager {
         })
         .then(({ entries, lastSeq }) => {
           agent.entries = entries;
+          agent.toolCallIndex = buildToolCallIndex(entries);
           agent.snapshot.lastSeq = Math.max(agent.snapshot.lastSeq, lastSeq);
           agent.entriesLoading = null;
           return entries;
@@ -1585,6 +1596,30 @@ export class AgentManager {
     return this.store.flushMeta(agent.id, () => toPersistedMeta(agent));
   }
 
+  /** 内存时间线追加：同 callId 的 tool_call 只留首条与最新一条（design.md 4.5） */
+  private pushEntry(agent: ManagedAgent, envelope: AgentStreamEnvelope): void {
+    const entries = agent.entries;
+    if (!entries) {
+      return;
+    }
+    const callId = toolCallId(envelope);
+    if (callId !== undefined && agent.toolCallIndex) {
+      const slot = agent.toolCallIndex.get(callId);
+      if (slot) {
+        if (slot.last !== slot.first) {
+          const at = entries.lastIndexOf(slot.last);
+          if (at >= 0) {
+            entries.splice(at, 1);
+          }
+        }
+        slot.last = envelope;
+      } else {
+        agent.toolCallIndex.set(callId, { first: envelope, last: envelope });
+      }
+    }
+    entries.push(envelope);
+  }
+
   private emitEnvelope(agent: ManagedAgent, event: AgentStreamEvent): void {
     agent.snapshot.lastSeq += 1;
     const envelope: AgentStreamEnvelope = {
@@ -1594,7 +1629,7 @@ export class AgentManager {
       timestamp: this.now(),
       event,
     };
-    agent.entries?.push(envelope);
+    this.pushEntry(agent, envelope);
     this.recordUsage(agent, envelope);
     this.recordSnapshot(agent, envelope);
     if (!agent.removed) {
@@ -1745,6 +1780,23 @@ function cloneSnapshot(snapshot: AgentSnapshot): AgentSnapshot {
   return structuredClone(snapshot);
 }
 
+function buildToolCallIndex(entries: AgentStreamEnvelope[]): Map<string, ToolCallSlot> {
+  const index = new Map<string, ToolCallSlot>();
+  for (const entry of entries) {
+    const callId = toolCallId(entry);
+    if (callId === undefined) {
+      continue;
+    }
+    const slot = index.get(callId);
+    if (slot) {
+      slot.last = entry;
+    } else {
+      index.set(callId, { first: entry, last: entry });
+    }
+  }
+  return index;
+}
+
 function newManagedAgent(
   id: string,
   client: AgentClient | undefined,
@@ -1757,6 +1809,7 @@ function newManagedAgent(
     snapshot,
     entries: null,
     entriesLoading: null,
+    toolCallIndex: null,
     tail: Promise.resolve(),
     unsubscribe: () => undefined,
     sending: false,

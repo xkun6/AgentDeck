@@ -23,7 +23,7 @@ Rust（Tauri）── src/process/sidecar.rs ───────────�
 
 - Rust 只负责：拉起与监管 sidecar、把 sidecar 地址和 token 交给前端、本地能力（git / terminal / 文件预览 / ui_store / 通知 / 托盘 / CLI 检测）。
 - sidecar 负责：Agent 会话管理、provider 适配、事件归一化、权限审批中转。
-- 前端直连 sidecar 的 WS；webview 拦截 `ws://` 时走 Rust 中继 `ws_proxy.rs`（线协议不变）。
+- 前端直连 sidecar 的 WS；webview 拦截 `ws://` 时走 Rust 中继 `ws_proxy.rs`（线协议不变）。中继的 WS 帧和消息上限放宽到 256 MiB，因为 tungstenite 默认 16 MiB 的帧上限会打断大的 `agent.timeline` 响应（断线重连循环）。
 - 安卓 App（规划中，见 `docs/mobile.md`）经 sidecar 的远程网关接入（4.31）：独立端口、默认关闭、扫码配对、端到端加密，加密信道内跑的仍是第 4 节的 JSON-RPC。
 
 ## 3. Rust ↔ sidecar 启动契约
@@ -296,6 +296,7 @@ export interface AgentSnapshot {
 - 启动：扫描全部 meta.json，原状态为 starting / idle / running / error 的恢复为 `dormant`，`closed` 保持 `closed`；timeline 在首次 `agent.timeline` 请求时惰性读取；seq 从持久化的 `lastSeq` 继续递增。`agent.list` 按 `updatedAt` 倒序返回。
 - 恢复：对 `dormant` 或 `closed` 的 agent 调 `agent.send` 时，若 `resumable` 则自动 `client.resumeSession(persistence, { cwd })`（状态 dormant/closed → starting → idle → running），若快照记录了非 null 的 model / modeId 则恢复后重新设置；不可恢复时返回 `-32000` + `NOT_SUPPORTED`（message「该会话无法恢复，请新建会话」）。恢复失败返回 `PROVIDER_UNAVAILABLE` 并把错误写入 lastError。
 - `agent.timeline` 返回的 `epoch` 为当前进程 epoch；历史条目保留原 seq 与原 epoch，前端按 seq 去重。
+- 同一 callId 的 tool_call 多次更新（典型为 `Agent` 子代理工具，每次推进都带累计 actions 摘要）时，内存时间线和 `agent.timeline` 只保留**首条（决定卡片位置）与最新一条**；`timeline.jsonl` 仍然只追加，读取时若发现中间更新，就在该 agent 的写入链上原子重写压缩（`timeline-compact.ts`）。背景：一次事故里会话 timeline.jsonl 达 35MB / 5180 行，其中 3451 行是 15 个 Agent 调用的中间更新，`agent.timeline` 单帧约 35MB。
 
 **P6 落地细则**（实现与上文有出入时以此为准）：
 - 不可恢复时的错误码：`dormant` 且不可恢复 → `NOT_SUPPORTED`；`closed` 且不可恢复 → `AGENT_CLOSED`。

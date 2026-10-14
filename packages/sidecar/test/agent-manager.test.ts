@@ -571,3 +571,34 @@ describe("AgentManager：工具调用大小限制（design.md 5.3）", () => {
     expect(JSON.stringify(assistant.event)).toContain(bigAssistant);
   });
 });
+
+describe("AgentManager：同 callId 的 tool_call 增量去重（design.md 4.5）", () => {
+  test("推 5 次更新后 timeline 只剩首尾两条，sinceSeq 增量能拿到最新一条", async () => {
+    const { manager, agent, session } = await setup();
+    const { turnId } = await manager.sendPrompt(agent.id, "hi");
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("running"));
+    await manager.timeline(agent.id); // 先加载内存时间线
+
+    for (let n = 1; n <= 5; n += 1) {
+      session.emit({
+        type: "timeline",
+        turnId,
+        item: { type: "tool_call", callId: "c1", name: "Agent", status: "running", detail: { type: "unknown", input: n, output: null } },
+      });
+    }
+    await vi.waitFor(async () => {
+      const calls = (await manager.timeline(agent.id)).entries.filter(
+        (e) => e.event.type === "timeline" && e.event.item.type === "tool_call",
+      );
+      expect(calls.length).toBe(2);
+    });
+    const all = (await manager.timeline(agent.id)).entries;
+    const calls = all.filter((e) => e.event.type === "timeline" && e.event.item.type === "tool_call");
+    expect(calls[1]!.seq).toBeGreaterThan(calls[0]!.seq);
+    const latest = all.reduce((max, e) => Math.max(max, e.seq), 0);
+    expect(calls[1]!.seq).toBe(latest);
+
+    const since = (await manager.timeline(agent.id, calls[0]!.seq)).entries;
+    expect(since.map((e) => e.seq)).toContain(calls[1]!.seq);
+  });
+});
