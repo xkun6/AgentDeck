@@ -10,6 +10,7 @@ import type {
 import { describeToolDetail } from "@/lib/agent-tool-detail";
 import type { PendingApproval } from "@/stores/chat";
 import { QuestionCard } from "./question-card";
+import { HANDLED_ELSEWHERE_MESSAGE, useApprovalFailure } from "./use-approval-failure";
 import s from "./approval-dialog.module.css";
 
 export interface ApprovalDialogProps {
@@ -97,21 +98,20 @@ export function ApprovalDialog({ approval, onRespond, remaining }: ApprovalDialo
 function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps) {
   const request = approval.permission;
   const [responding, setResponding] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { error, handledElsewhere, fail, clearError } = useApprovalFailure(approval);
   const hasActions = Boolean(request?.actions && request.actions.length > 0);
   const actions = hasActions ? request!.actions! : DEFAULT_ACTIONS;
   const title = request?.title || defaultTitle(request);
   const description = request?.description ?? approval.reason;
 
   const respond = async (action: AgentPermissionAction) => {
-    if (responding) return;
+    if (responding || handledElsewhere) return;
     setResponding(action.id);
-    setError(null);
+    clearError();
     try {
       await onRespond(approval, responseForAction(action, hasActions));
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message || "审批响应发送失败");
+      fail(err, "审批响应发送失败");
     } finally {
       setResponding(null);
     }
@@ -124,6 +124,7 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
       {description ? <div className={s.description}>{description}</div> : null}
       <ApprovalDetail request={request} fallback={approval.command} />
       {error ? <div className={s.error} role="alert">发送失败：{error}</div> : null}
+      {handledElsewhere ? <div className={s.handled} role="status">{HANDLED_ELSEWHERE_MESSAGE}</div> : null}
       <div className={s.actions}>
         {actions.map((action) => (
           <button
@@ -131,7 +132,7 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
             type="button"
             className={action.behavior === "allow" ? s.allow : s.deny}
             onClick={() => void respond(action)}
-            disabled={responding !== null}
+            disabled={responding !== null || handledElsewhere}
           >
             {responding === action.id ? "发送中…" : action.label}
           </button>

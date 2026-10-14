@@ -18,6 +18,7 @@ import type {
   AgentSession,
   AgentSessionConfig,
 } from "../../agent/types.js";
+import { AgentRpcError } from "../../agent/errors.js";
 import { OutputSpeedTracker } from "../shared/output-speed.js";
 
 export const MOCK_PROVIDER_ID = "mock";
@@ -167,7 +168,7 @@ export class MockAgentSession implements AgentSession {
   async respondToPermission(requestId: string, response: AgentPermissionResponse): Promise<void> {
     const pending = this.active?.pendingPermission;
     if (!pending || pending.request.id !== requestId) {
-      throw new Error(`找不到待处理的权限请求：${requestId}`);
+      throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.active!.pendingPermission = null;
     this.emit({ type: "permission_resolved", requestId, response });

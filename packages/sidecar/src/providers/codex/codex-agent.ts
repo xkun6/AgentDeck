@@ -44,6 +44,7 @@ import type {
 import { redactInteropTokens } from "../../utils/redact-interop.js";
 import { codexInteropConfig } from "../shared/interop.js";
 import { OutputSpeedTracker } from "../shared/output-speed.js";
+import { AgentRpcError } from "../../agent/errors.js";
 import { buildMcpSection, buildRows, formatResetsIn, formatWindowLabel } from "../../agent/status-sections.js";
 import type { Logger } from "../../logger.js";
 import { execCommand, spawnProcess } from "../../utils/spawn.js";
@@ -1108,7 +1109,7 @@ export class CodexAgentSession implements AgentSession {
   async respondToPermission(requestId: string, response: AgentPermissionResponse): Promise<void> {
     const pending = this.pending.get(requestId);
     if (!pending) {
-      throw new Error(`找不到待处理的权限请求：${requestId}`);
+      throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.pending.delete(requestId);
     this.emit({ type: "permission_resolved", requestId, response });

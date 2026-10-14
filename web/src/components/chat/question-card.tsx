@@ -8,6 +8,7 @@ import type {
   AgentQuestion,
 } from "@agentdeck/protocol";
 import type { PendingApproval } from "@/stores/chat";
+import { HANDLED_ELSEWHERE_MESSAGE, useApprovalFailure } from "./use-approval-failure";
 import a from "./approval-dialog.module.css";
 import s from "./question-card.module.css";
 
@@ -75,7 +76,8 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
     questions.map(() => ({ ...EMPTY_SELECTION })),
   );
   const [responding, setResponding] = useState<"submit" | "skip" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { error, handledElsewhere, fail, clearError } = useApprovalFailure(approval);
+  const locked = responding !== null || handledElsewhere;
   const answers = buildQuestionAnswers(questions, selections);
   const description = request.description ?? approval.reason;
 
@@ -84,18 +86,17 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
   };
 
   const respond = async (kind: "submit" | "skip") => {
-    if (responding) return;
+    if (locked) return;
     if (kind === "submit" && !answers) return;
     setResponding(kind);
-    setError(null);
+    clearError();
     const response: AgentPermissionResponse = kind === "submit"
       ? { behavior: "allow", selectedActionId: "submit", updatedInput: { ...request.input, answers: answers! } }
       : { behavior: "deny", selectedActionId: "skip", message: QUESTION_SKIP_MESSAGE };
     try {
       await onRespond(approval, response);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message || "回答发送失败");
+      fail(err, "回答发送失败");
     } finally {
       setResponding(null);
     }
@@ -133,7 +134,7 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
                         name={name}
                         checked={checked}
                         aria-checked={checked}
-                        disabled={responding !== null}
+                        disabled={locked}
                         onChange={() => update(index, toggleOption(question, selection, option.label))}
                       />
                       <span className={s.optionBody}>
@@ -153,7 +154,7 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
                     name={name}
                     checked={selection.other}
                     aria-checked={selection.other}
-                    disabled={responding !== null}
+                    disabled={locked}
                     onChange={() => update(index, toggleOther(question, selection))}
                   />
                   <span className={s.optionBody}>
@@ -167,7 +168,7 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
                     value={selection.otherText}
                     placeholder="输入你的回答"
                     aria-label={`${question.question}：其他回答`}
-                    disabled={responding !== null}
+                    disabled={locked}
                     onChange={(event) => update(index, { ...selection, otherText: event.target.value })}
                   />
                 ) : null}
@@ -177,12 +178,13 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
         })}
       </div>
       {error ? <div className={a.error} role="alert">发送失败：{error}</div> : null}
+      {handledElsewhere ? <div className={a.handled} role="status">{HANDLED_ELSEWHERE_MESSAGE}</div> : null}
       <div className={a.actions}>
         <button
           type="button"
           className={a.allow}
           onClick={() => void respond("submit")}
-          disabled={responding !== null || !answers}
+          disabled={locked || !answers}
         >
           {responding === "submit" ? "发送中…" : "提交回答"}
         </button>
@@ -190,7 +192,7 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
           type="button"
           className={a.deny}
           onClick={() => void respond("skip")}
-          disabled={responding !== null}
+          disabled={locked}
         >
           {responding === "skip" ? "发送中…" : "跳过"}
         </button>

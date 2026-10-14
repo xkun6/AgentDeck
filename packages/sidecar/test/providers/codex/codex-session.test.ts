@@ -297,6 +297,21 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn_completed", turnId });
   });
 
+  test("respond 找不到待处理请求（含已处理过的）抛 PERMISSION_NOT_FOUND", async () => {
+    const session = await newSession();
+    const events = collect(session);
+    await session.startTurn("shell");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    await session.respondToPermission(request!.id, { behavior: "allow" });
+    await expect(session.respondToPermission(request!.id, { behavior: "allow" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+  });
+
   test("commandExecution 审批 decline：tool_call 失败，回合正常完成", async () => {
     const session = await newSession();
     const events = collect(session);

@@ -743,7 +743,7 @@ export class ClaudeAgentSession implements AgentSession {
   async respondToPermission(requestId: string, response: AgentPermissionResponse): Promise<void> {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) {
-      throw new Error(`找不到待处理的权限请求：${requestId}`);
+      throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.pendingPermissions.delete(requestId);
     pending.cleanup();

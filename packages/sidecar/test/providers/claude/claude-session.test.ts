@@ -1228,7 +1228,13 @@ describe("ClaudeAgentSession", () => {
     await session.respondToPermission(third.id, { behavior: "deny" });
     await expect(denyPromise).resolves.toEqual({ behavior: "deny", message: "用户拒绝了该操作" });
     expect(session.getPendingPermissions()).toHaveLength(0);
-    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toThrow();
+    // 找不到（例如另一端刚处理完）：业务错误码 PERMISSION_NOT_FOUND，前端据此提示「已在其他设备处理」
+    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+    await expect(session.respondToPermission(third.id, { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
   });
 
   test("ExitPlanMode 为 plan 权限；批准后切出 plan 模式", async () => {

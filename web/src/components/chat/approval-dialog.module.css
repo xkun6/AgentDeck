@@ -69,6 +69,13 @@
   line-height: 1.5;
 }
 
+.handled {
+  margin-bottom: 12px;
+  color: var(--h-text-2);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.5;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

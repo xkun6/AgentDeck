@@ -44,6 +44,21 @@ describe("MockAgentClient", () => {
     await expect(client.createSession({ cwd: ".", modeId: "nope" })).rejects.toThrow();
   });
 
+  test("respond 找不到待处理请求抛 PERMISSION_NOT_FOUND", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+    await session.startTurn("/approve");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    await session.respondToPermission(request!.id, { behavior: "allow" });
+    await expect(session.respondToPermission(request!.id, { behavior: "allow" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+  });
+
   test("一轮完整事件序列，首轮才发 thread_started", async () => {
     const session = await new MockAgentClient().createSession({ cwd: "." });
     const events = collect(session);

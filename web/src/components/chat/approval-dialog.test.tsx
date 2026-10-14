@@ -2,10 +2,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AgentPermissionRequest } from "@agentdeck/protocol";
-import type { PendingApproval } from "@/stores/chat";
+import { getDefaultStore } from "jotai";
+import { SidecarRpcError } from "@/lib/sidecar-client";
+import { chatRuntimeBySessionAtom, createEmptyChatRuntime, type PendingApproval } from "@/stores/chat";
 import { ApprovalDialog } from "./approval-dialog";
+import { HANDLED_ELSEWHERE_REMOVE_DELAY_MS } from "./use-approval-failure";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  getDefaultStore().set(chatRuntimeBySessionAtom, {});
+});
+
+function rpcError(code: string, message = "找不到待处理的权限请求：p1"): SidecarRpcError {
+  return new SidecarRpcError({ code: -32000, message, data: { code } });
+}
 
 function approval(permission?: AgentPermissionRequest, command = "echo hi"): PendingApproval {
   return { requestId: permission?.id ?? "p1", sessionId: "agent-1", command, permission };
@@ -125,6 +136,66 @@ describe("ApprovalDialog", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("该审批请求已失效");
     expect((screen.getByRole("button", { name: "允许" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("ApprovalDialog：并发处理（PERMISSION_NOT_FOUND）", () => {
+  const request: AgentPermissionRequest = { id: "p1", provider: "claude", name: "Bash", kind: "tool", title: "执行命令" };
+
+  function seedStore() {
+    const pending = approval(request);
+    getDefaultStore().set(chatRuntimeBySessionAtom, {
+      "agent-1": { ...createEmptyChatRuntime(0), pendingApprovals: [pending] },
+    });
+    return pending;
+  }
+
+  it("权限卡：另一端已处理 → 显示「已在其他设备处理」、禁用按钮，稍后移除该卡片", async () => {
+    const pending = seedStore();
+    const onRespond = vi.fn().mockRejectedValue(rpcError("PERMISSION_NOT_FOUND"));
+    render(<ApprovalDialog approval={pending} onRespond={onRespond} />);
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "允许" }));
+    await vi.waitFor(() => expect(screen.getByText("已在其他设备处理")).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByRole("button", { name: "允许" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(getDefaultStore().get(chatRuntimeBySessionAtom)["agent-1"]!.pendingApprovals).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(HANDLED_ELSEWHERE_REMOVE_DELAY_MS);
+    expect(getDefaultStore().get(chatRuntimeBySessionAtom)["agent-1"]!.pendingApprovals).toHaveLength(0);
+  });
+
+  it("提问卡同样处理 PERMISSION_NOT_FOUND", async () => {
+    const question: AgentPermissionRequest = {
+      id: "p1",
+      provider: "claude",
+      name: "AskUserQuestion",
+      kind: "question",
+      detail: { type: "question", questions: [{ question: "Q?", multiSelect: false, options: [{ label: "A" }] }] },
+    };
+    const pending = approval(question);
+    getDefaultStore().set(chatRuntimeBySessionAtom, {
+      "agent-1": { ...createEmptyChatRuntime(0), pendingApprovals: [pending] },
+    });
+    const onRespond = vi.fn().mockRejectedValue(rpcError("PERMISSION_NOT_FOUND"));
+    render(<ApprovalDialog approval={pending} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "跳过" }));
+    expect(await screen.findByText("已在其他设备处理")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "跳过" }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(
+      () => expect(getDefaultStore().get(chatRuntimeBySessionAtom)["agent-1"]!.pendingApprovals).toHaveLength(0),
+      { timeout: HANDLED_ELSEWHERE_REMOVE_DELAY_MS + 1500 },
+    );
+  });
+
+  it("其它错误经 humanizeSidecarError 汉化后显示，卡片保留可重试", async () => {
+    const pending = seedStore();
+    const onRespond = vi.fn().mockRejectedValue(rpcError("AGENT_CLOSED", "closed"));
+    render(<ApprovalDialog approval={pending} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "允许" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("该会话已关闭，请新建会话");
+    expect(screen.queryByText("已在其他设备处理")).toBeNull();
+    expect((screen.getByRole("button", { name: "允许" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(getDefaultStore().get(chatRuntimeBySessionAtom)["agent-1"]!.pendingApprovals).toHaveLength(1);
   });
 });
 

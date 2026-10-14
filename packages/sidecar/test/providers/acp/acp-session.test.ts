@@ -346,6 +346,9 @@ describe("AcpAgentSession 权限", () => {
     await session.startTurn("scenario:permission");
     const requested = await waitForPermission(session, events);
     await session.respondToPermission(requested.request.id, { behavior: "deny", message: "不行" });
+    await expect(session.respondToPermission(requested.request.id, { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
     await waitForTerminal(events);
     expect(assistantText(events)).toBe("已拒绝:opt-reject");
     expect(toolItems(events, "call-perm").at(-1)).toMatchObject({ status: "failed", error: "用户拒绝" });
