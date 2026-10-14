@@ -19,7 +19,7 @@ import android.os.PowerManager
  * - foregroundServiceType 取 specialUse（Android 14+ 必须声明类型；dataSync 在 Android 15 有 6 小时上限，
  *   remoteMessaging 面向消息类 App，都不合适），Manifest 里附带用途说明。
  * - 可选 PARTIAL_WAKE_LOCK（extra `wakelock`）：用于验证锁屏后 CPU 休眠是否是断连原因。
- * 该服务只由 MainActivity 里的 M0 调试 extra 启动，M3 再改成随连接状态自动启停。
+ * 该服务目前默认不会被启动（M0 的 adb 调试入口已移除），M3 再改成随连接状态自动启停。
  */
 class KeepAliveService : Service() {
   private var wakeLock: PowerManager.WakeLock? = null

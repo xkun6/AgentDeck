@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手机要直连电脑上的远程网关（ws://局域网 / Tailscale 地址），传输层本身是 E2EE，故放行明文流量。debug / release 通用。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
