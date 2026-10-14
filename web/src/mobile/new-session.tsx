@@ -1,4 +1,4 @@
-// 新建会话：provider → 模型 → 模式（provider.list / provider.listModels）；工作目录从现有会话的 cwd 去重后选择。
+// 新建会话：provider → 模型 → 模式（provider.list / provider.listModels）；工作目录从现有会话的 cwd 去重后选择，也可手动输入路径。
 // 危险模式（AgentMode.dangerous，跳过权限确认）标红，且绝不默认选中：初始模式恒为「默认」，只有用户明确点选才会带 modeId。
 import { useMemo, useState } from "react";
 import { useAtomValue } from "jotai";
@@ -21,12 +21,14 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
   const [pickedMode, setPickedMode] = useState<string | null>(null);
   const [pickedCwd, setPickedCwd] = useState<string | null>(null);
   const [manualCwd, setManualCwd] = useState("");
+  const [manualSelected, setManualSelected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const provider = resolveProvider(pickedProvider, providers);
-  // 默认选最近使用的目录；没有任何会话时才允许手动输入
-  const cwd = pickedCwd ?? cwdOptions[0]?.cwd ?? (manualCwd.trim() || null);
+  // 默认选最近使用的目录；也可以随时选「手动输入路径」；没有任何会话可参考时只能手动输入
+  const manualMode = manualSelected || cwdOptions.length === 0;
+  const cwd = manualMode ? manualCwd.trim() || null : (pickedCwd ?? cwdOptions[0]?.cwd ?? null);
   const catalogQuery = useAgentCatalog(provider, cwd ?? "");
   const models = catalogQuery.data?.models ?? [];
   const modes = catalogQuery.data?.modes ?? [];
@@ -154,7 +156,7 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
           {cwdOptions.length > 0 ? (
             <div className={s.optionGroup} role="radiogroup" aria-label="工作目录">
               {cwdOptions.map((item) => {
-                const selected = cwd !== null && cwdKey(cwd) === cwdKey(item.cwd);
+                const selected = !manualMode && cwd !== null && cwdKey(cwd) === cwdKey(item.cwd);
                 return (
                   <button
                     key={cwdKey(item.cwd)}
@@ -163,17 +165,32 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
                     aria-checked={selected}
                     className={s.optionWide}
                     data-selected={selected ? "true" : undefined}
-                    onClick={() => setPickedCwd(item.cwd)}
+                    onClick={() => {
+                      setManualSelected(false);
+                      setPickedCwd(item.cwd);
+                    }}
                   >
                     <span className={s.rowTitle}>{cwdBaseName(item.cwd)}</span>
                     <span className={s.rowMeta}>{item.cwd}</span>
                   </button>
                 );
               })}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={manualMode}
+                className={s.optionWide}
+                data-selected={manualMode ? "true" : undefined}
+                onClick={() => setManualSelected(true)}
+              >
+                <span className={s.rowTitle}>手动输入路径</span>
+                <span className={s.rowMeta}>电脑上的其它目录</span>
+              </button>
             </div>
-          ) : (
+          ) : null}
+          {manualMode ? (
             <label className={s.field}>
-              <span>还没有会话可参考，请输入电脑上的目录路径</span>
+              <span>{cwdOptions.length > 0 ? "输入电脑上的目录路径" : "还没有会话可参考，请输入电脑上的目录路径"}</span>
               <input
                 className={s.control}
                 value={manualCwd}
@@ -181,7 +198,7 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
                 onChange={(e) => setManualCwd(e.target.value)}
               />
             </label>
-          )}
+          ) : null}
         </section>
 
         {error ? (

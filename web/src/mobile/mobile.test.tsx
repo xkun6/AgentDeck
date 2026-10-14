@@ -332,7 +332,8 @@ describe("NewSession 新建会话", () => {
     ]);
     await screen.findByRole("radio", { name: /完全放行/ });
     const dirs = within(screen.getByRole("radiogroup", { name: "工作目录" })).getAllByRole("radio");
-    expect(dirs).toHaveLength(2);
+    expect(dirs).toHaveLength(3); // 两个目录 + 「手动输入路径」
+    expect(dirs[2]!.textContent).toContain("手动输入路径");
     expect(dirs[0]!.textContent).toContain("J:/Program/B");
     expect(dirs[0]!.getAttribute("aria-checked")).toBe("true");
     expect((screen.getByRole("radio", { name: /Codex/ }) as HTMLButtonElement).disabled).toBe(true);
@@ -342,6 +343,30 @@ describe("NewSession 新建会话", () => {
       fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
     });
     expect(createCalls(client)[0]![1]).toMatchObject({ cwd: "j:\\program\\a" });
+  });
+
+  it("已有会话时也始终提供「手动输入路径」：选中后出现输入框，创建用输入的目录；改选回已有目录即恢复", async () => {
+    const { client } = setup();
+    await screen.findByRole("radio", { name: /完全放行/ });
+    expect(screen.queryByPlaceholderText(/J:\/Program\/MyProject/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /手动输入路径/ }));
+    const input = screen.getByPlaceholderText(/J:\/Program\/MyProject/);
+    // 选中手动但还没填：不能创建
+    expect((screen.getByRole("button", { name: "创建会话" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { value: " D:/other/proj " } });
+    expect((screen.getByRole("radio", { name: /手动输入路径/ })).getAttribute("aria-checked")).toBe("true");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    });
+    expect(createCalls(client)[0]![1]).toMatchObject({ cwd: "D:/other/proj" });
+
+    fireEvent.click(screen.getByRole("radio", { name: /Program\/A/ }));
+    expect(screen.queryByPlaceholderText(/J:\/Program\/MyProject/)).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    });
+    expect(createCalls(client)[1]![1]).toMatchObject({ cwd: "J:/Program/A" });
   });
 
   it("没有任何会话时允许手动输入目录，未填写前不能创建", async () => {
