@@ -8,10 +8,13 @@ import type {
   ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
 
+import { limitTimelineItem } from "./timeline-limits.js";
 import type { ProviderSubagentInputEvent } from "./types.js";
 
 /** 每个子代理时间线保留的最大行数，超出丢最旧的 */
 export const MAX_SUBAGENT_TIMELINE_ROWS = 2000;
+/** 每个父会话的全部子代理时间线合计字节数上限（design.md 4.11），超出从最早的行丢弃 */
+export const MAX_SUBAGENT_TIMELINE_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_SUBAGENT_TIMELINE_LIMIT = 200;
 
 export interface SubagentTimelineQuery {
@@ -28,6 +31,8 @@ export interface SubagentTimelinePage {
 
 interface TimelineState {
   rows: ProviderSubagentTimelineRow[];
+  /** 与 rows 一一对应的字节数（截断后 JSON 长度） */
+  sizes: number[];
   nextSeq: number;
 }
 
@@ -44,7 +49,13 @@ export class ProviderSubagentStore {
   private readonly descriptors = new Map<string, ProviderSubagentDescriptor>();
   private readonly timelines = new Map<string, TimelineState>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  /** 各父会话的子代理时间线合计字节数 */
+  private readonly parentBytes = new Map<string, number>();
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly maxParentBytes: number = MAX_SUBAGENT_TIMELINE_BYTES,
+  ) {}
 
   apply(
     parentAgentId: string,
@@ -54,7 +65,7 @@ export class ProviderSubagentStore {
     const key = storeKey(parentAgentId, event.id);
     if (event.type === "remove") {
       this.descriptors.delete(key);
-      this.timelines.delete(key);
+      this.dropTimeline(parentAgentId, key);
       return { kind: "remove", agentId: parentAgentId, subagentId: event.id };
     }
 
@@ -63,13 +74,23 @@ export class ProviderSubagentStore {
       const row: ProviderSubagentTimelineRow = {
         seq: timeline.nextSeq,
         timestamp: event.timestamp ?? this.now(),
-        item: event.item,
+        // 单行大小限制：文本截断、图片占位（design.md 4.11 / 5.3）
+        item: limitTimelineItem(event.item),
       };
+      const size = JSON.stringify(row).length;
       timeline.nextSeq += 1;
       timeline.rows.push(row);
+      timeline.sizes.push(size);
+      this.addBytes(parentAgentId, size);
       if (timeline.rows.length > MAX_SUBAGENT_TIMELINE_ROWS) {
-        timeline.rows.splice(0, timeline.rows.length - MAX_SUBAGENT_TIMELINE_ROWS);
+        const excess = timeline.rows.length - MAX_SUBAGENT_TIMELINE_ROWS;
+        timeline.rows.splice(0, excess);
+        this.addBytes(
+          parentAgentId,
+          -timeline.sizes.splice(0, excess).reduce((sum, bytes) => sum + bytes, 0),
+        );
       }
+      this.enforceParentBytes(parentAgentId);
       return { kind: "timeline", agentId: parentAgentId, subagentId: event.id, row };
     }
 
@@ -148,17 +169,77 @@ export class ProviderSubagentStore {
     for (const key of [...this.timelines.keys()]) {
       if (key.startsWith(prefix)) this.timelines.delete(key);
     }
+    this.parentBytes.delete(parentAgentId);
     return updates;
+  }
+
+  /** 全部子代理时间线的行数与字节数（内存采样用） */
+  stats(): { rows: number; bytes: number } {
+    let rows = 0;
+    for (const timeline of this.timelines.values()) rows += timeline.rows.length;
+    let bytes = 0;
+    for (const value of this.parentBytes.values()) bytes += value;
+    return { rows, bytes };
+  }
+
+  /** 某父会话的子代理时间线合计字节数 */
+  bytesOf(parentAgentId: string): number {
+    return this.parentBytes.get(parentAgentId) ?? 0;
+  }
+
+  private addBytes(parentAgentId: string, delta: number): void {
+    const next = Math.max(0, (this.parentBytes.get(parentAgentId) ?? 0) + delta);
+    if (next === 0) this.parentBytes.delete(parentAgentId);
+    else this.parentBytes.set(parentAgentId, next);
+  }
+
+  private dropTimeline(parentAgentId: string, key: string): void {
+    const timeline = this.timelines.get(key);
+    if (!timeline) return;
+    this.addBytes(
+      parentAgentId,
+      -timeline.sizes.reduce((sum, bytes) => sum + bytes, 0),
+    );
+    this.timelines.delete(key);
+  }
+
+  /** 超过父会话字节上限时，跨其全部子代理时间线从最早的行开始丢弃（至少保留最后一行） */
+  private enforceParentBytes(parentAgentId: string): void {
+    if (this.bytesOf(parentAgentId) <= this.maxParentBytes) return;
+    const prefix = `${parentAgentId}\0`;
+    const owned = [...this.timelines.entries()].filter(([key]) => key.startsWith(prefix));
+    while (this.bytesOf(parentAgentId) > this.maxParentBytes) {
+      let oldest: TimelineState | null = null;
+      for (const [, timeline] of owned) {
+        if (timeline.rows.length === 0) continue;
+        if (
+          oldest === null ||
+          isOlder(timeline.rows[0]!, oldest.rows[0]!)
+        ) {
+          oldest = timeline;
+        }
+      }
+      const total = owned.reduce((sum, [, timeline]) => sum + timeline.rows.length, 0);
+      if (oldest === null || total <= 1) return;
+      oldest.rows.shift();
+      this.addBytes(parentAgentId, -oldest.sizes.shift()!);
+    }
   }
 
   private ensureTimeline(key: string): TimelineState {
     let timeline = this.timelines.get(key);
     if (!timeline) {
-      timeline = { rows: [], nextSeq: 1 };
+      timeline = { rows: [], sizes: [], nextSeq: 1 };
       this.timelines.set(key, timeline);
     }
     return timeline;
   }
+}
+
+function isOlder(left: ProviderSubagentTimelineRow, right: ProviderSubagentTimelineRow): boolean {
+  return left.timestamp !== right.timestamp
+    ? left.timestamp < right.timestamp
+    : left.seq < right.seq;
 }
 
 /** rows 按 seq 升序：返回满足 predicate 的前缀长度 */

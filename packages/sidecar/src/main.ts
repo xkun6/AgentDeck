@@ -304,7 +304,10 @@ async function main(): Promise<void> {
     void usage.backfill(backfillAgents, (agentId) => store.streamTimeline(agentId));
   }
   startMemorySampler(logger, {
-    extra: () => `sessions=${manager?.listAgents().length ?? 0}`,
+    extra: () => {
+      const subagents = manager?.subagentStats() ?? { rows: 0, bytes: 0 };
+      return `sessions=${manager?.listAgents().length ?? 0} subagentRows=${subagents.rows} subagentBytes=${subagents.bytes}`;
+    },
   });
   logger.info(
     "已监听 127.0.0.1:%d（epoch=%s, providers=%s）",

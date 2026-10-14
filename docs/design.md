@@ -475,7 +475,10 @@ interface ProviderProfile {
   - `{ type: "upsert"; id; title?; description?; status?; toolCallId?; cwd?; subtitle?; parentSubagentId?; timestamp? }`：字段**省略 = 保留原值，显式 null = 清空**；status 省略时保留（新建默认 running）。
   - `{ type: "timeline"; id; item; timestamp? }`：追加到该子代理时间线（不存在则先建空时间线，但不建描述）。
   - `{ type: "remove"; id }`。
-- `ProviderSubagentStore`（`agent/provider-subagent-store.ts`）：键 `parentAgentId\0subagentId`；每个子代理时间线最多保留 2000 行（超出丢最旧的，hasOlder 以实际保留为准）。AgentManager 在事件尾链中拦截 `provider_subagent` 写入 store，并经监听器 `onSubagent` 推给 RpcServer 广播。
+- `ProviderSubagentStore`（`agent/provider-subagent-store.ts`）：键 `parentAgentId\0subagentId`；每个子代理时间线最多保留 2000 行（超出丢最旧的，hasOlder 以实际保留为准）；**另有大小限制**（事故背景：多个子代理大量读取截图，base64 经 stream-json 流入 sidecar，会话 `timeline.jsonl` 达 31 MB，而此前只限行数不限单行大小）：
+  - 单行（一条 `ProviderSubagentTimelineRow` 的 item）经 `limitTimelineItem`（`agent/timeline-limits.ts`，规则见 5.3「时间线大小限制」）处理：文本总预算 64 KB，超出截断；图片内容替换为占位文本「[图片 约 N KB，已省略]」。截断发生在写入 store 之前，因此广播给前端的 `agent.subagents.update` 与 `agent.subagents.timeline` 返回的都是截断后的内容。
+  - 每个父会话的全部子代理时间线合计字节数（各行截断后 JSON 长度之和）上限 8 MB；超出时按时间（timestamp，同刻按 seq）从**最早的行**开始丢弃，跨该父会话的所有子代理时间线，直到回到上限内（至少保留刚写入的那一行）。丢弃后 `hasOlder` 以实际保留为准。
+  - AgentManager 在事件尾链中拦截 `provider_subagent` 写入 store，并经监听器 `onSubagent` 推给 RpcServer 广播。
 - 清理：会话关闭（`agent.close`、shutdown）与删除时清空该会话的全部子代理，并逐个广播 `remove`。
 
 **Claude**：
@@ -1203,6 +1206,14 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 - `assistant_message` 一轮内可能有多条（不同 `messageId`），前端按 messageId 分段拼接；`reasoning` 不带 messageId。
 - 首轮 `thread_started` 与 `turn_started` 的先后不固定（Claude、ACP 先 thread_started，Codex 先 turn_started），前端不得依赖二者顺序。
 - `turn_started` 之前不一定有 `user_message`：CLI 自发轮次（4.12）只有 `turn_started { origin: "background" }`。
+
+**时间线大小限制**（`agent/timeline-limits.ts` 的 `limitTimelineItem`，主时间线与子代理时间线共用）：
+- **文本预算**：一个时间线项里所有字符串合计最多约 64 K 字符（`TIMELINE_ITEM_TEXT_BUDGET = 65536`，按 JS 字符数计，不是字节）。遍历整个项（`detail`、`error`、`metadata` 等任意深度，深度上限 8），每个字符串最多保留「剩余预算」（但至少 1024 字符，保证后面的字段不至于全空）；超出部分截断，并在末尾追加 `…[已截断 N 字符]`。
+- **图片**：任何 `type` 为 `image`（含 MCP 的 image 内容块）或带 `source.type === "base64"` 的对象，整体替换为 `{ "type": "text", "text": "[图片 约 N KB，已省略]" }`（N 按其 base64 数据长度 ×3/4 估算）；`data:image/…;base64,…` 形式的字符串替换为同样的占位文本。
+- 未超限的项原样返回（同一引用，不复制）。
+- **主时间线**：Claude provider 的 `toolResultText` 本来就只取 `tool_result.content` 里的文本块（图片块被丢弃），但结构化的 `tool_use_result` 会作为候选输出：未知（多为 MCP）工具的 `tool_use_result` 若含图片（如浏览器截图工具），解析不出结构化 detail 时会退回 `unknown` detail，**base64 会整段进入 `detail.output`、被广播并写入 `timeline.jsonl`**；Bash / Read 等的超大文本输出同样无上限。因此 AgentManager 在 `processEvent` 里对**所有 provider 的 `tool_call` 项**统一应用 `limitTimelineItem`（先于合并、快照、广播、落盘，所以内存、前端、`timeline.jsonl` 三处一致）。`user_message` / `assistant_message` / `reasoning` 不处理（来自用户或模型本身的文本，不是工具产物）。已落盘的旧会话不改写。
+- **对前端的影响**：前端从不渲染 `unknown` detail 里的图片，只把 `detail.input` / `detail.output` 序列化成文本并截到 20000 字符（`web/src/lib/agent-tool-detail.ts`），因此显示上几乎无差别；变化只有：① 超过 64 K 字符的工具输出末尾多一行「…[已截断 N 字符]」（前端自己的 20000 字符截断通常先生效）；② `unknown` 输出里的图片块显示为「[图片 约 N KB，已省略]」文本块而不是一长串 base64；③ 会话导出（`session-export`）里同一工具卡片的输出同样是截断后的内容。
+- **与 paseo 对照**：paseo 的 `limitAgentTimelineItemContent`（`TOOL_CALL_CONTENT_MAX_LENGTH = 64 * 1024`）在工具调用事件持久化、流式推送、历史回放前截断 shell 输出、失败 shell 的错误内容与 plain_text；图片由 Claude provider 从 tool_result 中取出，按 `materializeProviderImage` 物化为 assistant markdown 图片，不再以 base64 进时间线。AgentDeck 保留 64 K 的阈值，但覆盖范围更宽（任意 detail 的任意字符串字段，因为 `unknown` detail 的 output 是任意结构），图片不物化、直接占位（前端没有对应的图片消息通道）。
 
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。

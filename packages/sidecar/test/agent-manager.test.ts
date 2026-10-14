@@ -515,3 +515,59 @@ describe("AgentManager 建会话后补取模式目录", () => {
     }
   });
 });
+
+describe("AgentManager：工具调用大小限制（design.md 5.3）", () => {
+  test("tool_call 的超大文本被截断、图片块被占位，其它项原样", async () => {
+    const { manager, agent, session, streams } = await setup();
+    const { turnId } = await manager.sendPrompt(agent.id, "hi");
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("running"));
+
+    session.emit({
+      type: "timeline",
+      turnId,
+      item: {
+        type: "tool_call",
+        callId: "c1",
+        name: "mcp__browser__screenshot",
+        status: "completed",
+        detail: {
+          type: "unknown",
+          input: { url: "http://x" },
+          output: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "A".repeat(300_000) },
+            },
+            { type: "text", text: "B".repeat(200_000) },
+          ],
+        },
+      },
+    });
+    const bigAssistant = "C".repeat(100_000);
+    session.emit({
+      type: "timeline",
+      turnId,
+      item: { type: "assistant_message", text: bigAssistant },
+    });
+    await vi.waitFor(() =>
+      expect(
+        streams.some((s) => s.event.type === "timeline" && s.event.item.type === "assistant_message"),
+      ).toBe(true),
+    );
+
+    const toolEnvelope = streams.find(
+      (s) => s.event.type === "timeline" && s.event.item.type === "tool_call",
+    )!;
+    const json = JSON.stringify(toolEnvelope.event);
+    expect(json.length).toBeLessThan(80_000);
+    expect(json).toContain("[图片 约 220 KB，已省略]");
+    expect(json).toContain("已截断");
+    expect(json).not.toContain("AAAAAAAAAA");
+
+    // assistant_message 不属于工具产物，不处理
+    const assistant = streams.find(
+      (s) => s.event.type === "timeline" && s.event.item.type === "assistant_message",
+    )!;
+    expect(JSON.stringify(assistant.event)).toContain(bigAssistant);
+  });
+});
