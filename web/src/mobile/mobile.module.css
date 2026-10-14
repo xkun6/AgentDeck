@@ -364,6 +364,65 @@
   color: var(--h-danger);
 }
 
+/* 后台运行：厂商指引与首次引导 */
+.vendorTips {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+}
+
+.vendorTip {
+  padding: 0 12px;
+  border-bottom: 1px solid var(--h-line-soft);
+  font-size: 13px;
+  color: var(--h-text-2);
+}
+
+.vendorTip:last-child {
+  border-bottom: 0;
+}
+
+.vendorTip summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.vendorTip ul {
+  margin: 0 0 12px;
+  padding-left: 16px;
+  line-height: 1.7;
+}
+
+.guideOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.5);
+}
+
+.guideBox {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-height: 100%;
+  padding: 16px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  overflow-y: auto;
+}
+
+.guideTitle {
+  margin: 0;
+  font-size: 16px;
+}
+
 /* 选项（新建会话） */
 .optionGroup {
   display: flex;
@@ -476,7 +535,7 @@
 }
 
 .syncBanner {
-  padding: 2px 12px;
+  padding: 4px 12px;
   background: var(--h-accent-soft);
   color: var(--h-accent);
   font-size: 12px;

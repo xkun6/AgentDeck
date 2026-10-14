@@ -6,6 +6,7 @@ import type { PairOverrides } from "@/lib/remote/pairing";
 import { useSidecarBridge } from "@/hooks/use-agent-session";
 import { AUTH_REASON_TEXT, type ConnectionManager, type ConnectionSnapshot } from "./connection-manager";
 import { AttentionBanner, useAttentionNotice } from "./attention-banner";
+import { BackgroundGuideDialog } from "./background-section";
 import { HostList } from "./host-list";
 import { NewSession } from "./new-session";
 import { PairScreen } from "./pair-screen";
@@ -129,6 +130,7 @@ export function MobileApp({ hosts, manager, prefs, pairOverrides }: MobileAppPro
       <ConnectedShell
         key={connection.hostId}
         connection={connection}
+        prefs={prefs}
         route={route}
         navigate={navigate}
         content={
@@ -152,11 +154,13 @@ export function MobileApp({ hosts, manager, prefs, pairOverrides }: MobileAppPro
 
 function ConnectedShell({
   connection,
+  prefs,
   route,
   navigate,
   content,
 }: {
   connection: ConnectionSnapshot;
+  prefs: PreferencesStore;
   route: MobileRoute;
   navigate: (route: MobileRoute, options?: { replace?: boolean }) => void;
   content: React.ReactNode;
@@ -168,6 +172,7 @@ function ConnectedShell({
 
   return (
     <div className={s.app}>
+      {connection.phase === "open" ? <BackgroundGuideDialog prefs={prefs} /> : null}
       {notice ? <AttentionBanner notice={notice} onOpen={(target) => navigate(target)} onDismiss={dismiss} /> : null}
       {connection.phase !== "open" ? (
         <div className={s.connBanner} data-state={connection.phase} role="status">
