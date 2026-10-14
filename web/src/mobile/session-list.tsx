@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+// 会话列表：agent.list（进入时刷新 + 下拉刷新），置顶在前，默认隐藏归档与评判会话；显示标题 / provider / 运行状态 / 待审批标记。
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
-import type { ProviderInfo } from "@agentdeck/protocol";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import {
   AGENT_STATUS_LABELS,
   agentDisplayTitle,
@@ -11,18 +12,11 @@ import {
   formatAgentTime,
   isAgentRunning,
 } from "@/lib/agent-session-display";
+import { archivedCount, visibleSessions } from "./session-filter";
 import s from "./mobile.module.css";
 
-const CWD_KEY = "agentdeck-m0-cwd";
-const DEFAULT_CWD = "J:/Program/Agent/AgentDeck/tmp";
-
-const CONNECTION_LABELS: Record<string, string> = {
-  idle: "未连接",
-  connecting: "连接中…",
-  open: "已连接",
-  closed: "已断开",
-  error: "连接失败",
-};
+const PULL_TRIGGER_PX = 72;
+const PULL_MAX_PX = 96;
 
 export function SessionList({ onOpen }: { onOpen: (agentId: string) => void }) {
   const agents = useAtomValue(agentListAtom);
@@ -30,90 +24,100 @@ export function SessionList({ onOpen }: { onOpen: (agentId: string) => void }) {
   const connection = useAtomValue(sidecarConnectionAtom);
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const actions = useAgentSession();
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [creating, setCreating] = useState(false);
-  const [provider, setProvider] = useState("mock");
-  const [cwd, setCwd] = useState(() => localStorage.getItem(CWD_KEY) ?? DEFAULT_CWD);
+  const providers = useAgentProviders().data ?? null;
+  const [showArchived, setShowArchived] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [pull, setPull] = useState(0);
+  const touchStartY = useRef<number | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
 
-  useEffect(() => {
-    if (connection !== "open") return;
-    actions.listProviders().then(setProviders, () => {});
-  }, [actions, connection]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const now = useMemo(() => new Date(), [agents]);
-
-  const create = async () => {
-    setBusy(true);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
     setError(null);
     try {
-      localStorage.setItem(CWD_KEY, cwd);
-      const agent = await actions.createSession({ provider, cwd });
-      setCreating(false);
-      onOpen(agent.id);
+      await actions.listSessions();
     } catch (e) {
       setError(humanizeSidecarError(e));
     } finally {
-      setBusy(false);
+      setRefreshing(false);
     }
-  };
+  }, [actions]);
+
+  // 进入页面（已连接时）刷新一次
+  useEffect(() => {
+    if (connection === "open") void refresh();
+  }, [connection, refresh]);
+
+  const visible = useMemo(() => visibleSessions(agents, showArchived), [agents, showArchived]);
+  const archived = useMemo(() => archivedCount(agents), [agents]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const now = useMemo(() => new Date(), [agents]);
 
   return (
     <div className={s.page}>
       <header className={s.header}>
         <h1 className={s.title}>会话</h1>
-        <span className={s.conn} data-state={connection}>
-          {CONNECTION_LABELS[connection] ?? connection}
-        </span>
-        <button type="button" className={s.primaryButton} onClick={() => setCreating((v) => !v)}>
-          新建
+        <button type="button" className={s.textButton} onClick={() => void refresh()} disabled={refreshing}>
+          {refreshing ? "刷新中…" : "刷新"}
         </button>
       </header>
-      {creating ? (
-        <div className={s.sheet}>
-          <label className={s.field}>
-            <span>Agent</span>
-            <select value={provider} onChange={(e) => setProvider(e.target.value)} className={s.control}>
-              {providers.length === 0 ? <option value="mock">mock</option> : null}
-              {providers.map((item) => (
-                <option key={item.id} value={item.id} disabled={!item.available}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={s.field}>
-            <span>工作目录</span>
-            <input value={cwd} onChange={(e) => setCwd(e.target.value)} className={s.control} />
-          </label>
-          {error ? <div className={s.error}>{error}</div> : null}
-          <button type="button" className={s.primaryButton} disabled={busy || !cwd.trim()} onClick={() => void create()}>
-            {busy ? "创建中…" : "创建会话"}
-          </button>
+      {archived > 0 ? (
+        <label className={s.toggleRow}>
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          <span>显示已归档（{archived}）</span>
+        </label>
+      ) : null}
+      {error ? (
+        <div className={s.error} role="alert">
+          {error}
         </div>
       ) : null}
-      <ul className={s.list}>
-        {agents.map((agent) => {
+      {pull > 0 ? (
+        <div className={s.pullHint}>{pull >= PULL_TRIGGER_PX ? "松开刷新" : "下拉刷新"}</div>
+      ) : null}
+      <ul
+        ref={listRef}
+        className={s.list}
+        aria-label="会话列表"
+        onTouchStart={(e) => {
+          touchStartY.current = listRef.current && listRef.current.scrollTop <= 0 ? e.touches[0]!.clientY : null;
+        }}
+        onTouchMove={(e) => {
+          if (touchStartY.current === null) return;
+          const dy = e.touches[0]!.clientY - touchStartY.current;
+          setPull(dy > 0 ? Math.min(dy, PULL_MAX_PX) : 0);
+        }}
+        onTouchEnd={() => {
+          if (pull >= PULL_TRIGGER_PX) void refresh();
+          touchStartY.current = null;
+          setPull(0);
+        }}
+      >
+        {visible.map((agent) => {
           const runtime = runtimeBySession[agent.id];
           const running = isAgentRunning(agent, runtime);
+          const needsApproval = agent.pendingPermissions.length > 0 || (runtime?.pendingApprovals.length ?? 0) > 0;
           return (
             <li key={agent.id}>
               <button type="button" className={s.row} onClick={() => onOpen(agent.id)}>
-                <span className={s.rowTitle}>{agentDisplayTitle(agent, runtime, providers)}</span>
+                <span className={s.rowTitleLine}>
+                  {agent.pinned ? <span className={s.pin} aria-label="已置顶" title="已置顶">置顶</span> : null}
+                  <span className={s.rowTitle}>{agentDisplayTitle(agent, runtime, providers)}</span>
+                  {needsApproval ? <span className={s.badgeWarn}>待审批</span> : null}
+                </span>
                 <span className={s.rowMeta}>
                   <span data-running={running ? "true" : undefined}>{AGENT_STATUS_LABELS[agent.status]}</span>
                   <span>{agentProviderLabel(agent.provider, providers)}</span>
-                  <span>{agent.lastSeq} 条</span>
+                  {agent.archived ? <span>已归档</span> : null}
                   <span>{formatAgentTime(agent.updatedAt, now)}</span>
                 </span>
               </button>
             </li>
           );
         })}
-        {loaded && agents.length === 0 ? <li className={s.empty}>还没有会话，点右上角「新建」</li> : null}
-        {!loaded ? <li className={s.empty}>{connection === "open" ? "加载中…" : "等待连接 Agent 服务…"}</li> : null}
+        {loaded && visible.length === 0 ? <li className={s.empty}>还没有会话，到「新建」里开始一个</li> : null}
+        {!loaded ? <li className={s.empty}>{connection === "open" ? "加载中…" : "等待连接电脑…"}</li> : null}
       </ul>
     </div>
   );

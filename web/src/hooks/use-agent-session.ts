@@ -58,6 +58,7 @@ import {
   removeApprovalAtom,
   resetAgentRuntimesForEpochAtom,
   settleInactiveAgentRuntimeAtom,
+  prependAgentHistoryAtom,
   startAgentPromptAtom,
   type ImageEntry,
 } from "@/stores/chat";
@@ -533,6 +534,21 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       store.set(ensureChatSessionAtom, agentId);
       await client.syncAgent(agentId);
       store.set(settleInactiveAgentRuntimeAtom, agentId);
+    },
+
+    /**
+     * 向前翻一页更早的历史（design.md 4.31 的 `beforeSeq` / `limit` 分页）并前插进该会话的消息；
+     * 返回是否还有更早的。手机端时间线滚到顶部时调用。
+     */
+    async loadOlderTimeline(agentId: string, limit = 300): Promise<{ hasOlder: boolean }> {
+      const { entries, hasOlder } = await client.fetchOlder(agentId, limit);
+      if (entries.length > 0) store.set(prependAgentHistoryAtom, { agentId, entries });
+      return { hasOlder };
+    },
+
+    /** 时间线向前翻页状态（是否还有更早的历史）。 */
+    historyState(agentId: string): { oldestSeq: number; hasOlder: boolean } {
+      return client.historyState(agentId);
     },
 
     /** agent.subagents.list：该会话全部层级的 provider 子代理，写入 store 并返回（design.md 4.11）。 */

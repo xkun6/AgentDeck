@@ -942,6 +942,33 @@ export function reduceAgentEvent(
   };
 }
 
+/**
+ * 向前分页（design.md 4.31）：把更早的一页条目归约成消息并**前插**到现有消息之前。
+ * 页首是回合起点、页尾紧接现有时间线首个回合之前，所以每页单独从空运行时归约即可得到完整回合；
+ * 消息 id 由 seq / turnId / clientMessageId 决定，已存在的 id 直接跳过。
+ */
+export function prependAgentHistory(
+  runtime: ChatSessionRuntime,
+  entries: readonly AgentStreamEnvelope[],
+  now = Date.now(),
+): ChatSessionRuntime {
+  let older = createEmptyChatRuntime(now);
+  for (const envelope of entries) older = reduceAgentEvent(older, envelope, now);
+  const known = new Set(runtime.messages.map((message) => message.id));
+  const prepend = older.messages.filter((message) => !known.has(message.id));
+  if (prepend.length === 0) return runtime;
+  return { ...runtime, messages: [...prepend, ...runtime.messages], updatedAt: now };
+}
+
+export const prependAgentHistoryAtom = atom(
+  null,
+  (_get, set, input: { agentId: string; entries: readonly AgentStreamEnvelope[] }) => {
+    set(chatRuntimeBySessionAtom, (state) =>
+      updateSessionRuntime(state, input.agentId, (runtime) => prependAgentHistory(runtime, input.entries)),
+    );
+  },
+);
+
 export const applyAgentEventAtom = atom(null, (get, set, envelope: AgentStreamEnvelope, replay = false) => {
   // 通知旁路：用归约前的运行时判断是否「在场」的回合，避免回放重复通知；
   // timeline 补齐（打开历史会话、断线补齐）的事件一律不通知。

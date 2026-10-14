@@ -29,6 +29,7 @@ import { snapshotForMessage } from "@/lib/snapshots";
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const BOTTOM_FOLLOW_THRESHOLD_PX = 120;
 const BOTTOM_REATTACH_THRESHOLD_PX = 8;
+const REACH_TOP_THRESHOLD_PX = 80;
 
 interface MessageTimelineProps {
   messages: ChatMessage[];
@@ -63,6 +64,10 @@ interface MessageTimelineProps {
   snapshotTurns?: readonly SnapshotTurn[];
   /** 点击该小条：在右侧预览栏打开快照面板并展开该回合。 */
   onOpenSnapshot?: (turnId: string) => void;
+  /** 手机端向前分页：用户滚动到顶部附近时回调（宿主自行防抖 / 判断是否还有更早内容）。 */
+  onReachTop?: () => void;
+  /** 渲染在消息列表最上方的插槽（手机端「加载更早」入口）。 */
+  topSlot?: ReactNode;
 }
 
 /** 定位后消息高亮持续的时间（与 CSS 动画时长一致） */
@@ -1054,6 +1059,8 @@ export function MessageTimeline({
   onFork,
   snapshotTurns,
   onOpenSnapshot,
+  onReachTop,
+  topSlot,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1068,6 +1075,7 @@ export function MessageTimeline({
   const autoAnchorRef = useRef(false);
   const autoAnchorTimerRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
+  const scrollHeightRef = useRef(0);
   // 程序触发的轮次跳转（平滑滚动）守卫：跳转动画期间 onScroll 会被误判为用户上滑而
   // 触发 detachFromBottomAutoFollow 硬取消滚动，这里用标记把跳转滚动与用户手势区分开。
   const programmaticScrollRef = useRef(false);
@@ -1256,10 +1264,14 @@ export function MessageTimeline({
     const previousLastUserMessageId = lastUserMessageIdRef.current;
     const nextFirstMessageId = visibleMessages[0]?.id;
     const nextLastUserMessageId = turnAnchors[turnAnchors.length - 1]?.id;
-    const sessionChanged =
+    const firstMessageChanged =
       previousFirstMessageId !== undefined &&
       nextFirstMessageId !== undefined &&
       previousFirstMessageId !== nextFirstMessageId;
+    // 首条消息还在列表里 = 在前面插入了更早的历史（手机端向前分页 / 展开窗口），不是换了会话
+    const historyPrepended =
+      firstMessageChanged && visibleMessages.some((message) => message.id === previousFirstMessageId);
+    const sessionChanged = firstMessageChanged && !historyPrepended;
     const forceBottom = shouldForceBottomOnMessageChange(
       previousMessageCount,
       visibleMessages.length,
@@ -1286,6 +1298,11 @@ export function MessageTimeline({
     }
 
     const container = containerRef.current;
+    if (historyPrepended && container && !nearBottomRef.current) {
+      // 保持用户正在看的内容不动：scrollTop 补上新增的高度（手机 CSS 关了 overflow-anchor，由这里统一处理）
+      container.scrollTop += container.scrollHeight - scrollHeightRef.current;
+      lastScrollTopRef.current = container.scrollTop;
+    }
     if (!container || (!forceBottom && !nearBottomRef.current)) return;
     const initialHistoryRender = previousMessageCount === 0 || sessionChanged;
     // Bottom-follow must move synchronously. A smooth scroll targets the current
@@ -1318,6 +1335,11 @@ export function MessageTimeline({
       }, 650);
     }
   }, [clearAutoAnchor, pendingApproval, scrollToBottom, statusMessage, turnAnchors, visibleMessages]);
+
+  // 记录本次提交后的内容高度，供下一次「前插历史」时计算增量
+  useIsomorphicLayoutEffect(() => {
+    scrollHeightRef.current = containerRef.current?.scrollHeight ?? 0;
+  });
 
   const focusTargetId = useMemo(
     () => (focusSeq ? findMessageIdForSeq(visibleMessages, focusSeq) : undefined),
@@ -1437,6 +1459,7 @@ export function MessageTimeline({
     }
     lastScrollTopRef.current = container.scrollTop;
     updateActiveTurnFromScroll();
+    if (onReachTop && container.scrollTop <= REACH_TOP_THRESHOLD_PX) onReachTop();
   };
 
   return (
@@ -1471,6 +1494,7 @@ export function MessageTimeline({
         </div>
       ) : null}
       <div ref={messagesRef} className={s.messages}>
+        {topSlot}
         {loading ? <MessageSkeleton /> : null}
         {!loading && visibleMessages.length === 0 && !statusMessage && !pendingApproval ? (
           <div className={s.empty}>

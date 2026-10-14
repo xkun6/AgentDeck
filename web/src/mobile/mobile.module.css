@@ -1,11 +1,27 @@
-/* 手机端最小样式：单栏触控布局，间距走 4px 网格，颜色 / 字号走 shared-ui token。 */
-.page {
+/* 手机端样式：单栏触控布局，触控目标 >= 44px，间距走 4px 网格，颜色 / 字号走 shared-ui token。 */
+.app {
   display: flex;
   flex-direction: column;
   height: 100dvh;
   padding-top: env(safe-area-inset-top);
   background: var(--h-bg-app);
   color: var(--h-text);
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--h-bg-app);
+  color: var(--h-text);
+}
+
+/* 不在 .app 壳里的页面（电脑列表 / 配对）自己占满屏幕并处理安全区 */
+:global(#root) > .page {
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .header {
@@ -43,13 +59,66 @@
   white-space: nowrap;
 }
 
-.conn[data-state="open"] {
-  color: var(--h-accent);
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px;
+  overflow-y: auto;
 }
 
-.conn[data-state="error"],
-.conn[data-state="closed"] {
+/* 按钮：最小 44px 高 */
+.primaryButton,
+.secondaryButton,
+.dangerButton,
+.dangerOutlineButton {
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  background: var(--h-accent);
+  color: var(--h-accent-contrast);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  opacity: 0.4;
+}
+
+.secondaryButton {
+  border-color: var(--h-line);
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+}
+
+.dangerButton {
+  background: var(--h-danger);
+  color: var(--h-accent-contrast);
+}
+
+.dangerOutlineButton {
+  border-color: var(--h-danger);
+  background: transparent;
   color: var(--h-danger);
+}
+
+.textButton {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--h-accent);
+  font-size: 14px;
+}
+
+.textButton:disabled {
+  opacity: 0.4;
 }
 
 .iconButton {
@@ -62,34 +131,38 @@
   line-height: 1;
 }
 
-.primaryButton,
-.dangerButton {
-  min-width: 64px;
-  height: 44px;
-  padding: 0 16px;
-  border: 0;
-  background: var(--h-accent);
-  color: var(--h-accent-contrast);
-  font-size: 14px;
-  font-weight: 600;
+.actionRow {
+  display: flex;
+  gap: 8px;
 }
 
-.primaryButton:disabled {
-  opacity: 0.4;
+.actionRow > button {
+  flex: 1;
 }
 
-.dangerButton {
-  background: var(--h-danger);
-  color: var(--h-accent-contrast);
+.confirmBox {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
 }
 
 .sheet {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 12px;
-  border-bottom: 1px solid var(--h-line);
-  background: var(--h-bg-pane);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--h-text-3);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .field {
@@ -109,6 +182,34 @@
   font-size: 14px;
 }
 
+.pasteArea {
+  min-height: 96px;
+  padding: 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  resize: none;
+  word-break: break-all;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+}
+
+.hint {
+  color: var(--h-text-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 列表 */
 .list {
   flex: 1;
   min-height: 0;
@@ -132,7 +233,15 @@
   text-align: left;
 }
 
+.rowTitleLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .rowTitle {
+  min-width: 0;
   font-size: 14px;
   font-weight: 600;
   overflow: hidden;
@@ -145,18 +254,242 @@
   gap: 12px;
   color: var(--h-text-3);
   font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .rowMeta [data-running="true"] {
   color: var(--h-accent);
 }
 
+.pin,
+.badgeWarn {
+  flex-shrink: 0;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.pin {
+  border: 1px solid var(--h-line);
+  color: var(--h-text-3);
+}
+
+.badgeWarn {
+  background: var(--h-warn);
+  color: var(--h-accent-contrast);
+  font-weight: 600;
+}
+
 .empty {
   padding: 32px 16px;
   color: var(--h-text-3);
   text-align: center;
+  line-height: 1.8;
 }
 
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--h-line-soft);
+  color: var(--h-text-2);
+  font-size: 14px;
+}
+
+.toggleRow input {
+  width: 20px;
+  height: 20px;
+}
+
+.pullHint {
+  padding: 8px;
+  color: var(--h-text-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* 电脑列表 */
+.hostItem {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--h-line-soft);
+}
+
+.hostMain {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text);
+  text-align: left;
+}
+
+.hostStatus {
+  font-size: 12px;
+  color: var(--h-text-3);
+}
+
+.hostStatus[data-state="open"] {
+  color: var(--h-accent);
+}
+
+.hostStatus[data-state="error"] {
+  color: var(--h-danger);
+}
+
+/* 选项（新建会话） */
+.optionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.option,
+.optionWide {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-soft);
+  color: var(--h-text);
+  font-size: 14px;
+}
+
+.optionWide {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 16px;
+  text-align: left;
+}
+
+.option[data-selected="true"],
+.optionWide[data-selected="true"] {
+  border-color: var(--h-accent);
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+}
+
+.option[data-danger="true"] {
+  border-color: var(--h-danger);
+  color: var(--h-danger);
+}
+
+.option[data-danger="true"][data-selected="true"] {
+  background: var(--h-danger);
+  color: var(--h-accent-contrast);
+}
+
+.option:disabled {
+  opacity: 0.4;
+}
+
+.optionNote {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* 底部导航 */
+.nav {
+  display: flex;
+  flex-shrink: 0;
+  border-top: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.navItem {
+  flex: 1;
+  min-height: 52px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 14px;
+}
+
+.navItem[data-active="true"] {
+  color: var(--h-accent);
+  font-weight: 600;
+}
+
+/* 横幅：连接状态与 attention */
+.connBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 12px;
+  background: var(--h-bg-soft);
+  color: var(--h-text-2);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.connBanner[data-state="auth_failed"],
+.connBanner[data-state="failed"] {
+  background: var(--h-err-soft);
+  color: var(--h-danger);
+}
+
+.attention {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--h-accent-border);
+  background: var(--h-accent-soft);
+  flex-shrink: 0;
+}
+
+.attention[data-kind="permission"],
+.attention[data-kind="failed"] {
+  border-bottom-color: var(--h-warn);
+}
+
+.attentionMain {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text);
+  text-align: left;
+}
+
+.attentionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attentionBody {
+  color: var(--h-text-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 会话详情 */
 .timeline {
   flex: 1;
   min-height: 0;
@@ -165,12 +498,28 @@
   overflow: hidden;
 }
 
+/* 前插历史时由 MessageTimeline 手动补偿滚动位置，关掉浏览器的滚动锚定避免双重补偿 */
+.timeline [role="log"] {
+  overflow-anchor: none;
+}
+
 .moreButton {
-  flex-shrink: 0;
   min-height: 44px;
+  margin: 0 0 8px;
   border: 0;
   border-bottom: 1px solid var(--h-line);
   background: var(--h-bg-soft);
+  color: var(--h-text-2);
+  font-size: 12px;
+  width: 100%;
+}
+
+.approvalWrap button {
+  min-height: 44px;
+}
+
+.notice {
+  padding: 8px 12px;
   color: var(--h-text-2);
   font-size: 12px;
 }
@@ -183,6 +532,12 @@
   border-top: 1px solid var(--h-line);
   background: var(--h-bg-pane);
   flex-shrink: 0;
+}
+
+.inputActions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .textarea {
@@ -198,8 +553,13 @@
   resize: none;
 }
 
+.textarea:disabled {
+  opacity: 0.6;
+}
+
 .error {
   padding: 8px 12px;
   color: var(--h-danger);
   font-size: 12px;
+  line-height: 1.6;
 }

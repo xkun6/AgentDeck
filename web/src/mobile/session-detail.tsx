@@ -1,26 +1,37 @@
+// 会话详情：窗口化的时间线（打开取最近 300 条，滚到顶部向前分页）、审批 / 提问、状态行、输入区。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import type { AgentPermissionResponse } from "@agentdeck/protocol";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { MessageTimeline } from "@/components/chat/message-timeline";
 import { agentUIMessagesToChatMessages } from "@/components/chat/message-adapter";
+import { ComposerStatusRow } from "@/components/chat/status-row/composer-status-row";
 import { agentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
-import { chatRuntimeBySessionAtom, createEmptyChatRuntime, type PendingApproval } from "@/stores/chat";
+import {
+  chatRuntimeBySessionAtom,
+  createEmptyChatRuntime,
+  retractableUserMessageId,
+  type PendingApproval,
+} from "@/stores/chat";
 import { humanizeSidecarError, isInactiveAgent, useAgentSession } from "@/hooks/use-agent-session";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { useRetractMessage } from "@/hooks/use-retract-message";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { AGENT_STATUS_LABELS, agentDisplayTitle } from "@/lib/agent-session-display";
-import { m0Log } from "./m0-log";
+import { MobileComposer } from "./composer";
 import s from "./mobile.module.css";
 
-/** 首屏只渲染最近这么多条消息（手机 WebView 渲染 800+ 条全量 DOM 首开要数秒），更早的按需展开。 */
-const INITIAL_WINDOW = 60;
-const WINDOW_STEP = 100;
+/** 首屏只渲染最近这么多条消息（手机 WebView 全量渲染长会话首开要数秒、流式只有约 3fps），更早的按需展开 / 向前分页 */
+export const INITIAL_WINDOW = 60;
+export const WINDOW_STEP = 100;
+export const OLDER_PAGE_LIMIT = 300;
 
 export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: () => void }) {
   const actions = useAgentSession();
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const snapshot = useAtomValue(agentSnapshotsAtom)[agentId];
+  const providers = useAgentProviders().data ?? null;
   const runtime = useMemo(() => runtimeBySession[agentId] ?? createEmptyChatRuntime(), [runtimeBySession, agentId]);
   const allMessages = useMemo(() => agentUIMessagesToChatMessages(runtime.messages), [runtime.messages]);
   const [windowSize, setWindowSize] = useState(INITIAL_WINDOW);
@@ -31,28 +42,23 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
   );
   const busy = isRuntimeRunning(runtime) || snapshot?.status === "running";
   const inactive = isInactiveAgent(snapshot);
+  const steerSupported =
+    providers?.find((provider) => provider.id === snapshot?.provider)?.capabilities?.steer === true;
   const [loading, setLoading] = useState(false);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const openedAt = useRef(performance.now());
-  const reportedPaint = useRef(false);
-
-  // 首次打开耗时打点：进入 → timeline 拉取+归约完成 → 首次绘制。
-  useEffect(() => {
-    openedAt.current = performance.now();
-    reportedPaint.current = false;
-    m0Log(`open-session agent=${agentId.slice(0, 8)}`);
-  }, [agentId]);
 
   useEffect(() => {
     if (!connected) return;
     let cancelled = false;
     setLoading(true);
-    const started = performance.now();
     actions.loadTimeline(agentId).then(
       () => {
         if (cancelled) return;
-        m0Log(`timeline-loaded agent=${agentId.slice(0, 8)} took=${Math.round(performance.now() - started)}ms`);
+        setHasOlder(actions.historyState(agentId).hasOlder);
         setLoading(false);
       },
       (e: unknown) => {
@@ -66,16 +72,27 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
     };
   }, [actions, agentId, connected]);
 
-  useEffect(() => {
-    if (reportedPaint.current || loading || runtime.messages.length === 0) return;
-    reportedPaint.current = true;
-    const count = runtime.messages.length;
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() =>
-        m0Log(`first-paint agent=${agentId.slice(0, 8)} total=${Math.round(performance.now() - openedAt.current)}ms messages=${count}`),
-      ),
-    );
-  }, [agentId, loading, runtime.messages.length]);
+  // 滚到顶部 / 点「加载更早」：先展开本地已有的，再向 sidecar 取更早一页（beforeSeq）
+  const loadEarlier = useCallback(() => {
+    if (hidden > 0) {
+      setWindowSize((n) => n + WINDOW_STEP);
+      return;
+    }
+    if (!hasOlder || loadingOlderRef.current || !connected) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    actions
+      .loadOlderTimeline(agentId, OLDER_PAGE_LIMIT)
+      .then(({ hasOlder: more }) => {
+        setHasOlder(more);
+        setWindowSize((n) => n + WINDOW_STEP);
+      })
+      .catch((e: unknown) => setError(humanizeSidecarError(e)))
+      .finally(() => {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      });
+  }, [actions, agentId, connected, hasOlder, hidden]);
 
   const onRespond = useCallback(
     (approval: PendingApproval, response: AgentPermissionResponse) =>
@@ -85,11 +102,24 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
 
   const send = async () => {
     const value = text.trim();
-    if (!value || busy) return;
+    if (!value) return;
     setText("");
     setError(null);
     try {
       await actions.sendPrompt(agentId, value);
+    } catch (e) {
+      setText(value);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const steer = async () => {
+    const value = text.trim();
+    if (!value) return;
+    setError(null);
+    try {
+      await actions.steerPrompt(agentId, value);
+      setText("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -99,8 +129,15 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
     actions.interrupt(agentId).catch((e: unknown) => setError(humanizeSidecarError(e)));
   };
 
-  const pendingApproval = inactive ? null : runtime.pendingApprovals[0] ?? null;
-  const title = snapshot ? agentDisplayTitle(snapshot, runtime) : "会话";
+  const retractMessageId = retractableUserMessageId(runtime);
+  const retraction = useRetractMessage({
+    retract: () => actions.retract(agentId),
+    onPrefill: (prefill) => setText(prefill.text),
+  });
+
+  const pendingApproval = inactive ? null : (runtime.pendingApprovals[0] ?? null);
+  const title = snapshot ? agentDisplayTitle(snapshot, runtime, providers) : "会话";
+  const outputSpeed = runtime.agentUsage?.outputTokensPerSecond ?? snapshot?.lastUsage?.outputTokensPerSecond;
 
   return (
     <div className={s.page}>
@@ -112,50 +149,66 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
         {snapshot ? <span className={s.conn}>{AGENT_STATUS_LABELS[snapshot.status]}</span> : null}
       </header>
       <div className={s.timeline}>
-        {hidden > 0 ? (
-          <button type="button" className={s.moreButton} onClick={() => setWindowSize((n) => n + WINDOW_STEP)}>
-            显示更早的 {Math.min(hidden, WINDOW_STEP)} 条（还有 {hidden} 条未显示）
-          </button>
-        ) : null}
         <MessageTimeline
           key={agentId}
           messages={chatMessages}
           loading={loading && runtime.messages.length === 0}
-          statusMessage={runtime.statusMessage || (!connected ? "正在连接 Agent 服务…" : undefined)}
+          statusMessage={runtime.statusMessage || (!connected ? "正在连接电脑…" : undefined)}
           pendingApproval={
             pendingApproval ? (
-              <ApprovalDialog key={pendingApproval.requestId} approval={pendingApproval} onRespond={onRespond} />
+              <div className={s.approvalWrap}>
+                <ApprovalDialog key={pendingApproval.requestId} approval={pendingApproval} onRespond={onRespond} />
+              </div>
             ) : undefined
           }
           turnStartedAt={busy ? runtime.turnStartedAt : undefined}
           density="compact"
+          retractMessageId={retractMessageId}
+          onRetract={() => void retraction.run()}
+          retractDisabled={retraction.retracting}
+          onReachTop={loadEarlier}
+          topSlot={
+            hidden > 0 || hasOlder ? (
+              <button type="button" className={s.moreButton} onClick={loadEarlier} disabled={loadingOlder}>
+                {loadingOlder
+                  ? "正在加载更早的消息…"
+                  : hidden > 0
+                    ? `显示更早的 ${Math.min(hidden, WINDOW_STEP)} 条（还有 ${hidden} 条未显示）`
+                    : "加载更早的消息"}
+              </button>
+            ) : undefined
+          }
         />
       </div>
-      {error ? <div className={s.error}>{error}</div> : null}
-      <form
-        className={s.inputBar}
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <textarea
-          className={s.textarea}
-          value={text}
-          rows={1}
-          placeholder={busy ? "Agent 运行中…" : "给 Agent 发消息"}
-          onChange={(event) => setText(event.target.value)}
-        />
-        {busy ? (
-          <button type="button" className={s.dangerButton} onClick={cancel}>
-            取消
-          </button>
-        ) : (
-          <button type="submit" className={s.primaryButton} disabled={!text.trim() || !connected}>
-            发送
-          </button>
-        )}
-      </form>
+      {retraction.notice ? <div className={s.notice}>{retraction.notice}</div> : null}
+      {error ? (
+        <div className={s.error} role="alert">
+          {error}
+        </div>
+      ) : null}
+      <ComposerStatusRow
+        agentId={undefined}
+        subagents={[]}
+        openSubagentId={null}
+        onOpenSubagent={() => {}}
+        backgroundTasks={[]}
+        openTaskId={null}
+        onOpenTask={() => {}}
+        todos={runtime.agentTodos}
+        busy={busy}
+        rateLimits={snapshot?.rateLimits}
+        usage={outputSpeed === undefined ? undefined : { outputTokensPerSecond: outputSpeed }}
+      />
+      <MobileComposer
+        value={text}
+        onChange={setText}
+        busy={busy}
+        connected={connected}
+        steerSupported={steerSupported}
+        onSend={() => void send()}
+        onSteer={() => void steer()}
+        onCancel={cancel}
+      />
     </div>
   );
 }
