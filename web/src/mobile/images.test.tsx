@@ -311,4 +311,17 @@ describe("SessionDetail 带图发送", () => {
     expect(within(screen.getByRole("list", { name: "已选图片" })).getAllByRole("img")).toHaveLength(4);
     expect(await screen.findByText(/最多附 4 张图片/)).toBeTruthy();
   });
+
+  it("图片被删除后，残留的「最多附 4 张」提示清除", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "图片" }));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("从相册选择"), { target: { files: ["1", "2", "3", "4", "5"].map((n) => photo(`${n}.png`)) } });
+    });
+    expect(await screen.findByText(/最多附 4 张图片/)).toBeTruthy();
+    for (let i = 0; i < 4; i += 1) {
+      fireEvent.click(screen.getAllByRole("button", { name: /^移除图片/ })[0]!);
+    }
+    expect(screen.queryByText(/最多附 4 张图片/)).toBeNull();
+  });
 });

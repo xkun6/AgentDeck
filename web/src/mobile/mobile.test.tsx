@@ -468,6 +468,13 @@ describe("MobileComposer 输入区", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("运行中占位文案足够短（不折成两行）", () => {
+    const { rerender } = render(<MobileComposer {...base} busy steerSupported />);
+    expect(screen.getByLabelText("消息输入框").getAttribute("placeholder")).toBe("运行中，可插话");
+    rerender(<MobileComposer {...base} busy steerSupported={false} />);
+    expect(screen.getByLabelText("消息输入框").getAttribute("placeholder")).toBe("运行中，可取消");
+  });
+
   it("运行中且不支持插话：输入框禁用、只有取消", () => {
     render(<MobileComposer {...base} busy steerSupported={false} />);
     expect((screen.getByLabelText("消息输入框") as HTMLTextAreaElement).disabled).toBe(true);

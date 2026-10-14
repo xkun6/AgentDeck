@@ -48,8 +48,8 @@ export function MobileComposer({
     ? "未连接电脑"
     : busy
       ? steerSupported
-        ? "运行中，可插话给 Agent"
-        : "Agent 运行中，可取消本轮"
+        ? "运行中，可插话"
+        : "运行中，可取消"
       : "给 Agent 发消息";
 
   const pick = (input: HTMLInputElement | null) => {

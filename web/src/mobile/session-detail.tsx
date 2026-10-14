@@ -242,7 +242,11 @@ export function SessionDetail({
         images={images}
         imagesBusy={imagesBusy}
         onAddImages={(files) => void pickImages(files)}
-        onRemoveImage={(id) => setImages((list) => list.filter((image) => image.id !== id))}
+        onRemoveImage={(id) => {
+          setImages((list) => list.filter((image) => image.id !== id));
+          // 图片变了，之前「最多附 4 张」之类的选图提示不再成立
+          setError(null);
+        }}
         onSend={() => void send()}
         onSteer={() => void steer()}
         onCancel={cancel}
