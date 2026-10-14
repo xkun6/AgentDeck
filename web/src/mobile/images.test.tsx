@@ -69,6 +69,29 @@ describe("图片压缩参数", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("浏览器实现：createImageBitmap 解码、铺白底后缩放绘制、toBlob 输出 JPEG 0.85，位图只关闭一次", async () => {
+    const bitmap = { width: 4000, height: 3000, close: vi.fn() };
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => bitmap));
+    const ctx = { fillStyle: "", fillRect: vi.fn(), drawImage: vi.fn() };
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    const toBlob = vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type, quality) => {
+      expect(type).toBe("image/jpeg");
+      expect(quality).toBe(0.85);
+      callback(new Blob([new Uint8Array(10)], { type: "image/jpeg" }));
+    });
+    try {
+      const image = await compressImage(photo("big.png"));
+      expect(image.name).toBe("big.jpg");
+      expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 2048, 1536);
+      expect(ctx.drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 2048, 1536);
+      expect(bitmap.close).toHaveBeenCalledTimes(1);
+    } finally {
+      getContext.mockRestore();
+      toBlob.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("压缩后仍大于 5MB：拒绝并提示；恰好 5MB 通过", async () => {
     const big = fakeEnv({ width: 100, height: 100 }, IMAGE_LIMITS.maxBytes + 1);
     await expect(compressImage(photo(), big.env)).rejects.toThrow(/超过 5\.0MB/);

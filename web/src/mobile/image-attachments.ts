@@ -31,6 +31,8 @@ export interface DraftImage {
 export interface DecodedImage {
   width: number;
   height: number;
+  /** 底层可绘制对象（ImageBitmap / HTMLImageElement），仅 browserImageEnv 使用 */
+  source?: unknown;
   /** 释放位图资源 */
   close?(): void;
 }
@@ -148,7 +150,7 @@ export const browserImageEnv: ImageEnv = {
     if (typeof createImageBitmap === "function") {
       try {
         const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-        return Object.assign(bitmap, { close: () => bitmap.close() }) as DecodedImage;
+        return { width: bitmap.width, height: bitmap.height, source: bitmap, close: () => bitmap.close() };
       } catch {
         // 退回 <img>
       }
@@ -159,7 +161,7 @@ export const browserImageEnv: ImageEnv = {
       image.decoding = "async";
       image.src = url;
       await image.decode();
-      return Object.assign(image, { width: image.naturalWidth, height: image.naturalHeight }) as DecodedImage;
+      return { width: image.naturalWidth, height: image.naturalHeight, source: image };
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -172,7 +174,7 @@ export const browserImageEnv: ImageEnv = {
     if (!ctx) throw new ImageAttachError("当前环境不支持图片压缩");
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(image as unknown as CanvasImageSource, 0, 0, width, height);
+    ctx.drawImage(image.source as CanvasImageSource, 0, 0, width, height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
     if (!blob) throw new ImageAttachError("图片压缩失败");
     return blob;
