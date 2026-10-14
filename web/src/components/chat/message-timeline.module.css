@@ -1256,6 +1256,12 @@
   padding-left: 8px;
 }
 
+/* 窄屏（手机）下单张图片按整宽显示会高达数百像素：压到 240px 以内，点击仍可在查看器里看大图 */
+.scroll[data-density="compact"] .imageFrame,
+.scroll[data-density="compact"] .imageFrame img {
+  max-height: 240px;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

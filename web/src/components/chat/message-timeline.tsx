@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
 import { AlertTriangle, ChevronRight, FileDiff, GitFork, Info, RotateCcw, Undo2 } from "lucide-react";
@@ -195,6 +195,9 @@ function localizeProgressLabel(text?: string): string {
 
 const LONG_THINKING_THRESHOLD_S = 120;
 
+/** 时间线末尾有待审批请求：进度块显示「等待审批」并暂停计时（审批等待不算 Agent 的耗时） */
+const WaitingApprovalContext = createContext(false);
+
 interface ProgressBlockProps {
   turnStartedAt?: number;
   sessionUsage?: SessionUsageResult | null;
@@ -204,16 +207,34 @@ interface ProgressBlockProps {
 
 function ProgressBlock({ turnStartedAt, sessionUsage, progressModel, progressText }: ProgressBlockProps) {
   const [elapsed, setElapsed] = useState(0);
+  const waitingApproval = useContext(WaitingApprovalContext);
+  // 审批等待的累计时长与本次等待的起点：从耗时里扣除，等待期间计时冻结
+  const pausedRef = useRef<{ total: number; since: number | null }>({ total: 0, since: null });
+  useEffect(() => {
+    pausedRef.current = { total: 0, since: null };
+  }, [turnStartedAt]);
+  useEffect(() => {
+    const paused = pausedRef.current;
+    if (waitingApproval && paused.since === null) {
+      paused.since = Date.now();
+    } else if (!waitingApproval && paused.since !== null) {
+      paused.total += Date.now() - paused.since;
+      paused.since = null;
+    }
+  }, [waitingApproval, turnStartedAt]);
   useEffect(() => {
     if (!turnStartedAt) return;
-    setElapsed(Date.now() - turnStartedAt);
-    const timer = window.setInterval(() => {
-      setElapsed(Date.now() - turnStartedAt);
-    }, 1000);
+    const compute = () => {
+      const now = Date.now();
+      const { total, since } = pausedRef.current;
+      return now - turnStartedAt - total - (since !== null ? now - since : 0);
+    };
+    setElapsed(compute());
+    const timer = window.setInterval(() => setElapsed(compute()), 1000);
     return () => window.clearInterval(timer);
-  }, [turnStartedAt]);
+  }, [turnStartedAt, waitingApproval]);
 
-  const label = localizeProgressLabel(progressText);
+  const label = waitingApproval ? "等待审批" : localizeProgressLabel(progressText);
   const elapsedSeconds = Math.floor(elapsed / 1000);
   const showLongHint = elapsedSeconds >= LONG_THINKING_THRESHOLD_S;
 
@@ -1468,6 +1489,7 @@ export function MessageTimeline({
   };
 
   return (
+    <WaitingApprovalContext.Provider value={Boolean(pendingApproval)}>
     <div
       ref={containerRef}
       className={s.scroll}
@@ -1555,5 +1577,6 @@ export function MessageTimeline({
         {pendingApproval}
       </div>
     </div>
+    </WaitingApprovalContext.Provider>
   );
 }
