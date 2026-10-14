@@ -9,10 +9,13 @@ import { applyHostOSToDOM, runtime } from "./lib/runtime";
 import { installDebugCapture } from "./lib/debug-capture";
 import { installExternalLinkHandling } from "./lib/external-links";
 import { initUiStore, readUiValue } from "./lib/ui-store";
+import { configureSidecarClient } from "./lib/sidecar-client";
+import { createDesktopSidecarClient } from "./lib/sidecar-desktop";
 import { ErrorBoundary } from "./components/error-boundary";
 import { ConfirmProvider } from "./lib/use-confirm";
 import "./styles/global.css";
 
+configureSidecarClient({ create: createDesktopSidecarClient });
 installDebugCapture();
 applyPlatformToDOM(runtime.platform);
 applyHostOSToDOM();

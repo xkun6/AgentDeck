@@ -15,7 +15,18 @@ function notify(): void {
   listeners.forEach((listener) => listener());
 }
 
+/** "desktop" = 桌面桥（无桥时 localStorage 兜底，浏览器开发模式）；"local-storage" = 手机入口，恒用 localStorage。 */
+export type UiStoreBackend = "desktop" | "local-storage";
+
+let backend: UiStoreBackend = "desktop";
+
+/** 入口在 initUiStore 之前调用，决定持久化走桌面 Rust ui_store 还是 localStorage。 */
+export function configureUiStoreBackend(next: UiStoreBackend): void {
+  backend = next;
+}
+
 function bridge() {
+  if (backend === "local-storage") return undefined;
   return typeof window === "undefined" ? undefined : window.agentdeckDesktop;
 }
 

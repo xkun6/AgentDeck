@@ -11,7 +11,7 @@
 import type { AgentStreamEnvelope, ScheduleNotice } from "@agentdeck/protocol";
 import type { ChatSessionRuntime } from "@/stores/chat";
 import { readNotificationSettings, type NotificationSettings } from "@/stores/ui";
-import type { DesktopNotifyResult } from "@/lib/runtime";
+import type { DesktopNotifyInput, DesktopNotifyResult } from "@/lib/runtime";
 import { describePermissionCommand } from "@/lib/agent-tool-detail";
 
 export interface NotificationAction {
@@ -196,6 +196,23 @@ export function playChime(): void {
   }
 }
 
+// ── 通知出口（可按入口替换）──────────────────────────────────────────────
+
+export type Notifier = (input: DesktopNotifyInput) => Promise<DesktopNotifyResult | void>;
+
+// undefined = 默认走桌面桥 desktopNotify；null = 本入口不发通知；函数 = 入口自带实现（手机 M3 的本地通知）
+let notifier: Notifier | null | undefined;
+
+export function configureNotifier(next: Notifier | null | undefined): void {
+  notifier = next;
+}
+
+function resolveNotifier(): Notifier | null {
+  if (notifier !== undefined) return notifier;
+  const bridge = typeof window === "undefined" ? undefined : window.agentdeckDesktop;
+  return typeof bridge?.desktopNotify === "function" ? (input) => bridge.desktopNotify!(input) : null;
+}
+
 // ── 触发器（副作用入口，错误全吞）──────────────────────────────────────
 
 export function notifyFromAgentEvent(
@@ -204,8 +221,8 @@ export function notifyFromAgentEvent(
   sessionTitle?: string,
 ): void {
   try {
-    const bridge = window.agentdeckDesktop;
-    if (typeof bridge?.desktopNotify !== "function") return;
+    const notify = resolveNotifier();
+    if (!notify) return;
     const settings = readNotificationSettings();
     const action = decideNotification({
       envelope,
@@ -215,16 +232,15 @@ export function notifyFromAgentEvent(
     });
     if (!action) return;
     markNotified(action.dedupeKey);
-    void bridge
-      .desktopNotify({
-        kind: action.kind,
-        title: action.title,
-        body: bodyWithSessionTitle(action.body, sessionTitle),
-        showSystemNotification: settings.system,
-        withSound: settings.sound,
-        respectFocus: settings.onlyBackground,
-        requestAttention: true,
-      })
+    void notify({
+      kind: action.kind,
+      title: action.title,
+      body: bodyWithSessionTitle(action.body, sessionTitle),
+      showSystemNotification: settings.system,
+      withSound: settings.sound,
+      respectFocus: settings.onlyBackground,
+      requestAttention: true,
+    })
       .then((result) => {
         if (result && shouldPlayFallbackSound(settings, result)) playChime();
       })
@@ -264,21 +280,20 @@ export function decideScheduleNotification(
 
 export function notifyFromSchedule(notice: ScheduleNotice): void {
   try {
-    const bridge = window.agentdeckDesktop;
-    if (typeof bridge?.desktopNotify !== "function") return;
+    const notify = resolveNotifier();
+    if (!notify) return;
     const settings = readNotificationSettings();
     const action = decideScheduleNotification(notice, settings);
     if (!action) return;
-    void bridge
-      .desktopNotify({
-        kind: action.kind,
-        title: action.title,
-        body: action.body,
-        showSystemNotification: settings.system,
-        withSound: settings.sound,
-        respectFocus: settings.onlyBackground,
-        requestAttention: true,
-      })
+    void notify({
+      kind: action.kind,
+      title: action.title,
+      body: action.body,
+      showSystemNotification: settings.system,
+      withSound: settings.sound,
+      respectFocus: settings.onlyBackground,
+      requestAttention: true,
+    })
       .then((result) => {
         if (result && shouldPlayFallbackSound(settings, result)) playChime();
       })
