@@ -20,6 +20,7 @@ import { KeepAliveController } from "./native/keepalive-controller";
 import { BackgroundNotifier } from "./native/local-notifications";
 import { keepaliveStart, keepaliveStop } from "./native/native-plugin";
 import { setBackgroundAttentionHandler } from "./attention";
+import { startAppStateTracking, subscribeAppForeground } from "./native/app-state";
 import "@/styles/global.css";
 
 // 手机上即使在 Tauri 壳里也不是桌面：显式声明，避免任何代码按 platform==="tauri" 去调桌面命令
@@ -45,6 +46,11 @@ async function bootstrap() {
     if (permissionRequested || manager.getSnapshot().phase !== "open") return;
     permissionRequested = true;
     void notifier.ensurePermission();
+  });
+  // 前后台以原生 Activity 状态为准（后台保活时页面可见性不可信，见 MainActivity.kt）；回前台立即探活 / 重连
+  void startAppStateTracking();
+  subscribeAppForeground((foreground) => {
+    if (foreground) manager.getSnapshot().client?.hintWake();
   });
   // 后台保持连接：随连接状态与开关启停前台服务（非 Tauri 环境下原生调用是 no-op）
   new KeepAliveController(

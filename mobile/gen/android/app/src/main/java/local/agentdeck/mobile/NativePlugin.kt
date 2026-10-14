@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.webkit.WebView
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
@@ -57,6 +58,29 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     targetOf(intent)?.let { trigger("notificationClicked", it) }
+  }
+
+  // App 前后台状态（Activity resume / stop）。MainActivity 在后台保活时会让 WebView 一直保持「可见」，
+  // 页面的 document.visibilityState 不再可信，前端改读这里的状态（见 web/src/mobile/native/app-state.ts）。
+  override fun onResume(activity: AppCompatActivity) {
+    super.onResume(activity)
+    trigger("appState", appStatePayload())
+  }
+
+  override fun onStop(activity: AppCompatActivity) {
+    super.onStop(activity)
+    trigger("appState", appStatePayload())
+  }
+
+  private fun appStatePayload(): JSObject {
+    val payload = JSObject()
+    payload.put("foreground", foreground)
+    return payload
+  }
+
+  @Command
+  fun appState(invoke: Invoke) {
+    invoke.resolve(appStatePayload())
   }
 
   private fun targetOf(intent: Intent?): JSObject? {
@@ -207,6 +231,10 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   companion object {
+    /** Activity 是否处于前台（onResume 置 true、onStop 置 false），由 MainActivity 维护 */
+    @Volatile
+    var foreground = false
+
     const val CHANNEL_PERMISSION = "agentdeck_permission"
     const val CHANNEL_RESULT = "agentdeck_result"
     const val CHANNEL_SCHEDULE = "agentdeck_schedule"

@@ -10,6 +10,7 @@ import {
   requestNotificationPermission,
   type BatteryOptimizationStatus,
 } from "./native/native-plugin";
+import { subscribeAppForeground } from "./native/app-state";
 import type { NotifyMode, PreferencesStore } from "./preferences";
 import s from "./mobile.module.css";
 
@@ -59,11 +60,9 @@ export function useBackgroundStatus(): BackgroundStatus {
 
   useEffect(() => {
     void refresh();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    return subscribeAppForeground((foreground) => {
+      if (foreground) void refresh();
+    });
   }, [refresh]);
 
   return { notifications, battery, refresh };

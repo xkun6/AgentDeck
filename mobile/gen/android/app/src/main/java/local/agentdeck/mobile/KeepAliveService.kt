@@ -27,6 +27,7 @@ class KeepAliveService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    active = true
     createChannel()
     val text = intent?.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: DEFAULT_TEXT
     val notification = buildNotification(text)
@@ -49,6 +50,7 @@ class KeepAliveService : Service() {
   }
 
   override fun onDestroy() {
+    active = false
     releaseWakeLock()
     super.onDestroy()
   }
@@ -89,6 +91,10 @@ class KeepAliveService : Service() {
   }
 
   companion object {
+    /** 服务是否在运行：MainActivity 据此决定切后台时是否让 WebView 继续运行（见 MainActivity 注释） */
+    @Volatile
+    var active = false
+
     const val CHANNEL_ID = "agentdeck_keepalive"
     const val NOTIFICATION_ID = 1001
     const val EXTRA_TEXT = "text"

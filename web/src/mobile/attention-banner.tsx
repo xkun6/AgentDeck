@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { SidecarClient } from "@/lib/sidecar-client";
 import { attentionTarget, decideAttention, dispatchBackgroundAttention } from "./attention";
+import { isAppForeground } from "./native/app-state";
 import type { NotifyMode } from "./preferences";
 import type { MobileRoute } from "./route";
 import s from "./mobile.module.css";
@@ -21,7 +22,7 @@ const KIND_LABEL: Record<AttentionNotice["kind"], string> = {
 export function useAttentionNotice(
   client: Pick<SidecarClient, "onAttention"> | null,
   route: MobileRoute,
-  isForeground: () => boolean = () => document.visibilityState === "visible",
+  isForeground: () => boolean = isAppForeground,
   getNotifyMode: () => NotifyMode = () => "always",
 ): [AttentionNotice | null, () => void] {
   const [notice, setNotice] = useState<AttentionNotice | null>(null);

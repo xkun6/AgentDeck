@@ -627,6 +627,11 @@ export class SidecarClient {
     this.unsubscribeSystemResume = null;
   }
 
+  /** 外部（手机端的原生前后台状态）认为 App 刚回到前台：与 `online` / `visibilitychange` 同一路径，连着就探活，断着就重连 */
+  hintWake(): void {
+    this.handleWake(false);
+  }
+
   private handleWake(forceful: boolean): void {
     if (!this.autoReconnect || this.intentionalClose || this._terminalError) return;
     if (!forceful && this.ws?.readyState === SOCKET_OPEN) {

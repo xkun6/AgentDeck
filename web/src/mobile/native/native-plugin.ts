@@ -155,3 +155,31 @@ export async function takeLaunchTarget(): Promise<NotificationClickTarget | null
   const target = (result.value as { target?: unknown } | null)?.target;
   return target && typeof target === "object" ? targetOf(target) : null;
 }
+
+// ── App 前后台状态 ────────────────────────────────────────────────────────────
+
+/**
+ * Activity 是否在前台（onResume 为 true、onStop 为 false）；null = 当前环境无法查询。
+ * 后台保活时原生层会让 WebView 一直保持「可见」，document.visibilityState 不可信，所以前端读这个值（见 app-state.ts）。
+ */
+export async function getAppForeground(): Promise<boolean | null> {
+  const result = await call("app_state");
+  if (!result.ok) return null;
+  const foreground = (result.value as { foreground?: unknown } | null)?.foreground;
+  return typeof foreground === "boolean" ? foreground : null;
+}
+
+/** 订阅前后台切换事件 appState；返回取消订阅函数（非 Tauri 环境为 no-op） */
+export async function onAppStateChanged(handler: (foreground: boolean) => void): Promise<() => void> {
+  const backend = currentBackend();
+  if (!backend?.listen) return () => {};
+  try {
+    return await backend.listen("appState", (payload) => {
+      const foreground = (payload as { foreground?: unknown } | null)?.foreground;
+      if (typeof foreground === "boolean") handler(foreground);
+    });
+  } catch (error) {
+    console.warn("[native] 订阅前后台状态失败", error);
+    return () => {};
+  }
+}
