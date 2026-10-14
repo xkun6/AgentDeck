@@ -136,6 +136,21 @@ describe("RemoteStore", () => {
     expect(reloaded.find(device.deviceId)?.revokedAt).toBe(600);
   });
 
+  test("并发的 touch 与 revoke 串行：吊销不会被排在前面的旧 touch 覆盖（防止复活已吊销设备）", async () => {
+    const store = new RemoteStore({ dataDir: dir });
+    await store.load();
+    const device = await store.addDevice({ name: "手机", secretSha256: sha256Hex("s"), now: 100 });
+    const touching = store.touch(device.deviceId, 500);
+    const revoking = store.revokeDevice(device.deviceId, 600);
+    const lateTouch = store.touch(device.deviceId, 700);
+    await Promise.all([touching, revoking, lateTouch]);
+    expect(await revoking).toBe(true);
+    expect(store.find(device.deviceId)).toMatchObject({ lastSeenAt: 500, revokedAt: 600 });
+    const reloaded = new RemoteStore({ dataDir: dir });
+    await reloaded.load();
+    expect(reloaded.find(device.deviceId)?.revokedAt).toBe(600);
+  });
+
   test("devices.json 损坏时视为空表而不是抛错；非法条目被丢弃", async () => {
     const store = new RemoteStore({ dataDir: dir });
     await store.addDevice({ name: "x", secretSha256: "aa", now: 1 });

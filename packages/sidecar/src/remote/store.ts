@@ -113,26 +113,29 @@ export class RemoteStore {
       pairedAt: input.now,
       secretSha256: input.secretSha256,
     };
-    await this.persist([...this.devices, device]);
+    await this.mutate((devices) => [...devices, device]);
     return { ...device };
   }
 
   /** 吊销：保留墓碑条目；设备不存在或已吊销返回 false */
   async revokeDevice(deviceId: string, now: number): Promise<boolean> {
-    const target = this.devices.find((device) => device.deviceId === deviceId);
-    if (!target || target.revokedAt !== undefined) {
-      return false;
-    }
-    await this.persist(this.devices.map((device) => (device === target ? { ...device, revokedAt: now } : device)));
-    return true;
+    return this.mutate((devices) => {
+      const target = devices.find((device) => device.deviceId === deviceId);
+      if (!target || target.revokedAt !== undefined) {
+        return null;
+      }
+      return devices.map((device) => (device === target ? { ...device, revokedAt: now } : device));
+    });
   }
 
   async touch(deviceId: string, now: number): Promise<void> {
-    const target = this.devices.find((device) => device.deviceId === deviceId);
-    if (!target || target.revokedAt !== undefined) {
-      return;
-    }
-    await this.persist(this.devices.map((device) => (device === target ? { ...device, lastSeenAt: now } : device)));
+    await this.mutate((devices) => {
+      const target = devices.find((device) => device.deviceId === deviceId);
+      if (!target || target.revokedAt !== undefined) {
+        return null;
+      }
+      return devices.map((device) => (device === target ? { ...device, lastSeenAt: now } : device));
+    });
   }
 
   /** 等待已排队的写盘完成（关闭前调用） */
@@ -140,9 +143,26 @@ export class RemoteStore {
     await this.writeChain;
   }
 
-  private async persist(next: StoredDevice[]): Promise<void> {
-    await this.write(path.join(this.dir, DEVICES_FILE), next);
-    this.devices = next;
+  /**
+   * 设备表的读-改-写必须串行：改动基于「排到队时」的最新内存状态计算，
+   * 否则并发的 touch 会用旧快照覆盖掉刚落盘的吊销（复活已吊销设备）。fn 返回 null 表示无需改动。
+   */
+  private mutate(fn: (devices: StoredDevice[]) => StoredDevice[] | null): Promise<boolean> {
+    const run = this.writeChain.then(async () => {
+      const next = fn(this.devices);
+      if (next === null) {
+        return false;
+      }
+      await mkdir(this.dir, { recursive: true });
+      await writeFileAtomic(path.join(this.dir, DEVICES_FILE), `${JSON.stringify(next, null, 2)}\n`);
+      this.devices = next;
+      return true;
+    });
+    this.writeChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private write(file: string, data: unknown): Promise<void> {
