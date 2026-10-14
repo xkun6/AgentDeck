@@ -1,0 +1,19 @@
+[package]
+name = "agentdeck-mobile"
+version = "0.2.0"
+description = "AgentDeck 安卓 App（M0 技术验证）"
+authors = ["AgentDeck Contributors"]
+edition = "2021"
+
+[lib]
+name = "agentdeck_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# 独立 workspace：mobile/ 不属于根目录的桌面 crate，避免 cargo 把它当成其成员。
+[workspace]

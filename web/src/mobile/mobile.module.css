@@ -1,0 +1,195 @@
+/* 手机端最小样式：单栏触控布局，间距走 4px 网格，颜色 / 字号走 shared-ui token。 */
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  background: var(--h-bg-app);
+  color: var(--h-text);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  flex-shrink: 0;
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.titleSmall {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn {
+  color: var(--h-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.conn[data-state="open"] {
+  color: var(--h-accent);
+}
+
+.conn[data-state="error"],
+.conn[data-state="closed"] {
+  color: var(--h-danger);
+}
+
+.iconButton {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.primaryButton,
+.dangerButton {
+  min-width: 64px;
+  height: 44px;
+  padding: 0 16px;
+  border: 0;
+  background: var(--h-accent);
+  color: var(--h-accent-contrast);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.primaryButton:disabled {
+  opacity: 0.4;
+}
+
+.dangerButton {
+  background: var(--h-danger);
+  color: var(--h-accent-contrast);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--h-text-3);
+}
+
+.control {
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-size: 14px;
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--h-line-soft);
+  background: transparent;
+  color: var(--h-text);
+  text-align: left;
+}
+
+.rowTitle {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  display: flex;
+  gap: 12px;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.rowMeta [data-running="true"] {
+  color: var(--h-accent);
+}
+
+.empty {
+  padding: 32px 16px;
+  color: var(--h-text-3);
+  text-align: center;
+}
+
+.timeline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inputBar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  flex-shrink: 0;
+}
+
+.textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-size: 14px;
+  resize: none;
+}
+
+.error {
+  padding: 8px 12px;
+  color: var(--h-danger);
+  font-size: 12px;
+}

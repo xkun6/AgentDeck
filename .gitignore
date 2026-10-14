@@ -4,6 +4,11 @@
 # Node
 node_modules/
 web/dist/
+web/dist-mobile/
+
+# Android 手机端（mobile/）构建产物
+mobile/target/
+mobile/gen/schemas/
 
 # Tauri generated
 /gen/

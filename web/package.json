@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "build:desktop": "vite build --base=./",
+    "build:mobile": "vite build --config vite.mobile.config.ts",
+    "dev:mobile": "vite --config vite.mobile.config.ts",
     "lint": "eslint src vite.config.ts",
     "preview": "vite preview",
     "test:unit": "vitest run",

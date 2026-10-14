@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "手机端主窗口权限（M0 无插件，仅核心默认权限）",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
