@@ -43,6 +43,7 @@ import type {
   UsageSummary,
 } from "@agentdeck/protocol";
 import {
+  CONFIRM_USER_MESSAGE_TIMEOUT_MS,
   getSidecarClient,
   SidecarConnectionLostError,
   SidecarRpcError,
@@ -328,12 +329,20 @@ async function confirmLostSend(
   agentId: string,
   clientMessageId: string,
   error: unknown,
+  timeoutMs = CONFIRM_USER_MESSAGE_TIMEOUT_MS,
 ): Promise<{ turnId: string } | null> {
   if (!(error instanceof SidecarConnectionLostError)) return null;
+  // 整体超时兜底（client 内部也有同样的时限；这里防止任何实现悬挂）：超时按「未确认」处理，调用方走失败分支让用户重发
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
   try {
-    return await client.confirmUserMessage(agentId, clientMessageId);
+    return await Promise.race([client.confirmUserMessage(agentId, clientMessageId), timeout]);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

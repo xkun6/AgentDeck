@@ -205,6 +205,33 @@ describe("断线期间发送（连接断开 ≠ 发送失败）", () => {
     expect(confirmUserMessage).not.toHaveBeenCalled();
   });
 
+  it("核对悬挂超时：按未确认处理，追加失败提示并抛出 AgentSendError（界面不会永远停在思考中）", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStore();
+      store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+      const actions = createAgentSessionActions(lostClient(() => new Promise(() => {})), store);
+      const outcome = actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-hang" }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(await outcome).toBeInstanceOf(AgentSendError);
+      expect(noticeTexts(store)).toEqual(["发送失败：与 Agent 服务的连接已断开"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("steerPrompt 核对悬挂超时：同样抛出原提示", async () => {
+    vi.useFakeTimers();
+    try {
+      const actions = createAgentSessionActions(lostClient(() => new Promise(() => {})), createStore());
+      const outcome = actions.steerPrompt(AGENT, "补一句").catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect((await outcome as Error).message).toContain("与 Agent 服务的连接已断开");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("steerPrompt 同样核对：已落地按成功处理，否则抛出原提示", async () => {
     const ok = createAgentSessionActions(lostClient(async () => ({ turnId: "t1" })), createStore());
     await expect(ok.steerPrompt(AGENT, "补一句", { clientMessageId: "cm-s" })).resolves.toEqual({ clientMessageId: "cm-s" });

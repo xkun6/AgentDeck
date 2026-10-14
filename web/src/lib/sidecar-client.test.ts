@@ -97,14 +97,23 @@ interface Harness {
   current: () => FakeSocket;
 }
 
-function setup(server: ServerHandler, options: { autoReconnect?: boolean } = {}): Harness {
+function setup(
+  server: ServerHandler,
+  options: {
+    autoReconnect?: boolean;
+    /** 第 index 个 socket 是否自动握手成功；返回 false 则一直停在连接中，由测试手动 open() */
+    autoOpen?: (index: number) => boolean;
+    resolveUrl?: () => Promise<string>;
+  } = {},
+): Harness {
   const sockets: FakeSocket[] = [];
   const client = new SidecarClient({
-    resolveUrl: async () => "ws://fake/rpc?token=t",
+    resolveUrl: options.resolveUrl ?? (async () => "ws://fake/rpc?token=t"),
     socketFactory: (url) => {
       const socket = new FakeSocket(url, server);
+      const index = sockets.length;
       sockets.push(socket);
-      queueMicrotask(() => socket.open());
+      if (options.autoOpen?.(index) ?? true) queueMicrotask(() => socket.open());
       return socket as unknown as WebSocket;
     },
     wakeListeners: false,
@@ -478,5 +487,50 @@ describe("agent.send 因断线失败后的核对（confirmUserMessage）", () =>
     current().push({ jsonrpc: "2.0", method: "agent.stream", params: userMessage(1, "cm-live") });
     await expect(client.confirmUserMessage("a1", "cm-live")).resolves.toEqual({ turnId: "turn-9" });
     expect(timelineCalls).toEqual([]);
+  });
+});
+
+describe("forceReconnect 打断进行中的连接（连接 promise 必须 settle）", () => {
+  it("握手中被 forceReconnect 打断：旧 connect() 转去等新连接并完成，不悬空", async () => {
+    // 第 0 个 socket 永远停在连接中（模拟断网期间的连接尝试），之后的正常握手
+    const { client, sockets } = setup(server(), { autoOpen: (index) => index > 0 });
+    const stale = client.connect();
+    await waitFor(() => sockets.length === 1, "第一个 socket 创建");
+    client.forceReconnect("wake");
+    await expect(stale).resolves.toBeUndefined();
+    expect(sockets.length).toBe(2);
+    expect(client.state).toBe("open");
+  });
+
+  it("resolveUrl 期间被 forceReconnect 打断：旧尝试不再创建 socket 抢占 this.ws，旧 connect() 也会 settle", async () => {
+    let calls = 0;
+    const gates: Array<() => void> = [];
+    const { client, sockets } = setup(server(), {
+      resolveUrl: () => {
+        calls += 1;
+        if (calls > 1) return Promise.resolve("ws://fake/rpc?token=t");
+        return new Promise<string>((resolve) => gates.push(() => resolve("ws://fake/rpc?token=t")));
+      },
+    });
+    const stale = client.connect();
+    await waitFor(() => gates.length === 1, "旧的 resolveUrl 挂起");
+    client.forceReconnect("wake");
+    await expect(stale).resolves.toBeUndefined();
+    gates[0]!(); // 旧的 resolveUrl 迟到返回
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sockets.length).toBe(1);
+    expect(client.state).toBe("open");
+  });
+
+  it("close() 时进行中的 connect() 以错误结束", async () => {
+    const { client } = setup(server(), { autoOpen: () => false });
+    const pending = client.connect();
+    client.close();
+    await expect(pending).rejects.toThrow("连接已关闭");
+  });
+
+  it("confirmUserMessage 整体超时：抛出核对超时，不会一直悬挂", async () => {
+    const { client } = setup(server(), { autoOpen: () => false });
+    await expect(client.confirmUserMessage("a1", "cm-never", 30)).rejects.toThrow("核对消息是否送达超时");
   });
 });

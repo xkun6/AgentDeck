@@ -115,6 +115,12 @@ export class SidecarConnectionLostError extends Error {
   }
 }
 
+/**
+ * 断线后核对 agent.send / steer 是否已落地的整体时限（重连 + 补齐）。超时按「未确认」处理，
+ * 避免界面永远停在「思考中」（见 `confirmUserMessage` / use-agent-session 的 `confirmLostSend`）。
+ */
+export const CONFIRM_USER_MESSAGE_TIMEOUT_MS = 20_000;
+
 /** 记住最近这么多条已收到的用户消息 clientMessageId（用于断线后判断 agent.send / steer 是否已落地） */
 const DELIVERED_MESSAGE_LIMIT = 500;
 
@@ -200,6 +206,10 @@ export class SidecarClient {
 
   private ws: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
+  /** 连接代数：forceReconnect / close 弃用进行中的连接尝试时递增，旧尝试据此放弃，不再占用 this.ws */
+  private connectGen = 0;
+  /** 让进行中的 connect() promise 转而等待新连接（forceReconnect）或以错误结束（close） */
+  private abandonConnect: ((error?: Error) => void) | null = null;
   private _state: SidecarConnectionState = "idle";
   private pending = new Map<string, PendingRequest>();
   private nextId = 1;
@@ -423,24 +433,38 @@ export class SidecarClient {
     this.intentionalClose = false;
     this._terminalError = null;
 
-    const promise = this.openSocket().finally(() => {
-      if (this.connectPromise === promise) this.connectPromise = null;
+    const gen = ++this.connectGen;
+    // 进行中的连接尝试被弃用（forceReconnect 换了 socket）时，旧 openSocket 里的回调都因 isCurrent() 为假而不再 settle；
+    // 这里额外挂一个「弃用」出口，保证等待者一定会 settle：forceReconnect 时转去等新连接，close 时报错。
+    const abandoned = new Promise<void>((resolve, reject) => {
+      this.abandonConnect = (error) => {
+        if (error) reject(error);
+        else resolve(this.connect());
+      };
+    });
+    const promise = Promise.race([this.openSocket(gen), abandoned]).finally(() => {
+      if (this.connectPromise === promise) {
+        this.connectPromise = null;
+        this.abandonConnect = null;
+      }
     });
     this.connectPromise = promise;
     return promise;
   }
 
-  private async openSocket(): Promise<void> {
+  private async openSocket(gen: number): Promise<void> {
     this.setState("connecting");
     let url: string;
     try {
       url = await this.resolveUrl();
     } catch (error) {
+      if (gen !== this.connectGen) throw new Error("连接尝试已被新的连接取代");
       this._lastError = error instanceof Error ? error.message : String(error);
       this.setState("error");
       this.scheduleReconnect();
       throw error instanceof Error ? error : new Error(String(error));
     }
+    if (gen !== this.connectGen) throw new Error("连接尝试已被新的连接取代");
     if (this.intentionalClose) {
       this.setState("idle");
       throw new Error("连接已关闭");
@@ -569,11 +593,18 @@ export class SidecarClient {
     if (ws || this.connectPromise) {
       this.ws = null;
       this.connectPromise = null;
+      this.connectGen += 1;
+      const abandon = this.abandonConnect;
+      this.abandonConnect = null;
       this.rejectPending("与 Agent 服务的连接已断开", true);
       if (ws) {
         try { ws.close(); } catch {}
       }
       this.setState("closed");
+      this.connect().catch(() => {});
+      // 旧连接尝试的等待者转去等刚发起的新连接（须在 connect() 之后调用）
+      abandon?.();
+      return;
     }
     this.connect().catch(() => {});
   }
@@ -586,6 +617,10 @@ export class SidecarClient {
     const ws = this.ws;
     this.ws = null;
     this.connectPromise = null;
+    this.connectGen += 1;
+    const abandon = this.abandonConnect;
+    this.abandonConnect = null;
+    abandon?.(new Error("连接已关闭"));
     if (ws) {
       try { ws.close(); } catch {}
     }
@@ -894,12 +929,26 @@ export class SidecarClient {
   /**
    * `agent.send` / `agent.steer` 因连接断开失败（`SidecarConnectionLostError`）后调用：重连并按 `sinceSeq` 补齐该会话时间线，
    * 看里面有没有带这个 `clientMessageId` 的 `user_message`（sidecar 写入时间线时原样带上，design.md 4.3）。
-   * 有 = 服务端其实已收到并开始处理，返回其 turnId；没有 = 确实没发出去，返回 null。重连失败时抛出（结果仍然未知）。
+   * 有 = 服务端其实已收到并开始处理，返回其 turnId；没有 = 确实没发出去，返回 null。重连失败或超过 `timeoutMs` 时抛出（结果仍然未知）。
    */
-  async confirmUserMessage(agentId: string, clientMessageId: string): Promise<{ turnId: string } | null> {
+  async confirmUserMessage(
+    agentId: string,
+    clientMessageId: string,
+    timeoutMs = CONFIRM_USER_MESSAGE_TIMEOUT_MS,
+  ): Promise<{ turnId: string } | null> {
     if (!this.deliveredMessages.has(clientMessageId)) {
-      await this.connect();
-      await this.syncAgent(agentId);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("核对消息是否送达超时")), timeoutMs);
+      });
+      try {
+        await Promise.race([(async () => {
+          await this.connect();
+          await this.syncAgent(agentId);
+        })(), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
     }
     const turnId = this.deliveredMessages.get(clientMessageId);
     return turnId === undefined ? null : { turnId };
