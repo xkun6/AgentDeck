@@ -125,6 +125,10 @@ export function shouldForceBottomOnMessageChange(
   return nextLastUserMessageId !== undefined && nextLastUserMessageId !== previousLastUserMessageId;
 }
 
+// Intl 格式化器创建很贵（Android WebView 上 800 条消息的 toLocale*String 约 600ms），按模块缓存复用。
+const DAY_FORMAT = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
+const TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
 function formatDay(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();
@@ -133,18 +137,11 @@ function formatDay(timestamp: number): string {
 
   if (date.toDateString() === now.toDateString()) return "今天";
   if (date.toDateString() === yesterday.toDateString()) return "昨天";
-  return date.toLocaleDateString("zh-CN", {
-    month: "long",
-    day: "numeric",
-    weekday: "long",
-  });
+  return DAY_FORMAT.format(date);
 }
 
 function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return TIME_FORMAT.format(new Date(timestamp));
 }
 
 function turnAnchorTitle(message: ChatMessage, index: number): string {
@@ -1125,7 +1122,8 @@ export function MessageTimeline({
 
   const updateActiveTurnFromScroll = useCallback(() => {
     const container = containerRef.current;
-    if (!container || turnAnchors.length < 2) return;
+    // 轮次导航条只在非 compact 下渲染；compact 下每次滚动遍历全部轮次并 setState 会让整表重渲染。
+    if (!container || turnAnchors.length < 2 || compact) return;
 
     const containerRect = container.getBoundingClientRect();
     const thresholdY = containerRect.top + Math.min(container.clientHeight * 0.35, 180);
@@ -1144,7 +1142,7 @@ export function MessageTimeline({
     if (currentId) {
       setActiveTurnId((previous) => previous === currentId ? previous : currentId);
     }
-  }, [turnAnchors]);
+  }, [compact, turnAnchors]);
 
   const scrollToTurn = useCallback((id: string) => {
     const container = containerRef.current;

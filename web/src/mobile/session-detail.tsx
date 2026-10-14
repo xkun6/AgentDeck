@@ -12,13 +12,23 @@ import { AGENT_STATUS_LABELS, agentDisplayTitle } from "@/lib/agent-session-disp
 import { m0Log } from "./m0-log";
 import s from "./mobile.module.css";
 
+/** 首屏只渲染最近这么多条消息（手机 WebView 渲染 800+ 条全量 DOM 首开要数秒），更早的按需展开。 */
+const INITIAL_WINDOW = 60;
+const WINDOW_STEP = 100;
+
 export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: () => void }) {
   const actions = useAgentSession();
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const snapshot = useAtomValue(agentSnapshotsAtom)[agentId];
   const runtime = useMemo(() => runtimeBySession[agentId] ?? createEmptyChatRuntime(), [runtimeBySession, agentId]);
-  const chatMessages = useMemo(() => agentUIMessagesToChatMessages(runtime.messages), [runtime.messages]);
+  const allMessages = useMemo(() => agentUIMessagesToChatMessages(runtime.messages), [runtime.messages]);
+  const [windowSize, setWindowSize] = useState(INITIAL_WINDOW);
+  const hidden = Math.max(0, allMessages.length - windowSize);
+  const chatMessages = useMemo(
+    () => (hidden > 0 ? allMessages.slice(-windowSize) : allMessages),
+    [allMessages, hidden, windowSize],
+  );
   const busy = isRuntimeRunning(runtime) || snapshot?.status === "running";
   const inactive = isInactiveAgent(snapshot);
   const [loading, setLoading] = useState(false);
@@ -102,6 +112,11 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
         {snapshot ? <span className={s.conn}>{AGENT_STATUS_LABELS[snapshot.status]}</span> : null}
       </header>
       <div className={s.timeline}>
+        {hidden > 0 ? (
+          <button type="button" className={s.moreButton} onClick={() => setWindowSize((n) => n + WINDOW_STEP)}>
+            显示更早的 {Math.min(hidden, WINDOW_STEP)} 条（还有 {hidden} 条未显示）
+          </button>
+        ) : null}
         <MessageTimeline
           key={agentId}
           messages={chatMessages}

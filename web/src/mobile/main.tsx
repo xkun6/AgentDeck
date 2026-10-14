@@ -13,6 +13,7 @@ import { queryClient } from "@/lib/query-client";
 import { SidecarClient, __setSidecarClientForTests, buildSidecarSocketUrl } from "@/lib/sidecar-client";
 import { MobileApp } from "./mobile-app";
 import { m0Log } from "./m0-log";
+import { installPerfProbe } from "./m0-perf";
 import "@/styles/global.css";
 
 const SIDECAR_URL = import.meta.env.VITE_AGENTDECK_SIDECAR_URL?.trim() ?? "";
@@ -47,8 +48,24 @@ function installClient(): SidecarClient {
   // M0：sidecar-client 在 Tauri 环境下会走 get_sidecar_config，这里直接换成自己的实例。
   __setSidecarClientForTests(client);
 
+  // 补齐（replay）事件成千上万条，逐条 console.log 会扭曲首开耗时，合并成一行汇总。
+  let replayCount = 0;
+  let replayLast = 0;
+  let replayTimer: ReturnType<typeof setTimeout> | null = null;
   client.onStream((envelope, meta) => {
-    m0Log(`agent.stream agent=${envelope.agentId.slice(0, 8)} seq=${envelope.seq} ${envelope.event.type}${meta.replay ? " replay" : ""}`);
+    if (meta.replay) {
+      replayCount += 1;
+      replayLast = envelope.seq;
+      if (!replayTimer) {
+        replayTimer = setTimeout(() => {
+          m0Log(`agent.stream replay batch count=${replayCount} lastSeq=${replayLast}`);
+          replayCount = 0;
+          replayTimer = null;
+        }, 300);
+      }
+      return;
+    }
+    m0Log(`agent.stream agent=${envelope.agentId.slice(0, 8)} seq=${envelope.seq} ${envelope.event.type}`);
   });
   client.onState((state) => m0Log(`state=${state}`));
 
@@ -71,6 +88,7 @@ jotaiStore.set(themeAtom, DEFAULT_THEME_CONFIG);
 
 const client = installClient();
 client.connect().catch(() => {});
+installPerfProbe();
 m0Log("boot");
 
 createRoot(document.getElementById("root")!).render(

@@ -187,14 +187,20 @@ function updateMessage(
   id: string,
   updater: (message: AgentUIMessage) => AgentUIMessage | null,
 ): ChatSessionRuntime {
-  let changed = false;
-  const messages = runtime.messages.flatMap((message) => {
-    if (message.id !== id) return [message];
-    changed = true;
-    const next = updater(message);
-    return next ? [next] : [];
-  });
-  return changed ? { ...runtime, messages } : runtime;
+  // 目标几乎总是最后几条：从尾部找，避免长时间线回放时每个事件都整表 flatMap（O(n²)）。
+  let index = -1;
+  for (let i = runtime.messages.length - 1; i >= 0; i -= 1) {
+    if (runtime.messages[i]!.id === id) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return runtime;
+  const next = updater(runtime.messages[index]!);
+  const messages = runtime.messages.slice();
+  if (next) messages[index] = next;
+  else messages.splice(index, 1);
+  return { ...runtime, messages };
 }
 
 function ensureAssistantMessage(
