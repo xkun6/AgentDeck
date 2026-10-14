@@ -15,6 +15,8 @@ import s from "./approval-dialog.module.css";
 export interface ApprovalDialogProps {
   approval: PendingApproval;
   onRespond: (approval: PendingApproval, response: AgentPermissionResponse) => Promise<void>;
+  /** 除当前这条外还有几条待处理（≥1 时在卡片上提示；处理完当前一条后自动显示下一条） */
+  remaining?: number;
 }
 
 const DEFAULT_ACTIONS: AgentPermissionAction[] = [
@@ -75,7 +77,7 @@ function ApprovalDetail({ request, fallback }: { request?: AgentPermissionReques
   }
 }
 
-export function ApprovalDialog({ approval, onRespond }: ApprovalDialogProps) {
+export function ApprovalDialog({ approval, onRespond, remaining }: ApprovalDialogProps) {
   const request = approval.permission;
   // Agent 提问（design.md 4.13）：逐题作答，不走通用的允许 / 拒绝
   if (request?.kind === "question" && request.detail?.type === "question") {
@@ -85,13 +87,14 @@ export function ApprovalDialog({ approval, onRespond }: ApprovalDialogProps) {
         request={request}
         questions={request.detail.questions}
         onRespond={onRespond}
+        remaining={remaining}
       />
     );
   }
-  return <PermissionCard approval={approval} onRespond={onRespond} />;
+  return <PermissionCard approval={approval} onRespond={onRespond} remaining={remaining} />;
 }
 
-function PermissionCard({ approval, onRespond }: ApprovalDialogProps) {
+function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps) {
   const request = approval.permission;
   const [responding, setResponding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +120,7 @@ function PermissionCard({ approval, onRespond }: ApprovalDialogProps) {
   return (
     <div className={s.card} role="group" aria-label="审批请求">
       <div className={s.header}>{title}</div>
+      {remaining && remaining > 0 ? <div className={s.queue}>还有 {remaining} 条待处理</div> : null}
       {description ? <div className={s.description}>{description}</div> : null}
       <ApprovalDetail request={request} fallback={approval.command} />
       {error ? <div className={s.error} role="alert">发送失败：{error}</div> : null}

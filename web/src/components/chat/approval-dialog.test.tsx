@@ -98,6 +98,26 @@ describe("ApprovalDialog", () => {
     expect(screen.getByRole("button", { name: "继续规划" })).toBeTruthy();
   });
 
+  it("remaining ≥ 1 时显示「还有 N 条待处理」，为 0 或缺省时不显示（权限卡与提问卡）", () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<ApprovalDialog approval={approval(undefined)} onRespond={onRespond} remaining={2} />);
+    expect(screen.getByText("还有 2 条待处理")).toBeTruthy();
+    rerender(<ApprovalDialog approval={approval(undefined)} onRespond={onRespond} remaining={0} />);
+    expect(screen.queryByText(/条待处理/)).toBeNull();
+    rerender(<ApprovalDialog approval={approval(undefined)} onRespond={onRespond} />);
+    expect(screen.queryByText(/条待处理/)).toBeNull();
+
+    const question: AgentPermissionRequest = {
+      id: "pq2",
+      provider: "claude",
+      name: "AskUserQuestion",
+      kind: "question",
+      detail: { type: "question", questions: [{ question: "Q?", multiSelect: false, options: [{ label: "A" }] }] },
+    };
+    rerender(<ApprovalDialog approval={approval(question)} onRespond={onRespond} remaining={1} />);
+    expect(screen.getByText("还有 1 条待处理")).toBeTruthy();
+  });
+
   it("发送失败时显示错误并恢复按钮", async () => {
     const onRespond = vi.fn().mockRejectedValue(new Error("该审批请求已失效"));
     render(<ApprovalDialog approval={approval(undefined)} onRespond={onRespond} />);

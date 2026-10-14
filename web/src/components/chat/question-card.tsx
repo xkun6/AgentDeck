@@ -16,6 +16,8 @@ export interface QuestionCardProps {
   request: AgentPermissionRequest;
   questions: AgentQuestion[];
   onRespond: (approval: PendingApproval, response: AgentPermissionResponse) => Promise<void>;
+  /** 除当前这条外还有几条待处理 */
+  remaining?: number;
 }
 
 export interface QuestionSelection {
@@ -68,7 +70,7 @@ function toggleOther(question: AgentQuestion, selection: QuestionSelection): Que
   return { ...selection, other: !selection.other };
 }
 
-export function QuestionCard({ approval, request, questions, onRespond }: QuestionCardProps) {
+export function QuestionCard({ approval, request, questions, onRespond, remaining }: QuestionCardProps) {
   const [selections, setSelections] = useState<QuestionSelection[]>(() =>
     questions.map(() => ({ ...EMPTY_SELECTION })),
   );
@@ -102,6 +104,7 @@ export function QuestionCard({ approval, request, questions, onRespond }: Questi
   return (
     <div className={a.card} role="group" aria-label="Agent 提问">
       <div className={a.header}>{request.title || "Agent 需要你的回答"}</div>
+      {remaining && remaining > 0 ? <div className={a.queue}>还有 {remaining} 条待处理</div> : null}
       {description ? <div className={a.description}>{description}</div> : null}
       <div className={s.questions}>
         {questions.map((question, index) => {

@@ -1122,6 +1122,11 @@ interface RemoteStatus {
 - `beforeSeq`（≥ 1）必须与 `limit` 一起给；单独给 `beforeSeq`、`limit` 越界（非 1–2000 的整数）同样是 `-32602`。回合起点按时间线上的 `user_message`（非插话）判定，其后紧跟的同回合 `turn_started` 不再单独算起点；CLI 自发轮次等没有 `user_message` 的回合以 `turn_started` 为起点。一个回合比 `limit` 长但不超过上限时整回合返回；更长则按上述上限从回合中间截断，被截开的回合在前端由相邻两页合并显示（同一回合的助手消息 id 相同，older 页的内容并到已有消息之前）。
 - 手机打开会话取 `{ limit: 300 }`，向上滚动到顶取 `{ beforeSeq: 当前最早 seq, limit: 300 }`；断线重连仍用 `sinceSeq` 补齐。
 
+**审批卡片与快照补齐**（桌面 / 手机共用，`web/src/stores/chat.ts` 的 `syncPendingApprovals`）：
+- 待审批卡片（`runtime.pendingApprovals`）原本只来自时间线里的 `permission_requested`；手机首屏只拉最近一页时间线，`permission_requested` 被分页截断时，会话列表（读快照）显示待审批、进入会话却没有卡片。
+- 因此用快照（`agent.state` / `agent.list` 的 `AgentSnapshot.pendingPermissions`）校准：快照有、运行时没有、且不在「已处理」名单的，按 `permission_requested` 的格式补进去；快照已不存在的（快照 `lastSeq` ≥ 已归约事件序号，即快照不比事件旧）移除，快照更旧时只补不删。「已处理」名单（`resolvedApprovalIds`，最近 50 条）由 `permission_resolved` 与本地回应（`removeApprovalAtom`）写入，防止过期快照把刚处理的审批补回来。触发点：收到 `agent.state` / `agent.list`、`loadTimeline` 完成后；`dormant` / `closed` 会话不处理。
+- 同一会话有多条待审批时按到达顺序逐条显示（`pendingApprovals[0]`，卡片 key 为 requestId，处理完自动显示下一条），卡片上显示「还有 N 条待处理」（N = 其余条数，≥1 时）。
+
 **断线诊断**（事故背景：真机「总在重连」，但网关与手机都没有留下断线原因）：
 - **网关关闭日志**（`sidecar.log`，info）：每条远程 WS 关闭时统一写一行
   `远程连接关闭 device=<deviceId 前 8 位，未认证为 -> ip=<ip> 存活=<s>s code=<code> reason=<reason> by=<local|peer> path=<path> 距上次pong=<ms>ms buffered=<n>`。
