@@ -214,3 +214,45 @@ describe("AgentStore", () => {
     await expect(store.deleteAgent("../evil")).rejects.toThrow("非法");
   });
 });
+
+function toolEnvelope(agentId: string, seq: number, callId: string): AgentStreamEnvelope {
+  return {
+    agentId,
+    seq,
+    epoch: "e1",
+    timestamp: seq,
+    event: {
+      type: "timeline",
+      item: { type: "tool_call", callId, name: "Agent", status: "running", detail: { type: "unknown", input: seq, output: null } },
+    },
+  };
+}
+
+describe("AgentStore：tool_call 中间更新压缩（design.md 4.5）", () => {
+  test("readTimeline 返回压缩结果，写入链随后原子重写磁盘文件", async () => {
+    const dataDir = makeDataDir();
+    const dir = path.join(dataDir, "agents", "a1");
+    mkdirSync(dir, { recursive: true });
+    const all = [
+      envelope("a1", 1),
+      toolEnvelope("a1", 2, "c1"),
+      toolEnvelope("a1", 3, "c1"),
+      toolEnvelope("a1", 4, "c1"),
+      envelope("a1", 5),
+    ];
+    const file = path.join(dir, "timeline.jsonl");
+    writeFileSync(file, all.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+
+    const store = new AgentStore({ dataDir });
+    const loaded = await store.readTimeline("a1");
+    expect(loaded.entries.map((e) => e.seq)).toEqual([1, 2, 4, 5]);
+    expect(loaded.lastSeq).toBe(5);
+
+    // 第二次读取会先 drain 写入链，此时重写已完成
+    const again = await store.readTimeline("a1");
+    expect(again.entries.map((e) => e.seq)).toEqual([1, 2, 4, 5]);
+    const onDisk = readFileSync(file, "utf8").trimEnd().split("\n").map((l) => JSON.parse(l));
+    expect(onDisk.map((e: AgentStreamEnvelope) => e.seq)).toEqual([1, 2, 4, 5]);
+    expect(again.lastSeq).toBe(5);
+  });
+});

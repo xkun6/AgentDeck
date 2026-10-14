@@ -124,4 +124,84 @@ describe("ProviderSubagentStore", () => {
     expect(store.fetchTimeline("p", "s1").rows).toEqual([]);
     expect(store.list("q")).toHaveLength(1);
   });
+
+  test("大行：文本截断、图片替换为占位文本，广播与分页返回的都是截断后的内容", () => {
+    const { store } = createStore();
+    const update = store.apply("p", "claude", {
+      type: "timeline",
+      id: "s",
+      item: {
+        type: "tool_call",
+        callId: "t1",
+        name: "mcp__browser__shot",
+        status: "completed",
+        detail: {
+          type: "unknown",
+          input: {},
+          output: [
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(409_600) } },
+            { type: "text", text: "T".repeat(300_000) },
+          ],
+        },
+      },
+    });
+    const json = JSON.stringify(update);
+    expect(json.length).toBeLessThan(70_000);
+    expect(json).toContain("[图片 约 300 KB，已省略]");
+    expect(json).toContain("已截断");
+    expect(json).not.toContain("AAAAAAAA");
+    expect(JSON.stringify(store.fetchTimeline("p", "s").rows)).toBe(JSON.stringify([
+      (update as { row: unknown }).row,
+    ]));
+    expect(store.bytesOf("p")).toBe(JSON.stringify((update as { row: unknown }).row).length);
+    expect(store.stats()).toEqual({ rows: 1, bytes: store.bytesOf("p") });
+  });
+
+  test("父会话字节总量超上限时，跨子代理从最早的行丢弃，且保留最新一行", () => {
+    let now = 1_000;
+    const store = new ProviderSubagentStore(() => now, 2_500);
+    const row = (text: string) => ({ type: "reasoning" as const, text });
+    // 每行约 100 字节 + 文本
+    const add = (id: string, text: string) => {
+      now += 1;
+      store.apply("p", "claude", { type: "timeline", id, item: row(text) });
+    };
+    add("a", "a1".padEnd(900, "x"));
+    add("b", "b1".padEnd(900, "x"));
+    add("a", "a2".padEnd(900, "x")); // 触发超限：丢最早的 a1
+    const texts = (id: string) =>
+      store.fetchTimeline("p", id).rows.map((r) => (r.item as { text: string }).text.slice(0, 2));
+    expect(texts("a")).toEqual(["a2"]);
+    expect(texts("b")).toEqual(["b1"]);
+    expect(store.bytesOf("p")).toBeLessThanOrEqual(2_500);
+    // seq 不回退，hasOlder 以实际保留为准
+    expect(store.fetchTimeline("p", "a").rows[0]?.seq).toBe(2);
+    expect(store.fetchTimeline("p", "a").hasOlder).toBe(false);
+
+    // 另一个父会话互不影响
+    store.apply("q", "claude", { type: "timeline", id: "a", item: row("q1") });
+    expect(store.fetchTimeline("q", "a").rows).toHaveLength(1);
+
+    // 单行本身就超过上限：仍保留最新一行
+    const tiny = new ProviderSubagentStore(() => now, 10);
+    tiny.apply("p", "claude", { type: "timeline", id: "a", item: row("x".repeat(500)) });
+    tiny.apply("p", "claude", { type: "timeline", id: "a", item: row("y".repeat(500)) });
+    expect(tiny.fetchTimeline("p", "a").rows).toHaveLength(1);
+    expect((tiny.fetchTimeline("p", "a").rows[0]!.item as { text: string }).text[0]).toBe("y");
+  });
+
+  test("字节计数在行数上限丢弃、remove、deleteParent 后保持一致", () => {
+    const { store } = createStore();
+    for (let i = 0; i < MAX_SUBAGENT_TIMELINE_ROWS + 5; i++) {
+      store.apply("p", "claude", { type: "timeline", id: "s", item: { type: "reasoning", text: "x" } });
+    }
+    const rows = store.fetchTimeline("p", "s", { limit: 1000 }).rows;
+    expect(store.stats().rows).toBe(MAX_SUBAGENT_TIMELINE_ROWS);
+    expect(store.bytesOf("p")).toBeGreaterThan(rows.length);
+    store.apply("p", "claude", { type: "remove", id: "s" });
+    expect(store.bytesOf("p")).toBe(0);
+    store.apply("p", "claude", { type: "timeline", id: "s2", item: { type: "reasoning", text: "x" } });
+    store.deleteParent("p");
+    expect(store.stats()).toEqual({ rows: 0, bytes: 0 });
+  });
 });

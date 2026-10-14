@@ -59,6 +59,7 @@ import {
 import { ClaudeBackgroundTaskRegistry, readFileTail } from "./background-tasks.js";
 import { mapClaudeRateLimitEvent } from "./rate-limits.js";
 import { ClaudeSidechainTracker } from "./sidechain-tracker.js";
+import { ClaudeTaskTodos, isTaskTodoTool } from "./task-todos.js";
 import { ClaudeTaskProtocolSource } from "./subagents/live-source.js";
 import { foldSubagentObservations, type SubagentObservation } from "./subagents/observation.js";
 import {
@@ -544,7 +545,7 @@ interface PendingPermission {
 interface ToolUseEntry {
   name: string;
   input: unknown;
-  /** TodoWrite 等以其它 timeline 形式展示的工具，不发 tool_call */
+  /** TodoWrite / TaskCreate 等以其它 timeline 形式展示的工具，不发 tool_call */
   hidden: boolean;
 }
 
@@ -600,6 +601,8 @@ export class ClaudeAgentSession implements AgentSession {
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly toolUses = new Map<string, ToolUseEntry>();
+  /** 新版 Task 工具（TaskCreate / TaskUpdate / TaskList）维护的任务表，变化后以 todo 项发出 */
+  private readonly taskTodos = new ClaudeTaskTodos();
   /** 已通过 stream_event 增量输出过文本 / 思考的 API message id，完整 assistant 消息到达时跳过对应块 */
   private readonly streamedText = new Set<string>();
   private readonly streamedThinking = new Set<string>();
@@ -1383,6 +1386,11 @@ export class ClaudeAgentSession implements AgentSession {
       }
       return;
     }
+    if (isTaskTodoTool(name)) {
+      // 结果到达后才应用到任务表（要拿 id，也要确认没被拒绝），见 handleToolResult
+      this.toolUses.set(callId, { name, input, hidden: true });
+      return;
+    }
     this.toolUses.set(callId, { name, input, hidden: false });
     if (isClaudeSubagentToolName(name) && isRecord(input)) {
       this.subagentToolInputs.set(callId, input);
@@ -1431,6 +1439,12 @@ export class ClaudeAgentSession implements AgentSession {
     const entry = this.toolUses.get(callId);
     this.toolUses.delete(callId);
     if (entry?.hidden) {
+      if (block.is_error !== true && isTaskTodoTool(entry.name)) {
+        const changed = this.taskTodos.apply(entry.name, entry.input, toolResultText(block.content), structured);
+        if (changed) {
+          this.emitTimeline(turn, { type: "todo", items: this.taskTodos.items() });
+        }
+      }
       return;
     }
     const name = entry?.name ?? "tool";

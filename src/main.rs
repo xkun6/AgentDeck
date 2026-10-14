@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use agentdeck_core::commands;
+use agentdeck_core::desktop_log;
 use agentdeck_core::paths;
 use agentdeck_core::process::instance;
 use agentdeck_core::state::AppState;
@@ -44,10 +45,11 @@ fn shutdown(app: &tauri::AppHandle) {
         }
     }
     supervisor::shutdown_sidecar(app);
+    desktop_log::flush(std::time::Duration::from_secs(1));
 }
 
 fn main() {
-    env_logger::init();
+    desktop_log::init();
 
     // Windows：设置了 AGENTDECK_HOME 时把 WebView2 用户数据也放进数据目录，
     // 保持隔离；必须在创建 webview 环境之前设置。
@@ -76,6 +78,7 @@ fn main() {
             let data_dir = paths::resolve_data_dir(app.path().app_data_dir().ok())?;
             let log_dir = paths::log_dir(&data_dir);
             std::fs::create_dir_all(&log_dir)?;
+            desktop_log::attach(&log_dir);
             log::info!("data dir: {}", data_dir.display());
 
             // 2. 单实例锁（按数据目录）
@@ -89,6 +92,7 @@ fn main() {
                         data_dir.display()
                     );
                     instance::notify_running_instance(&data_dir);
+                    desktop_log::flush(std::time::Duration::from_secs(1));
                     std::process::exit(0);
                 }
                 instance::SingleInstance::Unavailable(reason) => {

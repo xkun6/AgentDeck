@@ -13,6 +13,7 @@ import type {
 } from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
+import { compactToolCallUpdates } from "./timeline-compact.js";
 
 /** meta.json 的内容：快照中除 pendingPermissions / activeTurnId 外的全部字段（design.md 4.5） */
 export type PersistedAgentMeta = Omit<AgentSnapshot, "pendingPermissions" | "activeTurnId"> & {
@@ -172,31 +173,36 @@ export class AgentStore {
       this.needsNewline.add(agentId);
     }
 
-    const entries: AgentStreamEnvelope[] = [];
-    let lastSeq = 0;
-    let skipped = 0;
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") {
-        continue;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        skipped += 1;
-        continue;
-      }
-      if (!isEnvelope(parsed) || parsed.seq <= lastSeq) {
-        skipped += 1;
-        continue;
-      }
-      lastSeq = parsed.seq;
-      entries.push(parsed);
-    }
+    const { entries: parsedEntries, lastSeq, skipped } = parseTimeline(raw);
     if (skipped > 0) {
       this.logger.warn("%s 中有 %d 行损坏或乱序，已跳过", file, skipped);
     }
+    const { entries, dropped } = compactToolCallUpdates(parsedEntries);
+    if (dropped > 0) {
+      this.logger.info("压缩 %s：丢弃 %d 条 tool_call 中间更新", file, dropped);
+      this.enqueue(agentId, () => this.rewriteCompacted(agentId));
+    }
     return { entries, lastSeq };
+  }
+
+  /** 在写入链内重读 timeline、压缩并原子写回；失败只记 warn，原文件保持不变 */
+  private async rewriteCompacted(agentId: string): Promise<void> {
+    if (this.deleted.has(agentId)) {
+      return;
+    }
+    const file = this.timelinePath(agentId);
+    try {
+      await this.writePendingLines(agentId);
+      const raw = await readFile(file, "utf8");
+      const { entries, dropped } = compactToolCallUpdates(parseTimeline(raw).entries);
+      if (dropped === 0) {
+        return;
+      }
+      await writeFileAtomic(file, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+      this.needsNewline.delete(agentId);
+    } catch (error) {
+      this.logger.warn("重写压缩后的 %s 失败：%s", file, String(error));
+    }
   }
 
   /** 流式逐行读取 timeline.jsonl（全文搜索 / 用量回填用）；损坏、乱序的行跳过，文件不存在则为空 */
@@ -431,6 +437,35 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
       await sleep(RENAME_RETRY_BASE_MS * 2 ** (attempt - 1));
     }
   }
+}
+
+function parseTimeline(raw: string): {
+  entries: AgentStreamEnvelope[];
+  lastSeq: number;
+  skipped: number;
+} {
+  const entries: AgentStreamEnvelope[] = [];
+  let lastSeq = 0;
+  let skipped = 0;
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      skipped += 1;
+      continue;
+    }
+    if (!isEnvelope(parsed) || parsed.seq <= lastSeq) {
+      skipped += 1;
+      continue;
+    }
+    lastSeq = parsed.seq;
+    entries.push(parsed);
+  }
+  return { entries, lastSeq, skipped };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

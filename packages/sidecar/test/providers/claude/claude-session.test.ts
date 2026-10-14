@@ -952,6 +952,197 @@ describe("ClaudeAgentSession", () => {
     ]);
   });
 
+  describe("新版 Task 工具 → todo", () => {
+    const todosOf = (events: AgentStreamEvent[]) =>
+      events.flatMap((e) => (e.type === "timeline" && e.item.type === "todo" ? [e.item.items] : []));
+    const use = (id: string, name: string, input: unknown) => ({ type: "tool_use", id, name, input });
+    const created = (n: number, subject: string) => ({ task: { id: String(n), subject } });
+    const updated = (n: number, to: string) => ({
+      success: true,
+      taskId: String(n),
+      updatedFields: ["status"],
+      statusChange: { from: "pending", to },
+    });
+
+    async function runTurn(script: (q: FakeCli, user: ClaudeUserInput) => void) {
+      const h = createHarness();
+      h.setup((q) => (q.onUser = (user) => script(q, user)));
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("run");
+      await waitUntil(() => terminalEvents(events).length === 1);
+      return events;
+    }
+
+    test("创建 3 个任务并逐个完成（实测格式），不发 tool_call", async () => {
+      const events = await runTurn((q, user) => {
+        q.emit(msg.init());
+        for (const [n, subject] of [[1, "步骤一"], [2, "步骤二"], [3, "步骤三"]] as const) {
+          q.emit(
+            msg.assistant(`mc${n}`, [use(`toolu_c${n}`, "TaskCreate", { subject, description: "d", activeForm: "做中" })]),
+            msg.toolResult(`toolu_c${n}`, `Task #${n} created successfully: ${subject}`, {
+              structured: created(n, subject),
+            }),
+          );
+        }
+        for (const n of [1, 2, 3]) {
+          q.emit(
+            msg.assistant(`mu${n}`, [use(`toolu_u${n}`, "TaskUpdate", { taskId: String(n), status: "completed" })]),
+            msg.toolResult(`toolu_u${n}`, `Updated task #${n} status`, { structured: updated(n, "completed") }),
+          );
+        }
+        q.emit(
+          msg.assistant("ml", [use("toolu_l", "TaskList", {})]),
+          msg.toolResult("toolu_l", "#1 [completed] 步骤一\n#2 [completed] 步骤二\n#3 [completed] 步骤三", {
+            structured: {
+              tasks: [1, 2, 3].map((n) => ({ id: String(n), subject: `步骤${"一二三"[n - 1]}`, status: "completed", blockedBy: [] })),
+            },
+          }),
+          msg.result(user.uuid),
+        );
+      });
+      expect(toolCalls(events)).toEqual([]);
+      expect(todosOf(events)).toEqual([
+        [{ text: "步骤一", completed: false }],
+        [{ text: "步骤一", completed: false }, { text: "步骤二", completed: false }],
+        [
+          { text: "步骤一", completed: false },
+          { text: "步骤二", completed: false },
+          { text: "步骤三", completed: false },
+        ],
+        [
+          { text: "步骤一", completed: true },
+          { text: "步骤二", completed: false },
+          { text: "步骤三", completed: false },
+        ],
+        [
+          { text: "步骤一", completed: true },
+          { text: "步骤二", completed: true },
+          { text: "步骤三", completed: false },
+        ],
+        [
+          { text: "步骤一", completed: true },
+          { text: "步骤二", completed: true },
+          { text: "步骤三", completed: true },
+        ],
+        // TaskList 与现有任务表一致，不重复发
+      ]);
+    });
+
+    test("TaskUpdate 改标题、in_progress 仍为未完成、deleted 移除；失败结果与未知 id 忽略", async () => {
+      const events = await runTurn((q, user) => {
+        q.emit(
+          msg.init(),
+          msg.assistant("m1", [use("c1", "TaskCreate", { subject: "甲" }), use("c2", "TaskCreate", { subject: "乙" })]),
+          msg.toolResult("c1", "Task #1 created successfully: 甲", { structured: created(1, "甲") }),
+          msg.toolResult("c2", "Task #2 created successfully: 乙", { structured: created(2, "乙") }),
+          msg.assistant("m2", [use("u1", "TaskUpdate", { taskId: "1", subject: "甲（改）", status: "in_progress" })]),
+          msg.toolResult("u1", "Updated task #1 subject, status"),
+          msg.assistant("m3", [use("u2", "TaskUpdate", { taskId: "2", status: "completed" })]),
+          msg.toolResult("u2", "denied", { isError: true }),
+          msg.assistant("m4", [use("u3", "TaskUpdate", { taskId: "99", status: "completed" })]),
+          msg.toolResult("u3", "Updated task #99 status"),
+          msg.assistant("m5", [use("u4", "TaskUpdate", { taskId: "1", status: "deleted" })]),
+          msg.toolResult("u4", "Updated task #1 status", { structured: updated(1, "deleted") }),
+          msg.result(user.uuid),
+        );
+      });
+      expect(toolCalls(events)).toEqual([]);
+      expect(todosOf(events)).toEqual([
+        [{ text: "甲", completed: false }],
+        [{ text: "甲", completed: false }, { text: "乙", completed: false }],
+        [{ text: "甲（改）", completed: false }, { text: "乙", completed: false }],
+        [{ text: "乙", completed: false }],
+      ]);
+    });
+
+    test("TaskList 整表同步（含文本退化解析、deleted 过滤、清空）", async () => {
+      const events = await runTurn((q, user) => {
+        q.emit(
+          msg.init(),
+          msg.assistant("m1", [use("c1", "TaskCreate", { subject: "旧任务" })]),
+          msg.toolResult("c1", "Task #1 created successfully: 旧任务", { structured: created(1, "旧任务") }),
+          // 结构化结果：整表替换，deleted 被过滤
+          msg.assistant("m2", [use("l1", "TaskList", {})]),
+          msg.toolResult("l1", "...", {
+            structured: {
+              tasks: [
+                { id: "2", subject: "乙", status: "in_progress", blockedBy: [] },
+                { id: "3", subject: "丙", status: "completed", blockedBy: ["2"] },
+                { id: "4", subject: "丁", status: "deleted", blockedBy: [] },
+              ],
+            },
+          }),
+          // 没有结构化结果（同一条消息多个 tool_result 时）：解析文本行
+          msg.assistant("m3", [use("l2", "TaskList", {}), use("t1", "Read", { file_path: "a.txt" })]),
+          {
+            ...msg.toolResult("l2", "#2 [completed] 乙\n#3 [completed] 丙", {}),
+            message: {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "l2", content: "#2 [completed] 乙\n#3 [completed] 丙" },
+                { type: "tool_result", tool_use_id: "t1", content: "x" },
+              ],
+            },
+            tool_use_result: { ignored: true },
+          },
+          msg.assistant("m4", [use("l3", "TaskList", {})]),
+          msg.toolResult("l3", "No tasks found", { structured: { tasks: [] } }),
+          msg.result(user.uuid),
+        );
+      });
+      expect(todosOf(events)).toEqual([
+        [{ text: "旧任务", completed: false }],
+        [{ text: "乙", completed: false }, { text: "丙", completed: true }],
+        [{ text: "乙", completed: true }, { text: "丙", completed: true }],
+        [],
+      ]);
+      expect(toolCalls(events).map((c) => c.callId)).toEqual(["t1", "t1"]);
+    });
+
+    test("结果里拿不到 id：先按文本、再按顺序临时编号，TaskUpdate 仍能命中", async () => {
+      const events = await runTurn((q, user) => {
+        q.emit(
+          msg.init(),
+          msg.assistant("m1", [use("c1", "TaskCreate", { subject: "甲" })]),
+          msg.toolResult("c1", "Task #7 created successfully: 甲"),
+          msg.assistant("m2", [use("c2", "TaskCreate", { subject: "乙" })]),
+          msg.toolResult("c2", "created"),
+          msg.assistant("m3", [use("u1", "TaskUpdate", { taskId: "8", status: "completed" })]),
+          msg.toolResult("u1", "Updated task #8 status"),
+          msg.result(user.uuid),
+        );
+      });
+      expect(todosOf(events)).toEqual([
+        [{ text: "甲", completed: false }],
+        [{ text: "甲", completed: false }, { text: "乙", completed: false }],
+        [{ text: "甲", completed: false }, { text: "乙", completed: true }],
+      ]);
+    });
+
+    test("子代理里的 Task 工具调用不进主时间线 todo", async () => {
+      const events = await runTurn((q, user) => {
+        q.emit(
+          msg.init(),
+          msg.assistant("m1", [use("c1", "TaskCreate", { subject: "主任务" })]),
+          msg.toolResult("c1", "Task #1 created successfully: 主任务", { structured: created(1, "主任务") }),
+          msg.assistant("m2", [use("toolu_agent", "Agent", { description: "子活", prompt: "p", subagent_type: "general-purpose" })]),
+          msg.assistant("s1", [use("sc1", "TaskCreate", { subject: "子任务" })], "toolu_agent"),
+          {
+            ...msg.toolResult("sc1", "Task #1 created successfully: 子任务", { structured: created(1, "子任务") }),
+            parent_tool_use_id: "toolu_agent",
+          },
+          msg.assistant("s2", [use("su1", "TaskUpdate", { taskId: "1", status: "completed" })], "toolu_agent"),
+          { ...msg.toolResult("su1", "Updated task #1 status", { structured: updated(1, "completed") }), parent_tool_use_id: "toolu_agent" },
+          msg.toolResult("toolu_agent", "done"),
+          msg.result(user.uuid),
+        );
+      });
+      expect(todosOf(events)).toEqual([[{ text: "主任务", completed: false }]]);
+      expect(toolCalls(events).filter((c) => c.name === "TaskCreate" || c.name === "TaskUpdate")).toEqual([]);
+    });
+  });
+
   test("result is_error / 错误 subtype → turn_failed", async () => {
     const h = createHarness();
     let round = 0;
