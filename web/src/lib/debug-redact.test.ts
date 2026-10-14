@@ -23,6 +23,19 @@ describe("redact", () => {
     expect(out.payload.session_token).toBe("***");
   });
 
+  it("手机配对链接与 deviceSecret / pairingSecret 被遮挡", () => {
+    const out = redact({
+      offerUrl: "agentdeck://pair#eyJ2IjoxLCJwYWlyaW5nU2VjcmV0IjoiYWJjIn0",
+      note: "扫码 agentdeck://pair#eyJ2IjoxfQ 配对",
+      deviceSecret: "q3Zx9Yk2LmN8pR5tVw7yB1cD4fG6hJ0aS2eU8iO3kM=",
+      pairingSecret: "abc",
+    }) as Record<string, string>;
+    expect(out.offerUrl).toBe("agentdeck://pair#***");
+    expect(out.note).toBe("扫码 agentdeck://pair#*** 配对");
+    expect(out.deviceSecret).toBe("***");
+    expect(out.pairingSecret).toBe("***");
+  });
+
   it("scrubs Bearer tokens and provider-specific token shapes inside string values", () => {
     const out = redact({
       message: "request failed: Bearer abcdefghij returned 401",

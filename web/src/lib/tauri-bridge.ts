@@ -32,6 +32,7 @@ import type {
   PreviewFileChangedPayload,
   FsListInput,
   FsListResult,
+  NetworkCategoryInfo,
   ReadWorkspaceFileInput,
   ExternalTerminalResult,
   TerminalEventPayload,
@@ -375,6 +376,10 @@ const tauriBridge = {
 
   async fsList(input: FsListInput): Promise<FsListResult> {
     return invokeCommand("fs_list", { input });
+  },
+
+  async networkCategories(): Promise<NetworkCategoryInfo[]> {
+    return invokeCommand("network_categories");
   },
 
   async readFileDataUrl(path: string): Promise<string> {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, WheelEvent } from "react";
 import { useAtomValue } from "jotai";
 import { AlertTriangle, ChevronRight, FileDiff, GitFork, Info, RotateCcw, Undo2 } from "lucide-react";
@@ -29,6 +29,7 @@ import { snapshotForMessage } from "@/lib/snapshots";
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const BOTTOM_FOLLOW_THRESHOLD_PX = 120;
 const BOTTOM_REATTACH_THRESHOLD_PX = 8;
+const REACH_TOP_THRESHOLD_PX = 80;
 
 interface MessageTimelineProps {
   messages: ChatMessage[];
@@ -63,6 +64,10 @@ interface MessageTimelineProps {
   snapshotTurns?: readonly SnapshotTurn[];
   /** 点击该小条：在右侧预览栏打开快照面板并展开该回合。 */
   onOpenSnapshot?: (turnId: string) => void;
+  /** 手机端向前分页：用户滚动到顶部附近时回调（宿主自行防抖 / 判断是否还有更早内容）。 */
+  onReachTop?: () => void;
+  /** 渲染在消息列表最上方的插槽（手机端「加载更早」入口）。 */
+  topSlot?: ReactNode;
 }
 
 /** 定位后消息高亮持续的时间（与 CSS 动画时长一致） */
@@ -125,6 +130,10 @@ export function shouldForceBottomOnMessageChange(
   return nextLastUserMessageId !== undefined && nextLastUserMessageId !== previousLastUserMessageId;
 }
 
+// Intl 格式化器创建很贵（Android WebView 上 800 条消息的 toLocale*String 约 600ms），按模块缓存复用。
+const DAY_FORMAT = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" });
+const TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
 function formatDay(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();
@@ -133,18 +142,11 @@ function formatDay(timestamp: number): string {
 
   if (date.toDateString() === now.toDateString()) return "今天";
   if (date.toDateString() === yesterday.toDateString()) return "昨天";
-  return date.toLocaleDateString("zh-CN", {
-    month: "long",
-    day: "numeric",
-    weekday: "long",
-  });
+  return DAY_FORMAT.format(date);
 }
 
 function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return TIME_FORMAT.format(new Date(timestamp));
 }
 
 function turnAnchorTitle(message: ChatMessage, index: number): string {
@@ -193,6 +195,9 @@ function localizeProgressLabel(text?: string): string {
 
 const LONG_THINKING_THRESHOLD_S = 120;
 
+/** 时间线末尾有待审批请求：进度块显示「等待审批」并暂停计时（审批等待不算 Agent 的耗时） */
+const WaitingApprovalContext = createContext(false);
+
 interface ProgressBlockProps {
   turnStartedAt?: number;
   sessionUsage?: SessionUsageResult | null;
@@ -202,16 +207,34 @@ interface ProgressBlockProps {
 
 function ProgressBlock({ turnStartedAt, sessionUsage, progressModel, progressText }: ProgressBlockProps) {
   const [elapsed, setElapsed] = useState(0);
+  const waitingApproval = useContext(WaitingApprovalContext);
+  // 审批等待的累计时长与本次等待的起点：从耗时里扣除，等待期间计时冻结
+  const pausedRef = useRef<{ total: number; since: number | null }>({ total: 0, since: null });
+  useEffect(() => {
+    pausedRef.current = { total: 0, since: null };
+  }, [turnStartedAt]);
+  useEffect(() => {
+    const paused = pausedRef.current;
+    if (waitingApproval && paused.since === null) {
+      paused.since = Date.now();
+    } else if (!waitingApproval && paused.since !== null) {
+      paused.total += Date.now() - paused.since;
+      paused.since = null;
+    }
+  }, [waitingApproval, turnStartedAt]);
   useEffect(() => {
     if (!turnStartedAt) return;
-    setElapsed(Date.now() - turnStartedAt);
-    const timer = window.setInterval(() => {
-      setElapsed(Date.now() - turnStartedAt);
-    }, 1000);
+    const compute = () => {
+      const now = Date.now();
+      const { total, since } = pausedRef.current;
+      return now - turnStartedAt - total - (since !== null ? now - since : 0);
+    };
+    setElapsed(compute());
+    const timer = window.setInterval(() => setElapsed(compute()), 1000);
     return () => window.clearInterval(timer);
-  }, [turnStartedAt]);
+  }, [turnStartedAt, waitingApproval]);
 
-  const label = localizeProgressLabel(progressText);
+  const label = waitingApproval ? "等待审批" : localizeProgressLabel(progressText);
   const elapsedSeconds = Math.floor(elapsed / 1000);
   const showLongHint = elapsedSeconds >= LONG_THINKING_THRESHOLD_S;
 
@@ -630,6 +653,18 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
   }
 
   return <>{items}</>;
+}
+
+/**
+ * 消息有没有可显示的内容。只有思考内容、而思考显示又关着时（失败 / 中断的回合常见）整行不渲染，
+ * 否则会留下一行只有时间 / 复制 / TTFT 的空消息；流式进行中仍保留（显示「思考中」进度）。
+ */
+function hasVisibleContent(message: ChatMessage, showReasoning: boolean): boolean {
+  if (message.text || message.images?.length || message.tools?.length) return true;
+  if (message.blocks?.some((block) => block.type !== "reasoning")) return true;
+  const hasReasoning = Boolean(message.reasoning) || Boolean(message.blocks?.length);
+  if (!hasReasoning) return false;
+  return showReasoning || message.status === "streaming";
 }
 
 function getCopyableText(message: ChatMessage): string | undefined {
@@ -1057,6 +1092,8 @@ export function MessageTimeline({
   onFork,
   snapshotTurns,
   onOpenSnapshot,
+  onReachTop,
+  topSlot,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1071,6 +1108,7 @@ export function MessageTimeline({
   const autoAnchorRef = useRef(false);
   const autoAnchorTimerRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
+  const scrollHeightRef = useRef(0);
   // 程序触发的轮次跳转（平滑滚动）守卫：跳转动画期间 onScroll 会被误判为用户上滑而
   // 触发 detachFromBottomAutoFollow 硬取消滚动，这里用标记把跳转滚动与用户手势区分开。
   const programmaticScrollRef = useRef(false);
@@ -1080,17 +1118,10 @@ export function MessageTimeline({
   const firstMessageIdRef = useRef<string | undefined>(undefined);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const showReasoning = useAtomValue(showReasoningAtom);
   const visibleMessages = useMemo(
-    () =>
-      messages.filter(
-        (message) =>
-          message.text ||
-          message.reasoning ||
-          message.images?.length ||
-          message.tools?.length ||
-          message.blocks?.length,
-      ),
-    [messages],
+    () => messages.filter((message) => hasVisibleContent(message, showReasoning)),
+    [messages, showReasoning],
   );
   // 进行中的回合（从最后一条用户消息起）还没结束，不能作为分叉点（design.md 4.23）
   const runningTurnStartIndex = useMemo(() => {
@@ -1125,7 +1156,8 @@ export function MessageTimeline({
 
   const updateActiveTurnFromScroll = useCallback(() => {
     const container = containerRef.current;
-    if (!container || turnAnchors.length < 2) return;
+    // 轮次导航条只在非 compact 下渲染；compact 下每次滚动遍历全部轮次并 setState 会让整表重渲染。
+    if (!container || turnAnchors.length < 2 || compact) return;
 
     const containerRect = container.getBoundingClientRect();
     const thresholdY = containerRect.top + Math.min(container.clientHeight * 0.35, 180);
@@ -1144,7 +1176,7 @@ export function MessageTimeline({
     if (currentId) {
       setActiveTurnId((previous) => previous === currentId ? previous : currentId);
     }
-  }, [turnAnchors]);
+  }, [compact, turnAnchors]);
 
   const scrollToTurn = useCallback((id: string) => {
     const container = containerRef.current;
@@ -1258,10 +1290,14 @@ export function MessageTimeline({
     const previousLastUserMessageId = lastUserMessageIdRef.current;
     const nextFirstMessageId = visibleMessages[0]?.id;
     const nextLastUserMessageId = turnAnchors[turnAnchors.length - 1]?.id;
-    const sessionChanged =
+    const firstMessageChanged =
       previousFirstMessageId !== undefined &&
       nextFirstMessageId !== undefined &&
       previousFirstMessageId !== nextFirstMessageId;
+    // 首条消息还在列表里 = 在前面插入了更早的历史（手机端向前分页 / 展开窗口），不是换了会话
+    const historyPrepended =
+      firstMessageChanged && visibleMessages.some((message) => message.id === previousFirstMessageId);
+    const sessionChanged = firstMessageChanged && !historyPrepended;
     const forceBottom = shouldForceBottomOnMessageChange(
       previousMessageCount,
       visibleMessages.length,
@@ -1288,6 +1324,11 @@ export function MessageTimeline({
     }
 
     const container = containerRef.current;
+    if (historyPrepended && container && !nearBottomRef.current) {
+      // 保持用户正在看的内容不动：scrollTop 补上新增的高度（手机 CSS 关了 overflow-anchor，由这里统一处理）
+      container.scrollTop += container.scrollHeight - scrollHeightRef.current;
+      lastScrollTopRef.current = container.scrollTop;
+    }
     if (!container || (!forceBottom && !nearBottomRef.current)) return;
     const initialHistoryRender = previousMessageCount === 0 || sessionChanged;
     // Bottom-follow must move synchronously. A smooth scroll targets the current
@@ -1320,6 +1361,11 @@ export function MessageTimeline({
       }, 650);
     }
   }, [clearAutoAnchor, pendingApproval, scrollToBottom, statusMessage, turnAnchors, visibleMessages]);
+
+  // 记录本次提交后的内容高度，供下一次「前插历史」时计算增量
+  useIsomorphicLayoutEffect(() => {
+    scrollHeightRef.current = containerRef.current?.scrollHeight ?? 0;
+  });
 
   const focusTargetId = useMemo(
     () => (focusSeq ? findMessageIdForSeq(visibleMessages, focusSeq) : undefined),
@@ -1439,9 +1485,11 @@ export function MessageTimeline({
     }
     lastScrollTopRef.current = container.scrollTop;
     updateActiveTurnFromScroll();
+    if (onReachTop && container.scrollTop <= REACH_TOP_THRESHOLD_PX) onReachTop();
   };
 
   return (
+    <WaitingApprovalContext.Provider value={Boolean(pendingApproval)}>
     <div
       ref={containerRef}
       className={s.scroll}
@@ -1473,6 +1521,7 @@ export function MessageTimeline({
         </div>
       ) : null}
       <div ref={messagesRef} className={s.messages}>
+        {topSlot}
         {loading ? <MessageSkeleton /> : null}
         {!loading && visibleMessages.length === 0 && !statusMessage && !pendingApproval ? (
           <div className={s.empty}>
@@ -1528,5 +1577,6 @@ export function MessageTimeline({
         {pendingApproval}
       </div>
     </div>
+    </WaitingApprovalContext.Provider>
   );
 }

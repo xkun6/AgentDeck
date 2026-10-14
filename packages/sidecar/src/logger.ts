@@ -3,6 +3,7 @@ import path from "node:path";
 import { format } from "node:util";
 
 import { redactInteropTokens } from "./utils/redact-interop.js";
+import { redactRemoteSecrets } from "./utils/redact-remote.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -37,7 +38,7 @@ export function rotateLogIfNeeded(logFile: string, maxBytes = LOG_ROTATE_BYTES):
 
 /** 与 logger 一致的单行日志格式（含 interop token 脱敏），供 fatal / exit 路径独立同步写文件复用 */
 export function formatLogLine(level: LogLevel, text: string): string {
-  return `${new Date().toISOString()} [${level}] ${redactInteropTokens(text)}\n`;
+  return `${new Date().toISOString()} [${level}] ${redactRemoteSecrets(redactInteropTokens(text))}\n`;
 }
 
 /**

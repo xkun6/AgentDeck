@@ -656,6 +656,7 @@ export type AgentRpcBusinessErrorCode =
   | "NOT_SUPPORTED"
   | "TASK_NOT_FOUND"
   | "RETRACT_UNAVAILABLE"
+  | "RESPONSE_TOO_LARGE"
   | "INTERNAL_ERROR";
 
 // ---------------------------------------------------------------------------
@@ -758,11 +759,55 @@ export interface SidecarSettings {
   snapshots: { enabled: boolean; maxFiles: number; maxFileBytes: number };
   /** 4.26 以后实现，目前只存取 */
   interop: { enabled: boolean };
+  /** 4.31 远程网关（手机接入）；默认关闭，端口 1024–65535 */
+  remote: { enabled: boolean; port: number };
 }
 
 export interface SidecarSettingsPatch {
   snapshots?: Partial<SidecarSettings["snapshots"]>;
   interop?: Partial<SidecarSettings["interop"]>;
+  remote?: Partial<SidecarSettings["remote"]>;
+}
+
+// ---------------------------------------------------------------------------
+// 4.31 远程网关（安卓 App 接入）
+// ---------------------------------------------------------------------------
+
+export interface RemoteAddress {
+  host: string;
+  port: number;
+  kind: "lan" | "tailscale";
+}
+
+/** 已配对设备（公开版，不含 secretSha256） */
+export interface RemoteDevice {
+  deviceId: string;
+  name: string;
+  pairedAt: number;
+  lastSeenAt?: number;
+}
+
+export interface RemoteStatus {
+  enabled: boolean;
+  port: number;
+  listening: boolean;
+  /** 中文原因：端口被占用、未设置数据目录等 */
+  error?: string;
+  addresses: RemoteAddress[];
+  devices: Array<RemoteDevice & { connected: boolean }>;
+}
+
+/** `client.attention`：只发给远程客户端，手机据此弹本地通知 */
+export interface AttentionNotice {
+  /** 去重用 */
+  id: string;
+  kind: "finished" | "failed" | "permission" | "schedule";
+  agentId?: string;
+  /** 会话标题或调度名 */
+  title: string;
+  /** 中文摘要，≤ 120 字（不含工具输出原文） */
+  body: string;
+  timestamp: number;
 }
 
 export type SnapshotFileStatus = "A" | "M" | "D" | "R";
@@ -887,6 +932,9 @@ export const AGENT_RPC_METHODS = {
   providerConfigGet: "provider.config.get",
   providerConfigSet: "provider.config.set",
   providerTest: "provider.test",
+  remoteStatus: "remote.status",
+  remotePairingCreate: "remote.pairing.create",
+  remoteDevicesRevoke: "remote.devices.revoke",
 } as const;
 
 export const AGENT_RPC_NOTIFICATIONS = {
@@ -902,6 +950,8 @@ export const AGENT_RPC_NOTIFICATIONS = {
   boardChanged: "board.changed",
   groupChanged: "group.changed",
   groupRemoved: "group.removed",
+  remoteChanged: "remote.changed",
+  clientAttention: "client.attention",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -1050,9 +1100,14 @@ export interface AgentRpcMethods {
     result: { agent: AgentSnapshot; notice?: string };
   };
   "agent.close": { params: { agentId: string }; result: Record<string, never> };
+  /**
+   * 时间线读取。只给 `sinceSeq` 或不带参数：返回其后全部条目（不带 hasOlder）。
+   * 给 `limit`（1–2000）为向前分页（design.md 4.31）：从 `beforeSeq`（缺省 = 末尾之后）往前取至少 limit 条，
+   * 再扩到最近的回合起点，返回 `hasOlder`；`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 -32602。
+   */
   "agent.timeline": {
-    params: { agentId: string; sinceSeq?: number };
-    result: { epoch: string; entries: AgentStreamEnvelope[] };
+    params: { agentId: string; sinceSeq?: number; beforeSeq?: number; limit?: number };
+    result: { epoch: string; entries: AgentStreamEnvelope[]; hasOlder?: boolean };
   };
   "agent.delete": { params: { agentId: string }; result: Record<string, never> };
   /** 该会话当前已知的 provider 子代理（按 createdAt 升序，含各层级） */
@@ -1112,6 +1167,15 @@ export interface AgentRpcMethods {
   };
   /** 可测试未保存的表单 */
   "provider.test": { params: { profile: ProviderProfile }; result: ProviderTestResult };
+  /** 远程网关状态（design.md 4.31）；远程客户端调用返回 -32601 */
+  "remote.status": { params: AgentRpcEmptyParams; result: RemoteStatus };
+  /** 签发一次性配对二维码内容；网关未监听时 NOT_SUPPORTED；远程客户端调用返回 -32601 */
+  "remote.pairing.create": {
+    params: AgentRpcEmptyParams;
+    result: { offerUrl: string; expiresAt: number };
+  };
+  /** 吊销设备并立即断开其全部连接；远程客户端调用返回 -32601 */
+  "remote.devices.revoke": { params: { deviceId: string }; result: Record<string, never> };
 }
 
 export type AgentRpcMethodName = keyof AgentRpcMethods;
@@ -1140,6 +1204,10 @@ export interface AgentRpcNotifications {
   "group.changed": { group: AgentGroup };
   /** 协作组被删除（design.md 4.27 补记） */
   "group.removed": { groupId: string };
+  /** 远程网关启停、设备配对 / 吊销 / 连接 / 断开（design.md 4.31），只发给本机客户端 */
+  "remote.changed": RemoteStatus;
+  /** 需要用户回到会话的事件（design.md 4.31），只发给已认证的远程客户端 */
+  "client.attention": AttentionNotice;
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

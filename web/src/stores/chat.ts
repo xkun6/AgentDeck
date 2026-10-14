@@ -187,14 +187,20 @@ function updateMessage(
   id: string,
   updater: (message: AgentUIMessage) => AgentUIMessage | null,
 ): ChatSessionRuntime {
-  let changed = false;
-  const messages = runtime.messages.flatMap((message) => {
-    if (message.id !== id) return [message];
-    changed = true;
-    const next = updater(message);
-    return next ? [next] : [];
-  });
-  return changed ? { ...runtime, messages } : runtime;
+  // 目标几乎总是最后几条：从尾部找，避免长时间线回放时每个事件都整表 flatMap（O(n²)）。
+  let index = -1;
+  for (let i = runtime.messages.length - 1; i >= 0; i -= 1) {
+    if (runtime.messages[i]!.id === id) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return runtime;
+  const next = updater(runtime.messages[index]!);
+  const messages = runtime.messages.slice();
+  if (next) messages[index] = next;
+  else messages.splice(index, 1);
+  return { ...runtime, messages };
 }
 
 function ensureAssistantMessage(
@@ -935,6 +941,76 @@ export function reduceAgentEvent(
     updatedAt: now,
   };
 }
+
+/** `parts` 是否以 `prefix` 开头（最后一段文本允许在 `parts` 里被后续文本接长） */
+function startsWithParts(parts: AgentMessagePart[], prefix: AgentMessagePart[]): boolean {
+  if (parts.length < prefix.length) return false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const a = parts[index]!;
+    const b = prefix[index]!;
+    if (index === prefix.length - 1 && a.type === "text" && b.type === "text") {
+      return a.source === b.source && a.text.startsWith(b.text);
+    }
+    if (JSON.stringify(a) !== JSON.stringify(b)) return false;
+  }
+  return true;
+}
+
+/** 把 older 页里被页边界截开的回合的前半段 parts 接到已有消息的 parts 前面（相邻同来源文本拼成一段，与整段回放一致） */
+function joinSplitTurnParts(older: AgentMessagePart[], known: AgentMessagePart[]): AgentMessagePart[] {
+  const last = older[older.length - 1];
+  const first = known[0];
+  if (last?.type === "text" && first?.type === "text" && last.source === first.source) {
+    return [...older.slice(0, -1), { ...last, text: last.text + first.text }, ...known.slice(1)];
+  }
+  return [...older, ...known];
+}
+
+/**
+ * 向前分页（design.md 4.31）：把更早的一页条目归约成消息并**前插**到现有消息之前。
+ * 页首通常是回合起点、页尾紧接现有时间线首个回合之前，所以每页单独从空运行时归约即可得到完整回合；
+ * 消息 id 由 seq / turnId / clientMessageId 决定，已存在的 id 直接跳过。
+ *
+ * 例外：sidecar 为控制页大小会在回合中间截断（条数 / 字节上限），此时同一回合的助手消息（id 为 `agent-turn-<turnId>`）
+ * 同时出现在 older 页末尾与现有首个回合里：older 里的前半段并到已有消息之前（已完整包含的重复页则跳过）。
+ */
+export function prependAgentHistory(
+  runtime: ChatSessionRuntime,
+  entries: readonly AgentStreamEnvelope[],
+  now = Date.now(),
+): ChatSessionRuntime {
+  let older = createEmptyChatRuntime(now);
+  for (const envelope of entries) older = reduceAgentEvent(older, envelope, now);
+  const known = new Map(runtime.messages.map((message) => [message.id, message]));
+  const prepend: AgentUIMessage[] = [];
+  const merged = new Map<string, AgentUIMessage>();
+  for (const message of older.messages) {
+    const existing = known.get(message.id);
+    if (!existing) {
+      prepend.push(message);
+      continue;
+    }
+    if (message.role !== "assistant" || message.parts.length === 0) continue;
+    if (startsWithParts(existing.parts, message.parts)) continue; // 同一页重复前插（已并入过）
+    merged.set(message.id, {
+      ...existing,
+      createdAt: Math.min(existing.createdAt, message.createdAt),
+      parts: joinSplitTurnParts(message.parts, existing.parts),
+    });
+  }
+  if (prepend.length === 0 && merged.size === 0) return runtime;
+  const messages = merged.size > 0 ? runtime.messages.map((message) => merged.get(message.id) ?? message) : runtime.messages;
+  return { ...runtime, messages: [...prepend, ...messages], updatedAt: now };
+}
+
+export const prependAgentHistoryAtom = atom(
+  null,
+  (_get, set, input: { agentId: string; entries: readonly AgentStreamEnvelope[] }) => {
+    set(chatRuntimeBySessionAtom, (state) =>
+      updateSessionRuntime(state, input.agentId, (runtime) => prependAgentHistory(runtime, input.entries)),
+    );
+  },
+);
 
 export const applyAgentEventAtom = atom(null, (get, set, envelope: AgentStreamEnvelope, replay = false) => {
   // 通知旁路：用归约前的运行时判断是否「在场」的回合，避免回放重复通知；

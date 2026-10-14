@@ -864,6 +864,7 @@ export class AcpAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   private emit(event: AgentStreamEvent): void {
+    this.active?.speed.observe(event);
     for (const listener of this.listeners) {
       try {
         listener(event);

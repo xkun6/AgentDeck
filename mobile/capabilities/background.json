@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "background",
+  "description": "手机端后台能力：本地通知（notification 插件仅移动端编译，故单独成文件并限定平台）与自写 native 插件（前台服务 / 电池优化 / 应用设置）",
+  "windows": ["main"],
+  "platforms": ["android", "iOS"],
+  "permissions": ["notification:default", "native:default"]
+}

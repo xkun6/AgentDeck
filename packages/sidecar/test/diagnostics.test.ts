@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   HEAP_WARN_RATIO,
+  RUNNING_MARKER_FILE,
+  claimRunningMarker,
   formatMemory,
   logMemorySample,
+  readRunningMarker,
+  removeRunningMarker,
   startMemorySampler,
   type MemorySnapshot,
 } from "../src/diagnostics.js";
@@ -99,13 +103,18 @@ describe("致命错误与退出事件落盘", () => {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  function runFixture(mode: string) {
+  function runFixture(mode: string, withMarker = false) {
     const result = spawnSync(
       process.execPath,
       ["--import", "tsx", "test/fixtures/diagnostics-child.ts"],
       {
         cwd: PACKAGE_DIR,
-        env: { ...process.env, FIXTURE_LOG_DIR: dir, FIXTURE_MODE: mode },
+        env: {
+          ...process.env,
+          FIXTURE_LOG_DIR: dir,
+          FIXTURE_MODE: mode,
+          ...(withMarker ? { FIXTURE_MARKER: "1" } : {}),
+        },
         encoding: "utf8",
         windowsHide: true,
         timeout: 20_000,
@@ -135,5 +144,76 @@ describe("致命错误与退出事件落盘", () => {
     const { status, log } = runFixture("normal");
     expect(status).toBe(0);
     expect(log).toContain("[info] 进程退出事件：code=0 原因=stdin end");
+  });
+
+  it("运行标记：正常退出与 fatal 退出都会删除；被外部硬杀则残留，下次启动 warn 后覆盖", () => {
+    const marker = path.join(dir, RUNNING_MARKER_FILE);
+
+    runFixture("normal", true);
+    expect(existsSync(marker)).toBe(false);
+
+    runFixture("throw", true);
+    expect(existsSync(marker)).toBe(false);
+
+    runFixture("kill", true);
+    expect(existsSync(marker)).toBe(true);
+    const stale = readRunningMarker(marker);
+    expect(stale?.pid).toBeGreaterThan(0);
+
+    const { log } = runFixture("normal", true);
+    expect(log).toContain(`[warn] 上次 sidecar（pid=${stale!.pid}，启动于 ${stale!.startedAt}）未正常退出（被外部结束或进程级崩溃）`);
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe("运行标记（sidecar.running）", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "agentdeck-marker-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it("没有残留：不告警，写入本进程 pid 与启动时间", () => {
+    const { logger, lines } = recordingLogger();
+    const file = path.join(dir, RUNNING_MARKER_FILE);
+    expect(claimRunningMarker(file, logger, () => new Date("2026-01-02T03:04:05.000Z"))).toBeNull();
+    expect(lines).toEqual([]);
+    expect(readRunningMarker(file)).toEqual({ pid: process.pid, startedAt: "2026-01-02T03:04:05.000Z" });
+  });
+
+  it("有残留：warn 带上次 pid 与启动时间，并覆盖为本进程", () => {
+    const { logger, lines } = recordingLogger();
+    const file = path.join(dir, RUNNING_MARKER_FILE);
+    writeFileSync(file, JSON.stringify({ pid: 4242, startedAt: "2026-01-01T00:00:00.000Z" }));
+    expect(claimRunningMarker(file, logger)).toEqual({ pid: 4242, startedAt: "2026-01-01T00:00:00.000Z" });
+    expect(lines).toEqual([
+      {
+        level: "warn",
+        text: "上次 sidecar（pid=4242，启动于 2026-01-01T00:00:00.000Z）未正常退出（被外部结束或进程级崩溃）",
+      },
+    ]);
+    expect(readRunningMarker(file)?.pid).toBe(process.pid);
+  });
+
+  it("残留内容损坏：仍然告警（pid 未知）；目录不存在时写入失败不抛错", () => {
+    const { logger, lines } = recordingLogger();
+    const file = path.join(dir, RUNNING_MARKER_FILE);
+    writeFileSync(file, "not json");
+    claimRunningMarker(file, logger);
+    expect(lines[0]?.text).toBe("上次 sidecar（pid=未知）未正常退出（被外部结束或进程级崩溃）");
+    expect(() => claimRunningMarker(path.join(dir, "missing", RUNNING_MARKER_FILE), logger)).not.toThrow();
+  });
+
+  it("removeRunningMarker 只删除本进程写的标记", () => {
+    const file = path.join(dir, RUNNING_MARKER_FILE);
+    writeFileSync(file, JSON.stringify({ pid: process.pid + 1, startedAt: "x" }));
+    removeRunningMarker(file);
+    expect(existsSync(file)).toBe(true);
+    writeFileSync(file, JSON.stringify({ pid: process.pid, startedAt: "x" }));
+    removeRunningMarker(file);
+    expect(existsSync(file)).toBe(false);
+    expect(() => removeRunningMarker(file)).not.toThrow();
   });
 });

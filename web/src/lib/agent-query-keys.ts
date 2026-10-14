@@ -6,6 +6,8 @@ export const AGENT_QUERY_KEYS = {
   /** 前缀；完整 key 为 [...catalog, provider, cwd] */
   catalog: ["agentdeck", "catalog"] as const,
   providerConfig: ["agentdeck", "provider-config"] as const,
+  /** remote.status（design.md 4.31）；remote.changed 直接写入缓存 */
+  remoteStatus: ["agentdeck", "remote-status"] as const,
   /** 前缀；完整 key 为 [...commands, agentId, 会话阶段] */
   commands: ["agentdeck", "commands"] as const,
 };

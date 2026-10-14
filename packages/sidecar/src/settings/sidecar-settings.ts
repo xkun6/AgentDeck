@@ -12,6 +12,7 @@ export const SETTINGS_FILE = "sidecar-settings.json";
 export const DEFAULT_SIDECAR_SETTINGS: SidecarSettings = {
   snapshots: { enabled: true, maxFiles: 20_000, maxFileBytes: 5 * 1024 * 1024 },
   interop: { enabled: true },
+  remote: { enabled: false, port: 47_631 },
 };
 
 /** settings.set 的 patch 校验：未知字段、非法取值一律拒绝（-32602） */
@@ -26,12 +27,20 @@ export const settingsPatchSchema = z
       .partial()
       .strict(),
     interop: z.object({ enabled: z.boolean() }).partial().strict(),
+    remote: z
+      .object({ enabled: z.boolean(), port: z.number().int().min(1024).max(65_535) })
+      .partial()
+      .strict(),
   })
   .partial()
   .strict();
 
 function cloneSettings(settings: SidecarSettings): SidecarSettings {
-  return { snapshots: { ...settings.snapshots }, interop: { ...settings.interop } };
+  return {
+    snapshots: { ...settings.snapshots },
+    interop: { ...settings.interop },
+    remote: { ...settings.remote },
+  };
 }
 
 /** 文件内容与默认值逐字段合并；类型不对的字段回退默认值 */
@@ -40,7 +49,7 @@ function mergeWithDefaults(raw: unknown): SidecarSettings {
   if (typeof raw !== "object" || raw === null) {
     return result;
   }
-  for (const key of ["snapshots", "interop"] as const) {
+  for (const key of ["snapshots", "interop", "remote"] as const) {
     const section = (raw as Record<string, unknown>)[key];
     if (typeof section !== "object" || section === null) {
       continue;
@@ -94,6 +103,7 @@ export class SettingsStore {
     const next = cloneSettings(this.current);
     Object.assign(next.snapshots, patch.snapshots);
     Object.assign(next.interop, patch.interop);
+    Object.assign(next.remote, patch.remote);
     if (this.file) {
       const file = this.file;
       const write = this.writeChain.then(async () => {

@@ -6,6 +6,7 @@ pub mod file_dialogs;
 pub mod fs;
 pub mod git;
 pub mod log_export;
+pub mod network;
 pub mod notify;
 pub mod preview;
 pub mod session_export;

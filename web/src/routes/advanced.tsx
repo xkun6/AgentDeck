@@ -5,8 +5,17 @@ import { EnvironmentSection } from "./environment";
 import { DebugSection } from "./debug";
 import { SnapshotSettingsSection } from "./snapshot-settings";
 import { InteropSettingsSection } from "./interop-settings";
+import { RemoteSettingsSection } from "./remote-settings";
 
-type AdvancedSection = "general" | "notifications" | "env" | "snapshots" | "interop" | "debug" | "about";
+type AdvancedSection =
+  | "general"
+  | "notifications"
+  | "env"
+  | "snapshots"
+  | "interop"
+  | "remote"
+  | "debug"
+  | "about";
 
 const SECTION_PATHS: Record<AdvancedSection, string> = {
   general: "/common",
@@ -14,6 +23,7 @@ const SECTION_PATHS: Record<AdvancedSection, string> = {
   env: "/env",
   snapshots: "/snapshots",
   interop: "/interop",
+  remote: "/remote",
   debug: "/debug",
   about: "/about",
 };
@@ -24,6 +34,7 @@ const LEGACY_SECTION_PATHS: Record<string, AdvancedSection> = {
   "/advanced/env": "env",
   "/advanced/snapshots": "snapshots",
   "/advanced/interop": "interop",
+  "/advanced/remote": "remote",
   "/advanced/debug": "debug",
   "/advanced/about": "about",
 };
@@ -34,6 +45,7 @@ const SECTION_META: Record<AdvancedSection, { title: string; sub: string }> = {
   env: { title: "环境", sub: "检查本机 CLI 与可选工具能力。" },
   snapshots: { title: "文件快照", sub: "按回合自动记录工作目录的文件状态，用于查看回合改动与回滚。" },
   interop: { title: "会话互通", sub: "让会话之间互相委派任务、读取与转发消息（本机 MCP 服务）。" },
+  remote: { title: "手机连接", sub: "让安卓手机经局域网或 Tailscale 扫码配对，远程查看会话并审批（端到端加密）。" },
   debug: { title: "调试", sub: "运行状态、路径、日志，一键导出脱敏诊断包。" },
   about: { title: "关于", sub: "版本、许可与第三方声明。" },
 };
@@ -70,6 +82,7 @@ export function AdvancedRoute() {
       {section === "env" && <EnvironmentSection showHeading={false} />}
       {section === "snapshots" && <SnapshotSettingsSection showHeading={false} />}
       {section === "interop" && <InteropSettingsSection showHeading={false} />}
+      {section === "remote" && <RemoteSettingsSection showHeading={false} />}
       {section === "debug" && <DebugSection showHeading={false} />}
       {section === "about" && <AboutSection showHeading={false} />}
     </SectionShell>

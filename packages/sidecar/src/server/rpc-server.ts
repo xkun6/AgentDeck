@@ -16,6 +16,7 @@ import {
   type ProviderInfo,
   type ProviderProfile,
   type ProviderTestResult,
+  type RemoteStatus,
 } from "@agentdeck/protocol";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { z } from "zod";
@@ -39,10 +40,52 @@ import type { Scheduler } from "../scheduler/scheduler.js";
 import { scheduleDraftSchema } from "../scheduler/schema.js";
 import { UsageLedger } from "../usage/ledger.js";
 import { summarizeUsage } from "../usage/summary.js";
+import type { RpcClientConnection } from "./client-connection.js";
 import { MCP_PATH } from "./interop-service.js";
 import type { McpInteropEndpoint } from "./mcp-interop.js";
 
 export const RPC_PATH = "/rpc";
+
+/**
+ * 远程客户端（手机）不可调用的方法，一律按「方法不存在」处理（design.md 4.31）：
+ * `remote.*`、`settings.set`，以及会把自定义 provider 明文密钥交出去的 `provider.config.get` / `provider.config.set`
+ */
+function isRemoteForbiddenMethod(method: string): boolean {
+  return (
+    method.startsWith("remote.") ||
+    method === "settings.set" ||
+    method === "provider.config.get" ||
+    method === "provider.config.set"
+  );
+}
+
+/** `remote.*` RPC 的实现（remote/service.ts 的 RemoteService） */
+export interface RemoteController {
+  status(): RemoteStatus;
+  /** 网关未监听 / 没有可用地址时抛 NOT_SUPPORTED */
+  createPairing(): { offerUrl: string; expiresAt: number };
+  /** 吊销并断开该设备的全部连接；设备不存在抛 AgentInvalidParamsError */
+  revokeDevice(deviceId: string): Promise<void>;
+  /** 状态变化（启停、配对、吊销、连接、断开）；返回取消订阅函数 */
+  subscribe(listener: (status: RemoteStatus) => void): () => void;
+  /** 等待排队中的网关启停完成：settings.set 返回前等待，使紧随其后的 remote.status 准确 */
+  settled?(): Promise<void>;
+}
+
+/** `attachConnection` 的返回值：连接侧据此交付收到的 JSON 文本、在断开时解除注册 */
+export interface RpcConnectionHandle {
+  receive(text: string): Promise<void>;
+  detach(): void;
+}
+
+/** 没有 RemoteController 时 remote.status 的默认返回 */
+const REMOTE_DISABLED_STATUS: RemoteStatus = {
+  enabled: false,
+  port: 47_631,
+  listening: false,
+  addresses: [],
+  devices: [],
+};
 
 /** provider.config.* / provider.test 的实现（providers/custom 的 CustomProviderService） */
 export interface ProviderConfigHandler {
@@ -75,6 +118,8 @@ export interface RpcServerOptions {
   groups?: GroupService;
   /** 会话互通 MCP 端点（design.md 4.26）；不传时 /mcp 返回 404 */
   mcp?: McpInteropEndpoint;
+  /** 远程网关（design.md 4.31）；不传时 remote.status 返回关闭状态，pairing / revoke 返回 NOT_SUPPORTED */
+  remote?: RemoteController;
   logger?: Logger;
 }
 
@@ -156,6 +201,23 @@ function defineMethod<M extends AgentRpcMethodName, S extends z.ZodType>(
   ];
 }
 
+/** 本机 `/rpc` 的 WebSocket 连接（文本帧） */
+class LocalWsConnection implements RpcClientConnection {
+  readonly kind = "local" as const;
+
+  constructor(private readonly ws: WebSocket) {}
+
+  send(payload: string): void {
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(payload);
+    }
+  }
+
+  close(): void {
+    this.ws.terminate();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // JSON-RPC 帮助函数
 // ---------------------------------------------------------------------------
@@ -219,7 +281,7 @@ function tokenDigest(value: string): Buffer {
 export class RpcServer {
   private readonly http: Server;
   private readonly wss: WebSocketServer;
-  private readonly clients = new Set<WebSocket>();
+  private readonly clients = new Set<RpcClientConnection>();
   private readonly methods: Map<string, RegisteredMethod>;
   private readonly logger: Logger;
   private readonly tokenHash: Buffer;
@@ -261,11 +323,16 @@ export class RpcServer {
       onChanged: (group) => this.broadcast(AGENT_RPC_NOTIFICATIONS.groupChanged, { group }),
       onRemoved: (groupId) => this.broadcast(AGENT_RPC_NOTIFICATIONS.groupRemoved, { groupId }),
     });
+    // remote.changed 只发给本机客户端（手机无权管理配对）
+    const unsubscribeRemote = options.remote?.subscribe((status) =>
+      this.broadcast(AGENT_RPC_NOTIFICATIONS.remoteChanged, status, "local"),
+    );
     this.unsubscribeManager = () => {
       unsubscribeGroups?.();
       unsubscribeManager();
       unsubscribeScheduler?.();
       unsubscribeBoard?.();
+      unsubscribeRemote?.();
     };
   }
 
@@ -285,11 +352,44 @@ export class RpcServer {
     return this.clients.size;
   }
 
+  /**
+   * 注册一个已认证的客户端连接（本机 WS 或远程网关的解密连接）：之后它与本机客户端一样
+   * 收到全部广播；连接侧用返回的句柄交付收到的 JSON 文本，断开时调用 detach。
+   */
+  attachConnection(connection: RpcClientConnection): RpcConnectionHandle {
+    this.clients.add(connection);
+    const device = connection.deviceId ? ` device=${connection.deviceId.slice(0, 8)}` : "";
+    this.logger.info(
+      "%s客户端已连接%s（当前 %d 个）",
+      connection.kind === "remote" ? "远程" : "WS ",
+      device,
+      this.clients.size,
+    );
+    return {
+      receive: (text) => this.handleText(connection, text),
+      detach: () => {
+        if (this.clients.delete(connection)) {
+          this.logger.info(
+            "%s客户端已断开%s（当前 %d 个）",
+            connection.kind === "remote" ? "远程" : "WS ",
+            device,
+            this.clients.size,
+          );
+        }
+      },
+    };
+  }
+
+  /** 向全部已认证的远程客户端发送通知（client.attention）；返回送达的连接数 */
+  sendToRemote<N extends AgentRpcNotificationName>(method: N, params: AgentRpcNotifications[N]): number {
+    return this.broadcast(method, params, "remote");
+  }
+
   async close(): Promise<void> {
     this.unsubscribeManager();
     this.unsubscribeSettings();
-    for (const ws of this.clients) {
-      ws.terminate();
+    for (const connection of this.clients) {
+      connection.close();
     }
     this.clients.clear();
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
@@ -447,11 +547,31 @@ export class RpcServer {
       }),
       defineMethod(
         AGENT_RPC_METHODS.agentTimeline,
-        z.object({
-          agentId: z.string().min(1),
-          sinceSeq: z.number().int().nonnegative().optional(),
-        }),
-        (params) => manager.timeline(params.agentId, params.sinceSeq),
+        z
+          .object({
+            agentId: z.string().min(1),
+            sinceSeq: z.number().int().nonnegative().optional(),
+            beforeSeq: z.number().int().positive().optional(),
+            limit: z.number().int().min(1).max(2000).optional(),
+          })
+          .refine(
+            (value) => value.sinceSeq === undefined || (value.beforeSeq === undefined && value.limit === undefined),
+            { message: "sinceSeq 不能与 beforeSeq / limit 同时给出" },
+          )
+          .refine((value) => value.beforeSeq === undefined || value.limit !== undefined, {
+            message: "beforeSeq 需要同时给出 limit",
+          }),
+        (params) =>
+          manager.timeline(
+            params.agentId,
+            params.sinceSeq,
+            params.limit !== undefined
+              ? {
+                  limit: params.limit,
+                  ...(params.beforeSeq !== undefined ? { beforeSeq: params.beforeSeq } : {}),
+                }
+              : undefined,
+          ),
       ),
       defineMethod(
         AGENT_RPC_METHODS.agentUpdate,
@@ -532,7 +652,11 @@ export class RpcServer {
       defineMethod(
         AGENT_RPC_METHODS.settingsSet,
         z.object({ patch: settingsPatchSchema }),
-        (params) => settings.set(params.patch),
+        async (params) => {
+          const next = await settings.set(params.patch);
+          await this.options.remote?.settled?.();
+          return next;
+        },
       ),
       defineMethod(AGENT_RPC_METHODS.snapshotList, agentIdParams, async (params) => {
         manager.getAgent(params.agentId);
@@ -717,6 +841,32 @@ export class RpcServer {
           manager.readBackgroundTaskOutput(params.agentId, params.taskId, params.maxBytes),
       ),
       ...this.createProviderConfigMethods(),
+      ...this.createRemoteMethods(),
+    ];
+  }
+
+  /** 4.31：remote.*（对远程客户端在 dispatch 里统一拦截为 -32601） */
+  private createRemoteMethods(): Array<[string, RegisteredMethod]> {
+    const remote = this.options.remote;
+    const requireRemote = (): RemoteController => {
+      if (!remote) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用远程网关");
+      }
+      return remote;
+    };
+    return [
+      defineMethod(AGENT_RPC_METHODS.remoteStatus, emptyParams, () =>
+        remote ? remote.status() : { ...REMOTE_DISABLED_STATUS },
+      ),
+      defineMethod(AGENT_RPC_METHODS.remotePairingCreate, emptyParams, () => requireRemote().createPairing()),
+      defineMethod(
+        AGENT_RPC_METHODS.remoteDevicesRevoke,
+        z.object({ deviceId: z.string().min(1) }),
+        async (params) => {
+          await requireRemote().revokeDevice(params.deviceId);
+          return {};
+        },
+      ),
     ];
   }
 
@@ -814,33 +964,29 @@ export class RpcServer {
   }
 
   private handleConnection(ws: WebSocket): void {
-    this.clients.add(ws);
-    this.logger.info("WS 客户端已连接（当前 %d 个）", this.clients.size);
+    const connection = new LocalWsConnection(ws);
+    const handle = this.attachConnection(connection);
     ws.on("message", (data, isBinary) => {
-      void this.handleMessage(ws, data, isBinary);
+      if (isBinary) {
+        this.send(connection, {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: AGENT_RPC_ERROR_CODES.INVALID_REQUEST, message: "只支持文本帧" },
+        });
+        return;
+      }
+      void handle.receive(rawDataToString(data));
     });
-    ws.on("close", () => {
-      this.clients.delete(ws);
-      this.logger.info("WS 客户端已断开（当前 %d 个）", this.clients.size);
-    });
+    ws.on("close", () => handle.detach());
     ws.on("error", (error) => {
       this.logger.warn("WS 连接错误：%s", error.message);
     });
   }
 
-  private async handleMessage(ws: WebSocket, data: RawData, isBinary: boolean): Promise<void> {
-    if (isBinary) {
-      this.send(ws, {
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: AGENT_RPC_ERROR_CODES.INVALID_REQUEST, message: "只支持文本帧" },
-      });
-      return;
-    }
-
+  private async handleText(ws: RpcClientConnection, text: string): Promise<void> {
     let message: unknown;
     try {
-      message = JSON.parse(rawDataToString(data));
+      message = JSON.parse(text);
     } catch {
       this.send(ws, {
         jsonrpc: "2.0",
@@ -871,7 +1017,7 @@ export class RpcServer {
     const isNotification = !("id" in message);
     const id = (message.id ?? null) as AgentRpcId | null;
     try {
-      const result = await this.dispatch(message.method, message.params);
+      const result = await this.dispatch(ws, message.method, message.params);
       if (!isNotification) {
         this.send(ws, { jsonrpc: "2.0", id, result });
       }
@@ -889,9 +1035,13 @@ export class RpcServer {
     }
   }
 
-  private async dispatch(method: string, params: unknown): Promise<unknown> {
+  private async dispatch(
+    connection: RpcClientConnection,
+    method: string,
+    params: unknown,
+  ): Promise<unknown> {
     const registered = this.methods.get(method);
-    if (!registered) {
+    if (!registered || (connection.kind === "remote" && isRemoteForbiddenMethod(method))) {
       throw new RpcProtocolError(AGENT_RPC_ERROR_CODES.METHOD_NOT_FOUND, `方法不存在：${method}`);
     }
     const parsed = registered.schema.safeParse(params);
@@ -906,25 +1056,28 @@ export class RpcServer {
     return registered.handle(parsed.data);
   }
 
+  /** audience 缺省 = 全部连接；返回送达的连接数 */
   private broadcast<N extends AgentRpcNotificationName>(
     method: N,
     params: AgentRpcNotifications[N],
-  ): void {
+    audience: "all" | "local" | "remote" = "all",
+  ): number {
     if (this.clients.size === 0) {
-      return;
+      return 0;
     }
     const payload = JSON.stringify({ jsonrpc: "2.0", method, params });
-    for (const ws of this.clients) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(payload);
+    let delivered = 0;
+    for (const connection of this.clients) {
+      if (audience === "all" || connection.kind === audience) {
+        connection.send(payload);
+        delivered += 1;
       }
     }
+    return delivered;
   }
 
-  private send(ws: WebSocket, message: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
-    }
+  private send(connection: RpcClientConnection, message: unknown): void {
+    connection.send(JSON.stringify(message));
   }
 }
 

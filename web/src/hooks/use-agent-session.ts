@@ -26,6 +26,7 @@ import type {
   ProviderSubagentDescriptor,
   ProviderSubagentTimelineRow,
   ProviderTestResult,
+  RemoteStatus,
   SidecarSettings,
   SidecarSettingsPatch,
   SnapshotTurn,
@@ -42,7 +43,9 @@ import type {
   UsageSummary,
 } from "@agentdeck/protocol";
 import {
+  CONFIRM_USER_MESSAGE_TIMEOUT_MS,
   getSidecarClient,
+  SidecarConnectionLostError,
   SidecarRpcError,
   type SidecarClient,
 } from "@/lib/sidecar-client";
@@ -57,6 +60,7 @@ import {
   removeApprovalAtom,
   resetAgentRuntimesForEpochAtom,
   settleInactiveAgentRuntimeAtom,
+  prependAgentHistoryAtom,
   startAgentPromptAtom,
   type ImageEntry,
 } from "@/stores/chat";
@@ -81,7 +85,7 @@ import {
   subagentsByAgentAtom,
   type SubagentTimelineCache,
 } from "@/stores/subagents";
-import { invalidateProviderQueries } from "@/lib/agent-query-keys";
+import { AGENT_QUERY_KEYS, invalidateProviderQueries } from "@/lib/agent-query-keys";
 import { notifyFromSchedule } from "@/lib/notifications";
 import { replaceBoardAtom } from "@/stores/boards";
 import { replaceSchedulesAtom } from "@/stores/schedules";
@@ -306,6 +310,42 @@ export function bindGroupsToStore(client: SidecarClient, store: JotaiStore): () 
   return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
+/** `remote.changed` → remote.status 查询缓存（design.md 4.31），「手机连接」设置页据此实时刷新。 */
+export function bindRemoteToQueries(
+  client: Pick<SidecarClient, "onRemoteChanged">,
+  queryClient: Pick<QueryClient, "setQueryData">,
+): () => void {
+  return client.onRemoteChanged((status) => {
+    queryClient.setQueryData<RemoteStatus>(AGENT_QUERY_KEYS.remoteStatus, status);
+  });
+}
+
+/**
+ * `agent.send` / `agent.steer` 因连接断开而失败时，核对该消息是否其实已被服务端接收（时间线里有同 clientMessageId 的 user_message）。
+ * 其它类型的失败（未连接、RPC 错误、超时）与核对本身失败都返回 null，按原有方式报错。
+ */
+async function confirmLostSend(
+  client: Pick<SidecarClient, "confirmUserMessage">,
+  agentId: string,
+  clientMessageId: string,
+  error: unknown,
+  timeoutMs = CONFIRM_USER_MESSAGE_TIMEOUT_MS,
+): Promise<{ turnId: string } | null> {
+  if (!(error instanceof SidecarConnectionLostError)) return null;
+  // 整体超时兜底（client 内部也有同样的时限；这里防止任何实现悬挂）：超时按「未确认」处理，调用方走失败分支让用户重发
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([client.confirmUserMessage(agentId, clientMessageId), timeout]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -317,6 +357,7 @@ export function useSidecarBridge(): void {
     const unbindBoards = bindBoardsToStore(client, store);
     const unbindGroups = bindGroupsToStore(client, store);
     const unbindProviders = bindProviderChangesToQueries(client, queryClient);
+    const unbindRemote = bindRemoteToQueries(client, queryClient);
     client.connect().catch(() => {});
     return () => {
       unbind();
@@ -324,6 +365,7 @@ export function useSidecarBridge(): void {
       unbindBoards();
       unbindGroups();
       unbindProviders();
+      unbindRemote();
     };
   }, [queryClient, store]);
 }
@@ -395,6 +437,9 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         const { turnId } = await client.request("agent.send", { agentId, prompt, clientMessageId });
         return { turnId, clientMessageId };
       } catch (error) {
+        // 请求发出后连接断开（例如页面被系统挂起期间发送）：服务端可能已经执行，重连补齐后按 clientMessageId 核对，已落地就当成功
+        const recovered = await confirmLostSend(client, agentId, clientMessageId, error);
+        if (recovered) return { turnId: recovered.turnId, clientMessageId };
         const info = describeAgentSendError(error, {
           resuming,
           lastError: store.get(agentSnapshotsAtom)[agentId]?.lastError,
@@ -422,6 +467,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       try {
         await client.request("agent.steer", { agentId, prompt, clientMessageId });
       } catch (error) {
+        if (await confirmLostSend(client, agentId, clientMessageId, error)) return { clientMessageId };
         throw new Error(humanizeSidecarError(error));
       }
       return { clientMessageId };
@@ -480,6 +526,21 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       store.set(ensureChatSessionAtom, agentId);
       await client.syncAgent(agentId);
       store.set(settleInactiveAgentRuntimeAtom, agentId);
+    },
+
+    /**
+     * 向前翻一页更早的历史（design.md 4.31 的 `beforeSeq` / `limit` 分页）并前插进该会话的消息；
+     * 返回是否还有更早的。手机端时间线滚到顶部时调用。
+     */
+    async loadOlderTimeline(agentId: string, limit = 300): Promise<{ hasOlder: boolean }> {
+      const { entries, hasOlder } = await client.fetchOlder(agentId, limit);
+      if (entries.length > 0) store.set(prependAgentHistoryAtom, { agentId, entries });
+      return { hasOlder };
+    },
+
+    /** 时间线向前翻页状态（是否还有更早的历史）。 */
+    historyState(agentId: string): { oldestSeq: number; hasOlder: boolean } {
+      return client.historyState(agentId);
     },
 
     /** agent.subagents.list：该会话全部层级的 provider 子代理，写入 store 并返回（design.md 4.11）。 */
@@ -594,6 +655,17 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     },
     async setSidecarSettings(patch: SidecarSettingsPatch): Promise<SidecarSettings> {
       return client.request("settings.set", { patch });
+    },
+
+    /** remote.status / remote.pairing.create / remote.devices.revoke：远程网关（design.md 4.31）。 */
+    async getRemoteStatus(): Promise<RemoteStatus> {
+      return client.request("remote.status", {});
+    },
+    async createRemotePairing(): Promise<{ offerUrl: string; expiresAt: number }> {
+      return client.request("remote.pairing.create", {});
+    },
+    async revokeRemoteDevice(deviceId: string): Promise<void> {
+      await client.request("remote.devices.revoke", { deviceId });
     },
 
     /** snapshot.list：按回合的文件快照索引（design.md 4.24）。 */

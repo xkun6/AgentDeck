@@ -102,7 +102,7 @@ sidecar 入口：
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
 - `GET /health`（无需 token）→ `{ "ok": true, "version": "..." }`
 - 每个 WS 文本帧是一个 JSON-RPC 2.0 对象。客户端发请求，服务端回响应；服务端主动推送用**通知**（无 id）。
-- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
+- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`RESPONSE_TOO_LARGE`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。`RESPONSE_TOO_LARGE` 只由远程网关（4.31）在响应明文超过 16 MiB 帧上限时代发（message 中文，含实际大小），本机 `/rpc` 不会产生。
 
 ### 4.1 请求方法
 
@@ -142,7 +142,6 @@ sidecar 入口：
 | `group.create` / `group.list` / `group.get` / `group.delete` | 见 4.27 | 并行协作组（扇出 + 汇总） |
 | `board.get` / `board.updateSettings` / `board.upsertTask` / `board.deleteTask` / `board.moveTask` / `board.merge` | 见 4.28 | 看板式任务分派 |
 | `remote.status` / `remote.pairing.create` / `remote.devices.revoke` | 见 4.31 | 远程网关（手机接入）；远程客户端不可调用 |
-| `client.presence` | `{ kind: "desktop" \| "mobile", visible: boolean }` | `{}`（客户端在线 / 可见状态，见 4.31） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -682,6 +681,7 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 - `uncaughtException`：用 `fs.appendFileSync` **同步**把错误、堆栈与当时的 `process.memoryUsage()`（rss / heapUsed / heapTotal / external / arrayBuffers）写入 `sidecar.log`（级别 `error`，独立于 logger 的文件句柄，logger 关闭后仍可写），再走原有优雅关闭（tree-kill 各 Agent 子进程）并以退出码 1 退出，另设 4 秒硬退出兜底。
 - `unhandledRejection`：**保持现有行为（只记日志、不退出）**，但同样同步写入堆栈与内存，不因此引入新的崩溃。
 - `process.on("exit")`：同步记一行「进程退出事件：code=<码> 原因=<原因>」。原因来自 `shutdown(reason)`（`stdin end` / `stdin close` / `stdin error` / `SIGINT` / `SIGTERM` / `父进程 <pid> 已退出` / `uncaughtException`），未经过 shutdown 的 `process.exit`（启动失败、配置错误等）记为「未经过 shutdown 流程」。被 `TerminateProcess` / 系统 OOM 杀死时 exit 事件不会触发，此时日志最后一条记录与内存采样就是线索。
+- 运行标记：`<日志目录>/sidecar.running`（`{ pid, startedAt }`）启动时写入、`exit` 事件里同步删除；启动时发现残留即 warn「上次 sidecar（pid=…）未正常退出（被外部结束或进程级崩溃）」，用来区分被 `TerminateProcess` / OOM 硬杀（exit 事件不触发，标记残留）与进程自己退出（见 4.31「断线诊断」）。
 - 内存采样：启动时记一条，之后每 5 分钟写一条 `info`「内存采样 rss=… heapUsed=… heapTotal=… external=… arrayBuffers=… heapLimit=…」，附带会话数与子代理时间线占用（行数 / 字节）；`heapUsed` 超过 `v8.getHeapStatistics().heap_size_limit` 的 80% 时额外写一条 `warn`。定时器 `unref`，不阻止退出。
 - V8 的 `FATAL ERROR: Reached heap limit` 无法在 JS 里捕获（进程直接 abort，exit 事件也不触发），只能由 Rust 外壳记录 sidecar 的 stderr 与退出状态（见 3.6）。
 
@@ -813,6 +813,7 @@ interface UsageSummary {
 interface SidecarSettings {
   snapshots: { enabled: boolean /* 默认 true */; maxFiles: number /* 默认 20000 */; maxFileBytes: number /* 默认 5 MB */ };
   interop: { enabled: boolean /* 默认 true，见 4.26 */ };
+  remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535，见 4.31 */ };
 }
 ```
 
@@ -1040,7 +1041,7 @@ interface AgentRateLimits {
 - 快照没有 `rateLimits` 时隐藏。额度为账户级：每个会话显示自己快照中最近收到的值。
 
 **输出速度（tok/s）**：
-- `AgentUsage` 增加 `outputTokensPerSecond?: number`：本回合输出 token 数 ÷（当前或结束时刻 − 本回合首个输出到达时刻）秒；首个输出不足 1 秒时不计算。随 `usage_updated`（回合中）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
+- `AgentUsage` 增加 `outputTokensPerSecond?: number`：本回合输出 token 数 ÷（当前或结束时刻 − 本回合首个输出到达时刻 − 审批等待时长）秒；首个输出不足 1 秒（扣除后不足 1 秒同样）时不计算。**审批等待时长** = 首个输出之后，每段 `permission_requested` → `permission_resolved` 之间的时间（同一时刻有多个请求挂起时取并集；首个输出之前的等待本来就不在分母里，不重复扣除；等待尚未结束时扣到当前时刻）。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker.observe`，在各自的事件出口（`emit`）喂入会话事件。随 `usage_updated`（回合中）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
 - Claude：主线程（不含子代理 sidechain）每条 assistant 消息的 `stream_event` `message_delta.usage.output_tokens`（该消息内累计）累加为本回合已输出 token，回合中最多每秒发一次只带 `outputTokensPerSecond` 的 `usage_updated`；result 时用最终输出 token 计算最终值。
 - Codex：本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径）到达时计算并下发；只在回合结束才有用量时只给最终值。
 - ACP：只在回合结束用 `PromptResponse.usage` 的输出 token 计算最终值（没有 usage 则不给）。
@@ -1048,22 +1049,28 @@ interface AgentRateLimits {
 
 ### 4.31 远程网关（安卓 App 接入）
 
-> 状态：契约已定（2026-10-14），尚未实现。路线、阶段与手机端结构见 `docs/mobile.md`。握手与加密参照 paseo `packages/relay/src/{crypto,encrypted-channel}.ts`（tweetnacl box），在其基础上增加一次性配对密钥、设备凭据、服务端挑战与递增计数 nonce（防重放）。
+> 状态：sidecar 侧与桌面设置页已实现（M1）；手机端见 `docs/mobile.md`（M2 起）。实现位置：`packages/remote`（帧 / offer / 客户端握手，sidecar 与手机共用）、`packages/sidecar/src/remote/`（store / pairing / addresses / gateway / service / attention）。握手与加密参照 paseo `packages/relay/src/{crypto,encrypted-channel}.ts`（tweetnacl box），在其基础上增加一次性配对密钥、设备凭据、服务端挑战与递增计数 nonce（防重放）。
 
 **原则**：原有 `127.0.0.1` 的 `/rpc`、`/mcp` 不变、不对外；手机走另起的远程监听，默认关闭。v1 只支持局域网与 Tailscale 直连，不做 relay 中转、不做 FCM 推送。
 
 **设置**（4.24 的 `SidecarSettings` 增加，经 `settings.get` / `settings.set` 读写）：
 ```ts
-remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535 */ }
+remote: {
+  enabled: boolean /* 默认 false */;
+  port: number /* 默认 47631，1024–65535 */;
+}
 ```
-- `enabled` 由 false 变 true 时在 `0.0.0.0:<port>` 起独立 HTTP 服务，只接受 `GET /remote` 的 WS 升级，其余路径 404，不提供 `/health`；变 false 时关闭监听并断开所有远程连接。端口被占用时不影响 sidecar 本身，`remote.status.error` 给出中文原因。
+- `enabled` 由 false 变 true 时在 `0.0.0.0:<port>` 起独立 HTTP 服务，只接受 `GET /remote` 的 WS 升级，其余路径 404，不提供 `/health`；变 false 时关闭监听并断开所有远程连接；`port` 变化时在新端口重启。端口被占用（或无权限）时不影响 sidecar 本身，`remote.status.error` 给出中文原因，`listening: false`；之后再 `settings.set`（换端口或重新启用）会重试。
+- `settings.set` 在网关启停完成后才返回，因此紧随其后的 `remote.status` 反映最终结果。与网关无关的设置变化不会重启网关。
+- 未设置数据目录（`AGENTDECK_DATA_DIR`）时不能启用：设置仍可写入（只在内存），但网关不启动，`remote.status.error` 提示。
 - 首次监听时 Windows 防火墙会对 node.exe 弹窗，前端设置页提示用户允许「专用网络」。
+- **网络类别检测**（真机测试发现：有线网卡被 Windows 标为「公用」时，即使在弹窗里允许了专用网络，手机仍被防火墙挡住）：Rust 命令 `network_categories` → `Array<{ address: string; interfaceAlias: string; category: "public" | "private" | "domain" | "unknown" }>`。Windows 上用 PowerShell 的 `Get-NetIPAddress -AddressFamily IPv4` 与 `Get-NetConnectionProfile` 按 `InterfaceAlias` 关联（无需管理员权限，`CREATE_NO_WINDOW`，超时 5 秒，失败返回空数组）；其它平台返回空数组。「手机连接」页对 `remote.status.addresses` 中所在网卡为 `public` 的地址标红并提示：「该网络被 Windows 标为『公用』，防火墙会阻止手机连接。请在 设置 → 网络和 Internet → 该网络 中改为『专用网络』」。
 
 **存储**（`<AGENTDECK_DATA_DIR>/remote/`，原子写入；未设置数据目录时远程网关不可启用）：
 - `daemon-keypair.json`：`{ publicKey, secretKey }`（`nacl.box.keyPair()`，base64），首次启用时生成，之后不变（换钥匙 = 所有设备需重新配对）。
-- `devices.json`：`RemoteDevice[]`，凭据只存哈希。
+- `devices.json`：`RemoteDevice[]`，凭据只存哈希。吊销不删除条目而是写入 `revokedAt`（墓碑），使之后用原凭据认证能回 `revoked`；`RemoteStatus.devices` 不含已吊销设备。`lastSeenAt` 在认证成功与连接断开时更新。
 ```ts
-interface RemoteDevice { deviceId: string; name: string; pairedAt: number; lastSeenAt?: number; secretSha256: string /* 不出 sidecar */ }
+interface RemoteDevice { deviceId: string; name: string; pairedAt: number; lastSeenAt?: number; secretSha256: string /* 不出 sidecar */; revokedAt?: number }
 ```
 
 **配对二维码**：`remote.pairing.create {}` → `{ offerUrl, expiresAt }`，`offerUrl = "agentdeck://pair#" + base64url(JSON(offer))`：
@@ -1079,18 +1086,24 @@ interface RemoteConnectionOffer {
 ```
 - `addresses` 取 `os.networkInterfaces()` 中非内部的 IPv4：`100.64.0.0/10` 记为 `tailscale`，其余私网段（10/8、172.16/12、192.168/16）记为 `lan`，其它地址不列出。
 - 同一时刻只有一个有效 pairingSecret，新签发即作废旧的；使用一次或过期即失效。二维码由桌面前端渲染，sidecar 只给字符串。
+- 配对失败的 `reason`：当前这把密钥已超过 `expiresAt` → `expired`；密钥已被使用、被新签发作废或从未签发 → `invalid`。sidecar 只保存 pairingSecret 的哈希。
+- 没有任何可用地址（`addresses` 为空）时 `remote.pairing.create` 返回 `NOT_SUPPORTED`（二维码无法连接）。
 
 **握手**（每个 WS 连接）：
 1. 客户端明文文本帧：`{ "type": "e2ee_hello", "v": 1, "clientKey": <每次连接新生成的 nacl.box 公钥 base64> }`。
 2. 服务端明文文本帧：`{ "type": "e2ee_ready", "v": 1, "challenge": <32 字节随机 base64> }`。双方 `shared = nacl.box.before(对方公钥, 己方私钥)`（服务端用 daemon 长期私钥）。
-3. 此后**只允许二进制帧**，每帧 = `nonce(24) || nacl.box.after(明文 UTF-8, nonce, shared)`。nonce 第 0 字节为方向（`0x01` 客户端→服务端、`0x02` 服务端→客户端），第 16–23 字节为该方向从 1 开始的大端 64 位计数，其余为 0；接收方要求计数严格递增，否则立即断开。解密失败、出现文本帧、单帧明文超过 16 MiB 一律断开。
+3. 此后**只允许二进制帧**，每帧 = `nonce(24) || nacl.box.after(明文 UTF-8, nonce, shared)`。nonce 第 0 字节为方向（`0x01` 客户端→服务端、`0x02` 服务端→客户端），第 16–23 字节为该方向从 1 开始的大端 64 位计数，其余为 0；接收方要求计数严格递增，否则立即断开。解密失败、出现文本帧、单帧明文超过 16 MiB 一律断开。**下行**明文超过 16 MiB 时（如 `agent.timeline` 一页过大）网关不再静默丢弃：写 `warn`（device、字节数、JSON-RPC method / id），带 `id` 的响应改发同 id 的 `{ code: -32000, data: { code: "RESPONSE_TOO_LARGE" } }` 错误（message 中文），手机端那条请求立即失败而不是等 120 秒超时；无 `id` 的通知只记日志，连接不受影响。
 4. 客户端第一条加密消息必须是以下之一（10 秒内未完成认证则断开）：
    - 配对：`{ "type": "pair", "pairingSecret", "challenge", "deviceName" }` → 成功回 `{ "type": "paired", "deviceId", "deviceSecret" }`（`deviceSecret` 32 字节随机 base64，只在此时出现一次）。
    - 认证：`{ "type": "auth", "deviceId", "deviceSecret", "challenge" }` → 成功回 `{ "type": "authed", "name" }`。
-   - `challenge` 必须等于本连接第 2 步下发的值（防止重放旧连接录下的帧）；失败回 `{ "type": "auth_failed", "reason": "expired" | "invalid" | "revoked" }` 后断开。连续 5 次认证失败的来源 IP 冷却 60 秒。
+   - `challenge` 必须等于本连接第 2 步下发的值（防止重放旧连接录下的帧）；失败回 `{ "type": "auth_failed", "reason": "expired" | "invalid" | "revoked" }` 后断开。`challenge` 不符、凭据错误、设备不存在、第一条消息格式非法都按 `invalid` 计；已吊销设备凭据正确时回 `revoked`（凭据错误仍是 `invalid`，不泄露设备状态）。
+   - 连续 5 次认证失败的来源 IP 冷却 60 秒：冷却期内该 IP 的升级请求直接以 HTTP 429 拒绝；认证成功清零计数。10 秒认证超时、协议违规不计入失败次数。
+   - 违规断开统一用 WS close code 1008（文本帧、解密失败、计数回退、认证超时等）。另有两项资源保护：未完成认证的连接最多 32 个（超出 HTTP 503），网关每 30 秒对每个连接做 WS ping，**连续 2 次没收到 pong** 才终止连接（单次丢失不算，手机主线程繁忙时可能晚回；收到 pong 计数清零），终止时写一条 `warn`（device 前 8 位、ip、存活秒数、距上次 pong 毫秒）。
 5. 认证后，每条加密消息是一个 JSON-RPC 2.0 对象，语义与 `/rpc` 完全一致（同样收到全部广播通知），外加只发给远程客户端的 `client.attention`。
 
-**远程客户端的限制**：调用 `remote.*`、`settings.set` 返回 `-32601`（方法不存在）；其余方法照常。`remote.devices.revoke` 立即断开该设备的所有连接。
+**远程客户端的限制**：以下方法对远程客户端一律返回 `-32601`（方法不存在）：`remote.*`、`settings.set`（防止手机改网关设置或管理配对）、`provider.config.get` / `provider.config.set`（自定义 provider 配置含明文 `apiKey` / `env` 里的密钥，不得交给手机）。其余方法照常；持有已配对设备等同于信任其能驱动 Agent 执行命令，因此 `agent.*`、`snapshot.*`、`schedule.*` 等不再细分。已逐项审查 4.1 方法表，除上述外没有方法返回密钥、token 或本机敏感配置：`settings.get` 只含快照 / 互通 / 网关开关，`provider.list` 只含 id / 可用性 / 启动命令，`provider.test` 只接受调用方自带的 profile 且不回显密钥，`agent.status` 仅含账户邮箱 / 订阅类型等非凭据信息。`remote.devices.revoke` 立即断开该设备的所有连接。
+
+**内部结构**：`RpcServer` 把客户端抽象为 `RpcClientConnection { kind: "local" | "remote"; deviceId?; send(text); close() }`，本机 `/rpc` 的 WS 与认证后的远程连接走同一套 `attachConnection`（调度、校验、广播完全一致）；加解密只在网关的 `RemoteConnection` 里。`remote.changed` 只广播给 `kind: "local"` 的连接，`client.attention` 只发给 `kind: "remote"` 的连接。日志层对 `deviceSecret` / `pairingSecret` 取值与 `agentdeck://pair#…` 链接统一脱敏。
 
 **RPC（只限本机 `/rpc`）**：
 ```ts
@@ -1105,13 +1118,23 @@ interface RemoteStatus {
 
 **时间线向前分页**（`agent.timeline` 扩展，兼容旧调用）：
 - 只给 `sinceSeq` 或什么都不给：行为不变（不带 `hasOlder`）。
-- 给 `limit`（1–2000）时为向前分页：从 `beforeSeq`（缺省为末尾之后）往前取至少 `limit` 条，再继续往前扩到最近的**回合起点**（`user_message`；某回合没有 `user_message` 时取其 `turn_started`），保证页首是完整回合；返回 `hasOlder` 表示更早还有条目。`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 `-32602`。
+- 给 `limit`（1–2000）时为向前分页：从 `beforeSeq`（缺省为末尾之后）往前取至少 `limit` 条，再继续往前扩到最近的**回合起点**（`user_message`；某回合没有 `user_message` 时取其 `turn_started`），使页首尽量是完整回合；为凑完整回合的回溯有**硬上限**：整页条数不超过 `limit` 的 2 倍，且累计序列化字节不超过 4 MiB（`TIMELINE_PAGE_MAX_BYTES`，远小于网关 16 MiB 的单帧上限；基础的最近 `limit` 条也受字节上限约束，但至少返回最近一条以保证分页能前进）。超出上限时从回合中间截断（页首不是回合起点），`hasOlder` 仍为 true，客户端照常用 `beforeSeq` 继续向前翻；返回 `hasOlder` 表示更早还有条目。`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 `-32602`。
+- `beforeSeq`（≥ 1）必须与 `limit` 一起给；单独给 `beforeSeq`、`limit` 越界（非 1–2000 的整数）同样是 `-32602`。回合起点按时间线上的 `user_message`（非插话）判定，其后紧跟的同回合 `turn_started` 不再单独算起点；CLI 自发轮次等没有 `user_message` 的回合以 `turn_started` 为起点。一个回合比 `limit` 长但不超过上限时整回合返回；更长则按上述上限从回合中间截断，被截开的回合在前端由相邻两页合并显示（同一回合的助手消息 id 相同，older 页的内容并到已有消息之前）。
 - 手机打开会话取 `{ limit: 300 }`，向上滚动到顶取 `{ beforeSeq: 当前最早 seq, limit: 300 }`；断线重连仍用 `sinceSeq` 补齐。
 
-**在线状态与通知（attention）**：
-- 客户端在连接成功、可见性变化时调用 `client.presence { kind, visible }`，可见期间每 30 秒再调用一次作为心跳。远程连接的 `kind` 一律按 `mobile` 处理。
-- sidecar 在以下事件发生时决定是否向远程客户端发 `client.attention`：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。
-- 判定：最近 120 秒内有 `kind: "desktop"` 且 `visible: true` 的心跳 → 不发（用户在电脑前）；否则发给所有已认证的远程连接。
+**断线诊断**（事故背景：真机「总在重连」，但网关与手机都没有留下断线原因）：
+- **网关关闭日志**（`sidecar.log`，info）：每条远程 WS 关闭时统一写一行
+  `远程连接关闭 device=<deviceId 前 8 位，未认证为 -> ip=<ip> 存活=<s>s code=<code> reason=<reason> by=<local|peer> path=<path> 距上次pong=<ms>ms buffered=<n>`。
+  `by=local` 表示本端先关闭 / 终止，`path` 说明走的哪条路径：`auth-timeout`（10 秒未认证）、`auth-failed`、`bad-hello`（握手格式 / 公钥非法）、`binary-in-hello`（首帧是二进制）、`bad-frame`（握手后的文本帧、解密失败、计数回退、认证期间多余帧）、`internal-error`、`pong-timeout`（连续 2 次 ping 无 pong）、`buffer-overflow`（发送缓冲超 64 MiB）、`revoked`（吊销设备）、`gateway-stop`（网关停止 / 端口变更）、`shutdown`（RpcServer 关闭）；`by=peer` 时 `path=peer-close`（对端先关闭或网络层断开）。`距上次pong` 以连接建立时刻为起点。`rpc-server` 的「远程客户端已连接 / 已断开」日志同样带 `device=<前 8 位>`。
+- **sidecar 运行标记** `<AGENTDECK_LOG_DIR>/sidecar.running`（未配置日志目录时不写）：启动时写入 `{ pid, startedAt }`；进程自己退出（含 fatal 与 `process.exit`，即触发 `exit` 事件的所有退出，见 4.18）时同步删除。启动时若发现残留，`warn`「上次 sidecar（pid=…，启动于 …）未正常退出（被外部结束或进程级崩溃）」后覆盖。退出码本身由 4.18 的「进程退出事件」日志与 Rust 的 `desktop.log`（3.6）记录，不重复。
+- **手机连接事件缓冲**（`web/src/lib/connection-log.ts`，只在手机入口注入，桌面不写）：环形缓冲最多 100 条，持久化到 `localStorage`（键 `agentdeck.mobile.connection-log`，事件后 1 秒合并写一次，页面隐藏时立即写）。每条记录：ISO 时间 `at`、`event`、触发路径 `trigger`、`gapMs`、关闭的 `code` / `reason` / `wasClean`、`aliveMs`（本连接存活）、`idleMs`（距最后入站帧）、`online` / `netType` / `effectiveType`（`navigator.onLine` 与 Network Information，有则记）、`foreground`（`isBackground` 回调）。`event` 取值：`open`、`close`、`error`、`force-reconnect`、`probe-start`、`probe-ok`、`probe-timeout`、`schedule-reconnect`、`connect-timeout`、`manual-close`、`wake-ignored`（CONNECTING 时忽略非强制唤醒）、`sync-fail`（重连后某个会话按 `sinceSeq` 补齐失败，只记录并继续其它会话，随后照常刷新 `agent.list`），以及 E2eeSocket 的 `attempt-ok` / `attempt-fail`（每个地址的结果与耗时）、`protocol-error`（赢家连接的协议错误）。`trigger` 取值：`gap-watchdog`（附 `gapMs`）、`hint`、`online`、`visibility`、`network-change`、`system-resume`、`probe`、`manual` 等。
+- **设置页「连接诊断」**（手机端设置页，通知 / 后台运行小节之后）：显示最近 20 条（时间 + 事件 + 触发路径 + code，最新在上），「复制全部」把缓冲区全部条目的 JSON 写入剪贴板（`navigator.clipboard` 失败则展示可全选的文本框兜底），「清空」同时清掉持久化。
+
+**通知（attention）**：
+- sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。
+- 是否提醒完全由手机端决定（见下文手机端处理与 `docs/mobile.md`）。
+- 改动背景：v1 原设计用 `client.presence` 上报桌面窗口可见性，「桌面可见则不发」。真机测试发现 WebView2 在最小化、隐藏到托盘后 `document.visibilityState` 仍为 `visible`，手机永远收不到通知；且「人在不在电脑前」本身难以可靠判断。按用户决定（2026-10-14）删除 `client.presence` 与在线判定，改为手机端三档设置。
+- 摘要文本（`body`）：完成 = 「本轮已完成」；失败 = 「本轮失败：」+ 错误信息；审批 = 「Agent 请求审批：」+ 请求标题（`question` / `plan` / `mode` 类用固定句式）；调度 = `schedule.notice.message`。全部压成单行并截断到 120 字，只引用标题 / 错误 / 工具名，不含工具输入输出原文。`title` 取会话标题（缺省取首条消息预览，再缺省「未命名会话」）或调度名。
 ```ts
 interface AttentionNotice {
   id: string;                                   // 去重用
@@ -1122,7 +1145,18 @@ interface AttentionNotice {
   timestamp: number;
 }
 ```
-- 手机收到后：App 在前台且正停留在该会话 → 忽略；App 在前台其它页面 → 应用内提示；App 在后台 → Android 本地通知，点击跳转到对应会话。桌面端现有通知逻辑不变，只在其可见性变化时补发 `client.presence`。
+- 手机收到后按手机端设置「通知」（存手机本地，默认「总是通知」）处理：
+  | 设置 | App 在后台 | App 在前台 |
+  |---|---|---|
+  | 总是通知（`always`，默认） | Android 本地通知，点击跳转到对应会话 | 停在该会话 → 忽略；其它页面 → 应用内提示条 |
+  | 仅在前台时（`foreground`） | 不通知 | 同上 |
+  | 从不通知（`never`） | 不通知 | 不提示 |
+- 桌面端现有通知逻辑不变。
+
+**桌面前端（设置页「手机连接」，路径 `/remote`，侧栏「设置」下）**：
+- 内容：启用开关与端口（1024–65535）、`remote.status.error`、可用地址列表（局域网 / Tailscale 标签）、「生成配对二维码」（调用 `remote.pairing.create`，用 `qrcode` 把 `offerUrl` 渲染成 SVG，白底黑码不随主题变色，显示 5 分钟倒计时，过期后「重新生成」；有新设备配对成功或网关停止监听时自动收起）、已配对设备（名称、配对时间、最近在线、在线 / 离线、吊销需二次确认）。启用后提示 Windows 防火墙需对 node.exe 允许「专用网络」。
+- 实时刷新：`sidecar-client` 的 `onRemoteChanged` 订阅 `remote.changed`，`useSidecarBridge` 把载荷直接写入 `remote.status` 的查询缓存；页面还会在改设置 / 吊销后主动失效重取。
+- 调试面板的脱敏规则覆盖 `agentdeck://pair#…` 链接与 `deviceSecret` / `pairingSecret` 字段。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "手机端主窗口权限：核心默认权限 + store（配对信息持久化）；扫码权限见 barcode.json",
+  "windows": ["main"],
+  "permissions": ["core:default", "store:default"]
+}

@@ -11,12 +11,19 @@ import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
 import { GroupService } from "./groups/group-service.js";
 import { GroupStore } from "./groups/store.js";
-import { installProcessDiagnostics, startMemorySampler } from "./diagnostics.js";
+import {
+  claimRunningMarker,
+  installProcessDiagnostics,
+  RUNNING_MARKER_FILE,
+  startMemorySampler,
+} from "./diagnostics.js";
 import { createLogger, type Logger } from "./logger.js";
 import { BoardService } from "./kanban/board-service.js";
 import { BoardStore } from "./kanban/store.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
+import { AttentionService } from "./remote/attention.js";
+import { RemoteService } from "./remote/service.js";
 import { Scheduler } from "./scheduler/scheduler.js";
 import { ScheduleStore } from "./scheduler/store.js";
 import { InteropService } from "./server/interop-service.js";
@@ -99,11 +106,15 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logDir ? { logDir: config.logDir } : {});
   protectStdout(logger);
   // 致命错误 / 退出事件同步落盘（design.md 4.18）；fatal 后走下面的 shutdown
+  // 运行标记 `<logDir>/sidecar.running`（未配置日志目录时不写）：残留 = 上次被外部硬杀或进程级崩溃
+  const runningMarkerFile = config.logDir ? path.join(config.logDir, RUNNING_MARKER_FILE) : undefined;
   const diagnostics = installProcessDiagnostics({
     logger,
     ...(config.logDir ? { logFile: path.join(config.logDir, "sidecar.log") } : {}),
+    ...(runningMarkerFile ? { runningMarkerFile } : {}),
     onFatal: (reason, exitCode) => void shutdown(reason, exitCode),
   });
+  if (runningMarkerFile) claimRunningMarker(runningMarkerFile, logger);
   logger.info("sidecar %s 启动（pid=%d, node=%s）", SIDECAR_VERSION, process.pid, process.version);
 
   let registry: ProviderRegistry | null = null;
@@ -112,6 +123,8 @@ async function main(): Promise<void> {
   let board: BoardService | null = null;
   let groups: GroupService | null = null;
   let server: RpcServer | null = null;
+  let remote: RemoteService | null = null;
+  let attention: AttentionService | null = null;
   let parentTimer: NodeJS.Timeout | null = null;
   let shuttingDown = false;
 
@@ -134,6 +147,8 @@ async function main(): Promise<void> {
           // manager.shutdown 先落盘、再关闭会话、最后再落盘一次
           await manager?.shutdown();
           await registry?.shutdown();
+          attention?.dispose();
+          await remote?.stop();
           await server?.close();
         })(),
         SHUTDOWN_TIMEOUT_MS,
@@ -264,8 +279,15 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error("启动并行协作组服务失败：%s", String(error));
   }
+  // 远程网关（design.md 4.31）：默认关闭；启停由 settings.remote 驱动，启动失败只写入 remote.status.error
+  remote = new RemoteService({
+    settings,
+    logger,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+  });
   server = new RpcServer({
     token: config.token,
+    remote,
     groups,
     version: SIDECAR_VERSION,
     manager,
@@ -286,8 +308,17 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const rpcServer = server;
+  remote.bind(rpcServer);
+  attention = new AttentionService({
+    manager,
+    scheduler,
+    sendToRemote: (notice) => rpcServer.sendToRemote("client.attention", notice),
+  });
+
   const port = await server.listen(config.port, "127.0.0.1");
   interop.setPort(port);
+  await remote.start();
   if (shuttingDown) {
     return;
   }

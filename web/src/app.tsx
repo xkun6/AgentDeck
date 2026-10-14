@@ -76,6 +76,7 @@ function MainApp() {
             <Route path="/coding-agents" element={withBoundary(<CodingAgentsRoute />)} />
             <Route path="/snapshots" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/interop" element={withBoundary(<AdvancedRoute />)} />
+            <Route path="/remote" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/debug" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/about" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/advanced/*" element={withBoundary(<AdvancedRoute />)} />

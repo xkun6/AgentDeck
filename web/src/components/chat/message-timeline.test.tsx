@@ -287,6 +287,19 @@ describe("MessageTimeline", () => {
     expect(html).toContain("/Users/enzo/Downloads/chart.png");
   });
 
+  it("只有（被隐藏的）思考内容的助手消息不渲染成空行；有正文或流式中仍显示", () => {
+    const rowCount = (messages: ChatMessage[]) =>
+      (renderTimeline(<MessageTimeline messages={messages} />).match(/data-role="assistant"/g) ?? []).length;
+    const user: ChatMessage = { id: "user-1", role: "user", createdAt: 1, text: "问题" };
+    // 思考显示默认关闭：失败的回合只留下 reasoning
+    expect(rowCount([user, { id: "a1", role: "assistant", createdAt: 2, status: "error", reasoning: "想了想" }])).toBe(0);
+    expect(
+      rowCount([user, { id: "a1", role: "assistant", createdAt: 2, status: "error", blocks: [{ type: "reasoning", text: "想了想" }] }]),
+    ).toBe(0);
+    expect(rowCount([user, { id: "a1", role: "assistant", createdAt: 2, status: "complete", text: "回答", reasoning: "想了想" }])).toBeGreaterThan(0);
+    expect(rowCount([user, { id: "a1", role: "assistant", createdAt: 2, status: "streaming", reasoning: "想了想" }])).toBeGreaterThan(0);
+  });
+
   it("shows turn navigation for multi-turn conversations", () => {
     const messages: ChatMessage[] = [
       { id: "user-1", role: "user", createdAt: 1, text: "第一轮问题" },

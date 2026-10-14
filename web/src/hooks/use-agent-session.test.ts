@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createStore } from "jotai";
 import type { AgentBackgroundTask, AgentSnapshot } from "@agentdeck/protocol";
-import { SidecarRpcError, type SidecarClient } from "@/lib/sidecar-client";
+import { SidecarConnectionLostError, SidecarRpcError, type SidecarClient } from "@/lib/sidecar-client";
 import {
   AgentSendError,
   bindSchedulesToStore,
@@ -142,6 +142,101 @@ describe("dormant 会话发送", () => {
     const error = await actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-3" }).catch((e: unknown) => e);
     expect((error as AgentSendError).unrecoverable).toBe(false);
     expect(noticeTexts(store)).toEqual(["发送失败：恢复会话失败：claude 不可用"]);
+  });
+});
+
+describe("断线期间发送（连接断开 ≠ 发送失败）", () => {
+  const lost = () => new SidecarConnectionLostError("与 Agent 服务的连接已断开");
+
+  function lostClient(confirm: (agentId: string, clientMessageId: string) => Promise<{ turnId: string } | null>) {
+    return {
+      request: vi.fn(async () => {
+        throw lost();
+      }),
+      confirmUserMessage: vi.fn(confirm),
+    } as unknown as SidecarClient & { confirmUserMessage: ReturnType<typeof vi.fn> };
+  }
+
+  it("重连补齐后发现服务端已收到：按成功处理，不报错、不追加失败提示、不回填", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+    const client = lostClient(async () => ({ turnId: "t-real" }));
+    const actions = createAgentSessionActions(client, store);
+    const result = await actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-lost" });
+    expect(result).toEqual({ turnId: "t-real", clientMessageId: "cm-lost" });
+    expect(client.confirmUserMessage).toHaveBeenCalledWith(AGENT, "cm-lost");
+    expect(noticeTexts(store)).toEqual([]);
+  });
+
+  it("补齐后没有该消息：才报错并追加失败提示", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+    const actions = createAgentSessionActions(lostClient(async () => null), store);
+    const error = await actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-gone" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AgentSendError);
+    expect(noticeTexts(store)).toEqual(["发送失败：与 Agent 服务的连接已断开"]);
+  });
+
+  it("核对本身失败（仍连不上）：沿用原有报错", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+    const actions = createAgentSessionActions(
+      lostClient(async () => {
+        throw new Error("连接 Agent 服务超时");
+      }),
+      store,
+    );
+    const error = await actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-x" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AgentSendError);
+  });
+
+  it("非断线类失败（RPC 错误）不做核对", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+    const confirmUserMessage = vi.fn();
+    const client = {
+      request: vi.fn(async () => {
+        throw rpcError("TURN_IN_PROGRESS");
+      }),
+      confirmUserMessage,
+    } as unknown as SidecarClient;
+    const actions = createAgentSessionActions(client, store);
+    await actions.sendPrompt(AGENT, "继续").catch(() => {});
+    expect(confirmUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("核对悬挂超时：按未确认处理，追加失败提示并抛出 AgentSendError（界面不会永远停在思考中）", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createStore();
+      store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+      const actions = createAgentSessionActions(lostClient(() => new Promise(() => {})), store);
+      const outcome = actions.sendPrompt(AGENT, "继续", { clientMessageId: "cm-hang" }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(await outcome).toBeInstanceOf(AgentSendError);
+      expect(noticeTexts(store)).toEqual(["发送失败：与 Agent 服务的连接已断开"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("steerPrompt 核对悬挂超时：同样抛出原提示", async () => {
+    vi.useFakeTimers();
+    try {
+      const actions = createAgentSessionActions(lostClient(() => new Promise(() => {})), createStore());
+      const outcome = actions.steerPrompt(AGENT, "补一句").catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect((await outcome as Error).message).toContain("与 Agent 服务的连接已断开");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("steerPrompt 同样核对：已落地按成功处理，否则抛出原提示", async () => {
+    const ok = createAgentSessionActions(lostClient(async () => ({ turnId: "t1" })), createStore());
+    await expect(ok.steerPrompt(AGENT, "补一句", { clientMessageId: "cm-s" })).resolves.toEqual({ clientMessageId: "cm-s" });
+    const missing = createAgentSessionActions(lostClient(async () => null), createStore());
+    await expect(missing.steerPrompt(AGENT, "补一句")).rejects.toThrow("与 Agent 服务的连接已断开");
   });
 });
 

@@ -36,6 +36,7 @@ import {
 } from "./provider-subagent-store.js";
 import { dedupeSlashCommands } from "./slash-commands.js";
 import { searchSources, type SearchResult } from "./timeline-search.js";
+import { pageTimeline } from "./timeline-page.js";
 import { compactToolCallUpdates, toolCallId } from "./timeline-compact.js";
 import { limitTimelineItem } from "./timeline-limits.js";
 import type {
@@ -1001,13 +1002,20 @@ export class AgentManager {
     );
   }
 
-  /** 历史条目保留原 seq / epoch；返回的 epoch 为当前进程 epoch */
+  /**
+   * 历史条目保留原 seq / epoch；返回的 epoch 为当前进程 epoch。
+   * 给 `page` 时为向前分页（design.md 4.31），返回 `hasOlder`；调用方保证不与 `sinceSeq` 同时给出。
+   */
   async timeline(
     agentId: string,
     sinceSeq?: number,
-  ): Promise<{ epoch: string; entries: AgentStreamEnvelope[] }> {
+    page?: { beforeSeq?: number; limit: number },
+  ): Promise<{ epoch: string; entries: AgentStreamEnvelope[]; hasOlder?: boolean }> {
     const agent = this.requireAgent(agentId);
     const entries = await this.loadEntries(agent);
+    if (page) {
+      return { epoch: this.epoch, ...pageTimeline(entries, page) };
+    }
     const since = sinceSeq ?? 0;
     return {
       epoch: this.epoch,

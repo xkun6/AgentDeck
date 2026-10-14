@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手改部分：状态栏通知小图标（纯白剪影，系统会自行着色）。前台服务通知与本地通知共用。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,5h16c1.1,0 2,0.9 2,2v8c0,1.1 -0.9,2 -2,2h-6l-2,3l-2,-3H4c-1.1,0 -2,-0.9 -2,-2V7c0,-1.1 0.9,-2 2,-2zM7,9v2h6V9H7zM7,12v1.5h10V12H7z" />
+</vector>

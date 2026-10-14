@@ -34,4 +34,67 @@ describe("OutputSpeedTracker（design.md 4.30）", () => {
     now = 9000;
     expect(tracker.speed(20)).toBeUndefined();
   });
+
+  describe("审批等待不计入耗时", () => {
+    const requested = (id: string) => ({ type: "permission_requested", request: { id } });
+    const resolved = (id: string) => ({ type: "permission_resolved", requestId: id });
+
+    test("permission_requested → permission_resolved 之间的时间从分母里扣除", () => {
+      let now = 0;
+      const tracker = new OutputSpeedTracker(() => now);
+      tracker.markOutput();
+      now = 2_000;
+      tracker.observe(requested("p1"));
+      now = 62_000; // 等了 60 秒
+      // 等待期间：只算审批前的 2 秒
+      expect(tracker.speed(40)).toBe(20);
+      tracker.observe(resolved("p1"));
+      now = 64_000; // 之后又输出了 2 秒
+      expect(tracker.speed(80)).toBe(20); // 80 token ÷ 4 秒，而不是 ÷ 64 秒
+    });
+
+    test("首个输出之前的等待本来就不在分母里，不会被重复扣除", () => {
+      let now = 0;
+      const tracker = new OutputSpeedTracker(() => now);
+      tracker.observe(requested("p1"));
+      now = 30_000;
+      tracker.observe(resolved("p1"));
+      tracker.markOutput();
+      now = 32_000;
+      expect(tracker.speed(40)).toBe(20);
+    });
+
+    test("多个请求同时挂起按并集扣除；未知 / 重复的 resolved 被忽略；reset 清空", () => {
+      let now = 0;
+      const tracker = new OutputSpeedTracker(() => now);
+      tracker.markOutput();
+      now = 1_000;
+      tracker.observe(requested("a"));
+      now = 11_000;
+      tracker.observe(requested("b"));
+      now = 21_000;
+      tracker.observe(resolved("a"));
+      now = 31_000;
+      tracker.observe(resolved("b"));
+      tracker.observe(resolved("b"));
+      tracker.observe(resolved("zzz"));
+      now = 32_000;
+      // 总共 32 秒，其中 1–31 秒（30 秒）在等审批
+      expect(tracker.speed(4)).toBe(2);
+      tracker.reset();
+      tracker.markOutput();
+      now = 34_000;
+      expect(tracker.speed(4)).toBe(2);
+    });
+
+    test("等待中扣到不足 1 秒时不计算", () => {
+      let now = 0;
+      const tracker = new OutputSpeedTracker(() => now);
+      tracker.markOutput();
+      now = 500;
+      tracker.observe(requested("p1"));
+      now = 60_000;
+      expect(tracker.speed(10)).toBeUndefined();
+    });
+  });
 });

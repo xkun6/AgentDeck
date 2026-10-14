@@ -1,6 +1,6 @@
 # AgentDeck 安卓 App 规划
 
-> 状态：规划已定（2026-10-14），尚未开工。协议与安全契约见 `docs/design.md` 4.31，改契约先改那里。
+> 状态：规划已定（2026-10-14）；M0 技术验证脚手架已有，M1（sidecar 远程网关 + 桌面「手机连接」页）已在分支 `feat/android-m1` 实现，M2（手机 MVP：扫码配对 / 电脑列表 / 会话列表 / 时间线分页 / 审批 / 新建会话 / 设置）已在分支 `feat/android-m2` 实现，M3（后台保持连接 / 本地通知 / 回前台快速恢复 / 图片附件 / 后台运行引导）已在分支 `feat/android-m3` 实现（见第 7 节），真机联调待办。协议与安全契约见 `docs/design.md` 4.31，改契约先改那里。
 
 ## 1. 定位
 
@@ -26,7 +26,7 @@
 | `packages/protocol/src/connection-offer.ts`、`server/pairing-offer.ts` | `RemoteConnectionOffer` 与 `agentdeck://pair#...` 二维码 |
 | `packages/app/src/utils/connection-selection.ts` | 多地址候选：v1 简化为并发尝试 offer 中的全部地址，取第一个认证成功的 |
 | `docs/timeline-sync.md`（epoch + seq、tail 分页、缺口补齐） | `agent.timeline` 的 `beforeSeq` / `limit` 分页；`sidecar-client` 已有的 seq 去重与缺口补齐沿用 |
-| `server/agent-attention-policy.ts` | `client.presence` + `client.attention`，电脑前有人时手机不响 |
+| `server/agent-attention-policy.ts` | `client.attention`（原设计的 `client.presence` 在线判定已删除，是否提醒由手机端三档设置决定） |
 | `packages/app/src/agent-stream/`（倒置列表、按帧提交） | 手机时间线性能优化的参照 |
 
 ## 4. 结构
@@ -51,9 +51,9 @@ mobile/                      新增：Tauri Android 工程（独立 crate，不�
 | 阶段 | 内容 | 验证 |
 |---|---|---|
 | **M0 技术验证** | ① `mobile/` 跑通 Tauri Android 并加载 `web/src/mobile` 的最小页面；② 用临时方式（开发开关让 sidecar 的 `/rpc` 绑局域网，仅验证用、不合入）连上电脑 sidecar，打开会话、发消息、看流式输出；③ 在真机打开 3000+ 条时间线的会话，测滚动与流式渲染；④ 验证 App 切到后台、开着前台服务时，WebView 里的 WS 能否保持 10 分钟并持续收到事件；⑤ 输入法弹出时输入框与列表的布局 | 真机记录：滚动是否明显掉帧、内存、后台存活时长。④ 不通过时改为前台服务里用 Kotlin 原生维持连接（只收 attention），③ 不通过则评估转 Expo RN |
-| **M1 sidecar 远程网关** | 按 4.31 实现：`packages/remote`、`sidecar/src/remote/`、设置项、`remote.*` RPC、远程方法白名单、`agent.timeline` 分页、`client.presence` / `client.attention`；桌面「手机连接」设置页；桌面前端补发 `client.presence` | 单测覆盖：握手成功 / challenge 不符 / 计数回退 / 文本帧 / 配对密钥过期与复用 / 吊销后断开 / 白名单 / 分页回合边界 / attention 判定；`pnpm typecheck`、`pnpm test:unit` |
+| **M1 sidecar 远程网关** | 按 4.31 实现：`packages/remote`、`sidecar/src/remote/`、设置项、`remote.*` RPC、远程方法白名单、`agent.timeline` 分页、`client.attention`；桌面「手机连接」设置页 | 单测覆盖：握手成功 / challenge 不符 / 计数回退 / 文本帧 / 配对密钥过期与复用 / 吊销后断开 / 白名单 / 分页回合边界 / attention 发送；`pnpm typecheck`、`pnpm test:unit` |
 | **M2 手机 MVP** | 扫码配对、电脑列表与切换、会话列表、时间线（分页 + 流式）、发送 / 插话 / 取消 / 撤回、权限审批与 Agent 提问、状态行、新建会话 | 真机连真实电脑走完整流程：配对 → 新建 Claude 会话 → 审批工具调用 → 回合完成 |
-| **M3 后台与输入** | 前台服务 + 本地通知（点击跳转会话）、网络切换与锁屏恢复后的重连补齐、图片附件、电池优化白名单引导 | 锁屏 10 分钟内收到完成 / 审批通知；Wi-Fi 与移动网络（Tailscale）切换后会话不丢 |
+| **M3 后台与输入（已实现）** | 前台服务 + 本地通知（点击跳转会话）、网络切换与锁屏恢复后的重连补齐、图片附件、电池优化白名单引导 | 锁屏 10 分钟内收到完成 / 审批通知；Wi-Fi 与移动网络（Tailscale）切换后会话不丢 |
 | **M4 扩展（按需）** | 按回合 diff 查看（`snapshot.diff`）、调度 / 看板 / 协作组只读、用量统计；凭据改存 Android Keystore；APK 签名与 CI（需先配置 git remote） | — |
 
 每个阶段沿用现有流程：先改 `design.md` 契约，再派子代理实现，验证全过才提交。
@@ -65,3 +65,31 @@ mobile/                      新增：Tauri Android 工程（独立 crate，不�
 - **WebView 性能**：长时间线与流式渲染是转 RN 的主要触发条件，M0 先测。
 - **Tauri 移动端**：插件生态比 Expo 薄，前台服务需要自写 Kotlin 插件。
 - **凭据存储**：v1 用 tauri-plugin-store（应用私有目录），root 设备上可被读取；M4 改 Keystore。
+
+## 7. M3 实现要点（后台与输入）
+
+**两种情况都要成立**：M0 实测华为 HarmonyOS 的 freezer 会在切后台约 3 秒后冻结整个进程（含 WebView），前台服务也挡不住；用户放行自启动 / 电池优化后是否有效要真机复测。所以设计成：没被冻结时后台照常收 `client.attention` 弹本地通知；被冻结时回到前台立刻检测死连接、重连，并用 `sinceSeq` 补齐，补齐期间界面照常可用。
+
+**Android 本地插件 `native`**（`mobile/src/native.rs` + `gen/android/.../NativePlugin.kt`，手改部分已加注释）：`keepalive_start({ text, wakeLock? })` / `keepalive_stop`（`KeepAliveService`，specialUse 类型）、`battery_optimization_status`、`request_ignore_battery_optimization`、`open_app_settings`、`show_attention`（后台提醒通知）、`notification_status`、`take_launch_target`，以及插件事件 `notificationClicked`。移动端 Tauri 会把 Rust 没处理的 `plugin:native|xxx` 按 lowerCamelCase 直接转给 Kotlin 同名方法，所以 Rust 侧只做 `register_android_plugin` 与 ACL 声明（`build.rs` 的 `InlinedPlugin` + `capabilities/background.json`）。JS 包装在 `web/src/mobile/native/native-plugin.ts`，非 Tauri 环境全部 no-op。
+
+**保持连接的启停时机**（`native/keepalive-controller.ts`）：选「连上就启动、断开就停」，而不是「进后台再启动」。原因：Android 12+ 禁止 App 在后台启动前台服务，而 `visibilitychange → hidden` 触发时 Activity 已经 stop，此时 `startForegroundService` 会抛 `ForegroundServiceStartNotAllowedException`；在前台、连接刚建立时启动最可靠。代价只是前台期间也有一条静音低优先级常驻通知。规则（设置页「后台保持连接」开关默认开，localStorage 持久化）：本次运行中第一次连上才启动；启动后短暂断线（自动重连中）保持服务，只把常驻通知文案从「AgentDeck 已连接：<电脑名>」改成「重连中」；用户断开 / 删除电脑、凭据失效、关闭开关、切换电脑时停止。`wakeLock` 参数默认关，仅作为锁屏后 CPU 休眠导致断连时的备用手段（目前没有界面入口）。
+
+**前台服务被系统杀后重启**：`KeepAliveService` 改为 `START_NOT_STICKY`，并在 `onStartCommand` 收到 null intent（旧版本遗留的 sticky 重启，不带 extras）时直接 `stopSelf`。原因：进程被杀后与电脑的连接早已不在，必须由前端重建，系统重启出来的服务只会显示一条假的「AgentDeck 已连接」；Android 12+ 后台启动前台服务本就受限。二选一里选 NOT_STICKY 为主、stopSelf 兜底。
+
+**华为的审批通知不弹横幅**：华为会把「待审批」channel 降为 importance 3，不弹横幅。设置页「后台运行」小节加了通用引导文案（各机型开关名称不同：「横幅通知」/「悬浮通知」），并提供「打开通知设置」按钮（`NativePlugin.openAppNotificationSettings` → `Settings.ACTION_APP_NOTIFICATION_SETTINGS`；不支持时依次退到「待审批」channel 设置、应用详情页）。不直接打开 channel 设置，因为华为会把它重定向到只有「允许通知 / 静默通知 / 锁屏通知」的「社交通讯」分组页，里面没有横幅开关。
+
+**长会话卡顿**（真机测试：向前分页加载完整个 5000+ 条会话后约 3 万 DOM 节点，滑动帧耗时 p95 76ms、14 个长任务）：没有做真正的列表虚拟化，而是给会话详情加了「同时渲染消息数上限」（`MAX_RENDERED` = 400）。选它的理由：虚拟化要改 `MessageTimeline` 内部的滚动贴底 / 前插补偿 / 轮次导航 / 搜索定位，这些逻辑桌面共用，而变高行（Markdown、代码块、工具卡）的高度估算在真机上很难调稳，风险大且没有真机无法验证；折叠方案只动 `SessionDetail`，效果确定（DOM 节点数有硬上限，有单测）。做法：首屏 60 条、「显示更早」每次 +100 条原地展开；再展开会超过上限时，改为「较早的消息」视图——只渲染更早的一段（与刚看过的部分重叠 20 条衔接），时间线换 key 重挂按首次渲染贴底，顶部提示条「正在查看较早的消息 · 返回最新」；发送 / 插话 / 来了待审批时自动回到最新。没有新增依赖。
+
+**后台页面保活**（真机测试发现）：放行华为后台设置后进程不再被 freezer 冻结（cgroup 始终 `freezer:/`），但切后台约 5 分钟后 WebView 页面 JS 整体停止，超过 5 分钟的通知不再触发。推断原因：`WryActivity.onPause` 调 `webView.onPause()`，Activity stop 后窗口可见性又变为 INVISIBLE，Chromium 把页面视为不可见，后台定时器限流（1 次/秒 → 5 分钟后 1 次/分钟）并最终冻结。`generated/` 下的 WryActivity 每次构建都会被 wry 重新生成，不能改，所以在 `MainActivity.kt`（手改）里补：「后台保持连接」开启且已连接（`KeepAliveService.active`，服务 onStartCommand / onDestroy 维护）时，① `onPause` 后立刻 `webView.onResume()` + `resumeTimers()`；② `onStop` 后延迟几次把窗口可见性重新派发为 VISIBLE（`dispatchWindowVisibilityChanged`，系统的 INVISIBLE 在 stop 之后的下一次 traversal 才派发）；③ `setRendererPriorityPolicy(IMPORTANT, waivedWhenNotVisible=false)`，渲染进程优先级不随不可见降级。WebView 拿不到字段（`mWebView` 是 private），改为 override `onWebViewCreate` 自己持有。Chromium 没有「关闭后台节流」的 `WebSettings`，所以只能让页面保持「可见」。**代价**：后台时 `document.visibilityState` 也是 `visible`，前端的前台 / 后台改由 `NativePlugin` 的 `appState`（Activity onResume=前台、onStop=后台，命令 `app_state` + 事件 `appState`）提供，见 `native/app-state.ts`；回前台时用它触发 `SidecarClient.hintWake()`（连着就探活、断着就重连）。**这条路没有自动化测试能覆盖**，复测方法见最终回报；若真机仍在约 5 分钟后停摆，说明 Chromium 的冻结不受可见性欺骗影响，只剩「Kotlin 原生 WS 只收 attention」方案。
+
+**断线期间发送不再误报失败**（真机测试发现）：页面被系统挂起期间发出的 prompt，回前台后会收到「与 Agent 服务的连接已断开」，但服务端回合其实已执行，用户可能因此重复发送。协议不变（sidecar 写入时间线的 `user_message` 本来就带 `clientMessageId`，`agent.send` / `agent.steer` 的 `clientMessageId` 原样落入）：`SidecarClient` 区分「请求发出后连接断开」（`SidecarConnectionLostError`，结果未知）与未连接 / RPC 错误 / 超时；`sendPrompt` / `steerPrompt` 遇到前者时调 `confirmUserMessage`——重连并按 `sinceSeq` 补齐该会话时间线，若已有同 `clientMessageId` 的 `user_message` 就按成功处理（不报错、不追加失败提示、不回填输入框），没有才按原样报错；重连仍失败（结果未知）也按原样报错。桌面共用同一段逻辑。
+
+**回前台快速恢复**（`SidecarClient` 新增可选 `livenessProbe`，只有手机端配置，桌面行为不变）：`visibilitychange → visible`、`online`、Network Information API 的 `change` 触发检查；连接看起来还开着但距最后一次收到数据超过 15 秒，立即发 `sidecar.info`，**10 秒内没有收到任何入站帧**（不必是 `sidecar.info` 的回应，流式事件、RPC 错误都算存活）就 `forceReconnect`，不等 TCP 自然超时。时钟跳变 watchdog 的间隔超过 5 秒时，手机端（配置了 `livenessProbe`）**一律只探活、不强制重连**：后台时（默认看 `document.visibilityState`，手机壳里由 `isBackground` 改读原生前后台状态）多半只是浏览器把后台定时器限速到每分钟一次（真机上曾因此每 60 秒断开重连一次），前台时则可能只是主线程卡顿 3 秒以上（长会话首屏、解密大帧、`JSON.parse`，曾因此误判重连）；都不等于连接已死。探活为空闲超过阈值才发 `sidecar.info`，10 秒无任何入站帧才重连。`online` / 回前台 / 网络切换在连接**正在建立**（CONNECTING）时不打断在途连接，由连接超时兜底。桌面（未配置 `livenessProbe`）行为不变，时钟跳变仍无条件强制重连。E2EE 连接建立（认证成功）之后若发生协议错误（解密失败、帧计数回退、收到文本帧），`E2eeSocket` 会真正关闭该连接（close code 1011，reason `protocol_error:<原因>`），由 `SidecarClient` 走正常的 onclose → 退避重连，不再留下只丢弃入站帧的半死连接。重连后沿用 `sinceSeq` 补齐；补齐期间 `client.syncing` 为 true，界面顶部显示轻量的「正在同步…」，结束自动消失。
+
+**本地通知**：sidecar 总是向手机发 `client.attention`，是否提醒由设置页「通知」三档决定（`always` 默认 / `foreground` / `never`，存 localStorage 的偏好里，见 design.md 4.31 表格）。`always` 时 App 在后台（`document.visibilityState !== "visible"`）收到 → `BackgroundNotifier` 按 `id` 去重后调用 `show_attention`；前台规则：当前会话忽略 / 其它页面弹提示条；`foreground` 后台不通知；`never` 都不提醒。三个 channel：`agentdeck_permission`（待审批，高优先级）、`agentdeck_result`（完成 / 失败）、`agentdeck_schedule`（定时任务）；前台服务常驻通知用独立的 `agentdeck_keepalive`（低优先级静音）。首次连上电脑（App 在前台）时用 `tauri-plugin-notification` 的 `requestPermission` 申请 Android 13+ 通知权限，被拒后设置页显示状态并引导去系统设置。**点击跳转**：`tauri-plugin-notification` 2.6.0 在 Android 上的点击回调 payload 不含自定义 extra 和通知 id（`sourceJson` 从未赋值），无法知道该开哪个会话，所以提醒通知由 `NativePlugin` 自己发，`PendingIntent` 带 `agentId`；App 存活时经 `onNewIntent` → 事件 `notificationClicked` → 前端导航，进程被杀后冷启动经 `take_launch_target` 取走一次。
+
+**图片附件**：输入区「图片」按钮 →「拍照 / 相册」，用 `<input type="file" accept="image/*">`（拍照加 `capture="environment"`）。wry 的 `RustWebChromeClient.onShowFileChooser` 原生支持文件选择与拍照（相机权限由 barcode-scanner 合并进 Manifest，拍照走 FileProvider），无需额外插件。发送前压缩：长边 ≤ 2048px、JPEG 质量 0.85（透明底铺白）、压缩后单张 > 5MB 拒绝；最多 4 张，可预览可删除；按 `{ type: "image", data, mimeType }` 发送，运行中插话（`agent.steer` 的 prompt 同为 `AgentPromptInput`）也允许带图。协议里没有「provider 支持图片」的能力字段（`ProviderCapabilities` 只有 steer / fork），不预先禁用按钮，带图发送失败时在错误后补一句「如果当前 Agent 不支持图片，请去掉图片后重试」，并保留文字与图片草稿。
+
+**后台运行引导**：设置页「后台运行」小节显示通知开关与电池优化状态（回前台自动刷新）、「请求忽略电池优化」「打开应用设置」按钮、华为 / 荣耀、小米、OPPO / vivo 的自启动 / 后台活动 / 锁定最近任务指引，以及「被系统冻结时回到 App 自动补齐，不会丢消息」的说明；首次开启「后台保持连接」后连上电脑时弹一次引导对话框。
+
+**真机验证清单（M3）**：锁屏 10 分钟内收到完成 / 审批通知；点通知（App 在后台 / 被杀后）跳转到对应会话；Wi-Fi ↔ 移动网络（Tailscale）切换后会话不丢且无重复消息；切后台被冻结后回到前台能在数秒内重连并补齐，「正在同步…」出现后消失；拍照 / 相册选图并发送；放行自启动 / 电池优化后后台存活是否改善。

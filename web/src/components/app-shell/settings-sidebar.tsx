@@ -9,6 +9,7 @@ import {
   Network,
   Palette,
   SlidersHorizontal,
+  Smartphone,
   Waypoints,
   type LucideIcon,
 } from "lucide-react";
@@ -29,6 +30,7 @@ export const SETTINGS_ITEMS: readonly SettingsItem[] = [
   { label: "环境", path: "/env", icon: MonitorCog },
   { label: "文件快照", path: "/snapshots", icon: Camera },
   { label: "会话互通", path: "/interop", icon: Network },
+  { label: "手机连接", path: "/remote", icon: Smartphone },
   { label: "调试", path: "/debug", icon: Bug },
   { label: "关于", path: "/about", icon: Info },
 ];

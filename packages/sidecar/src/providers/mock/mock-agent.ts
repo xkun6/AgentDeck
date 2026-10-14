@@ -18,6 +18,7 @@ import type {
   AgentSession,
   AgentSessionConfig,
 } from "../../agent/types.js";
+import { OutputSpeedTracker } from "../shared/output-speed.js";
 
 export const MOCK_PROVIDER_ID = "mock";
 
@@ -103,8 +104,17 @@ export class MockAgentSession implements AgentSession {
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private active: ActiveTurn | null = null;
   private closed = false;
+  /** 输出速度（design.md 4.30）：与真实 provider 共用同一个 tracker，审批等待不计入 tok/s */
+  private readonly outputSpeed: OutputSpeedTracker;
+  private speedTokens = 0;
 
-  constructor(cfg: AgentSessionConfig, resumeSessionId: string | null = null) {
+  constructor(
+    cfg: AgentSessionConfig,
+    resumeSessionId: string | null = null,
+    /** 时钟（仅测试注入，用于模拟审批等待时长） */
+    now: () => number = Date.now,
+  ) {
+    this.outputSpeed = new OutputSpeedTracker(now);
     this.model = cfg.model ?? null;
     this.modeId = cfg.modeId ?? "default";
     this.sessionId = resumeSessionId;
@@ -129,6 +139,8 @@ export class MockAgentSession implements AgentSession {
       pendingPermission: null,
     };
     this.active = turn;
+    this.outputSpeed.reset();
+    this.speedTokens = 0;
 
     if (!this.sessionId) {
       this.sessionId = `mock-${randomUUID()}`;
@@ -227,6 +239,8 @@ export class MockAgentSession implements AgentSession {
   // -------------------------------------------------------------------------
 
   private emit(event: AgentStreamEvent): void {
+    // 先让 tracker 看到 permission_requested / permission_resolved，再通知订阅方
+    this.outputSpeed.observe(event);
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -252,6 +266,7 @@ export class MockAgentSession implements AgentSession {
     try {
       for (const chunk of REASONING_CHUNKS) {
         await this.pause(turn);
+        this.outputSpeed.markOutput();
         this.emit({ type: "timeline", turnId, item: { type: "reasoning", text: chunk } });
       }
 
@@ -326,16 +341,26 @@ export class MockAgentSession implements AgentSession {
       const messageId = randomUUID();
       for (const chunk of splitIntoChunks(reply)) {
         await this.pause(turn);
+        this.outputSpeed.markOutput();
         this.emit({
           type: "timeline",
           turnId,
           item: { type: "assistant_message", text: chunk, messageId },
         });
+        // 回合中最多每秒一次、只带 outputTokensPerSecond 的 usage_updated
+        this.speedTokens += Array.from(chunk).length;
+        const live = this.outputSpeed.throttledSpeed(this.speedTokens);
+        if (live !== undefined) {
+          this.emit({ type: "usage_updated", usage: { outputTokensPerSecond: live } });
+        }
       }
 
+      const outputTokens = Array.from(reply).length;
+      const finalSpeed = this.outputSpeed.speed(outputTokens);
       const usage = {
         inputTokens: Array.from(text).length,
-        outputTokens: Array.from(reply).length,
+        outputTokens,
+        ...(finalSpeed !== undefined ? { outputTokensPerSecond: finalSpeed } : {}),
       };
       this.emit({ type: "usage_updated", usage });
       this.finish(turn, { type: "turn_completed", turnId, usage });

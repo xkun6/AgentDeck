@@ -163,6 +163,7 @@ fn main() {
             commands::file_dialogs::open_workspace_path,
             commands::file_dialogs::open_external_url,
             commands::fs::fs_list,
+            commands::network::network_categories,
             commands::log_export::export_log_snapshot,
             commands::session_export::export_session_file,
             commands::debug::log_tail,

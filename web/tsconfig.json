@@ -6,5 +6,7 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "vite-env.d.ts"]
+  "include": ["src", "vite-env.d.ts"],
+  // 协议级 e2e 直接引用 packages/sidecar 的测试夹具，用 vitest 跑，不并入 web 的类型检查
+  "exclude": ["src/**/*.e2e-sidecar.test.ts"]
 }
