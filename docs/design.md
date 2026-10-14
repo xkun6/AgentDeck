@@ -1005,7 +1005,7 @@ interface BoardTask {
 ### 4.29 输入框上方状态行：子代理 · 后台任务 · 步骤 · 额度 · 速度
 
 - 输入框上方原本上下两行的「子代理」（4.11）与「后台任务」（4.15）芯片合并为**同一行**，从左到右：子代理、后台任务；之后依次新增「步骤」「额度」（4.30）「速度」芯片。各芯片没有内容时隐藏，整行都没有内容时不占高度。窄宽度时芯片不换行，文字省略。
-- 「步骤」= Agent 自己维护的待办清单：取当前会话时间线中**最近一条** `todo` 项（Claude TodoWrite、Codex plan、ACP plan 均归一为 `todo`，见 4.3 / 5.1）。
+- 「步骤」= Agent 自己维护的待办清单：取当前会话时间线中**最近一条** `todo` 项（Claude TodoWrite 与 TaskCreate / TaskUpdate / TaskList、Codex plan、ACP plan 均归一为 `todo`，见 4.3 / 5.1 / 5.3）。
   - 芯片文字「步骤 已完成数/总数」（全部完成时显示「步骤 N/N ✓」样式的完成态，颜色用 token 中的成功色）；回合进行中且有未完成项时，第一条未完成项视为「进行中」。
   - 点击展开弹层（与子代理 / 后台任务弹层同一套样式与开合行为）：按顺序列出每一步，状态图标区分已完成 / 进行中 / 未开始，已完成项文字弱化；列表过长时弹层内滚动。
   - 没有任何 `todo` 项时不显示；新会话或分叉（4.23）后以新会话自身时间线为准。
@@ -1217,7 +1217,14 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。
-- detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent→sub_agent（见 4.11）、Skill→plain_text、MCP 等→unknown；TodoWrite 只发 `todo`。
+- detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent→sub_agent（见 4.11）、Skill→plain_text、MCP 等→unknown；TodoWrite 与 TaskCreate / TaskUpdate / TaskList 不发 `tool_call`，只发 `todo`（见下两条）。
+- Claude 的待办工具有两套（Claude Code 2.1.299 实测）：旧的 `TodoWrite`（input `todos[{content,status,activeForm}]`，整表覆盖，每次发一条 `todo`）只在 `CLAUDE_CODE_ENABLE_TASKS=false` 时启用；新的 `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` 默认启用，但仅当模型在内置名单内（Claude 3.x、Opus 4.0–4.7、Sonnet 4.0–4.6、Haiku 4.5）或设了 `CLAUDE_CODE_ENABLE_TODO_TOOLS=true` 时才会提供（Claude 5 系列不在名单内，AgentDeck 不注入该环境变量，所以 5 系列不出待办）。它们是延迟加载工具，模型要先调 `ToolSearch`（`select:TaskCreate,TaskUpdate,TaskList`）取回 schema，这一步是普通工具卡片。
+- 新 Task 工具的协议（实测，id 是字符串形式的自增数字，从 "1" 起）：
+  - `TaskCreate` input `{subject, description, activeForm?}`；`tool_result.content` 为文本 `Task #1 created successfully: <subject>`，同一条 user 消息的 `tool_use_result` 为 `{task:{id:"1",subject}}`。
+  - `TaskUpdate` input `{taskId, status?, subject?, ...}`，status 取 `pending` / `in_progress` / `completed` / `deleted`；文本结果 `Updated task #1 status`，`tool_use_result` 为 `{success,taskId,updatedFields,statusChange:{from,to}}`。
+  - `TaskList` input `{}`；文本结果每行 `#1 [completed] <subject>`，`tool_use_result` 为 `{tasks:[{id,subject,status,blockedBy}]}`。
+  - 一条 user 消息带多个 `tool_result` 时没有可对应的 `tool_use_result`，此时 TaskCreate / TaskList 退回解析文本。
+- Task 工具映射（`providers/claude/task-todos.ts`）：每个会话维护一张任务表（id → subject / status，保持创建顺序），在 `tool_result` 到达（非 `is_error`）时才应用：`TaskCreate` 加入一项（id 取结构化结果 `task.id`，其次文本 `Task #<id>`，都没有则按「当前最大数字 id + 1」临时编号，后续 TaskList 整表同步时纠正）；`TaskUpdate` 按 `taskId` 改 status / subject，`deleted` 移除，未知 id 忽略；`TaskList` 以结构化 `tasks`（其次文本行）整表替换（不含 `deleted`）。每次表变化发一条 `{type:"todo", items}`：`text`=subject，`completed`=(status==="completed")，`in_progress` 与 `pending` 同为未完成（与 TodoWrite 一致，「进行中」由前端取第一条未完成项）。子代理（带 `parent_tool_use_id`）内的 Task 工具调用走子代理时间线，不改主表；`--resume` 后任务表从空开始，以之后的事件为准。`TaskGet` 仍按普通工具卡片显示。这些工具的 `can_use_tool` 权限请求流程不变（只是不发 `tool_call` 卡片）。
 - 始终传 `--allow-dangerously-skip-permissions` 以允许会话中途切到 `bypassPermissions`；前端须把 bypassPermissions 标为危险选项且不得默认选中。
 - 模式表顺序：`default`「逐项审批」、`acceptEdits`「自动接受编辑」、`auto`「自动模式」（独立分类器模型审查，常规操作直接执行，越权 / 可疑 / 高风险操作被拦截；出处 code.claude.com/docs/en/permission-modes）、`plan`「计划模式」、`bypassPermissions`「跳过所有审批」（dangerous）。CLI 的 `manual` 是 `default` 的别名（2.1.296 实测两者都回报 `default`），传参仍用 `default`。
 - modeId 为 null（前端「默认模式」）时**不传** `--permission-mode`，跟随用户 Claude 设置中的默认模式；initialize 应答的 `current_permission_mode` 记为会话「基础模式」。跟随设置时直接进入 plan（新建选计划模式或恢复）：先不带参数启动读取基础模式，再立即发 `set_permission_mode plan`。
