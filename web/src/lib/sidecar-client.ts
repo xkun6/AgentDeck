@@ -59,13 +59,14 @@ export interface SidecarClientOptions {
    */
   historyLimit?: number;
   /**
-   * 回前台 / 网络恢复时的死连接探测（手机端设置，桌面不设）：连接看起来还开着，但距最后一次收到数据已超过 `idleMs`，
-   * 就立即发一次 `sidecar.info`，`timeoutMs` 内没有回应则强制断开重连（不等 TCP 自然超时），重连后照常 `sinceSeq` 补齐。
+   * 回前台 / 网络恢复 / 时钟跳变时的死连接探测（手机端设置，桌面不设）：连接看起来还开着，但距最后一次收到数据已超过 `idleMs`，
+   * 就立即发一次 `sidecar.info`，`timeoutMs` 内没有收到任何入站帧则强制断开重连（不等 TCP 自然超时），重连后照常 `sinceSeq` 补齐。
    */
   livenessProbe?: LivenessProbeOptions;
   /**
    * 页面当前是否处于后台（手机端设置，默认看 `document.visibilityState`）。后台时浏览器会把定时器限速到每秒甚至每分钟一次，
    * 时钟跳变 watchdog 看到的「间隔」只是限速而不是系统休眠，所以此时的跳变不再无条件强制重连，改走 `livenessProbe`。
+   * 前台的跳变也可能只是主线程卡顿（长会话首屏、解密大帧），配置了 `livenessProbe` 时同样只探活，不强制重连。
    * 原生壳里后台保活会让页面一直保持可见，由调用方改用原生前后台状态判断。
    */
   isBackground?: () => boolean;
@@ -76,8 +77,8 @@ export interface LivenessProbeOptions {
   timeoutMs: number;
 }
 
-/** 手机端默认值：15 秒没收到任何数据才探活，3 秒内无回应即判定连接已死 */
-export const DEFAULT_LIVENESS_PROBE: LivenessProbeOptions = { idleMs: 15_000, timeoutMs: 3_000 };
+/** 手机端默认值：15 秒没收到任何数据才探活，10 秒内没有收到任何入站帧即判定连接已死 */
+export const DEFAULT_LIVENESS_PROBE: LivenessProbeOptions = { idleMs: 15_000, timeoutMs: 10_000 };
 
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
@@ -646,9 +647,9 @@ export class SidecarClient {
       const gap = now - this.lastWakeTickAt;
       this.lastWakeTickAt = now;
       if (gap > WAKE_GAP_THRESHOLD_MS) {
-        // 手机端后台：定时器被限速造成的跳变不等于系统休眠，不强制重连，连着就探活（3 秒无回应才重连）
-        const throttledInBackground = this.livenessProbe !== undefined && this.isBackground();
-        this.handleWake(!throttledInBackground);
+        // 手机端（配置了探活）：后台定时器限速、前台主线程卡顿都会造成跳变，不等于连接已死，不强制重连，
+        // 连着就探活（10 秒内没收到任何入站帧才重连）；桌面端无探活，保持强制重连
+        this.handleWake(this.livenessProbe === undefined);
       }
     }, WAKE_WATCHDOG_INTERVAL_MS);
     if (typeof window.addEventListener === "function") {
@@ -703,12 +704,15 @@ export class SidecarClient {
       if (this.livenessProbe) void this.probeIfIdle();
       return;
     }
+    // 正在建立连接：非强制唤醒（online / 回前台 / 网络切换）不打断在途连接，由连接超时兜底
+    if (!forceful && this._state === "connecting") return;
     this.forceReconnect(forceful ? "wake" : "hint");
   }
 
   /**
    * 回前台 / 网络恢复时的死连接探测（需配置 `livenessProbe`）：距最后一次收到数据不足 `idleMs` 视为健康；
-   * 否则发 `sidecar.info`，超时（对端无任何回应）即强制重连。对端回了 RPC 错误也说明连接是活的。
+   * 否则发 `sidecar.info`，等待期间收到任何入站帧（不限于 `sidecar.info` 的回应）即视为存活；
+   * 超时仍没有任何入站帧即强制重连。对端回了 RPC 错误也说明连接是活的。
    */
   probeIfIdle(): Promise<void> {
     const probe = this.livenessProbe;
@@ -716,6 +720,7 @@ export class SidecarClient {
     if (!probe || !ws || ws.readyState !== SOCKET_OPEN || this._state !== "open") return Promise.resolve();
     if (this.probing) return this.probing;
     if (Date.now() - this.lastActivityAt < probe.idleMs) return Promise.resolve();
+    const startedAt = Date.now();
     const run = (async () => {
       try {
         await this.sendRequest("sidecar.info", {}, { timeoutMs: probe.timeoutMs });
@@ -723,6 +728,8 @@ export class SidecarClient {
         if (error instanceof SidecarRpcError) return;
         // 探测期间已经断线 / 换了连接：由 onclose 与重连流程处理
         if (this.ws !== ws) return;
+        // 等待期间收到过任何入站帧（流式事件等）说明连接是活的，只是 sidecar.info 的回应慢
+        if (this.lastActivityAt >= startedAt) return;
         debugBus.push({
           type: "sidecar",
           level: "warn",

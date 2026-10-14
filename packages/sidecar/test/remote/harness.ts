@@ -24,6 +24,7 @@ import { MockAgentClient } from "../../src/providers/mock/index.js";
 import { ProviderRegistry } from "../../src/providers/registry.js";
 import { AttentionService } from "../../src/remote/attention.js";
 import { RemoteService } from "../../src/remote/service.js";
+import type { Logger } from "../../src/logger.js";
 import type { RemoteGatewayTuning } from "../../src/remote/gateway.js";
 import { RpcServer } from "../../src/server/rpc-server.js";
 import { SettingsStore } from "../../src/settings/sidecar-settings.js";
@@ -60,6 +61,8 @@ export interface HarnessOptions {
   addresses?: (port: number) => RemoteAddress[];
   /** 创建完后立即启用网关 */
   enable?: boolean;
+  /** 网关 / RpcServer 使用的 logger（默认静默） */
+  logger?: Logger;
 }
 
 export interface Harness {
@@ -93,6 +96,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const remote = new RemoteService({
     settings,
     ...(dataDir ? { dataDir } : {}),
+    ...(options.logger ? { logger: options.logger } : {}),
     hostname: () => "test-pc",
     addresses: options.addresses ?? LAN_ADDRESS,
     now: clock.now,
@@ -102,6 +106,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const server = new RpcServer({
     token: TOKEN,
     version: "9.9.9-test",
+    ...(options.logger ? { logger: options.logger } : {}),
     manager,
     registry,
     settings,

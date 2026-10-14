@@ -119,7 +119,7 @@ afterEach(() => {
 });
 
 describe("回前台探活", () => {
-  it("空闲超过阈值：立即发 sidecar.info，3 秒内无回应则强制重连并按 sinceSeq 补齐", async () => {
+  it("空闲超过阈值：立即发 sidecar.info，10 秒内无任何入站帧则强制重连并按 sinceSeq 补齐", async () => {
     const rig = await setup();
     rig.answerInfo.value = false;
     await vi.advanceTimersByTimeAsync(20_000);
@@ -128,8 +128,8 @@ describe("回前台探活", () => {
     setVisibility("visible");
     await vi.advanceTimersByTimeAsync(0);
     expect(infoCount(rig.sockets[0]!)).toBe(1);
-    // 还没到 3 秒：不动
-    await vi.advanceTimersByTimeAsync(2_900);
+    // 还没到 10 秒：不动
+    await vi.advanceTimersByTimeAsync(9_900);
     expect(rig.sockets).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(200);
@@ -140,6 +140,20 @@ describe("回前台探活", () => {
     const timeline = rig.sockets[1]!.sent.find((f) => f.method === "agent.timeline");
     expect(timeline?.params).toEqual({ agentId: "a1", sinceSeq: 1 });
     expect(rig.client.lastSeq("a1")).toBe(2);
+  });
+
+  it("探活等待期间收到任意入站帧（不必是 sidecar.info 的回应）即视为存活，不重连", async () => {
+    const rig = await setup();
+    rig.answerInfo.value = false;
+    await vi.advanceTimersByTimeAsync(20_000);
+    setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    await vi.advanceTimersByTimeAsync(4_000);
+    rig.sockets[0]!.push({ jsonrpc: "2.0", method: "agent.stream", params: envelope(2) });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(rig.sockets).toHaveLength(1);
+    expect(rig.client.state).toBe("open");
   });
 
   it("探活有回应：连接保持，不重连", async () => {
@@ -207,14 +221,16 @@ describe("时钟跳变 watchdog", () => {
     expect(rig.client.state).toBe("open");
   });
 
-  it("手机端页面不可见 + 连接已死：探活 3 秒无回应后才重连", async () => {
+  it("手机端页面不可见 + 连接已死：探活 10 秒无任何入站帧后才重连", async () => {
     const rig = await setup();
     rig.answerInfo.value = false;
     setVisibility("hidden");
     await jumpClock(60_000);
     expect(infoCount(rig.sockets[0]!)).toBe(1);
     expect(rig.sockets).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(rig.sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2_100);
     await vi.advanceTimersByTimeAsync(10);
     expect(rig.sockets).toHaveLength(2);
     expect(rig.client.state).toBe("open");
@@ -230,24 +246,36 @@ describe("时钟跳变 watchdog", () => {
     expect(rig.sockets).toHaveLength(1);
   });
 
-  it("手机端页面可见：跳变仍无条件强制重连（回前台时的老行为）", async () => {
+  it("手机端页面可见（主线程卡顿）：跳变不强制重连，只探活，有回应则保持连接", async () => {
     const rig = await setup();
     await jumpClock(60_000);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(rig.sockets).toHaveLength(2);
-    expect(infoCount(rig.sockets[0]!)).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    expect(rig.sockets).toHaveLength(1);
+    expect(rig.client.state).toBe("open");
   });
 
-  it("isBackground 可由调用方接管（原生壳后台页面一直 visible）", async () => {
-    const background = { value: true };
-    const rig = await setup({ isBackground: () => background.value });
+  it("手机端页面可见 + 连接已死：探活 10 秒无任何入站帧后才重连", async () => {
+    const rig = await setup();
+    rig.answerInfo.value = false;
     await jumpClock(60_000);
-    await vi.advanceTimersByTimeAsync(10);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    await vi.advanceTimersByTimeAsync(9_000);
     expect(rig.sockets).toHaveLength(1);
-    background.value = false;
-    await jumpClock(60_000);
+    await vi.advanceTimersByTimeAsync(2_100);
     await vi.advanceTimersByTimeAsync(10);
     expect(rig.sockets).toHaveLength(2);
+  });
+
+  it("手机端页面可见 + 探活期间收到任意入站帧：视为存活，不重连", async () => {
+    const rig = await setup();
+    rig.answerInfo.value = false;
+    await jumpClock(60_000);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    await vi.advanceTimersByTimeAsync(3_000);
+    rig.sockets[0]!.push({ jsonrpc: "2.0", method: "agent.stream", params: envelope(2) });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(rig.sockets).toHaveLength(1);
   });
 
   it("桌面（未配置 livenessProbe）：页面不可见时跳变仍强制重连，行为不变", async () => {
@@ -265,7 +293,7 @@ describe("hintWake（原生回前台）", () => {
     rig.answerInfo.value = false;
     await vi.advanceTimersByTimeAsync(20_000);
     rig.client.hintWake();
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(10_100);
     await vi.advanceTimersByTimeAsync(10);
     expect(infoCount(rig.sockets[0]!)).toBe(1);
     expect(rig.sockets).toHaveLength(2);
@@ -278,7 +306,7 @@ describe("online 与网络切换", () => {
     rig.answerInfo.value = false;
     await vi.advanceTimersByTimeAsync(20_000);
     window.dispatchEvent(new Event("online"));
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(10_100);
     await vi.advanceTimersByTimeAsync(10);
     expect(rig.sockets).toHaveLength(2);
     expect(rig.client.state).toBe("open");
@@ -292,12 +320,50 @@ describe("online 与网络切换", () => {
       rig.answerInfo.value = false;
       await vi.advanceTimersByTimeAsync(20_000);
       connection.dispatchEvent(new Event("change"));
-      await vi.advanceTimersByTimeAsync(3_100);
+      await vi.advanceTimersByTimeAsync(10_100);
       await vi.advanceTimersByTimeAsync(10);
       expect(rig.sockets).toHaveLength(2);
     } finally {
       delete (navigator as { connection?: unknown }).connection;
     }
+  });
+});
+
+describe("连接建立中的非强制唤醒", () => {
+  it("CONNECTING 时 online / 回前台 / hintWake 不打断在途连接", async () => {
+    const sockets: FakeSocket[] = [];
+    const client = new SidecarClient({
+      resolveUrl: async () => "e2ee://x",
+      // 不自动 open：连接一直停在 connecting
+      socketFactory: () => {
+        const socket = new FakeSocket(() => {});
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+      reconnectBaseDelayMs: 1,
+      reconnectMaxDelayMs: 2,
+      livenessProbe: DEFAULT_LIVENESS_PROBE,
+    });
+    client.enableAutoReconnect();
+    clients.push(client);
+    const connecting = client.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+    expect(client.state).toBe("connecting");
+
+    window.dispatchEvent(new Event("online"));
+    setVisibility("visible");
+    client.hintWake();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]!.readyState).toBe(0);
+
+    // 原连接仍可正常完成
+    sockets[0]!.readyState = 1;
+    sockets[0]!.onopen?.({});
+    await connecting;
+    expect(client.state).toBe("open");
+    expect(sockets).toHaveLength(1);
   });
 });
 

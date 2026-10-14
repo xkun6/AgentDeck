@@ -1,9 +1,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { format } from "node:util";
 
 import { encodeOfferUrl, decodeOfferUrl } from "@agentdeck/remote";
 import nacl from "tweetnacl";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { WebSocket } from "ws";
+
+import type { Logger } from "../../src/logger.js";
 
 import { RemotePhone, RawPhone, startHarness, upgradeStatus, type Harness } from "./harness.js";
 
@@ -251,6 +255,58 @@ describe("连接超时与限流", () => {
     }
     expect(await upgradeStatus(h.port)).toBe(101);
     ok.close();
+  });
+});
+
+/** 记录 logger 输出（已按 printf 风格格式化） */
+function captureLogger(): { logger: Logger; lines: string[] } {
+  const lines: string[] = [];
+  const push = (level: string) => (message: string, ...args: unknown[]) => {
+    lines.push(`[${level}] ${format(message, ...args)}`);
+  };
+  return {
+    lines,
+    logger: { debug: push("debug"), info: push("info"), warn: push("warn"), error: push("error"), close: () => undefined },
+  };
+}
+
+describe("WS 心跳：连续 2 次无 pong 才终止", () => {
+  const INTERVAL = 200;
+
+  async function authedWithoutPong(logs: ReturnType<typeof captureLogger>) {
+    await h.close();
+    h = await startHarness({ enable: true, tuning: { pingIntervalMs: INTERVAL }, logger: logs.logger });
+    const offer = await h.newOffer();
+    const raw = await RawPhone.open(h.port);
+    await raw.handshake(offer.daemonPublicKey);
+    raw.sendJson({ type: "pair", pairingSecret: offer.pairingSecret, challenge: raw.challenge, deviceName: "raw" });
+    expect((await raw.readJson()).type).toBe("paired");
+    const realPong = raw.ws.pong.bind(raw.ws);
+    return { raw, mute: () => (raw.ws.pong = () => undefined), unmute: () => (raw.ws.pong = realPong) };
+  }
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  test("漏 1 次 pong 不断开（之后恢复应答则计数清零）", async () => {
+    const logs = captureLogger();
+    const { raw, mute, unmute } = await authedWithoutPong(logs);
+    mute();
+    await sleep(INTERVAL * 1.5); // 第 1 次 ping 已发出且被忽略
+    unmute();
+    await sleep(INTERVAL * 5); // 之后的 ping 都正常应答
+    expect(raw.ws.readyState).toBe(WebSocket.OPEN);
+    expect(logs.lines.filter((line) => line.includes("心跳无响应"))).toEqual([]);
+  });
+
+  test("连续漏 2 次 pong 终止连接，并 warn 记录 device / ip / 存活 / 距上次 pong", async () => {
+    const logs = captureLogger();
+    const { raw, mute } = await authedWithoutPong(logs);
+    mute();
+    await sleep(INTERVAL * 2.5); // 已发出 2 次 ping，尚未到第 3 次检查
+    expect(raw.ws.readyState).toBe(WebSocket.OPEN);
+    await raw.closed;
+    const warn = logs.lines.find((line) => line.includes("心跳无响应"));
+    expect(warn).toMatch(/^\[warn\] 远程连接连续 2 次心跳无响应，终止（device=\S{8} ip=127\.0\.0\.1 存活=\d+s 距上次pong=\d+ms）$/);
   });
 });
 

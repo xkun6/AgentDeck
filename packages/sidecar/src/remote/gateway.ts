@@ -39,7 +39,7 @@ export interface RemoteGatewayTuning {
   maxAuthFailures: number;
   /** 冷却时长（默认 60 秒） */
   cooldownMs: number;
-  /** WS ping 间隔，用于发现手机网络切换后的死连接（默认 30 秒） */
+  /** WS ping 间隔，用于发现手机网络切换后的死连接（默认 30 秒；连续 2 次无 pong 才终止） */
   pingIntervalMs: number;
   /** 未完成认证的连接数上限（默认 32） */
   maxPendingConnections: number;
@@ -99,6 +99,20 @@ class RemoteConnection implements RpcClientConnection {
   }
 }
 
+/** 每条已升级 WS 的心跳 / 诊断状态 */
+interface SocketState {
+  ip: string;
+  openedAt: number;
+  lastPongAt: number;
+  /** 已发出 ping 但仍未收到 pong 的连续次数，收到 pong 清零 */
+  missedPongs: number;
+  /** 认证成功后才有 */
+  deviceId?: string;
+}
+
+/** 连续这么多次 ping 没收到 pong 才终止连接（单次丢失 / 手机主线程繁忙不算死） */
+const MAX_MISSED_PONGS = 2;
+
 interface FailureRecord {
   count: number;
   cooldownUntil: number;
@@ -139,7 +153,7 @@ export class RemoteGateway {
   private readonly now: () => number;
   private readonly tuning: RemoteGatewayTuning;
   private readonly failures = new Map<string, FailureRecord>();
-  private readonly sockets = new Map<WebSocket, { alive: boolean }>();
+  private readonly sockets = new Map<WebSocket, SocketState>();
   private readonly connections = new Set<RemoteConnection>();
   private pending = 0;
   private pingTimer: NodeJS.Timeout | null = null;
@@ -264,11 +278,20 @@ export class RemoteGateway {
 
   private pingAll(): void {
     for (const [ws, state] of this.sockets) {
-      if (!state.alive) {
+      if (state.missedPongs >= MAX_MISSED_PONGS) {
+        const now = this.now();
+        this.logger.warn(
+          "远程连接连续 %d 次心跳无响应，终止（device=%s ip=%s 存活=%ds 距上次pong=%dms）",
+          MAX_MISSED_PONGS,
+          state.deviceId?.slice(0, 8) ?? "-",
+          state.ip,
+          Math.round((now - state.openedAt) / 1000),
+          now - state.lastPongAt,
+        );
         ws.terminate();
         continue;
       }
-      state.alive = false;
+      state.missedPongs += 1;
       try {
         ws.ping();
       } catch {
@@ -279,10 +302,12 @@ export class RemoteGateway {
 
   /** 处理一条已升级的连接：握手 → 认证 → 转交 RpcServer */
   private serve(ws: WebSocket, ip: string): void {
-    const state = { alive: true };
+    const openedAt = this.now();
+    const state: SocketState = { ip, openedAt, lastPongAt: openedAt, missedPongs: 0 };
     this.sockets.set(ws, state);
     ws.on("pong", () => {
-      state.alive = true;
+      state.missedPongs = 0;
+      state.lastPongAt = this.now();
     });
 
     type Phase = "hello" | "auth" | "authenticating" | "ready" | "closed";
@@ -343,6 +368,7 @@ export class RemoteGateway {
     const completeAuth = (deviceId: string, reply: ServerAuthReply) => {
       clearTimeout(authTimer);
       leavePending();
+      state.deviceId = deviceId;
       const conn = new RemoteConnection(deviceId, ws, channel!, drop);
       connection = conn;
       this.connections.add(conn);

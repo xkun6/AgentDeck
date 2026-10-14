@@ -1097,7 +1097,7 @@ interface RemoteConnectionOffer {
    - 认证：`{ "type": "auth", "deviceId", "deviceSecret", "challenge" }` → 成功回 `{ "type": "authed", "name" }`。
    - `challenge` 必须等于本连接第 2 步下发的值（防止重放旧连接录下的帧）；失败回 `{ "type": "auth_failed", "reason": "expired" | "invalid" | "revoked" }` 后断开。`challenge` 不符、凭据错误、设备不存在、第一条消息格式非法都按 `invalid` 计；已吊销设备凭据正确时回 `revoked`（凭据错误仍是 `invalid`，不泄露设备状态）。
    - 连续 5 次认证失败的来源 IP 冷却 60 秒：冷却期内该 IP 的升级请求直接以 HTTP 429 拒绝；认证成功清零计数。10 秒认证超时、协议违规不计入失败次数。
-   - 违规断开统一用 WS close code 1008（文本帧、解密失败、计数回退、认证超时等）。另有两项资源保护：未完成认证的连接最多 32 个（超出 HTTP 503），网关每 30 秒对每个连接做 WS ping、无 pong 的连接被终止（发现手机网络切换后的死连接）。
+   - 违规断开统一用 WS close code 1008（文本帧、解密失败、计数回退、认证超时等）。另有两项资源保护：未完成认证的连接最多 32 个（超出 HTTP 503），网关每 30 秒对每个连接做 WS ping，**连续 2 次没收到 pong** 才终止连接（单次丢失不算，手机主线程繁忙时可能晚回；收到 pong 计数清零），终止时写一条 `warn`（device 前 8 位、ip、存活秒数、距上次 pong 毫秒）。
 5. 认证后，每条加密消息是一个 JSON-RPC 2.0 对象，语义与 `/rpc` 完全一致（同样收到全部广播通知），外加只发给远程客户端的 `client.attention`。
 
 **远程客户端的限制**：以下方法对远程客户端一律返回 `-32601`（方法不存在）：`remote.*`、`settings.set`（防止手机改网关设置或管理配对）、`provider.config.get` / `provider.config.set`（自定义 provider 配置含明文 `apiKey` / `env` 里的密钥，不得交给手机）。其余方法照常；持有已配对设备等同于信任其能驱动 Agent 执行命令，因此 `agent.*`、`snapshot.*`、`schedule.*` 等不再细分。已逐项审查 4.1 方法表，除上述外没有方法返回密钥、token 或本机敏感配置：`settings.get` 只含快照 / 互通 / 网关开关，`provider.list` 只含 id / 可用性 / 启动命令，`provider.test` 只接受调用方自带的 profile 且不回显密钥，`agent.status` 仅含账户邮箱 / 订阅类型等非凭据信息。`remote.devices.revoke` 立即断开该设备的所有连接。

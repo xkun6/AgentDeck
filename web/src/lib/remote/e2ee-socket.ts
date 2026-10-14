@@ -151,7 +151,12 @@ export class E2eeSocket {
       },
       onAuthed: () => this.win(attempt),
       onAuthFailed: (reason) => this.failAttempt(attempt, { kind: "auth", reason }),
-      onProtocolError: (error) => this.failAttempt(attempt, { kind: "network", message: error.message }),
+      onProtocolError: (error) => {
+        // 胜出之后的协议错误（解密失败 / 计数回退 / 文本帧）：会话已失效、后续入站帧都会被丢弃，
+        // 必须真正关闭连接，让 SidecarClient 走正常的 onclose → 退避重连，不能留下半死连接
+        if (this.winner === attempt) this.failWinner(error);
+        else this.failAttempt(attempt, { kind: "network", message: error.message });
+      },
     });
     attempt.session = session;
     socket.onopen = () => {
@@ -219,6 +224,24 @@ export class E2eeSocket {
       const last = this.failures[this.failures.length - 1];
       this.finishClosed(1006, last?.kind === "network" ? last.message : "无法连接");
     }
+  }
+
+  private failWinner(error: Error): void {
+    const winner = this.winner;
+    if (!winner || this.readyState !== READY_STATE.OPEN) return;
+    this.winner = null;
+    winner.done = true;
+    const socket = winner.socket;
+    if (socket) {
+      socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+      try {
+        socket.close(1011, "protocol_error");
+      } catch {
+        // 已关闭
+      }
+    }
+    const code = (error as { code?: unknown }).code;
+    this.finishClosed(1011, `protocol_error:${typeof code === "string" ? code : error.message}`);
   }
 
   private finishAuthFailed(reason: AuthFailedReason): void {
