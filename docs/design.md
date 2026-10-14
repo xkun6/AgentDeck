@@ -102,7 +102,7 @@ sidecar 入口：
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
 - `GET /health`（无需 token）→ `{ "ok": true, "version": "..." }`
 - 每个 WS 文本帧是一个 JSON-RPC 2.0 对象。客户端发请求，服务端回响应；服务端主动推送用**通知**（无 id）。
-- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。
+- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`RESPONSE_TOO_LARGE`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。`RESPONSE_TOO_LARGE` 只由远程网关（4.31）在响应明文超过 16 MiB 帧上限时代发（message 中文，含实际大小），本机 `/rpc` 不会产生。
 
 ### 4.1 请求方法
 
@@ -1092,7 +1092,7 @@ interface RemoteConnectionOffer {
 **握手**（每个 WS 连接）：
 1. 客户端明文文本帧：`{ "type": "e2ee_hello", "v": 1, "clientKey": <每次连接新生成的 nacl.box 公钥 base64> }`。
 2. 服务端明文文本帧：`{ "type": "e2ee_ready", "v": 1, "challenge": <32 字节随机 base64> }`。双方 `shared = nacl.box.before(对方公钥, 己方私钥)`（服务端用 daemon 长期私钥）。
-3. 此后**只允许二进制帧**，每帧 = `nonce(24) || nacl.box.after(明文 UTF-8, nonce, shared)`。nonce 第 0 字节为方向（`0x01` 客户端→服务端、`0x02` 服务端→客户端），第 16–23 字节为该方向从 1 开始的大端 64 位计数，其余为 0；接收方要求计数严格递增，否则立即断开。解密失败、出现文本帧、单帧明文超过 16 MiB 一律断开。
+3. 此后**只允许二进制帧**，每帧 = `nonce(24) || nacl.box.after(明文 UTF-8, nonce, shared)`。nonce 第 0 字节为方向（`0x01` 客户端→服务端、`0x02` 服务端→客户端），第 16–23 字节为该方向从 1 开始的大端 64 位计数，其余为 0；接收方要求计数严格递增，否则立即断开。解密失败、出现文本帧、单帧明文超过 16 MiB 一律断开。**下行**明文超过 16 MiB 时（如 `agent.timeline` 一页过大）网关不再静默丢弃：写 `warn`（device、字节数、JSON-RPC method / id），带 `id` 的响应改发同 id 的 `{ code: -32000, data: { code: "RESPONSE_TOO_LARGE" } }` 错误（message 中文），手机端那条请求立即失败而不是等 120 秒超时；无 `id` 的通知只记日志，连接不受影响。
 4. 客户端第一条加密消息必须是以下之一（10 秒内未完成认证则断开）：
    - 配对：`{ "type": "pair", "pairingSecret", "challenge", "deviceName" }` → 成功回 `{ "type": "paired", "deviceId", "deviceSecret" }`（`deviceSecret` 32 字节随机 base64，只在此时出现一次）。
    - 认证：`{ "type": "auth", "deviceId", "deviceSecret", "challenge" }` → 成功回 `{ "type": "authed", "name" }`。
@@ -1118,8 +1118,8 @@ interface RemoteStatus {
 
 **时间线向前分页**（`agent.timeline` 扩展，兼容旧调用）：
 - 只给 `sinceSeq` 或什么都不给：行为不变（不带 `hasOlder`）。
-- 给 `limit`（1–2000）时为向前分页：从 `beforeSeq`（缺省为末尾之后）往前取至少 `limit` 条，再继续往前扩到最近的**回合起点**（`user_message`；某回合没有 `user_message` 时取其 `turn_started`），保证页首是完整回合；返回 `hasOlder` 表示更早还有条目。`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 `-32602`。
-- `beforeSeq`（≥ 1）必须与 `limit` 一起给；单独给 `beforeSeq`、`limit` 越界（非 1–2000 的整数）同样是 `-32602`。回合起点按时间线上的 `user_message`（非插话）判定，其后紧跟的同回合 `turn_started` 不再单独算起点；CLI 自发轮次等没有 `user_message` 的回合以 `turn_started` 为起点。一个回合比 `limit` 还长时整回合返回。
+- 给 `limit`（1–2000）时为向前分页：从 `beforeSeq`（缺省为末尾之后）往前取至少 `limit` 条，再继续往前扩到最近的**回合起点**（`user_message`；某回合没有 `user_message` 时取其 `turn_started`），使页首尽量是完整回合；为凑完整回合的回溯有**硬上限**：整页条数不超过 `limit` 的 2 倍，且累计序列化字节不超过 4 MiB（`TIMELINE_PAGE_MAX_BYTES`，远小于网关 16 MiB 的单帧上限；基础的最近 `limit` 条也受字节上限约束，但至少返回最近一条以保证分页能前进）。超出上限时从回合中间截断（页首不是回合起点），`hasOlder` 仍为 true，客户端照常用 `beforeSeq` 继续向前翻；返回 `hasOlder` 表示更早还有条目。`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 `-32602`。
+- `beforeSeq`（≥ 1）必须与 `limit` 一起给；单独给 `beforeSeq`、`limit` 越界（非 1–2000 的整数）同样是 `-32602`。回合起点按时间线上的 `user_message`（非插话）判定，其后紧跟的同回合 `turn_started` 不再单独算起点；CLI 自发轮次等没有 `user_message` 的回合以 `turn_started` 为起点。一个回合比 `limit` 长但不超过上限时整回合返回；更长则按上述上限从回合中间截断，被截开的回合在前端由相邻两页合并显示（同一回合的助手消息 id 相同，older 页的内容并到已有消息之前）。
 - 手机打开会话取 `{ limit: 300 }`，向上滚动到顶取 `{ beforeSeq: 当前最早 seq, limit: 300 }`；断线重连仍用 `sinceSeq` 补齐。
 
 **断线诊断**（事故背景：真机「总在重连」，但网关与手机都没有留下断线原因）：
@@ -1127,7 +1127,7 @@ interface RemoteStatus {
   `远程连接关闭 device=<deviceId 前 8 位，未认证为 -> ip=<ip> 存活=<s>s code=<code> reason=<reason> by=<local|peer> path=<path> 距上次pong=<ms>ms buffered=<n>`。
   `by=local` 表示本端先关闭 / 终止，`path` 说明走的哪条路径：`auth-timeout`（10 秒未认证）、`auth-failed`、`bad-hello`（握手格式 / 公钥非法）、`binary-in-hello`（首帧是二进制）、`bad-frame`（握手后的文本帧、解密失败、计数回退、认证期间多余帧）、`internal-error`、`pong-timeout`（连续 2 次 ping 无 pong）、`buffer-overflow`（发送缓冲超 64 MiB）、`revoked`（吊销设备）、`gateway-stop`（网关停止 / 端口变更）、`shutdown`（RpcServer 关闭）；`by=peer` 时 `path=peer-close`（对端先关闭或网络层断开）。`距上次pong` 以连接建立时刻为起点。`rpc-server` 的「远程客户端已连接 / 已断开」日志同样带 `device=<前 8 位>`。
 - **sidecar 运行标记** `<AGENTDECK_LOG_DIR>/sidecar.running`（未配置日志目录时不写）：启动时写入 `{ pid, startedAt }`；进程自己退出（含 fatal 与 `process.exit`，即触发 `exit` 事件的所有退出，见 4.18）时同步删除。启动时若发现残留，`warn`「上次 sidecar（pid=…，启动于 …）未正常退出（被外部结束或进程级崩溃）」后覆盖。退出码本身由 4.18 的「进程退出事件」日志与 Rust 的 `desktop.log`（3.6）记录，不重复。
-- **手机连接事件缓冲**（`web/src/lib/connection-log.ts`，只在手机入口注入，桌面不写）：环形缓冲最多 100 条，持久化到 `localStorage`（键 `agentdeck.mobile.connection-log`，事件后 1 秒合并写一次，页面隐藏时立即写）。每条记录：ISO 时间 `at`、`event`、触发路径 `trigger`、`gapMs`、关闭的 `code` / `reason` / `wasClean`、`aliveMs`（本连接存活）、`idleMs`（距最后入站帧）、`online` / `netType` / `effectiveType`（`navigator.onLine` 与 Network Information，有则记）、`foreground`（`isBackground` 回调）。`event` 取值：`open`、`close`、`error`、`force-reconnect`、`probe-start`、`probe-ok`、`probe-timeout`、`schedule-reconnect`、`connect-timeout`、`manual-close`、`wake-ignored`（CONNECTING 时忽略非强制唤醒），以及 E2eeSocket 的 `attempt-ok` / `attempt-fail`（每个地址的结果与耗时）、`protocol-error`（赢家连接的协议错误）。`trigger` 取值：`gap-watchdog`（附 `gapMs`）、`hint`、`online`、`visibility`、`network-change`、`system-resume`、`probe`、`manual` 等。
+- **手机连接事件缓冲**（`web/src/lib/connection-log.ts`，只在手机入口注入，桌面不写）：环形缓冲最多 100 条，持久化到 `localStorage`（键 `agentdeck.mobile.connection-log`，事件后 1 秒合并写一次，页面隐藏时立即写）。每条记录：ISO 时间 `at`、`event`、触发路径 `trigger`、`gapMs`、关闭的 `code` / `reason` / `wasClean`、`aliveMs`（本连接存活）、`idleMs`（距最后入站帧）、`online` / `netType` / `effectiveType`（`navigator.onLine` 与 Network Information，有则记）、`foreground`（`isBackground` 回调）。`event` 取值：`open`、`close`、`error`、`force-reconnect`、`probe-start`、`probe-ok`、`probe-timeout`、`schedule-reconnect`、`connect-timeout`、`manual-close`、`wake-ignored`（CONNECTING 时忽略非强制唤醒）、`sync-fail`（重连后某个会话按 `sinceSeq` 补齐失败，只记录并继续其它会话，随后照常刷新 `agent.list`），以及 E2eeSocket 的 `attempt-ok` / `attempt-fail`（每个地址的结果与耗时）、`protocol-error`（赢家连接的协议错误）。`trigger` 取值：`gap-watchdog`（附 `gapMs`）、`hint`、`online`、`visibility`、`network-change`、`system-resume`、`probe`、`manual` 等。
 - **设置页「连接诊断」**（手机端设置页，通知 / 后台运行小节之后）：显示最近 20 条（时间 + 事件 + 触发路径 + code，最新在上），「复制全部」把缓冲区全部条目的 JSON 写入剪贴板（`navigator.clipboard` 失败则展示可全选的文本框兜底），「清空」同时清掉持久化。
 
 **通知（attention）**：

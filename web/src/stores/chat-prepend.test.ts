@@ -65,6 +65,34 @@ describe("prependAgentHistory", () => {
     expect(again.messages).toHaveLength(runtime.messages.length);
   });
 
+  it("回合被页边界从中间截开：前半段并到已有的同回合助手消息之前，与整段回放一致", () => {
+    const turn: AgentStreamEnvelope[] = [
+      env(1, { type: "timeline", item: { type: "user_message", text: "问题" } }),
+      env(2, { type: "turn_started", turnId: "t1" }),
+      env(3, { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "前半" } }),
+      env(4, { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "后半" } }),
+      env(5, { type: "turn_completed", turnId: "t1" }),
+    ];
+    // 页边界落在 seq 4 之前：新页 [4, 5] 不是回合起点，older 页 [1, 2, 3] 末尾属于同一回合
+    let runtime = reduceAll(turn.slice(3));
+    expect(runtime.messages.map((m) => m.id)).toEqual(["agent-turn-t1"]);
+    runtime = prependAgentHistory(runtime, turn.slice(0, 3), 1);
+    expect(summarize(runtime)).toEqual(summarize(reduceAll(turn)));
+    expect(runtime.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    // 重复前插同一页仍然幂等
+    expect(summarize(prependAgentHistory(runtime, turn.slice(0, 3), 1))).toEqual(summarize(runtime));
+  });
+
+  it("页首不是回合起点（以 tool_call / turn_completed 开头）也能归约出消息，不抛错", () => {
+    const entries: AgentStreamEnvelope[] = [
+      env(10, { type: "timeline", turnId: "t9", item: { type: "assistant_message", text: "尾巴" } }),
+      env(11, { type: "turn_completed", turnId: "t9" }),
+    ];
+    const runtime = reduceAll(entries);
+    expect(runtime.messages.map((m) => m.role)).toEqual(["assistant"]);
+    expect(runtime.streamStatus).not.toBe("streaming");
+  });
+
   it("空页原样返回", () => {
     const runtime = reduceAll(all.slice(8));
     expect(prependAgentHistory(runtime, [], 1)).toBe(runtime);

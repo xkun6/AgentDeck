@@ -942,10 +942,37 @@ export function reduceAgentEvent(
   };
 }
 
+/** `parts` 是否以 `prefix` 开头（最后一段文本允许在 `parts` 里被后续文本接长） */
+function startsWithParts(parts: AgentMessagePart[], prefix: AgentMessagePart[]): boolean {
+  if (parts.length < prefix.length) return false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const a = parts[index]!;
+    const b = prefix[index]!;
+    if (index === prefix.length - 1 && a.type === "text" && b.type === "text") {
+      return a.source === b.source && a.text.startsWith(b.text);
+    }
+    if (JSON.stringify(a) !== JSON.stringify(b)) return false;
+  }
+  return true;
+}
+
+/** 把 older 页里被页边界截开的回合的前半段 parts 接到已有消息的 parts 前面（相邻同来源文本拼成一段，与整段回放一致） */
+function joinSplitTurnParts(older: AgentMessagePart[], known: AgentMessagePart[]): AgentMessagePart[] {
+  const last = older[older.length - 1];
+  const first = known[0];
+  if (last?.type === "text" && first?.type === "text" && last.source === first.source) {
+    return [...older.slice(0, -1), { ...last, text: last.text + first.text }, ...known.slice(1)];
+  }
+  return [...older, ...known];
+}
+
 /**
  * 向前分页（design.md 4.31）：把更早的一页条目归约成消息并**前插**到现有消息之前。
- * 页首是回合起点、页尾紧接现有时间线首个回合之前，所以每页单独从空运行时归约即可得到完整回合；
+ * 页首通常是回合起点、页尾紧接现有时间线首个回合之前，所以每页单独从空运行时归约即可得到完整回合；
  * 消息 id 由 seq / turnId / clientMessageId 决定，已存在的 id 直接跳过。
+ *
+ * 例外：sidecar 为控制页大小会在回合中间截断（条数 / 字节上限），此时同一回合的助手消息（id 为 `agent-turn-<turnId>`）
+ * 同时出现在 older 页末尾与现有首个回合里：older 里的前半段并到已有消息之前（已完整包含的重复页则跳过）。
  */
 export function prependAgentHistory(
   runtime: ChatSessionRuntime,
@@ -954,10 +981,26 @@ export function prependAgentHistory(
 ): ChatSessionRuntime {
   let older = createEmptyChatRuntime(now);
   for (const envelope of entries) older = reduceAgentEvent(older, envelope, now);
-  const known = new Set(runtime.messages.map((message) => message.id));
-  const prepend = older.messages.filter((message) => !known.has(message.id));
-  if (prepend.length === 0) return runtime;
-  return { ...runtime, messages: [...prepend, ...runtime.messages], updatedAt: now };
+  const known = new Map(runtime.messages.map((message) => [message.id, message]));
+  const prepend: AgentUIMessage[] = [];
+  const merged = new Map<string, AgentUIMessage>();
+  for (const message of older.messages) {
+    const existing = known.get(message.id);
+    if (!existing) {
+      prepend.push(message);
+      continue;
+    }
+    if (message.role !== "assistant" || message.parts.length === 0) continue;
+    if (startsWithParts(existing.parts, message.parts)) continue; // 同一页重复前插（已并入过）
+    merged.set(message.id, {
+      ...existing,
+      createdAt: Math.min(existing.createdAt, message.createdAt),
+      parts: joinSplitTurnParts(message.parts, existing.parts),
+    });
+  }
+  if (prepend.length === 0 && merged.size === 0) return runtime;
+  const messages = merged.size > 0 ? runtime.messages.map((message) => merged.get(message.id) ?? message) : runtime.messages;
+  return { ...runtime, messages: [...prepend, ...messages], updatedAt: now };
 }
 
 export const prependAgentHistoryAtom = atom(

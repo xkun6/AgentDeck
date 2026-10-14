@@ -656,6 +656,7 @@ export type AgentRpcBusinessErrorCode =
   | "NOT_SUPPORTED"
   | "TASK_NOT_FOUND"
   | "RETRACT_UNAVAILABLE"
+  | "RESPONSE_TOO_LARGE"
   | "INTERNAL_ERROR";
 
 // ---------------------------------------------------------------------------

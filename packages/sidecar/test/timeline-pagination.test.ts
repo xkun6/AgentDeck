@@ -82,8 +82,8 @@ describe("pageTimeline", () => {
   });
 
   test("再往前翻到头：hasOlder=false", () => {
-    const page = pageTimeline(sample(), { beforeSeq: 7, limit: 2 });
-    // seq<7 共 6 条，最近 2 条是 5、6 → 补到回合 A 的 user_message(2)；seq 1 (thread_started) 在更早，仍算更早
+    const page = pageTimeline(sample(), { beforeSeq: 7, limit: 3 });
+    // seq<7 共 6 条，最近 3 条是 4、5、6 → 补到回合 A 的 user_message(2)（共 5 条，不超过 2×limit）；seq 1 (thread_started) 在更早，仍算更早
     expect(page.entries.map((e) => e.seq)).toEqual([2, 3, 4, 5, 6]);
     expect(page.hasOlder).toBe(true);
     const first = pageTimeline(sample(), { beforeSeq: 2, limit: 10 });
@@ -97,9 +97,52 @@ describe("pageTimeline", () => {
     expect(page.hasOlder).toBe(false);
   });
 
-  test("一个回合比 limit 还长：整回合保留", () => {
-    const page = pageTimeline(sample(), { limit: 1 });
+  test("回合比 limit 长但不超过 2 倍：整回合保留", () => {
+    const page = pageTimeline(sample(), { limit: 3 });
     expect(page.entries.map((e) => e.seq)).toEqual([10, 11, 12, 13, 14, 15]);
+    expect(page.hasOlder).toBe(true);
+  });
+
+  test("回合超过 limit 的 2 倍：从回合中间截断，条数不超过 2×limit，hasOlder 仍为 true", () => {
+    const page = pageTimeline(sample(), { limit: 2 });
+    // 回合 C 共 6 条（10–15），上限 4 条 → 页首落在 seq 12（不是回合起点）
+    expect(page.entries.map((e) => e.seq)).toEqual([12, 13, 14, 15]);
+    expect(page.hasOlder).toBe(true);
+    // 继续向前翻：从截断处接着取，最终能覆盖整条时间线且没有重叠
+    const seen = page.entries.map((e) => e.seq);
+    let beforeSeq = page.entries[0]!.seq;
+    for (let guard = 0; guard < 20; guard++) {
+      const older = pageTimeline(sample(), { beforeSeq, limit: 2 });
+      seen.unshift(...older.entries.map((e) => e.seq));
+      if (!older.hasOlder) break;
+      beforeSeq = older.entries[0]!.seq;
+    }
+    expect(seen).toEqual(sample().map((e) => e.seq));
+  });
+
+  test("累计字节超过上限：从中间截断（至少保留最近一条），hasOlder 为 true", () => {
+    const big = (text: string) => reply(text.repeat(400));
+    const all = entries([user("A"), started("t"), big("a"), big("b"), big("c"), big("d"), done("t")]);
+    const one = Buffer.byteLength(JSON.stringify(all[2]!));
+    // 上限约 2.5 条大消息：从最近一条往前累计，吞到第 3 条大消息前停下
+    const page = pageTimeline(all, { limit: 20 }, Math.floor(one * 2.5));
+    expect(page.entries.map((e) => e.seq)).toEqual([5, 6, 7]);
+    expect(page.hasOlder).toBe(true);
+    // 单条就超过上限：仍返回最近一条，分页可以前进
+    const tiny = pageTimeline(all, { limit: 20 }, 10);
+    expect(tiny.entries.map((e) => e.seq)).toEqual([7]);
+    expect(tiny.hasOlder).toBe(true);
+  });
+
+  test("补齐回合起点时字节上限同样生效", () => {
+    const big = (text: string) => reply(text.repeat(400));
+    // 回合起点（user_message）之后有三条大消息；基础窗口是最近 3 条，补齐到起点还要再吞一条大消息
+    const all = entries([user("A"), started("t"), big("a"), big("b"), big("c"), done("t")]);
+    const one = Buffer.byteLength(JSON.stringify(all[2]!));
+    const page = pageTimeline(all, { limit: 3 }, Math.floor(one * 2.5));
+    // 基础窗口 4–6 累计约 2 条大消息 + done 未超限；再多吞一条大消息就超过 2.5 条 → 停在回合中间
+    expect(page.entries.map((e) => e.seq)).toEqual([4, 5, 6]);
+    expect(page.hasOlder).toBe(true);
   });
 
   test("beforeSeq 位于条目之间（序号有空洞）按 < 过滤", () => {

@@ -43,6 +43,8 @@ export interface RemoteGatewayTuning {
   pingIntervalMs: number;
   /** 未完成认证的连接数上限（默认 32） */
   maxPendingConnections: number;
+  /** 单条下行明文（JSON-RPC 响应 / 通知）上限，超过则回 RESPONSE_TOO_LARGE 错误或丢弃通知（默认 16 MiB，即加密帧上限） */
+  maxPlaintextBytes: number;
 }
 
 export const DEFAULT_GATEWAY_TUNING: RemoteGatewayTuning = {
@@ -51,6 +53,7 @@ export const DEFAULT_GATEWAY_TUNING: RemoteGatewayTuning = {
   cooldownMs: 60_000,
   pingIntervalMs: 30_000,
   maxPendingConnections: 32,
+  maxPlaintextBytes: MAX_PLAINTEXT_BYTES,
 };
 
 export interface RemoteGatewayOptions {
@@ -77,6 +80,8 @@ class RemoteConnection implements RpcClientConnection {
     private readonly ws: WebSocket,
     private readonly channel: E2eeChannel,
     private readonly drop: (code: number, reason: string, path: RemoteDropPath) => void,
+    private readonly logger: Logger,
+    private readonly maxPlaintextBytes: number,
   ) {}
 
   send(payload: string): void {
@@ -87,10 +92,63 @@ class RemoteConnection implements RpcClientConnection {
       this.drop(1013, "接收过慢", "buffer-overflow");
       return;
     }
+    const bytes = Buffer.byteLength(payload, "utf8");
+    if (bytes > this.maxPlaintextBytes) {
+      this.rejectOversize(payload, bytes);
+      return;
+    }
     try {
       this.ws.send(this.channel.seal(payload));
+    } catch (error) {
+      // 加密失败等：丢弃这条，不影响连接
+      this.logger.warn("远程帧发送失败（%d 字节）：%s", bytes, String(error));
+    }
+  }
+
+  /**
+   * 明文超过帧上限：带 id 的 JSON-RPC 响应改发同 id 的 `RESPONSE_TOO_LARGE` 错误，让手机端那条请求立即失败（而不是挂到 120 秒超时）；
+   * 通知（无 id）无法回错，只记日志。
+   */
+  private rejectOversize(payload: string, bytes: number): void {
+    let id: string | number | null = null;
+    let method: string | undefined;
+    try {
+      const parsed = JSON.parse(payload) as { id?: unknown; method?: unknown };
+      if (typeof parsed.id === "string" || typeof parsed.id === "number") {
+        id = parsed.id;
+      }
+      if (typeof parsed.method === "string") {
+        method = parsed.method;
+      }
     } catch {
-      // 明文超过 16 MiB 等：丢弃这条，不影响连接
+      // 无法解析：当作无 id 的通知处理
+    }
+    this.logger.warn(
+      "远程下行消息过大，未发送（device=%s %d 字节，上限 %d，method=%s id=%s）%s",
+      this.deviceId.slice(0, 8),
+      bytes,
+      this.maxPlaintextBytes,
+      method ?? "-",
+      id === null ? "-" : String(id),
+      id === null ? "" : "，已改发错误响应",
+    );
+    if (id === null) {
+      return;
+    }
+    const mb = (bytes / 1024 / 1024).toFixed(1);
+    const reply = JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32000,
+        message: `响应过大（${mb} MiB），超过远程传输上限，已放弃发送。请缩小请求范围后重试`,
+        data: { code: "RESPONSE_TOO_LARGE" },
+      },
+    });
+    try {
+      this.ws.send(this.channel.seal(reply));
+    } catch (error) {
+      this.logger.warn("发送 RESPONSE_TOO_LARGE 错误响应失败：%s", String(error));
     }
   }
 
@@ -398,7 +456,14 @@ export class RemoteGateway {
       clearTimeout(authTimer);
       leavePending();
       state.deviceId = deviceId;
-      const conn = new RemoteConnection(deviceId, ws, channel!, drop);
+      const conn = new RemoteConnection(
+        deviceId,
+        ws,
+        channel!,
+        drop,
+        this.logger,
+        this.tuning.maxPlaintextBytes,
+      );
       connection = conn;
       this.connections.add(conn);
       phase = "ready";

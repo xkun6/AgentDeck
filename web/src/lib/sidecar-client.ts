@@ -1135,7 +1135,10 @@ export class SidecarClient {
               this.resetEpoch(null);
               return;
             }
-            throw error;
+            // 单个会话补齐失败（超时 / 被截断 / 断线）只记录，不影响其它会话和最后的 agent.list 刷新
+            console.warn(`[sidecar-client] 重连后补齐会话 ${agentId} 失败`, error);
+            this.logEvent("sync-fail", { detail: `${agentId}：${error instanceof Error ? error.message : String(error)}` });
+            continue;
           }
           if (!this.trackers.has(agentId)) return; // 补齐中发现 epoch 变化，resetEpoch 已重拉列表
         }

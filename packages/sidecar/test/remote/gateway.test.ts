@@ -374,6 +374,44 @@ describe("断线诊断：远程连接关闭日志", () => {
   });
 });
 
+describe("下行超大消息", () => {
+  test("带 id 的响应超限：改发同 id 的 RESPONSE_TOO_LARGE 错误，连接保持可用", async () => {
+    const logs = captureLogger();
+    await h.close();
+    h = await startHarness({ enable: true, tuning: { maxPlaintextBytes: 1_500 }, logger: logs.logger });
+    const { phone } = await h.pairPhone();
+    for (let i = 0; i < 6; i++) {
+      await h.local.call("agent.create", { provider: "mock", cwd: process.cwd() });
+    }
+    const response = await phone.request("agent.list");
+    expect(response.result).toBeUndefined();
+    expect(response.error).toMatchObject({ code: -32000, data: { code: "RESPONSE_TOO_LARGE" } });
+    expect(response.error?.message).toContain("响应过大");
+    // 同一连接上小响应照常
+    expect(await phone.call("sidecar.info")).toMatchObject({ version: "9.9.9-test" });
+    const warn = logs.lines.find((line) => line.includes("远程下行消息过大") && line.includes("已改发错误响应"));
+    expect(warn).toMatch(/device=\S{8} \d+ 字节，上限 1500/);
+    phone.close();
+  });
+
+  test("通知（无 id）超限：只记日志（含 method），不发错误响应，连接不受影响", async () => {
+    const logs = captureLogger();
+    await h.close();
+    h = await startHarness({ enable: true, tuning: { maxPlaintextBytes: 300 }, logger: logs.logger });
+    const { phone } = await h.pairPhone();
+    await h.local.call("agent.create", { provider: "mock", cwd: process.cwd() });
+    for (let i = 0; i < 200 && !logs.lines.some((l) => l.includes("method=agent.state")); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const warn = logs.lines.find((line) => line.includes("远程下行消息过大") && line.includes("method=agent.state"));
+    expect(warn).toBeTruthy();
+    expect(warn).not.toContain("已改发错误响应");
+    expect(phone.notificationsOf("agent.state")).toEqual([]);
+    expect(phone.ws.readyState).toBe(WebSocket.OPEN);
+    phone.close();
+  });
+});
+
 describe("帧与连接", () => {
   async function authedRaw() {
     const offer = await h.newOffer();
