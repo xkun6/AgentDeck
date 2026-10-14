@@ -1102,9 +1102,14 @@ export interface AgentRpcMethods {
     result: { agent: AgentSnapshot; notice?: string };
   };
   "agent.close": { params: { agentId: string }; result: Record<string, never> };
+  /**
+   * 时间线读取。只给 `sinceSeq` 或不带参数：返回其后全部条目（不带 hasOlder）。
+   * 给 `limit`（1–2000）为向前分页（design.md 4.31）：从 `beforeSeq`（缺省 = 末尾之后）往前取至少 limit 条，
+   * 再扩到最近的回合起点，返回 `hasOlder`；`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 -32602。
+   */
   "agent.timeline": {
-    params: { agentId: string; sinceSeq?: number };
-    result: { epoch: string; entries: AgentStreamEnvelope[] };
+    params: { agentId: string; sinceSeq?: number; beforeSeq?: number; limit?: number };
+    result: { epoch: string; entries: AgentStreamEnvelope[]; hasOlder?: boolean };
   };
   "agent.delete": { params: { agentId: string }; result: Record<string, never> };
   /** 该会话当前已知的 provider 子代理（按 createdAt 升序，含各层级） */

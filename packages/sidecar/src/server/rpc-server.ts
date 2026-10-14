@@ -543,11 +543,31 @@ export class RpcServer {
       }),
       defineMethod(
         AGENT_RPC_METHODS.agentTimeline,
-        z.object({
-          agentId: z.string().min(1),
-          sinceSeq: z.number().int().nonnegative().optional(),
-        }),
-        (params) => manager.timeline(params.agentId, params.sinceSeq),
+        z
+          .object({
+            agentId: z.string().min(1),
+            sinceSeq: z.number().int().nonnegative().optional(),
+            beforeSeq: z.number().int().positive().optional(),
+            limit: z.number().int().min(1).max(2000).optional(),
+          })
+          .refine(
+            (value) => value.sinceSeq === undefined || (value.beforeSeq === undefined && value.limit === undefined),
+            { message: "sinceSeq 不能与 beforeSeq / limit 同时给出" },
+          )
+          .refine((value) => value.beforeSeq === undefined || value.limit !== undefined, {
+            message: "beforeSeq 需要同时给出 limit",
+          }),
+        (params) =>
+          manager.timeline(
+            params.agentId,
+            params.sinceSeq,
+            params.limit !== undefined
+              ? {
+                  limit: params.limit,
+                  ...(params.beforeSeq !== undefined ? { beforeSeq: params.beforeSeq } : {}),
+                }
+              : undefined,
+          ),
       ),
       defineMethod(
         AGENT_RPC_METHODS.agentUpdate,
