@@ -1,4 +1,4 @@
-import type { AgentStreamEvent } from "@agentdeck/protocol";
+import type { AgentQuestion, AgentStreamEvent } from "@agentdeck/protocol";
 import { describe, expect, test } from "vitest";
 
 import type { AgentSessionEvent } from "../src/agent/types.js";
@@ -102,6 +102,99 @@ describe("MockAgentClient", () => {
     const count = events.length;
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(events.length).toBe(count);
+  });
+
+  /** 取回合中 assistant_message 拼出的完整回复 */
+  const replyOf = (events: AgentStreamEvent[]) =>
+    events
+      .filter((e) => e.type === "timeline" && e.item.type === "assistant_message")
+      .map((e) => (e.type === "timeline" && e.item.type === "assistant_message" ? e.item.text : ""))
+      .join("");
+
+  test("/question：kind question，两题（单选带 preview + 多选），应答后回显收到的回答", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/question");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    expect(request).toMatchObject({ kind: "question", name: "AskUserQuestion", detail: { type: "question" } });
+    const questions = (request!.detail as { questions: AgentQuestion[] }).questions;
+    expect(questions).toHaveLength(2);
+    expect(questions[0]).toMatchObject({ multiSelect: false });
+    expect(questions[0]!.options.every((o) => typeof o.preview === "string")).toBe(true);
+    expect(questions[1]).toMatchObject({ multiSelect: true });
+    expect(request!.input).toEqual({ questions });
+    expect(request!.actions?.map((a) => a.id)).toEqual(["submit", "skip"]);
+    await session.respondToPermission(request!.id, {
+      behavior: "allow",
+      selectedActionId: "submit",
+      updatedInput: { ...request!.input, answers: { "用哪个日期库？": "luxon", "启用哪些功能？": "缓存, 自定义" } },
+    });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到的回答：\n- 用哪个日期库？ → luxon\n- 启用哪些功能？ → 缓存, 自定义");
+  });
+
+  test("/question 跳过：回显跳过", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/question");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    await session.respondToPermission(session.getPendingPermissions()[0]!.id, {
+      behavior: "deny",
+      selectedActionId: "skip",
+      message: "用户跳过了这些问题",
+    });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到：跳过了问题（用户跳过了这些问题）");
+  });
+
+  test("/plan：kind plan 带 Markdown 计划；批准 / 继续规划（含意见）后回显", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/plan");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    expect(request).toMatchObject({ kind: "plan", name: "ExitPlanMode", detail: { type: "plan" } });
+    const text = (request!.detail as { text: string }).text;
+    expect(text).toMatch(/^## /);
+    expect(text).toContain("```ts");
+    expect(request!.actions?.map((a) => a.id)).toEqual(["approve", "keep_planning"]);
+    await session.respondToPermission(request!.id, { behavior: "deny", selectedActionId: "keep_planning", message: "先补测试" });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到：继续规划，意见：先补测试");
+
+    await session.startTurn("/plan");
+    await waitUntil(() => events.filter((e) => e.type === "permission_requested").length === 2);
+    await session.respondToPermission(session.getPendingPermissions()[0]!.id, { behavior: "allow", selectedActionId: "approve" });
+    await waitUntil(() => events.filter((e) => e.type === "turn_completed").length === 2);
+    expect(replyOf(events.slice(events.findLastIndex((e) => e.type === "turn_started")))).toBe("Mock 收到：计划已批准");
+  });
+
+  test("/multi：同时挂起 2 条工具审批，逐条应答后回显各自结果（含拒绝理由）", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/multi");
+    await waitUntil(() => events.filter((e) => e.type === "permission_requested").length === 2);
+    const pending = session.getPendingPermissions();
+    expect(pending).toHaveLength(2);
+    expect(pending.map((r) => r.kind)).toEqual(["tool", "tool"]);
+    expect(new Set(pending.map((r) => r.id)).size).toBe(2);
+    await session.respondToPermission(pending[0]!.id, { behavior: "allow", selectedActionId: "allow" });
+    expect(session.getPendingPermissions().map((r) => r.id)).toEqual([pending[1]!.id]);
+    await session.respondToPermission(pending[1]!.id, { behavior: "deny", selectedActionId: "deny", message: "太危险" });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到的处理结果：\n- 第 1 条：允许\n- 第 2 条：拒绝，理由：太危险");
+  });
+
+  test("/multi 等待时 interrupt：每条挂起的审批都发 permission_resolved", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/multi");
+    await waitUntil(() => events.filter((e) => e.type === "permission_requested").length === 2);
+    await session.interrupt();
+    expect(session.getPendingPermissions()).toEqual([]);
+    expect(events.filter((e) => e.type === "permission_resolved")).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ type: "turn_canceled" });
   });
 
   test("splitIntoChunks 均分为 3~5 段且可无损拼回", () => {

@@ -8,6 +8,7 @@ import type {
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentQuestion,
   AgentStreamEvent,
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
@@ -88,11 +89,64 @@ interface ActiveTurn {
   abort: AbortController;
   /** 当前正在运行的工具调用（interrupt 时置 canceled） */
   runningTool: ToolCallTimelineItem | null;
-  pendingPermission: {
-    request: AgentPermissionRequest;
-    resolve: (response: AgentPermissionResponse) => void;
-  } | null;
+  /** 挂起的审批（/multi 场景会同时挂起多条） */
+  pendingPermissions: Map<
+    string,
+    {
+      request: AgentPermissionRequest;
+      resolve: (response: AgentPermissionResponse) => void;
+    }
+  >;
 }
+
+/** 交互场景（prompt 里带对应关键字触发，供真机 / 手工测试审批 UI；见 design.md 4.31「Mock 审批场景」） */
+type MockScenario = "question" | "plan" | "multi";
+
+function pickScenario(text: string): MockScenario | undefined {
+  if (text.includes("/question")) return "question";
+  if (text.includes("/plan")) return "plan";
+  if (text.includes("/multi")) return "multi";
+  return undefined;
+}
+
+/** 与 Claude AskUserQuestion 映射后的 detail 一致：两题，一题单选带 preview，一题多选；界面都会再追加「其他」 */
+export const MOCK_QUESTIONS: AgentQuestion[] = [
+  {
+    question: "用哪个日期库？",
+    header: "库",
+    multiSelect: false,
+    options: [
+      { label: "dayjs", description: "轻量，约 2KB", preview: "import dayjs from 'dayjs';\nconst now = dayjs().format('YYYY-MM-DD');" },
+      { label: "luxon", description: "功能全面，时区支持好", preview: "import { DateTime } from 'luxon';\nconst now = DateTime.now().toISODate();" },
+    ],
+  },
+  {
+    question: "启用哪些功能？",
+    header: "功能",
+    multiSelect: true,
+    options: [
+      { label: "缓存", description: "缓存查询结果" },
+      { label: "日志", description: "记录每次请求" },
+      { label: "监控", description: "上报耗时指标" },
+    ],
+  },
+];
+
+export const MOCK_PLAN_TEXT = [
+  "## 重构登录模块",
+  "",
+  "1. **梳理现状**：阅读 `src/auth/*`，列出所有调用点",
+  "2. **拆分职责**：",
+  "   - 会话存储移到 `session-store.ts`",
+  "   - 令牌刷新移到 `token-refresh.ts`",
+  "3. **补测试**：为两个新模块各写单测",
+  "",
+  "> 预计改动 6 个文件，不影响对外接口。",
+  "",
+  "```ts",
+  "export function refresh(token: string): Promise<string>;",
+  "```",
+].join("\n");
 
 class TurnAbortedError extends Error {}
 
@@ -137,7 +191,7 @@ export class MockAgentSession implements AgentSession {
       turnId,
       abort: new AbortController(),
       runningTool: null,
-      pendingPermission: null,
+      pendingPermissions: new Map(),
     };
     this.active = turn;
     this.outputSpeed.reset();
@@ -161,16 +215,15 @@ export class MockAgentSession implements AgentSession {
   }
 
   getPendingPermissions(): AgentPermissionRequest[] {
-    const pending = this.active?.pendingPermission;
-    return pending ? [pending.request] : [];
+    return Array.from(this.active?.pendingPermissions.values() ?? [], (pending) => pending.request);
   }
 
   async respondToPermission(requestId: string, response: AgentPermissionResponse): Promise<void> {
-    const pending = this.active?.pendingPermission;
-    if (!pending || pending.request.id !== requestId) {
+    const pending = this.active?.pendingPermissions.get(requestId);
+    if (!pending) {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
-    this.active!.pendingPermission = null;
+    this.active!.pendingPermissions.delete(requestId);
     this.emit({ type: "permission_resolved", requestId, response });
     pending.resolve(response);
   }
@@ -182,15 +235,14 @@ export class MockAgentSession implements AgentSession {
     }
     this.active = null;
     turn.abort.abort();
-    if (turn.pendingPermission) {
-      const { request } = turn.pendingPermission;
-      turn.pendingPermission = null;
+    for (const { request } of turn.pendingPermissions.values()) {
       this.emit({
         type: "permission_resolved",
         requestId: request.id,
         response: { behavior: "deny", message: "回合已取消", interrupt: true },
       });
     }
+    turn.pendingPermissions.clear();
     if (turn.runningTool) {
       this.emit({
         type: "timeline",
@@ -262,6 +314,85 @@ export class MockAgentSession implements AgentSession {
     }
   }
 
+  /** 发出 permission_requested 并等待应答；回合被中断时 reject */
+  private requestPermission(turn: ActiveTurn, request: AgentPermissionRequest): Promise<AgentPermissionResponse> {
+    return new Promise<AgentPermissionResponse>((resolve, reject) => {
+      turn.pendingPermissions.set(request.id, { request, resolve });
+      turn.abort.signal.addEventListener("abort", () => reject(new TurnAbortedError()), { once: true });
+      this.emit({ type: "permission_requested", turnId: turn.turnId, request });
+    });
+  }
+
+  /** 交互场景：发审批、等应答，返回要输出的回复（回显收到的回答 / 理由，便于核对） */
+  private async runScenario(turn: ActiveTurn, scenario: MockScenario): Promise<string> {
+    if (scenario === "question") {
+      const request: AgentPermissionRequest = {
+        id: randomUUID(),
+        provider: MOCK_PROVIDER_ID,
+        name: "AskUserQuestion",
+        kind: "question",
+        title: "Mock 有问题需要你回答",
+        input: { questions: MOCK_QUESTIONS },
+        detail: { type: "question", questions: MOCK_QUESTIONS },
+        actions: [
+          { id: "submit", label: "提交回答", behavior: "allow" },
+          { id: "skip", label: "跳过", behavior: "deny" },
+        ],
+      };
+      const response = await this.requestPermission(turn, request);
+      if (response.behavior === "deny") {
+        return `Mock 收到：跳过了问题${response.message ? `（${response.message}）` : ""}`;
+      }
+      const answers = (response.updatedInput?.answers ?? {}) as Record<string, string>;
+      const lines = Object.entries(answers).map(([question, answer]) => `- ${question} → ${answer}`);
+      return `Mock 收到的回答：\n${lines.length > 0 ? lines.join("\n") : "（空）"}`;
+    }
+    if (scenario === "plan") {
+      const request: AgentPermissionRequest = {
+        id: randomUUID(),
+        provider: MOCK_PROVIDER_ID,
+        name: "ExitPlanMode",
+        kind: "plan",
+        title: "Mock 提交了计划，等待你确认",
+        input: { plan: MOCK_PLAN_TEXT },
+        detail: { type: "plan", text: MOCK_PLAN_TEXT },
+        actions: [
+          { id: "approve", label: "批准计划", behavior: "allow" },
+          { id: "keep_planning", label: "继续规划", behavior: "deny" },
+        ],
+      };
+      const response = await this.requestPermission(turn, request);
+      return response.behavior === "allow"
+        ? "Mock 收到：计划已批准"
+        : `Mock 收到：继续规划，意见：${response.message?.trim() || "（无）"}`;
+    }
+    // multi：同时挂起 2 条工具审批，用于验证「还有 N 条待处理」
+    const requests = [1, 2].map((index): AgentPermissionRequest => {
+      const command = `echo 第 ${index} 条审批`;
+      return {
+        id: randomUUID(),
+        provider: MOCK_PROVIDER_ID,
+        name: "shell",
+        kind: "tool",
+        title: `运行命令（${index}/2）`,
+        description: `Mock 想要运行：${command}`,
+        input: { command },
+        detail: { type: "shell", command },
+        actions: [
+          { id: "allow", label: "允许一次", behavior: "allow" },
+          { id: "deny", label: "拒绝", behavior: "deny" },
+        ],
+      };
+    });
+    const responses = await Promise.all(requests.map((request) => this.requestPermission(turn, request)));
+    const lines = responses.map((response, index) =>
+      response.behavior === "allow"
+        ? `- 第 ${index + 1} 条：允许`
+        : `- 第 ${index + 1} 条：拒绝${response.message ? `，理由：${response.message}` : ""}`,
+    );
+    return `Mock 收到的处理结果：\n${lines.join("\n")}`;
+  }
+
   private async runTurn(turn: ActiveTurn, text: string): Promise<void> {
     const { turnId } = turn;
     try {
@@ -279,6 +410,12 @@ export class MockAgentSession implements AgentSession {
           error: "Mock 模拟失败（prompt 含 /fail）",
           code: "MOCK_FAILURE",
         });
+        return;
+      }
+
+      const scenario = pickScenario(text);
+      if (scenario) {
+        await this.streamReply(turn, text, await this.runScenario(turn, scenario));
         return;
       }
 
@@ -306,13 +443,7 @@ export class MockAgentSession implements AgentSession {
             { id: "deny", label: "拒绝", behavior: "deny" },
           ],
         };
-        const response = await new Promise<AgentPermissionResponse>((resolve, reject) => {
-          turn.pendingPermission = { request, resolve };
-          turn.abort.signal.addEventListener("abort", () => reject(new TurnAbortedError()), {
-            once: true,
-          });
-          this.emit({ type: "permission_requested", turnId, request });
-        });
+        const response = await this.requestPermission(turn, request);
         if (response.behavior === "deny") {
           this.emit({
             type: "timeline",
@@ -338,33 +469,7 @@ export class MockAgentSession implements AgentSession {
         },
       });
 
-      const reply = `Mock 回复：${text}`;
-      const messageId = randomUUID();
-      for (const chunk of splitIntoChunks(reply)) {
-        await this.pause(turn);
-        this.outputSpeed.markOutput();
-        this.emit({
-          type: "timeline",
-          turnId,
-          item: { type: "assistant_message", text: chunk, messageId },
-        });
-        // 回合中最多每秒一次、只带 outputTokensPerSecond 的 usage_updated
-        this.speedTokens += Array.from(chunk).length;
-        const live = this.outputSpeed.throttledSpeed(this.speedTokens);
-        if (live !== undefined) {
-          this.emit({ type: "usage_updated", usage: { outputTokensPerSecond: live } });
-        }
-      }
-
-      const outputTokens = Array.from(reply).length;
-      const finalSpeed = this.outputSpeed.speed(outputTokens);
-      const usage = {
-        inputTokens: Array.from(text).length,
-        outputTokens,
-        ...(finalSpeed !== undefined ? { outputTokensPerSecond: finalSpeed } : {}),
-      };
-      this.emit({ type: "usage_updated", usage });
-      this.finish(turn, { type: "turn_completed", turnId, usage });
+      await this.streamReply(turn, text, `Mock 回复：${text}`);
     } catch (error) {
       if (error instanceof TurnAbortedError) {
         return; // interrupt() 已发 turn_canceled
@@ -373,6 +478,37 @@ export class MockAgentSession implements AgentSession {
         this.finish(turn, { type: "turn_failed", turnId, error: String(error) });
       }
     }
+  }
+
+  /** 把回复分段流式输出并正常结束回合 */
+  private async streamReply(turn: ActiveTurn, text: string, reply: string): Promise<void> {
+    const { turnId } = turn;
+    const messageId = randomUUID();
+    for (const chunk of splitIntoChunks(reply)) {
+      await this.pause(turn);
+      this.outputSpeed.markOutput();
+      this.emit({
+        type: "timeline",
+        turnId,
+        item: { type: "assistant_message", text: chunk, messageId },
+      });
+      // 回合中最多每秒一次、只带 outputTokensPerSecond 的 usage_updated
+      this.speedTokens += Array.from(chunk).length;
+      const live = this.outputSpeed.throttledSpeed(this.speedTokens);
+      if (live !== undefined) {
+        this.emit({ type: "usage_updated", usage: { outputTokensPerSecond: live } });
+      }
+    }
+
+    const outputTokens = Array.from(reply).length;
+    const finalSpeed = this.outputSpeed.speed(outputTokens);
+    const usage = {
+      inputTokens: Array.from(text).length,
+      outputTokens,
+      ...(finalSpeed !== undefined ? { outputTokensPerSecond: finalSpeed } : {}),
+    };
+    this.emit({ type: "usage_updated", usage });
+    this.finish(turn, { type: "turn_completed", turnId, usage });
   }
 
   private finish(turn: ActiveTurn, event: AgentStreamEvent): void {
