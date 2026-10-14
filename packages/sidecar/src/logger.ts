@@ -35,6 +35,11 @@ export function rotateLogIfNeeded(logFile: string, maxBytes = LOG_ROTATE_BYTES):
   }
 }
 
+/** 与 logger 一致的单行日志格式（含 interop token 脱敏），供 fatal / exit 路径独立同步写文件复用 */
+export function formatLogLine(level: LogLevel, text: string): string {
+  return `${new Date().toISOString()} [${level}] ${redactInteropTokens(text)}\n`;
+}
+
 /**
  * sidecar 日志：只写 stderr 与日志文件，**绝不写 stdout**（stdout 只留给 ready 握手行）。
  * 文件写入用同步 writeSync，保证 process.exit 前的日志不丢。
@@ -54,7 +59,7 @@ export function createLogger(options: CreateLoggerOptions = {}): Logger {
   }
 
   const write = (level: LogLevel, message: string, args: unknown[]) => {
-    const line = `${new Date().toISOString()} [${level}] ${redactInteropTokens(format(message, ...args))}\n`;
+    const line = formatLogLine(level, format(message, ...args));
     if (toStderr) {
       process.stderr.write(line);
     }

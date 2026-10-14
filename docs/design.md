@@ -662,6 +662,13 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 
 **sidecar 日志轮转**：sidecar 启动打开 `sidecar.log` 前，若文件超过 10 MB，先把它重命名为 `sidecar.log.1`（覆盖旧的 `.1`），再新建。运行中不轮转。
 
+**sidecar 致命错误与资源诊断**（`packages/sidecar/src/diagnostics.ts`；事故背景：sidecar 无征兆退出且 `sidecar.log` 里没有任何线索）：
+- `uncaughtException`：用 `fs.appendFileSync` **同步**把错误、堆栈与当时的 `process.memoryUsage()`（rss / heapUsed / heapTotal / external / arrayBuffers）写入 `sidecar.log`（级别 `error`，独立于 logger 的文件句柄，logger 关闭后仍可写），再走原有优雅关闭（tree-kill 各 Agent 子进程）并以退出码 1 退出，另设 4 秒硬退出兜底。
+- `unhandledRejection`：**保持现有行为（只记日志、不退出）**，但同样同步写入堆栈与内存，不因此引入新的崩溃。
+- `process.on("exit")`：同步记一行「进程退出事件：code=<码> 原因=<原因>」。原因来自 `shutdown(reason)`（`stdin end` / `stdin close` / `stdin error` / `SIGINT` / `SIGTERM` / `父进程 <pid> 已退出` / `uncaughtException`），未经过 shutdown 的 `process.exit`（启动失败、配置错误等）记为「未经过 shutdown 流程」。被 `TerminateProcess` / 系统 OOM 杀死时 exit 事件不会触发，此时日志最后一条记录与内存采样就是线索。
+- 内存采样：启动时记一条，之后每 5 分钟写一条 `info`「内存采样 rss=… heapUsed=… heapTotal=… external=… arrayBuffers=… heapLimit=…」，附带会话数与子代理时间线占用（行数 / 字节）；`heapUsed` 超过 `v8.getHeapStatistics().heap_size_limit` 的 80% 时额外写一条 `warn`。定时器 `unref`，不阻止退出。
+- V8 的 `FATAL ERROR: Reached heap limit` 无法在 JS 里捕获（进程直接 abort，exit 事件也不触发），只能由 Rust 外壳记录 sidecar 的 stderr 与退出状态（见 3.6）。
+
 **Rust 命令**：
 - `log_tail { input: { maxBytes?: number } }` → `{ path: string, text: string, truncated: boolean, size: number }`：读取 `<日志目录>/sidecar.log` 尾部，`maxBytes` 默认 256 KB、上限 2 MB；从截断处跳到下一个换行再返回，按 UTF-8 宽松解码。文件不存在时 `text` 为空字符串、`size` 为 0，不报错。
 - `debug_paths {}` → `{ dataDir, logDir, webviewDataDir? }`。
