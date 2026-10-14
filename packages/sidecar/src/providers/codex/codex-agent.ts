@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type {
+  AgentQuestion,
   AgentMcpServer,
   AgentMcpServerStatus,
   AgentMcpStatusResult,
@@ -269,6 +270,12 @@ const MODE_PRESETS: Record<string, { approvalPolicy: CodexApprovalPolicy; sandbo
   auto: { approvalPolicy: "on-request", sandbox: "workspace-write" },
   "full-access": { approvalPolicy: "never", sandbox: "danger-full-access" },
 };
+
+/** 提问卡片的应答动作（与 Claude AskUserQuestion 一致） */
+const QUESTION_ACTIONS: AgentPermissionAction[] = [
+  { id: "submit", label: "提交回答", behavior: "allow" },
+  { id: "skip", label: "跳过", behavior: "deny" },
+];
 
 const PERMISSION_ACTIONS: AgentPermissionAction[] = [
   { id: "accept", label: "允许", behavior: "allow" },
@@ -854,7 +861,9 @@ type PermissionKind =
   | "legacy-patch"
   | "elicitation"
   | "elicitation-form"
-  | "elicitation-url";
+  | "elicitation-url"
+  /** item/tool/requestUserInput（design.md 4.33）：映射成提问卡片 */
+  | "user-input";
 
 interface PendingPermission {
   request: AgentPermissionRequest;
@@ -862,6 +871,8 @@ interface PendingPermission {
   rpcId: JsonRpcId;
   /** actionId → decision 值（命令 / 文件 / 旧版审批）；应答时按 selectedActionId 取回 */
   decisions?: ReadonlyMap<string, unknown>;
+  /** user-input：协议里的题目文本（answers 的键）→ Codex 的题目 id */
+  questionIds?: ReadonlyMap<string, string>;
   resolve: (result: unknown) => void;
 }
 
@@ -931,7 +942,32 @@ export function buildPermissionDecision(
       return allow
         ? { action: "accept", content: null, _meta: null }
         : { action: cancel ? "cancel" : "decline", content: null, _meta: null };
+    case "user-input":
+      // 需要题目 id 映射，见 buildUserInputResult；这里只给「没有回答」的兜底
+      return { answers: {} };
   }
+}
+
+/**
+ * item/tool/requestUserInput 的应答：`{ answers: { [questionId]: { answers: string[] } } }`。
+ * allow 时取 updatedInput.answers（键为题目文本，值为字符串）按 id 回填；没有任何回答 / 拒绝时回空的 answers——
+ * 协议没有「拒绝」语义，空答案比 JSON-RPC 错误对 Codex 更友好（工具得到空结果，不会记错误）。
+ */
+export function buildUserInputResult(
+  questionIds: ReadonlyMap<string, string>,
+  response: AgentPermissionResponse,
+): { answers: Record<string, { answers: string[] }> } {
+  const result: Record<string, { answers: string[] }> = {};
+  if (response.behavior === "allow") {
+    const given = asRecord(response.updatedInput?.answers);
+    for (const [text, id] of questionIds) {
+      const value = given?.[text];
+      if (typeof value === "string" && value.length > 0) {
+        result[id] = { answers: [value] };
+      }
+    }
+  }
+  return { answers: result };
 }
 
 const CANCEL_RESPONSE: AgentPermissionResponse = {
@@ -1157,16 +1193,16 @@ export class CodexAgentSession implements AgentSession {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.pending.delete(requestId);
-    // 表单内容（可能含密码等）不写进 permission_resolved：该事件会广播并落盘
+    // 表单 / 回答内容（可能含密码等）不写进 permission_resolved：该事件会广播并落盘
     this.emit({
       type: "permission_resolved",
       requestId,
       response:
-        pending.kind === "elicitation-form" && response.behavior === "allow"
+        (pending.kind === "elicitation-form" || pending.kind === "user-input") && response.behavior === "allow"
           ? { behavior: "allow", ...(response.selectedActionId ? { selectedActionId: response.selectedActionId } : {}) }
           : response,
     });
-    pending.resolve(buildPermissionDecision(pending.kind, response, pending.decisions));
+    pending.resolve(this.decisionFor(pending, response));
     // 表单 / 浏览器流程的「取消」（deny + interrupt）：MCP 的 cancel 只让该次调用失败，这里额外中断本回合
     if (
       (pending.kind === "elicitation-form" || pending.kind === "elicitation-url") &&
@@ -1449,6 +1485,9 @@ export class CodexAgentSession implements AgentSession {
     client.setRequestHandler("mcpServer/elicitation/request", (params, rpcId) =>
       this.handleElicitation(params, rpcId),
     );
+    client.setRequestHandler("item/tool/requestUserInput", (params, rpcId) =>
+      this.handleUserInput(params, rpcId),
+    );
   }
 
   private ensureThread(): Promise<void> {
@@ -1633,12 +1672,19 @@ export class CodexAgentSession implements AgentSession {
     );
   }
 
+  /** 把应答转成该挂起请求对应的 JSON-RPC 结果 */
+  private decisionFor(pending: PendingPermission, response: AgentPermissionResponse): unknown {
+    return pending.kind === "user-input"
+      ? buildUserInputResult(pending.questionIds ?? new Map(), response)
+      : buildPermissionDecision(pending.kind, response, pending.decisions);
+  }
+
   private cancelAllPermissions(response: AgentPermissionResponse): void {
     for (const [requestId, pending] of Array.from(this.pending)) {
       this.pending.delete(requestId);
       this.emit({ type: "permission_resolved", requestId, response });
       pending.resolve(
-        buildPermissionDecision(pending.kind, {
+        this.decisionFor(pending, {
           behavior: "deny",
           interrupt: true,
           ...(response.behavior === "deny" && response.message ? { message: response.message } : {}),
@@ -1921,7 +1967,7 @@ export class CodexAgentSession implements AgentSession {
       this.pending.delete(requestId);
       const response: AgentPermissionResponse = { behavior: "deny", message: "Codex 已撤销该请求" };
       this.emit({ type: "permission_resolved", requestId, response });
-      pending.resolve(buildPermissionDecision(pending.kind, { ...response, interrupt: true }));
+      pending.resolve(this.decisionFor(pending, { ...response, interrupt: true }));
       return;
     }
   }
@@ -1936,6 +1982,7 @@ export class CodexAgentSession implements AgentSession {
     request: Omit<AgentPermissionRequest, "id" | "provider" | "kind" | "actions">,
     approval?: Pick<CodexApprovalActions, "actions"> & {
       decisions?: ReadonlyMap<string, unknown>;
+      questionIds?: ReadonlyMap<string, string>;
       requestKind?: AgentPermissionRequest["kind"];
     },
   ): Promise<unknown> {
@@ -1957,6 +2004,7 @@ export class CodexAgentSession implements AgentSession {
         kind,
         rpcId,
         ...(approval?.decisions ? { decisions: approval.decisions } : {}),
+        ...(approval?.questionIds ? { questionIds: approval.questionIds } : {}),
         resolve,
       });
       const turn = this.active;
@@ -2058,6 +2106,59 @@ export class CodexAgentSession implements AgentSession {
         detail,
       },
       legacyApprovalActions("文件改动"),
+    );
+  }
+
+  /**
+   * item/tool/requestUserInput（design.md 4.33）：Codex 的 request_user_input 工具向用户提问，映射成 kind "question"，
+   * 复用提问卡片。questions: [{ id, header, question, isOther, isSecret, options: [{label, description}] | null }]；
+   * options 为 null = 纯文本题，isSecret = 输入遮罩。应答按题目 id 组织，见 buildUserInputResult。
+   */
+  private handleUserInput(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
+    const params = asRecord(rawParams);
+    const itemId = str(pick(params, "itemId", "item_id"));
+    const rawQuestions = Array.isArray(params?.questions) ? params.questions : [];
+    const questions: AgentQuestion[] = [];
+    // 答案以题目文本为键（与 Claude 的 AskUserQuestion 一致）；文本重复时加序号区分，保证能映射回 id
+    const questionIds = new Map<string, string>();
+    for (const raw of rawQuestions) {
+      const q = asRecord(raw);
+      const id = str(q?.id);
+      const text = str(q?.question);
+      if (!q || !id || !text) continue;
+      let key = text;
+      for (let n = 2; questionIds.has(key); n += 1) key = `${text} (${n})`;
+      questionIds.set(key, id);
+      const options = Array.isArray(q.options) ? q.options : null;
+      const header = str(q.header);
+      questions.push({
+        question: key,
+        ...(header ? { header } : {}),
+        multiSelect: false,
+        options: (options ?? []).flatMap((option) => {
+          const o = asRecord(option);
+          const label = str(o?.label);
+          const description = str(o?.description);
+          return label ? [{ label, ...(description ? { description } : {}) }] : [];
+        }),
+        isOther: q.isOther === true,
+        ...(q.isSecret === true ? { isSecret: true } : {}),
+        ...(options === null ? { freeText: true } : {}),
+      });
+    }
+    if (questions.length === 0) {
+      return Promise.resolve({ answers: {} });
+    }
+    return this.requestPermission(
+      "user-input",
+      rpcId,
+      {
+        name: "request_user_input",
+        title: "Codex 有问题需要你回答",
+        input: { ...(itemId ? { itemId } : {}) },
+        detail: { type: "question", questions },
+      },
+      { actions: QUESTION_ACTIONS, questionIds, requestKind: "question" },
     );
   }
 

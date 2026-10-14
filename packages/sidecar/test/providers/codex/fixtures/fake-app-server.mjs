@@ -1,7 +1,7 @@
 // 假的 `codex app-server`：按行读 JSON-RPC，按剧本回放通知与审批请求（字段形状取自 codex-cli 0.162.1）。
 // 用法：node fake-app-server.mjs app-server
 // 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
-// 剧本由 turn/start 输入文本的第一个单词决定：hello / elicitform / eliciturl / elicitempty / elicitopenai / shell / shellavail / shellpolicy / legacyexec / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
+// 剧本由 turn/start 输入文本的第一个单词决定：hello / userinput / userinputempty / elicitform / eliciturl / elicitempty / elicitopenai / shell / shellavail / shellpolicy / legacyexec / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
 // thread/compact/start 按 compact 剧本开一个回合；mcpServerStatus/list 分两页返回三个服务器；config/mcpServer/reload 回 {}。
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
@@ -202,6 +202,29 @@ const scenarios = {
     await elicitation(turnId, { mode: "openai/form", message: "x", requestedSchema: {}, _meta: null });
   },
 
+  // request_user_input：单选（带 isOther）/ 单选（不允许其他）/ 纯文本 / 遮罩纯文本；应答原样回显到 assistant 文本
+  async userinput(turnId) {
+    const answer = await serverRequest("item/tool/requestUserInput", {
+      ...base(turnId), itemId: "ui_1", isBlocking: true, autoResolutionMs: null,
+      questions: [
+        { id: "q_db", header: "数据库", question: "用哪个数据库？", isOther: true, isSecret: false,
+          options: [{ label: "SQLite", description: "嵌入式" }, { label: "Postgres", description: "服务端" }] },
+        { id: "q_mode", header: "模式", question: "用哪个数据库？", isOther: false, isSecret: false,
+          options: [{ label: "读写", description: "可写" }] },
+        { id: "q_name", header: "名称", question: "项目叫什么？", isOther: false, isSecret: false, options: null },
+        { id: "q_key", header: "密钥", question: "API Key？", isOther: false, isSecret: true, options: null },
+      ],
+    });
+    await agentMessage(turnId, "msg_ui", [`answers:${JSON.stringify(answer?.result)}`]);
+    completeTurn(turnId, "completed");
+  },
+
+  async userinputempty(turnId) {
+    const answer = await serverRequest("item/tool/requestUserInput", { ...base(turnId), itemId: "ui_2", isBlocking: true, autoResolutionMs: null, questions: [] });
+    await agentMessage(turnId, "msg_ui2", [`answers:${JSON.stringify(answer?.result)}`]);
+    completeTurn(turnId, "completed");
+  },
+
   async patch(turnId) {
     const diff = "@@ -1 +1 @@\n-old\n+new\n";
     const item = { type: "fileChange", id: "patch_1", changes: [{ path: `${CWD}\\src\\a.txt`, kind: { type: "update", move_path: null }, diff }], status: "inProgress" };
@@ -262,7 +285,8 @@ const scenarios = {
   },
 
   async unknownreq(turnId) {
-    const answer = await serverRequest("item/tool/requestUserInput", { ...base(turnId), itemId: "q1", questions: [] });
+    // 未注册的 server→client 请求（item/permissions/requestApproval）：客户端应回 -32601
+    const answer = await serverRequest("item/permissions/requestApproval", { ...base(turnId), itemId: "q1" });
     notify("item/completed", {
       ...base(turnId),
       item: { type: "agentMessage", id: "msg_u", text: answer?.error ? `error:${answer.error.code}` : "ok" },

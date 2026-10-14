@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   buildPermissionDecision,
+  buildUserInputResult,
   codexTurnCompletedUsage,
   type CodexTurnTokens,
   planToTodoItems,
@@ -388,6 +389,21 @@ describe("codex 协议小工具", () => {
       content: {},
       _meta: null,
     });
+  });
+
+  test("buildUserInputResult：按题目 id 回填 answers，空串 / 缺失 / 拒绝不回答", () => {
+    const ids = new Map([
+      ["问题一", "q1"],
+      ["问题二", "q2"],
+    ]);
+    expect(
+      buildUserInputResult(ids, {
+        behavior: "allow",
+        updatedInput: { answers: { 问题一: "是", 问题二: "", 无关: "x" } },
+      }),
+    ).toEqual({ answers: { q1: { answers: ["是"] } } });
+    expect(buildUserInputResult(ids, { behavior: "allow" })).toEqual({ answers: {} });
+    expect(buildUserInputResult(ids, { behavior: "deny", message: "跳过" })).toEqual({ answers: {} });
   });
 
   test("buildPermissionDecision：elicitation-form / elicitation-url 带齐 action / content / _meta", () => {

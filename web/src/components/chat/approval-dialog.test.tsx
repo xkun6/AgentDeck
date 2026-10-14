@@ -490,3 +490,90 @@ describe("PermissionCard：始终允许与 defaultDeny", () => {
     expect(screen.getByRole("button", { name: "拒绝" }).getAttribute("data-primary")).toBeNull();
   });
 });
+
+describe("QuestionCard：纯文本题、遮罩与 isOther", () => {
+  const TEXT_REQUEST: AgentPermissionRequest = {
+    id: "pq-text",
+    provider: "codex",
+    name: "request_user_input",
+    kind: "question",
+    title: "Codex 有问题需要你回答",
+    detail: {
+      type: "question",
+      questions: [
+        { question: "项目叫什么？", header: "名称", multiSelect: false, options: [], isOther: false, freeText: true },
+        { question: "API Key？", multiSelect: false, options: [], isOther: false, isSecret: true, freeText: true },
+        {
+          question: "用哪个数据库？",
+          multiSelect: false,
+          options: [{ label: "SQLite" }, { label: "Postgres" }],
+          isOther: false,
+        },
+        {
+          question: "部署到哪？",
+          multiSelect: false,
+          options: [{ label: "云" }],
+          isOther: true,
+          isSecret: true,
+        },
+      ],
+    },
+    input: { itemId: "ui_1" },
+  };
+
+  it("纯文本题只有输入框；secret 用密码框；isOther 为 false 的选择题不显示「其他」", () => {
+    render(<ApprovalDialog approval={approval(TEXT_REQUEST)} onRespond={vi.fn()} />);
+    const name = screen.getByRole("textbox", { name: "项目叫什么？" }) as HTMLInputElement;
+    expect(name.type).toBe("text");
+    expect((screen.getByLabelText("API Key？") as HTMLInputElement).type).toBe("password");
+    // 纯文本题没有单选 / 复选
+    expect(screen.getByRole("radio", { name: "SQLite" })).toBeTruthy();
+    // 只有「部署到哪？」（isOther: true）有「其他」
+    expect(screen.getAllByRole("radio", { name: "其他" })).toHaveLength(1);
+  });
+
+  it("纯文本题未填不能提交；填完并选好后答案以题目文本为键（「其他」输入同样遮罩）", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(TEXT_REQUEST)} onRespond={onRespond} />);
+    const submit = screen.getByRole("button", { name: "提交回答" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "项目叫什么？" }), { target: { value: "  demo  " } });
+    fireEvent.change(screen.getByLabelText("API Key？"), { target: { value: "sk-1" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Postgres" }));
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "其他" }));
+    const other = screen.getByLabelText("部署到哪？：其他回答") as HTMLInputElement;
+    expect(other.type).toBe("password");
+    fireEvent.change(other, { target: { value: "自建机房" } });
+    expect(submit.disabled).toBe(false);
+
+    fireEvent.click(submit);
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(1));
+    expect(onRespond.mock.calls[0]![1]).toEqual({
+      behavior: "allow",
+      selectedActionId: "submit",
+      updatedInput: {
+        itemId: "ui_1",
+        answers: { "项目叫什么？": "demo", "API Key？": "sk-1", "用哪个数据库？": "Postgres", "部署到哪？": "自建机房" },
+      },
+    });
+  });
+
+  it("Claude 题目（没有 isOther 字段）仍然提供「其他」；空白纯文本不算作答", () => {
+    const claude: AgentPermissionRequest = {
+      id: "pq-claude",
+      provider: "claude",
+      name: "AskUserQuestion",
+      kind: "question",
+      detail: { type: "question", questions: [{ question: "Q?", multiSelect: false, options: [{ label: "A" }] }] },
+    };
+    const { unmount } = render(<ApprovalDialog approval={approval(claude)} onRespond={vi.fn()} />);
+    expect(screen.getByRole("radio", { name: "其他" })).toBeTruthy();
+    unmount();
+
+    render(<ApprovalDialog approval={approval(TEXT_REQUEST)} onRespond={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "项目叫什么？" }), { target: { value: "   " } });
+    expect((screen.getByRole("button", { name: "提交回答" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});

@@ -1,4 +1,6 @@
-// Agent 提问卡片（Claude AskUserQuestion，design.md 4.13）：逐题单选 / 多选，每题末尾有「其他」自由输入。
+// Agent 提问卡片（Claude AskUserQuestion，design.md 4.13；Codex request_user_input，design.md 4.33）：
+// 逐题单选 / 多选，默认每题末尾有「其他」自由输入（isOther 为 false 时不提供）；
+// 没有选项的纯文本题只渲染一个输入框，isSecret 的输入遮罩。
 // 提交回传 { behavior: "allow", selectedActionId: "submit", updatedInput: { ...request.input, answers } }，
 // answers 的键为 question 原文，多选以 ", " 拼接；跳过回传 deny + selectedActionId "skip"。
 import { useState } from "react";
@@ -33,6 +35,20 @@ export const QUESTION_SKIP_MESSAGE = "用户跳过了这些问题";
 
 const EMPTY_SELECTION: QuestionSelection = { selected: [], other: false, otherText: "" };
 
+/** 纯文本题：没有选项，只有一个输入框（Codex request_user_input 的 options:null） */
+export function isFreeTextQuestion(question: AgentQuestion): boolean {
+  return question.freeText === true || question.options.length === 0;
+}
+
+/** 是否提供「其他」自由输入：缺省 = 提供（Claude 的 AskUserQuestion 一律带「其他」），Codex 按 isOther 给出 */
+function allowsOther(question: AgentQuestion): boolean {
+  return question.isOther !== false;
+}
+
+function initialSelection(question: AgentQuestion): QuestionSelection {
+  return { ...EMPTY_SELECTION, other: isFreeTextQuestion(question) };
+}
+
 /** 按当前选择构造 answers；有题目未作答时返回 null。 */
 export function buildQuestionAnswers(
   questions: readonly AgentQuestion[],
@@ -40,9 +56,11 @@ export function buildQuestionAnswers(
 ): Record<string, string> | null {
   const answers: Record<string, string> = {};
   for (const [index, question] of questions.entries()) {
-    const selection = selections[index] ?? EMPTY_SELECTION;
+    const selection = selections[index] ?? initialSelection(question);
     const otherText = selection.other ? selection.otherText.trim() : "";
-    const values = question.multiSelect
+    const values = isFreeTextQuestion(question)
+      ? otherText ? [otherText] : []
+      : question.multiSelect
       ? [
           ...question.options
             .filter((option) => selection.selected.includes(option.label))
@@ -73,7 +91,7 @@ function toggleOther(question: AgentQuestion, selection: QuestionSelection): Que
 
 export function QuestionCard({ approval, request, questions, onRespond, remaining }: QuestionCardProps) {
   const [selections, setSelections] = useState<QuestionSelection[]>(() =>
-    questions.map(() => ({ ...EMPTY_SELECTION })),
+    questions.map(initialSelection),
   );
   const [responding, setResponding] = useState<"submit" | "skip" | null>(null);
   const { error, handledElsewhere, fail, clearError } = useApprovalFailure(approval);
@@ -109,9 +127,30 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
       {description ? <div className={a.description}>{description}</div> : null}
       <div className={s.questions}>
         {questions.map((question, index) => {
-          const selection = selections[index] ?? EMPTY_SELECTION;
+          const selection = selections[index] ?? initialSelection(question);
           const name = `question-${request.id}-${index}`;
           const inputType = question.multiSelect ? "checkbox" : "radio";
+          const textType = question.isSecret ? "password" : "text";
+          if (isFreeTextQuestion(question)) {
+            return (
+              <fieldset key={`${index}-${question.question}`} className={s.question}>
+                <legend className={s.legend}>
+                  {question.header ? <span className={s.chip}>{question.header}</span> : null}
+                  <span className={s.questionText}>{question.question}</span>
+                </legend>
+                <input
+                  className={s.otherInput}
+                  type={textType}
+                  autoComplete="off"
+                  value={selection.otherText}
+                  placeholder="输入你的回答"
+                  aria-label={question.question}
+                  disabled={locked}
+                  onChange={(event) => update(index, { ...selection, otherText: event.target.value })}
+                />
+              </fieldset>
+            );
+          }
           return (
             <fieldset key={`${index}-${question.question}`} className={s.question}>
               <legend className={s.legend}>
@@ -147,24 +186,27 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
                     </label>
                   );
                 })}
-                <label className={s.option} data-checked={selection.other}>
-                  <input
-                    className={s.control}
-                    type={inputType}
-                    name={name}
-                    checked={selection.other}
-                    aria-checked={selection.other}
-                    disabled={locked}
-                    onChange={() => update(index, toggleOther(question, selection))}
-                  />
-                  <span className={s.optionBody}>
-                    <span className={s.optionLabel}>其他</span>
-                  </span>
-                </label>
-                {selection.other ? (
+                {allowsOther(question) ? (
+                  <label className={s.option} data-checked={selection.other}>
+                    <input
+                      className={s.control}
+                      type={inputType}
+                      name={name}
+                      checked={selection.other}
+                      aria-checked={selection.other}
+                      disabled={locked}
+                      onChange={() => update(index, toggleOther(question, selection))}
+                    />
+                    <span className={s.optionBody}>
+                      <span className={s.optionLabel}>其他</span>
+                    </span>
+                  </label>
+                ) : null}
+                {allowsOther(question) && selection.other ? (
                   <input
                     className={s.otherInput}
-                    type="text"
+                    type={textType}
+                    autoComplete={question.isSecret ? "off" : undefined}
                     value={selection.otherText}
                     placeholder="输入你的回答"
                     aria-label={`${question.question}：其他回答`}

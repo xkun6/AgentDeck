@@ -298,6 +298,15 @@ export interface AgentQuestion {
   header?: string;
   multiSelect: boolean;
   options: AgentQuestionOption[];
+  /**
+   * 是否允许「其他」自由输入。缺省 = 允许（Claude AskUserQuestion 的题目一律带「其他」）；
+   * Codex request_user_input 按 `isOther` 显式给出 true / false。
+   */
+  isOther?: boolean;
+  /** 输入框需要遮罩（Codex `isSecret`），作用于「其他」输入与纯文本题 */
+  isSecret?: boolean;
+  /** 纯文本题：没有选项，只有一个输入框（Codex `options: null`）；options 为空数组时也按纯文本题处理 */
+  freeText?: boolean;
 }
 
 export type ToolCallStatus = "running" | "completed" | "failed" | "canceled";

@@ -621,6 +621,100 @@ describe("CodexAgentSession（假 app-server）", () => {
     });
   });
 
+  describe("item/tool/requestUserInput", () => {
+    test("映射成 kind question：header / question / options / isOther / isSecret / 纯文本题；重复的题目文本加序号区分", async () => {
+      const { request } = await openApproval("userinput");
+      expect(request).toMatchObject({
+        provider: "codex",
+        kind: "question",
+        name: "request_user_input",
+        title: "Codex 有问题需要你回答",
+        actions: [
+          { id: "submit", label: "提交回答", behavior: "allow" },
+          { id: "skip", label: "跳过", behavior: "deny" },
+        ],
+      });
+      expect(request.detail).toEqual({
+        type: "question",
+        questions: [
+          {
+            question: "用哪个数据库？",
+            header: "数据库",
+            multiSelect: false,
+            options: [
+              { label: "SQLite", description: "嵌入式" },
+              { label: "Postgres", description: "服务端" },
+            ],
+            isOther: true,
+          },
+          {
+            question: "用哪个数据库？ (2)",
+            header: "模式",
+            multiSelect: false,
+            options: [{ label: "读写", description: "可写" }],
+            isOther: false,
+          },
+          { question: "项目叫什么？", header: "名称", multiSelect: false, options: [], isOther: false, freeText: true },
+          { question: "API Key？", header: "密钥", multiSelect: false, options: [], isOther: false, isSecret: true, freeText: true },
+        ],
+      });
+    });
+
+    test("提交：answers 按题目 id 组织，未作答的题不出现", async () => {
+      const { session, events, request } = await openApproval("userinput");
+      await session.respondToPermission(request.id, {
+        behavior: "allow",
+        selectedActionId: "submit",
+        updatedInput: {
+          answers: { "用哪个数据库？": "SQLite", "用哪个数据库？ (2)": "读写", "API Key？": "sk-123" },
+        },
+      });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({
+        answers: {
+          q_db: { answers: ["SQLite"] },
+          q_mode: { answers: ["读写"] },
+          q_key: { answers: ["sk-123"] },
+        },
+      });
+      // 回答内容（可能含密钥）不进 permission_resolved
+      expect(events.find((e) => e.type === "permission_resolved")).toEqual({
+        type: "permission_resolved",
+        requestId: request.id,
+        response: { behavior: "allow", selectedActionId: "submit" },
+      });
+    });
+
+    test("跳过：协议没有拒绝语义，回空的 answers（不回 JSON-RPC 错误）", async () => {
+      const { session, events, request } = await openApproval("userinput");
+      await session.respondToPermission(request.id, { behavior: "deny", selectedActionId: "skip", message: "用户跳过了这些问题" });
+      await waitUntil(() => events.some(isTerminal));
+      const reply = received().find((m) => m.id === 1000);
+      expect(reply?.result).toEqual({ answers: {} });
+      expect(reply?.error).toBeUndefined();
+      expect(events.at(-1)?.type).toBe("turn_completed");
+    });
+
+    test("没有可解析的题目时不产生审批，直接回空 answers", async () => {
+      const session = await newSession();
+      const events = collect(session);
+      await session.startTurn("userinputempty");
+      await waitUntil(() => events.some(isTerminal));
+      expect(events.some((e) => e.type === "permission_requested")).toBe(false);
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ answers: {} });
+    });
+
+    test("回合被中断时挂起的提问被清理并回空 answers", async () => {
+      const { session, events, request } = await openApproval("userinput");
+      await session.interrupt();
+      await waitUntil(() => events.some(isTerminal));
+      expect(session.getPendingPermissions()).toEqual([]);
+      expect(events.some((e) => e.type === "permission_resolved" && e.requestId === request.id)).toBe(true);
+      await waitUntil(() => received().some((m) => m.id === 1000 && m.result !== undefined));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ answers: {} });
+    });
+  });
+
   test("fileChange 审批：edit 详情带 unifiedDiff 与相对路径；新增文件映射为 write", async () => {
     const session = await newSession();
     const events = collect(session);

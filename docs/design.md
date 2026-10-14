@@ -217,7 +217,12 @@ export interface ElicitationField {   // 见 4.32
 }
 
 export interface AgentQuestionOption { label: string; description?: string; preview?: string }
-export interface AgentQuestion { question: string; header?: string; multiSelect: boolean; options: AgentQuestionOption[] }
+export interface AgentQuestion {
+  question: string; header?: string; multiSelect: boolean; options: AgentQuestionOption[];
+  isOther?: boolean;    // 是否允许「其他」自由输入，缺省 = 允许（Claude）；Codex request_user_input 显式给出，见 4.33
+  isSecret?: boolean;   // 输入框遮罩
+  freeText?: boolean;   // 纯文本题：没有选项，只有输入框
+}
 
 export type ToolCallStatus = "running" | "completed" | "failed" | "canceled";
 export interface ToolCallTimelineItem {
@@ -1221,6 +1226,19 @@ MCP 服务可以通过 Agent 向用户索取结构化输入（form 模式）或�
 - 标签与通知：`web/src/lib/permission-label.ts` 里 `elicitation` →「待填写」/「等待填写」；`client.attention` 摘要（4.31）form =「Agent 需要你填写表单：<serverName>」，url =「Agent 需要你在浏览器中完成操作：<serverName>」，只引用服务名，不含表单内容。
 - 超大内容：`permission-limits`（4.31）对 `detail` 里的字符串同样生效（`message` / 字段说明 / 选项文本超限会截断，字段与选项个数已被归一化函数限制在 50 / 200）。
 
+### 4.33 Codex request_user_input（提问）
+
+Codex 的 `request_user_input` 工具向用户提问时，app-server 发 server→client 请求 `item/tool/requestUserInput`（实验 API，证据：codex-cli 0.162.1 的 `generate-ts --experimental`）。此前 AgentDeck 没注册这个方法，传输层回 `-32601`；现在注册并映射成与 Claude AskUserQuestion 相同的 `kind: "question"` 审批，复用提问卡片（4.13）。**只接住请求，不打开 `default_mode_request_user_input` 实验特性，也不传 `collaborationMode`**（是否会收到请求由用户的 Codex 配置决定）。
+
+- params：`{ threadId, turnId, itemId, isBlocking, autoResolutionMs, questions: [{ id, header, question, isOther, isSecret, options: [{label, description}] | null }] }`。
+- 映射（`codex-agent.ts` 的 `handleUserInput`）：`kind: "question"`、`name: "request_user_input"`、title「Codex 有问题需要你回答」、`detail: { type: "question", questions }`、actions 与 Claude 相同（`submit`「提交回答」/ `skip`「跳过」）。每题：`header` → `header`，`question` → `question`，`options` → `options`（label / description），`multiSelect` 恒为 false，`isOther` 原样透传，`isSecret` 为 true 时带 `isSecret`，`options: null` → `freeText: true` 且 `options: []`。
+- 协议新增（`AgentQuestion`，均可选）：`isOther?`（缺省 = 允许「其他」，Claude 的题目不带该字段，行为不变；Codex 为 false 时界面不显示「其他」）、`isSecret?`（遮罩「其他」输入与纯文本输入）、`freeText?`（纯文本题：不渲染选项，只有一个必填输入框；`options` 为空数组时也按纯文本题处理）。
+- 应答：`{ answers: { [questionId]: { answers: string[] } } }`。答案键沿用提问卡片的约定（题目文本 → 字符串）；provider 在挂起记录里保留「题目文本 → id」的映射（题目文本重复时第二个起加 ` (2)` 区分），回填时只包含已作答的题。
+- **跳过 / 拒绝**：schema 里 `ToolRequestUserInputResponse` 只有 `answers`，没有拒绝语义，因此跳过（deny）、回合结束、`serverRequest/resolved` 撤销、会话关闭一律回空的 `{ answers: {} }`，而不是 JSON-RPC 错误（Codex 对错误同样按无回答处理，但会额外记录失败；空答案让工具得到干净的空结果）。这一点依赖 Codex 实际对空答案的处理，见报告里的真机验证项。
+- **隐私**：provider 发出的 `permission_resolved` 不带 `updatedInput`（回答可能含密钥，该事件会广播并落盘）。
+- 清理：`serverRequest/resolved` 通知已映射成 `permission_resolved`（所有 server→client 审批共用，包括 elicitation 与本请求）。
+- Mock 场景 `/textq`（纯文本题 + secret 题，见 4.31「Mock 审批场景」）可在没有 Codex 的情况下验证界面。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -1282,7 +1300,7 @@ interface AgentClient {
 
 - **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14）、`stop_task { task_id }`（见 4.15），默认 30 秒超时；initialize 带 `forwardSubagentText` 与 `perTaskStopAffordance`（见 4.11 / 4.15）；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, updatedPermissions?, toolUseID}` 或 `{behavior:"deny", message}`（`updatedPermissions` 见 5.3「始终允许」），`elicitation`（MCP 表单 / url，见 4.32）→ `permission_requested`（kind `elicitation`），应答 `{action, content?}`；`control_cancel_request` 撤回挂起的权限 / elicitation 请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`elicitation_complete`（4.32），`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
-- **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision }`（`accept` / `acceptForSession` / `acceptWithExecpolicyAmendment` / `applyNetworkPolicyAmendment` / `decline` / `cancel`，见 5.3）；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
+- **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision }`（`accept` / `acceptForSession` / `acceptWithExecpolicyAmendment` / `applyNetworkPolicyAmendment` / `decline` / `cancel`，见 5.3）、`mcpServer/elicitation/request`（4.32）、`item/tool/requestUserInput`（4.33）；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
   可执行文件定位：「编程 Agent」页配置的路径（见 4.8，规则同上）→ `AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 PATH 或 `%APPDATA%
 pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；同样跳过 `node_modules` 内的 PATH 目录，只运行用户本机全局安装的 codex。
