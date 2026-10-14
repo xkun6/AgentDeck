@@ -87,6 +87,7 @@ export class E2eeSocket {
   private readonly attempts: Attempt[] = [];
   private readonly failures: Failure[] = [];
   private winner: Attempt | null = null;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly options: E2eeSocketOptions;
 
   constructor(options: E2eeSocketOptions) {
@@ -186,6 +187,7 @@ export class E2eeSocket {
       return;
     }
     this.winner = attempt;
+    this.clearGrace();
     this.selectedAddress = attempt.address;
     if (attempt.timer) clearTimeout(attempt.timer);
     attempt.timer = null;
@@ -201,16 +203,34 @@ export class E2eeSocket {
     if (attempt.done) return;
     this.disposeAttempt(attempt);
     if (this.winner || this.readyState !== READY_STATE.CONNECTING) return;
-    this.failures.push(failure);
-    if (this.attempts.every((a) => a.done)) {
-      const auth = this.failures.find((f): f is Extract<Failure, { kind: "auth" }> => f.kind === "auth");
-      if (auth) {
-        this.finishClosed(E2EE_AUTH_FAILED_CLOSE_CODE, auth.reason);
-      } else {
-        const last = this.failures[this.failures.length - 1];
-        this.finishClosed(1006, last?.kind === "network" ? last.message : "无法连接");
+    if (failure.kind === "auth") {
+      // 认证被拒是电脑用共享密钥加密回的，只有真正的电脑能发出，因此是定论，不必等其它（可能不可达的）地址超时；
+      // 唯一例外：配对时一次性密钥可能已被并发的兄弟连接用掉，这里的 invalid 只是输家，稍等兄弟连接的结果
+      if (this.options.credentials.mode === "auth" || failure.reason === "expired") {
+        this.finishAuthFailed(failure.reason);
+      } else if (!this.graceTimer) {
+        this.graceTimer = setTimeout(() => this.finishAuthFailed(failure.reason), 1_500);
       }
+      return;
     }
+    this.failures.push(failure);
+    // 有配对 invalid 在等兄弟连接的结果时，由 graceTimer 收尾
+    if (!this.graceTimer && this.attempts.every((a) => a.done)) {
+      const last = this.failures[this.failures.length - 1];
+      this.finishClosed(1006, last?.kind === "network" ? last.message : "无法连接");
+    }
+  }
+
+  private finishAuthFailed(reason: AuthFailedReason): void {
+    if (this.winner || this.readyState !== READY_STATE.CONNECTING) return;
+    this.clearGrace();
+    for (const other of this.attempts) this.disposeAttempt(other);
+    this.finishClosed(E2EE_AUTH_FAILED_CLOSE_CODE, reason);
+  }
+
+  private clearGrace(): void {
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    this.graceTimer = null;
   }
 
   private disposeAttempt(attempt: Attempt): void {
@@ -247,6 +267,7 @@ export class E2eeSocket {
   close(code = 1000, reason = ""): void {
     if (this.readyState === READY_STATE.CLOSED || this.readyState === READY_STATE.CLOSING) return;
     this.readyState = READY_STATE.CLOSING;
+    this.clearGrace();
     const winner = this.winner;
     for (const attempt of this.attempts) {
       if (attempt === winner) continue;

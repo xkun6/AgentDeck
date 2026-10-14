@@ -187,6 +187,36 @@ describe("手机端远程连接层 e2e", () => {
     expect(terminals).toHaveLength(1);
   });
 
+  it("认证被拒是定论：不必等不可达（一直挂起）的地址超时", async () => {
+    const host = await pair();
+    await store.upsert({
+      ...host,
+      lastAddress: undefined,
+      addresses: [
+        { host: "127.0.0.1", port: 1, kind: "lan" },
+        { host: "127.0.0.1", port: h.port, kind: "lan" },
+      ],
+    });
+    await h.local.call("remote.devices.revoke", { deviceId: host.deviceId });
+    const hanging: RawSocket = {
+      binaryType: "",
+      send() {},
+      close() {},
+      onopen: null,
+      onclose: null,
+      onerror: null,
+      onmessage: null,
+    };
+    client = createHostClient(store.get(host.id)!, store, {
+      createSocket: (url) => (url.includes("127.0.0.1:1/") ? hanging : net.createSocket(url)),
+      client: { wakeListeners: false },
+    });
+    const started = Date.now();
+    await expect(client.connect()).rejects.toMatchObject({ reason: "revoked" });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(client.terminalError?.reason).toBe("revoked");
+  });
+
   it("多地址：坏地址不影响连上好地址，并记住最近成功的地址优先尝试", async () => {
     const dead = await freePort();
     const host = await pair((port) => [
