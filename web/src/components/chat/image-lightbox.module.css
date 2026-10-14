@@ -29,33 +29,38 @@
 .stage {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 56px 72px;
   overflow: hidden;
 }
 
-.stage[data-actual="true"] {
-  display: block;
-  overflow: auto;
+.stage[data-zoomed="true"] {
   cursor: grab;
+}
+
+/* 内容比视口大时撑开可滚动区域，比视口小时居中 */
+.canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 56px 72px;
 }
 
 .image {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  max-width: calc(100vw - 144px);
+  max-height: calc(100vh - 112px);
   object-fit: contain;
   cursor: zoom-in;
   user-select: none;
 }
 
-.image[data-actual="true"] {
+.image[data-zoomed="true"] {
   max-width: none;
   max-height: none;
-  margin: auto;
-  cursor: zoom-out;
+  cursor: inherit;
 }
 
 .close {

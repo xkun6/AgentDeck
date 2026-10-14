@@ -58,13 +58,38 @@ describe("图片查看器", () => {
     expect(screen.getByTestId("lightbox-counter").textContent).toBe("1 / 3");
   });
 
-  it("双击图片切换原始尺寸", () => {
+  it("双击图片放大 / 还原", () => {
     render(<AttachmentTray attachments={ATTACHMENTS} onRemove={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "查看大图：a.png" }));
     const img = screen.getByRole("dialog").querySelector("img")!;
-    expect(img.getAttribute("data-actual")).toBe("false");
+    expect(img.getAttribute("data-zoomed")).toBe("false");
     fireEvent.doubleClick(img);
-    expect(img.getAttribute("data-actual")).toBe("true");
+    expect(img.getAttribute("data-zoomed")).toBe("true");
+    fireEvent.doubleClick(img);
+    expect(img.getAttribute("data-zoomed")).toBe("false");
+  });
+
+  it("放大 / 缩小按钮", () => {
+    render(<AttachmentTray attachments={ATTACHMENTS} onRemove={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "查看大图：a.png" }));
+    const img = screen.getByRole("dialog").querySelector("img")!;
+    const zoomOut = screen.getByRole("button", { name: "缩小" }) as HTMLButtonElement;
+    expect(zoomOut.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "放大" }));
+    expect(img.getAttribute("data-zoomed")).toBe("true");
+    expect(zoomOut.disabled).toBe(false);
+    fireEvent.click(zoomOut);
+    expect(img.getAttribute("data-zoomed")).toBe("false");
+  });
+
+  it("切换图片时还原缩放", () => {
+    render(<AttachmentTray attachments={ATTACHMENTS} onRemove={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "查看大图：a.png" }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "放大" }));
+    expect(dialog.querySelector("img")?.getAttribute("data-zoomed")).toBe("true");
+    fireEvent.keyDown(dialog, { key: "ArrowRight" });
+    expect(dialog.querySelector("img")?.getAttribute("data-zoomed")).toBe("false");
   });
 
   it("点击消息图片打开查看器，单图无序号", () => {
