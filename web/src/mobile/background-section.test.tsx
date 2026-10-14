@@ -2,7 +2,7 @@
 // 后台运行小节：电池优化 / 通知状态与按钮、厂商指引、被冻结的说明，以及首次开启「后台保持连接」的一次性引导。
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { BackgroundGuideDialog, BackgroundSection, FROZEN_NOTE } from "./background-section";
+import { BackgroundGuideDialog, BackgroundSection, FROZEN_NOTE, NotifyModeSection } from "./background-section";
 import { setNativeBackend, type NativeBackend } from "./native/native-plugin";
 import { PreferencesStore } from "./preferences";
 
@@ -157,5 +157,19 @@ describe("首次开启「后台保持连接」引导", () => {
     act(() => prefs.setKeepAlive(true));
     await flush();
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+});
+
+describe("设置页「通知」单选", () => {
+  it("默认总是通知；选择后写入偏好并持久化", () => {
+    const storage = new MemoryStorage();
+    const prefs = new PreferencesStore(storage);
+    render(<NotifyModeSection prefs={prefs} />);
+    expect((screen.getByRole("radio", { name: "总是通知" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "仅在前台时" }));
+    expect(prefs.getState().notifyMode).toBe("foreground");
+    expect((screen.getByRole("radio", { name: "仅在前台时" }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "从不通知" }));
+    expect(new PreferencesStore(storage).getState().notifyMode).toBe("never");
   });
 });

@@ -10,7 +10,7 @@ import {
   requestNotificationPermission,
   type BatteryOptimizationStatus,
 } from "./native/native-plugin";
-import type { PreferencesStore } from "./preferences";
+import type { NotifyMode, PreferencesStore } from "./preferences";
 import s from "./mobile.module.css";
 
 export const FROZEN_NOTE = "被系统冻结时，回到 App 会自动重连并补齐，不会丢消息；只是 App 在后台被冻结期间收不到提醒。";
@@ -83,6 +83,37 @@ export function VendorTips() {
         </details>
       ))}
     </div>
+  );
+}
+
+const NOTIFY_MODE_OPTIONS: Array<{ mode: NotifyMode; label: string; hint: string }> = [
+  { mode: "always", label: "总是通知", hint: "切到后台或锁屏时弹本地通知；在前台时，不在该会话页会弹提示条。" },
+  { mode: "foreground", label: "仅在前台时", hint: "只在 App 打开时提示，后台不通知。" },
+  { mode: "never", label: "从不通知", hint: "任务完成、待审批都不提醒。" },
+];
+
+/** 通知提醒档位（design.md 4.31）：存手机本地，默认总是通知 */
+export function NotifyModeSection({ prefs }: { prefs: PreferencesStore }) {
+  const { notifyMode } = useSyncExternalStore(prefs.subscribe, prefs.getState);
+  return (
+    <section className={s.section} aria-label="通知">
+      <h2 className={s.sectionTitle}>通知</h2>
+      <div role="radiogroup" aria-label="通知提醒" className={s.radioGroup}>
+        {NOTIFY_MODE_OPTIONS.map((option) => (
+          <label key={option.mode} className={s.switchRow}>
+            <input
+              type="radio"
+              name="notify-mode"
+              value={option.mode}
+              checked={notifyMode === option.mode}
+              onChange={() => prefs.setNotifyMode(option.mode)}
+            />
+            <span>{option.label}</span>
+          </label>
+        ))}
+      </div>
+      <div className={s.hint}>{NOTIFY_MODE_OPTIONS.find((option) => option.mode === notifyMode)?.hint}</div>
+    </section>
   );
 }
 

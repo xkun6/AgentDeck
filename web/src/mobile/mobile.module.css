@@ -322,6 +322,12 @@
   height: 20px;
 }
 
+.radioGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .pullHint {
   padding: 8px;
   color: var(--h-text-3);

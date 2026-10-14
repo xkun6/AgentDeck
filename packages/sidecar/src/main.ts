@@ -15,7 +15,6 @@ import { BoardStore } from "./kanban/store.js";
 import { CustomProviderService } from "./providers/custom/index.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
 import { AttentionService } from "./remote/attention.js";
-import { PresenceTracker } from "./remote/presence.js";
 import { RemoteService } from "./remote/service.js";
 import { Scheduler } from "./scheduler/scheduler.js";
 import { ScheduleStore } from "./scheduler/store.js";
@@ -269,7 +268,6 @@ async function main(): Promise<void> {
     logger.error("启动并行协作组服务失败：%s", String(error));
   }
   // 远程网关（design.md 4.31）：默认关闭；启停由 settings.remote 驱动，启动失败只写入 remote.status.error
-  const presence = new PresenceTracker();
   remote = new RemoteService({
     settings,
     logger,
@@ -278,7 +276,6 @@ async function main(): Promise<void> {
   server = new RpcServer({
     token: config.token,
     remote,
-    presence,
     groups,
     version: SIDECAR_VERSION,
     manager,
@@ -304,7 +301,6 @@ async function main(): Promise<void> {
   attention = new AttentionService({
     manager,
     scheduler,
-    presence,
     sendToRemote: (notice) => rpcServer.sendToRemote("client.attention", notice),
   });
 

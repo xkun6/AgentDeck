@@ -318,44 +318,6 @@ export function bindRemoteToQueries(
   });
 }
 
-/** client.presence 心跳间隔（design.md 4.31：可见期间每 30 秒一次） */
-export const PRESENCE_HEARTBEAT_MS = 30_000;
-
-type PresenceClient = Pick<SidecarClient, "onState" | "request">;
-type PresenceDocument = Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
-
-/**
- * 桌面端在线状态（design.md 4.31）：连接成功、窗口可见性变化时上报 `client.presence { kind: "desktop", visible }`，
- * 可见期间每 30 秒再报一次作为心跳。sidecar 据此判断「用户在电脑前」，决定要不要给手机发通知。
- */
-export function bindDesktopPresence(
-  client: PresenceClient,
-  doc: PresenceDocument = document,
-  heartbeatMs = PRESENCE_HEARTBEAT_MS,
-): () => void {
-  let open = false;
-  const report = () => {
-    if (!open) return;
-    client
-      .request("client.presence", { kind: "desktop", visible: doc.visibilityState === "visible" })
-      .catch(() => {});
-  };
-  const unsubscribe = client.onState((state) => {
-    const wasOpen = open;
-    open = state === "open";
-    if (open && !wasOpen) report();
-  });
-  doc.addEventListener("visibilitychange", report);
-  const timer = setInterval(() => {
-    if (doc.visibilityState === "visible") report();
-  }, heartbeatMs);
-  return () => {
-    unsubscribe();
-    doc.removeEventListener("visibilitychange", report);
-    clearInterval(timer);
-  };
-}
-
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -368,7 +330,6 @@ export function useSidecarBridge(): void {
     const unbindGroups = bindGroupsToStore(client, store);
     const unbindProviders = bindProviderChangesToQueries(client, queryClient);
     const unbindRemote = bindRemoteToQueries(client, queryClient);
-    const unbindPresence = bindDesktopPresence(client);
     client.connect().catch(() => {});
     return () => {
       unbind();
@@ -377,7 +338,6 @@ export function useSidecarBridge(): void {
       unbindGroups();
       unbindProviders();
       unbindRemote();
-      unbindPresence();
     };
   }, [queryClient, store]);
 }

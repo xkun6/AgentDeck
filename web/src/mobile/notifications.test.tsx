@@ -8,6 +8,7 @@ import { decideAttention, setBackgroundAttentionHandler } from "./attention";
 import { BackgroundNotifier, notificationIdOf, type NotifierDeps } from "./native/local-notifications";
 import { setNativeBackend, type AttentionNotification } from "./native/native-plugin";
 import { routeOfClickTarget, useNotificationClicks } from "./native/use-notification-clicks";
+import type { NotifyMode } from "./preferences";
 import type { MobileRoute } from "./route";
 
 afterEach(() => {
@@ -38,6 +39,62 @@ describe("decideAttention 前台 / 后台 / 当前会话", () => {
     expect(decideAttention(notice(), inSession, true)).toBe("ignore");
     expect(decideAttention(notice(), { name: "session", agentId: "other" }, true)).toBe("banner");
     expect(decideAttention(notice({ agentId: undefined, kind: "schedule" }), inSession, true)).toBe("banner");
+  });
+});
+
+describe("通知档位 × 前台 / 后台 / 当前会话", () => {
+  const inSession: MobileRoute = { name: "session", agentId: "a1" };
+  const elsewhere: MobileRoute = { name: "sessions" };
+
+  it("always：后台本地通知；前台当前会话忽略、其它页面弹条", () => {
+    expect(decideAttention(notice(), elsewhere, false, "always")).toBe("background");
+    expect(decideAttention(notice(), inSession, true, "always")).toBe("ignore");
+    expect(decideAttention(notice(), elsewhere, true, "always")).toBe("banner");
+  });
+
+  it("foreground：后台不通知；前台规则同 always", () => {
+    expect(decideAttention(notice(), elsewhere, false, "foreground")).toBe("ignore");
+    expect(decideAttention(notice(), inSession, false, "foreground")).toBe("ignore");
+    expect(decideAttention(notice(), inSession, true, "foreground")).toBe("ignore");
+    expect(decideAttention(notice(), elsewhere, true, "foreground")).toBe("banner");
+  });
+
+  it("never：任何状态都不提醒", () => {
+    for (const foreground of [true, false]) {
+      for (const route of [inSession, elsewhere]) {
+        expect(decideAttention(notice(), route, foreground, "never")).toBe("ignore");
+      }
+    }
+  });
+
+  it("useAttentionNotice 实时读取档位：切换后立即生效，无需重新订阅", () => {
+    const handler = vi.fn();
+    setBackgroundAttentionHandler(handler);
+    let mode: NotifyMode = "always";
+    let listener: ((n: AttentionNotice) => void) | null = null;
+    const client = {
+      onAttention: (l: (n: AttentionNotice) => void) => {
+        listener = l;
+        return () => {};
+      },
+    };
+    function Probe({ foreground }: { foreground: boolean }) {
+      const [current] = useAttentionNotice(client, elsewhere, () => foreground, () => mode);
+      return <div>{current ? "有提示" : "无提示"}</div>;
+    }
+    const { rerender } = render(<Probe foreground={false} />);
+    act(() => listener!(notice({ id: "m1" })));
+    expect(handler).toHaveBeenCalledTimes(1);
+    mode = "foreground";
+    act(() => listener!(notice({ id: "m2" })));
+    expect(handler).toHaveBeenCalledTimes(1);
+    mode = "never";
+    rerender(<Probe foreground />);
+    act(() => listener!(notice({ id: "m3" })));
+    expect(screen.getByText("无提示")).toBeTruthy();
+    mode = "foreground";
+    act(() => listener!(notice({ id: "m4" })));
+    expect(screen.getByText("有提示")).toBeTruthy();
   });
 });
 

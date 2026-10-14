@@ -6,10 +6,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { classifyIpv4, collectAddresses } from "../../src/remote/addresses.js";
 import { PairingManager, PAIRING_TTL_MS } from "../../src/remote/pairing.js";
-import { DESKTOP_ACTIVE_WINDOW_MS, PresenceTracker } from "../../src/remote/presence.js";
 import { RemoteStore, sha256Hex } from "../../src/remote/store.js";
 import { createLogger } from "../../src/logger.js";
-import type { RpcClientConnection } from "../../src/server/client-connection.js";
 import { redactRemoteSecrets } from "../../src/utils/redact-remote.js";
 import { FakeClock } from "./harness.js";
 
@@ -161,54 +159,6 @@ describe("RemoteStore", () => {
     writeFileSync(path.join(dir, "remote", "devices.json"), JSON.stringify([{ deviceId: 1 }, "x"]));
     await again.load();
     expect(again.listActive()).toEqual([]);
-  });
-});
-
-describe("PresenceTracker", () => {
-  const conn = (kind: "local" | "remote"): RpcClientConnection => ({ kind, send: () => undefined, close: () => undefined });
-
-  test("可见的 desktop 心跳在 120 秒内有效，超时失效", () => {
-    const clock = new FakeClock();
-    const presence = new PresenceTracker(clock.now);
-    const desktop = conn("local");
-    expect(presence.isDesktopActive()).toBe(false);
-    presence.update(desktop, "desktop", true);
-    expect(presence.isDesktopActive()).toBe(true);
-    clock.advance(DESKTOP_ACTIVE_WINDOW_MS);
-    expect(presence.isDesktopActive()).toBe(true);
-    clock.advance(1);
-    expect(presence.isDesktopActive()).toBe(false);
-    presence.update(desktop, "desktop", true); // 心跳续期
-    expect(presence.isDesktopActive()).toBe(true);
-  });
-
-  test("不可见 / 连接断开 / mobile 都不算电脑前有人", () => {
-    const presence = new PresenceTracker();
-    const desktop = conn("local");
-    presence.update(desktop, "desktop", false);
-    expect(presence.isDesktopActive()).toBe(false);
-    presence.update(desktop, "desktop", true);
-    presence.forget(desktop);
-    expect(presence.isDesktopActive()).toBe(false);
-    presence.update(conn("local"), "mobile", true);
-    expect(presence.isDesktopActive()).toBe(false);
-  });
-
-  test("远程连接自报 desktop 也按 mobile 处理", () => {
-    const presence = new PresenceTracker();
-    presence.update(conn("remote"), "desktop", true);
-    expect(presence.isDesktopActive()).toBe(false);
-  });
-
-  test("多个桌面窗口：任一可见即算在电脑前", () => {
-    const presence = new PresenceTracker();
-    const a = conn("local");
-    const b = conn("local");
-    presence.update(a, "desktop", false);
-    presence.update(b, "desktop", true);
-    expect(presence.isDesktopActive()).toBe(true);
-    presence.update(b, "desktop", false);
-    expect(presence.isDesktopActive()).toBe(false);
   });
 });
 

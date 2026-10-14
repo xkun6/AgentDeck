@@ -26,7 +26,7 @@
 | `packages/protocol/src/connection-offer.ts`、`server/pairing-offer.ts` | `RemoteConnectionOffer` 与 `agentdeck://pair#...` 二维码 |
 | `packages/app/src/utils/connection-selection.ts` | 多地址候选：v1 简化为并发尝试 offer 中的全部地址，取第一个认证成功的 |
 | `docs/timeline-sync.md`（epoch + seq、tail 分页、缺口补齐） | `agent.timeline` 的 `beforeSeq` / `limit` 分页；`sidecar-client` 已有的 seq 去重与缺口补齐沿用 |
-| `server/agent-attention-policy.ts` | `client.presence` + `client.attention`，电脑前有人时手机不响 |
+| `server/agent-attention-policy.ts` | `client.attention`（原设计的 `client.presence` 在线判定已删除，是否提醒由手机端三档设置决定） |
 | `packages/app/src/agent-stream/`（倒置列表、按帧提交） | 手机时间线性能优化的参照 |
 
 ## 4. 结构
@@ -51,7 +51,7 @@ mobile/                      新增：Tauri Android 工程（独立 crate，不�
 | 阶段 | 内容 | 验证 |
 |---|---|---|
 | **M0 技术验证** | ① `mobile/` 跑通 Tauri Android 并加载 `web/src/mobile` 的最小页面；② 用临时方式（开发开关让 sidecar 的 `/rpc` 绑局域网，仅验证用、不合入）连上电脑 sidecar，打开会话、发消息、看流式输出；③ 在真机打开 3000+ 条时间线的会话，测滚动与流式渲染；④ 验证 App 切到后台、开着前台服务时，WebView 里的 WS 能否保持 10 分钟并持续收到事件；⑤ 输入法弹出时输入框与列表的布局 | 真机记录：滚动是否明显掉帧、内存、后台存活时长。④ 不通过时改为前台服务里用 Kotlin 原生维持连接（只收 attention），③ 不通过则评估转 Expo RN |
-| **M1 sidecar 远程网关** | 按 4.31 实现：`packages/remote`、`sidecar/src/remote/`、设置项、`remote.*` RPC、远程方法白名单、`agent.timeline` 分页、`client.presence` / `client.attention`；桌面「手机连接」设置页；桌面前端补发 `client.presence` | 单测覆盖：握手成功 / challenge 不符 / 计数回退 / 文本帧 / 配对密钥过期与复用 / 吊销后断开 / 白名单 / 分页回合边界 / attention 判定；`pnpm typecheck`、`pnpm test:unit` |
+| **M1 sidecar 远程网关** | 按 4.31 实现：`packages/remote`、`sidecar/src/remote/`、设置项、`remote.*` RPC、远程方法白名单、`agent.timeline` 分页、`client.attention`；桌面「手机连接」设置页 | 单测覆盖：握手成功 / challenge 不符 / 计数回退 / 文本帧 / 配对密钥过期与复用 / 吊销后断开 / 白名单 / 分页回合边界 / attention 发送；`pnpm typecheck`、`pnpm test:unit` |
 | **M2 手机 MVP** | 扫码配对、电脑列表与切换、会话列表、时间线（分页 + 流式）、发送 / 插话 / 取消 / 撤回、权限审批与 Agent 提问、状态行、新建会话 | 真机连真实电脑走完整流程：配对 → 新建 Claude 会话 → 审批工具调用 → 回合完成 |
 | **M3 后台与输入（已实现）** | 前台服务 + 本地通知（点击跳转会话）、网络切换与锁屏恢复后的重连补齐、图片附件、电池优化白名单引导 | 锁屏 10 分钟内收到完成 / 审批通知；Wi-Fi 与移动网络（Tailscale）切换后会话不丢 |
 | **M4 扩展（按需）** | 按回合 diff 查看（`snapshot.diff`）、调度 / 看板 / 协作组只读、用量统计；凭据改存 Android Keystore；APK 签名与 CI（需先配置 git remote） | — |
@@ -76,7 +76,7 @@ mobile/                      新增：Tauri Android 工程（独立 crate，不�
 
 **回前台快速恢复**（`SidecarClient` 新增可选 `livenessProbe`，只有手机端配置，桌面行为不变）：`visibilitychange → visible`、`online`、Network Information API 的 `change` 触发检查；连接看起来还开着但距最后一次收到数据超过 15 秒，立即发 `sidecar.info`，3 秒内无任何回应（RPC 错误也算有回应）就 `forceReconnect`，不等 TCP 自然超时。原有的时钟跳变 watchdog（JS 被冻结后恢复）仍无条件强制重连。重连后沿用 `sinceSeq` 补齐；补齐期间 `client.syncing` 为 true，界面顶部显示轻量的「正在同步…」，结束自动消失。
 
-**本地通知**：App 在后台（`document.visibilityState !== "visible"`）收到 `client.attention` → `BackgroundNotifier` 按 `id` 去重后调用 `show_attention`；前台沿用 M2 规则（当前会话忽略 / 其它页面弹提示条）。三个 channel：`agentdeck_permission`（待审批，高优先级）、`agentdeck_result`（完成 / 失败）、`agentdeck_schedule`（定时任务）；前台服务常驻通知用独立的 `agentdeck_keepalive`（低优先级静音）。首次连上电脑（App 在前台）时用 `tauri-plugin-notification` 的 `requestPermission` 申请 Android 13+ 通知权限，被拒后设置页显示状态并引导去系统设置。**点击跳转**：`tauri-plugin-notification` 2.6.0 在 Android 上的点击回调 payload 不含自定义 extra 和通知 id（`sourceJson` 从未赋值），无法知道该开哪个会话，所以提醒通知由 `NativePlugin` 自己发，`PendingIntent` 带 `agentId`；App 存活时经 `onNewIntent` → 事件 `notificationClicked` → 前端导航，进程被杀后冷启动经 `take_launch_target` 取走一次。
+**本地通知**：sidecar 总是向手机发 `client.attention`，是否提醒由设置页「通知」三档决定（`always` 默认 / `foreground` / `never`，存 localStorage 的偏好里，见 design.md 4.31 表格）。`always` 时 App 在后台（`document.visibilityState !== "visible"`）收到 → `BackgroundNotifier` 按 `id` 去重后调用 `show_attention`；前台规则：当前会话忽略 / 其它页面弹提示条；`foreground` 后台不通知；`never` 都不提醒。三个 channel：`agentdeck_permission`（待审批，高优先级）、`agentdeck_result`（完成 / 失败）、`agentdeck_schedule`（定时任务）；前台服务常驻通知用独立的 `agentdeck_keepalive`（低优先级静音）。首次连上电脑（App 在前台）时用 `tauri-plugin-notification` 的 `requestPermission` 申请 Android 13+ 通知权限，被拒后设置页显示状态并引导去系统设置。**点击跳转**：`tauri-plugin-notification` 2.6.0 在 Android 上的点击回调 payload 不含自定义 extra 和通知 id（`sourceJson` 从未赋值），无法知道该开哪个会话，所以提醒通知由 `NativePlugin` 自己发，`PendingIntent` 带 `agentId`；App 存活时经 `onNewIntent` → 事件 `notificationClicked` → 前端导航，进程被杀后冷启动经 `take_launch_target` 取走一次。
 
 **图片附件**：输入区「图片」按钮 →「拍照 / 相册」，用 `<input type="file" accept="image/*">`（拍照加 `capture="environment"`）。wry 的 `RustWebChromeClient.onShowFileChooser` 原生支持文件选择与拍照（相机权限由 barcode-scanner 合并进 Manifest，拍照走 FileProvider），无需额外插件。发送前压缩：长边 ≤ 2048px、JPEG 质量 0.85（透明底铺白）、压缩后单张 > 5MB 拒绝；最多 4 张，可预览可删除；按 `{ type: "image", data, mimeType }` 发送，运行中插话（`agent.steer` 的 prompt 同为 `AgentPromptInput`）也允许带图。协议里没有「provider 支持图片」的能力字段（`ProviderCapabilities` 只有 steer / fork），不预先禁用按钮，带图发送失败时在错误后补一句「如果当前 Agent 不支持图片，请去掉图片后重试」，并保留文字与图片草稿。
 

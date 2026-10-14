@@ -166,7 +166,7 @@ function ConnectedShell({
   content: React.ReactNode;
 }) {
   useSidecarBridge();
-  const [notice, dismiss] = useAttentionNotice(connection.client, route);
+  const [notice, dismiss] = useAttentionNotice(connection.client, route, undefined, () => prefs.getState().notifyMode);
   const syncing = useClientSyncing(connection.client);
   const tab = navTabOf(route);
 

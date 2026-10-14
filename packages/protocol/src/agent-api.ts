@@ -809,8 +809,6 @@ export interface AttentionNotice {
   timestamp: number;
 }
 
-export type ClientKind = "desktop" | "mobile";
-
 export type SnapshotFileStatus = "A" | "M" | "D" | "R";
 
 export interface SnapshotChangedFile {
@@ -936,7 +934,6 @@ export const AGENT_RPC_METHODS = {
   remoteStatus: "remote.status",
   remotePairingCreate: "remote.pairing.create",
   remoteDevicesRevoke: "remote.devices.revoke",
-  clientPresence: "client.presence",
 } as const;
 
 export const AGENT_RPC_NOTIFICATIONS = {
@@ -1178,11 +1175,6 @@ export interface AgentRpcMethods {
   };
   /** 吊销设备并立即断开其全部连接；远程客户端调用返回 -32601 */
   "remote.devices.revoke": { params: { deviceId: string }; result: Record<string, never> };
-  /** 客户端在线 / 可见状态与心跳（design.md 4.31）；远程连接的 kind 一律按 mobile 处理 */
-  "client.presence": {
-    params: { kind: ClientKind; visible: boolean };
-    result: Record<string, never>;
-  };
 }
 
 export type AgentRpcMethodName = keyof AgentRpcMethods;

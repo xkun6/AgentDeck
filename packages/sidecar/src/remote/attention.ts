@@ -1,4 +1,4 @@
-// 判定思路参照 paseo packages/server/src/server/agent-attention-policy.ts（Apache-2.0）：用户在电脑前就不打扰手机
+// 判定思路参照 paseo packages/server/src/server/agent-attention-policy.ts（Apache-2.0）；是否提醒由手机端设置决定
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -11,7 +11,6 @@ import type {
 
 import type { AgentManager } from "../agent/agent-manager.js";
 import type { Scheduler } from "../scheduler/scheduler.js";
-import type { PresenceTracker } from "./presence.js";
 
 export const ATTENTION_BODY_MAX_CHARS = 120;
 const TITLE_MAX_CHARS = 60;
@@ -45,7 +44,6 @@ function permissionBody(request: AgentPermissionRequest): string {
 export interface AttentionServiceOptions {
   manager: Pick<AgentManager, "subscribe" | "getAgent">;
   scheduler?: Pick<Scheduler, "subscribe">;
-  presence: PresenceTracker;
   /** 向全部已认证的远程客户端发送，返回送达数 */
   sendToRemote: (notice: AttentionNotice) => number;
   now?: () => number;
@@ -54,7 +52,7 @@ export interface AttentionServiceOptions {
 /**
  * client.attention 判定（design.md 4.31）：主时间线 `turn_completed` / `turn_failed`
  * （CLI 自发轮次与 judge 会话除外）、`permission_requested`、`schedule.notice`。
- * 最近 120 秒内有可见的 desktop 心跳 = 用户在电脑前，不发；否则发给所有已认证的远程连接。
+ * 一律发给所有已认证的远程连接，不判断用户是否在电脑前；是否提醒由手机端设置决定。
  */
 export class AttentionService {
   private readonly now: () => number;
@@ -166,9 +164,6 @@ export class AttentionService {
   }
 
   private notify(partial: Omit<AttentionNotice, "id" | "timestamp">): void {
-    if (this.options.presence.isDesktopActive()) {
-      return;
-    }
     this.options.sendToRemote({ id: randomUUID(), timestamp: this.now(), ...partial });
   }
 }

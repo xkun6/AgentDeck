@@ -2,7 +2,7 @@
 import { useState } from "react";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { DESKTOP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/build-info";
-import { BackgroundSection } from "./background-section";
+import { BackgroundSection, NotifyModeSection } from "./background-section";
 import { hostStatusText } from "./host-list";
 import type { ConnectionSnapshot } from "./connection-manager";
 import type { PreferencesStore } from "./preferences";
@@ -86,6 +86,8 @@ export function Settings({
             )
           ) : null}
         </section>
+
+        <NotifyModeSection prefs={prefs} />
 
         <BackgroundSection prefs={prefs} />
 

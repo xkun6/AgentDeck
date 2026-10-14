@@ -31,7 +31,6 @@ import {
 } from "../providers/custom/schema.js";
 import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import { PresenceTracker } from "../remote/presence.js";
 import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
 import type { BoardService } from "../kanban/board-service.js";
@@ -79,11 +78,6 @@ export interface RpcConnectionHandle {
   detach(): void;
 }
 
-/** 方法处理器的调用上下文：发起调用的连接（client.presence 需要） */
-interface RpcCallContext {
-  connection: RpcClientConnection;
-}
-
 /** 没有 RemoteController 时 remote.status 的默认返回 */
 const REMOTE_DISABLED_STATUS: RemoteStatus = {
   enabled: false,
@@ -126,8 +120,6 @@ export interface RpcServerOptions {
   mcp?: McpInteropEndpoint;
   /** 远程网关（design.md 4.31）；不传时 remote.status 返回关闭状态，pairing / revoke 返回 NOT_SUPPORTED */
   remote?: RemoteController;
-  /** 客户端在线状态（client.presence）；与 AttentionService 共用同一个实例 */
-  presence?: PresenceTracker;
   logger?: Logger;
 }
 
@@ -192,19 +184,19 @@ const permissionResponseSchema = z.discriminatedUnion("behavior", [
 
 interface RegisteredMethod {
   schema: z.ZodType;
-  handle: (params: unknown, context: RpcCallContext) => Promise<unknown>;
+  handle: (params: unknown) => Promise<unknown>;
 }
 
 function defineMethod<M extends AgentRpcMethodName, S extends z.ZodType>(
   name: M,
   schema: S,
-  handle: (params: z.output<S>, context: RpcCallContext) => Promise<AgentRpcResult<M>> | AgentRpcResult<M>,
+  handle: (params: z.output<S>) => Promise<AgentRpcResult<M>> | AgentRpcResult<M>,
 ): [string, RegisteredMethod] {
   return [
     name,
     {
       schema,
-      handle: async (params, context) => handle(params as z.output<S>, context),
+      handle: async (params) => handle(params as z.output<S>),
     },
   ];
 }
@@ -290,7 +282,6 @@ export class RpcServer {
   private readonly http: Server;
   private readonly wss: WebSocketServer;
   private readonly clients = new Set<RpcClientConnection>();
-  private readonly presence: PresenceTracker;
   private readonly methods: Map<string, RegisteredMethod>;
   private readonly logger: Logger;
   private readonly tokenHash: Buffer;
@@ -299,7 +290,6 @@ export class RpcServer {
 
   constructor(private readonly options: RpcServerOptions) {
     this.logger = options.logger ?? createSilentLogger();
-    this.presence = options.presence ?? new PresenceTracker();
     this.tokenHash = tokenDigest(options.token);
     this.methods = new Map(this.createMethods());
 
@@ -373,7 +363,6 @@ export class RpcServer {
       receive: (text) => this.handleText(connection, text),
       detach: () => {
         if (this.clients.delete(connection)) {
-          this.presence.forget(connection);
           this.logger.info(
             "%s客户端已断开（当前 %d 个）",
             connection.kind === "remote" ? "远程" : "WS ",
@@ -849,7 +838,7 @@ export class RpcServer {
     ];
   }
 
-  /** 4.31：remote.* 与 client.presence（remote.* 对远程客户端在 dispatch 里统一拦截为 -32601） */
+  /** 4.31：remote.*（对远程客户端在 dispatch 里统一拦截为 -32601） */
   private createRemoteMethods(): Array<[string, RegisteredMethod]> {
     const remote = this.options.remote;
     const requireRemote = (): RemoteController => {
@@ -868,14 +857,6 @@ export class RpcServer {
         z.object({ deviceId: z.string().min(1) }),
         async (params) => {
           await requireRemote().revokeDevice(params.deviceId);
-          return {};
-        },
-      ),
-      defineMethod(
-        AGENT_RPC_METHODS.clientPresence,
-        z.object({ kind: z.enum(["desktop", "mobile"]), visible: z.boolean() }),
-        (params, context) => {
-          this.presence.update(context.connection, params.kind, params.visible);
           return {};
         },
       ),
@@ -1065,7 +1046,7 @@ export class RpcServer {
         })),
       });
     }
-    return registered.handle(parsed.data, { connection });
+    return registered.handle(parsed.data);
   }
 
   /** audience 缺省 = 全部连接；返回送达的连接数 */

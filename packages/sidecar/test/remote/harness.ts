@@ -23,7 +23,6 @@ import { AgentManager } from "../../src/agent/agent-manager.js";
 import { MockAgentClient } from "../../src/providers/mock/index.js";
 import { ProviderRegistry } from "../../src/providers/registry.js";
 import { AttentionService } from "../../src/remote/attention.js";
-import { PresenceTracker } from "../../src/remote/presence.js";
 import { RemoteService } from "../../src/remote/service.js";
 import type { RemoteGatewayTuning } from "../../src/remote/gateway.js";
 import { RpcServer } from "../../src/server/rpc-server.js";
@@ -70,7 +69,6 @@ export interface Harness {
   server: RpcServer;
   remote: RemoteService;
   settings: SettingsStore;
-  presence: PresenceTracker;
   /** 本机 /rpc 客户端（桌面） */
   local: TestRpcClient;
   localPort: number;
@@ -92,7 +90,6 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const manager = new AgentManager({ registry });
   const settings = new SettingsStore(dataDir ? { dataDir } : {});
   await settings.load();
-  const presence = new PresenceTracker(clock.now);
   const remote = new RemoteService({
     settings,
     ...(dataDir ? { dataDir } : {}),
@@ -109,12 +106,10 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     registry,
     settings,
     remote,
-    presence,
   });
   remote.bind(server);
   const attention = new AttentionService({
     manager,
-    presence,
     sendToRemote: (notice) => server.sendToRemote("client.attention", notice),
     now: clock.now,
   });
@@ -129,7 +124,6 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     server,
     remote,
     settings,
-    presence,
     local,
     localPort,
     port: 0,

@@ -1,4 +1,4 @@
-// 手机端本地偏好（localStorage 持久化）：后台保持连接开关与首次引导标记。
+// 手机端本地偏好（localStorage 持久化）：后台保持连接开关、首次引导标记与通知提醒档位。
 // 与配对信息（HostStore，plugin-store）分开：这里只是界面级开关，丢了也只是回到默认值。
 
 export interface MobilePreferences {
@@ -6,11 +6,17 @@ export interface MobilePreferences {
   keepAlive: boolean;
   /** 已弹过「后台保持连接」首次引导 */
   keepAliveGuided: boolean;
+  /** 通知提醒（design.md 4.31）：总是通知 / 仅在前台时 / 从不通知，默认总是通知 */
+  notifyMode: NotifyMode;
 }
+
+export type NotifyMode = "always" | "foreground" | "never";
+
+export const NOTIFY_MODES: readonly NotifyMode[] = ["always", "foreground", "never"];
 
 export const PREFERENCES_KEY = "agentdeck.mobile.preferences";
 
-const DEFAULTS: MobilePreferences = { keepAlive: true, keepAliveGuided: false };
+const DEFAULTS: MobilePreferences = { keepAlive: true, keepAliveGuided: false, notifyMode: "always" };
 
 type PreferencesStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -35,13 +41,23 @@ export class PreferencesStore {
     this.update({ keepAlive });
   }
 
+  setNotifyMode(notifyMode: NotifyMode): void {
+    this.update({ notifyMode });
+  }
+
   markKeepAliveGuided(): void {
     this.update({ keepAliveGuided: true });
   }
 
   private update(patch: Partial<MobilePreferences>): void {
     const next = { ...this.state, ...patch };
-    if (next.keepAlive === this.state.keepAlive && next.keepAliveGuided === this.state.keepAliveGuided) return;
+    if (
+      next.keepAlive === this.state.keepAlive &&
+      next.keepAliveGuided === this.state.keepAliveGuided &&
+      next.notifyMode === this.state.notifyMode
+    ) {
+      return;
+    }
     this.state = next;
     try {
       this.storage?.setItem(PREFERENCES_KEY, JSON.stringify(next));
@@ -59,6 +75,7 @@ export class PreferencesStore {
       return {
         keepAlive: typeof parsed?.keepAlive === "boolean" ? parsed.keepAlive : DEFAULTS.keepAlive,
         keepAliveGuided: parsed?.keepAliveGuided === true,
+        notifyMode: NOTIFY_MODES.find((mode) => mode === parsed?.notifyMode) ?? DEFAULTS.notifyMode,
       };
     } catch {
       return DEFAULTS;

@@ -25,7 +25,7 @@ describe("PreferencesStore", () => {
   it("后台保持连接默认开、首次引导默认未弹；修改后持久化并通知订阅方", () => {
     const storage = new MemoryStorage();
     const prefs = new PreferencesStore(storage);
-    expect(prefs.getState()).toEqual({ keepAlive: true, keepAliveGuided: false });
+    expect(prefs.getState()).toEqual({ keepAlive: true, keepAliveGuided: false, notifyMode: "always" });
 
     const listener = vi.fn();
     prefs.subscribe(listener);
@@ -33,10 +33,14 @@ describe("PreferencesStore", () => {
     prefs.setKeepAlive(false);
     prefs.markKeepAliveGuided();
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(storage.data.get(PREFERENCES_KEY)!)).toEqual({ keepAlive: false, keepAliveGuided: true });
+    expect(JSON.parse(storage.data.get(PREFERENCES_KEY)!)).toEqual({
+      keepAlive: false,
+      keepAliveGuided: true,
+      notifyMode: "always",
+    });
 
     const reloaded = new PreferencesStore(storage);
-    expect(reloaded.getState()).toEqual({ keepAlive: false, keepAliveGuided: true });
+    expect(reloaded.getState()).toEqual({ keepAlive: false, keepAliveGuided: true, notifyMode: "always" });
   });
 
   it("存储损坏 / 不可用时回到默认值，不抛错", () => {
@@ -44,6 +48,16 @@ describe("PreferencesStore", () => {
     storage.setItem(PREFERENCES_KEY, "{坏的");
     expect(new PreferencesStore(storage).getState().keepAlive).toBe(true);
     expect(new PreferencesStore(null).getState().keepAlive).toBe(true);
+  });
+
+  it("通知档位默认 always；修改后持久化，未知值回到默认", () => {
+    const storage = new MemoryStorage();
+    const prefs = new PreferencesStore(storage);
+    expect(prefs.getState().notifyMode).toBe("always");
+    prefs.setNotifyMode("never");
+    expect(new PreferencesStore(storage).getState().notifyMode).toBe("never");
+    storage.setItem(PREFERENCES_KEY, JSON.stringify({ notifyMode: "loud" }));
+    expect(new PreferencesStore(storage).getState().notifyMode).toBe("always");
   });
 });
 

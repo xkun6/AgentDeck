@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { SidecarClient } from "@/lib/sidecar-client";
 import { attentionTarget, decideAttention, dispatchBackgroundAttention } from "./attention";
+import type { NotifyMode } from "./preferences";
 import type { MobileRoute } from "./route";
 import s from "./mobile.module.css";
 
@@ -21,10 +22,16 @@ export function useAttentionNotice(
   client: Pick<SidecarClient, "onAttention"> | null,
   route: MobileRoute,
   isForeground: () => boolean = () => document.visibilityState === "visible",
+  getNotifyMode: () => NotifyMode = () => "always",
 ): [AttentionNotice | null, () => void] {
   const [notice, setNotice] = useState<AttentionNotice | null>(null);
   const routeRef = useRef(route);
   routeRef.current = route;
+  // 回调放进 ref：调用方每次渲染传新函数也不会重新订阅
+  const foregroundRef = useRef(isForeground);
+  foregroundRef.current = isForeground;
+  const modeRef = useRef(getNotifyMode);
+  modeRef.current = getNotifyMode;
   const seen = useRef(new Set<string>());
 
   useEffect(() => {
@@ -32,11 +39,11 @@ export function useAttentionNotice(
     return client.onAttention((incoming) => {
       if (seen.current.has(incoming.id)) return;
       seen.current.add(incoming.id);
-      const decision = decideAttention(incoming, routeRef.current, isForeground());
+      const decision = decideAttention(incoming, routeRef.current, foregroundRef.current(), modeRef.current());
       if (decision === "banner") setNotice(incoming);
       else if (decision === "background") dispatchBackgroundAttention(incoming);
     });
-  }, [client, isForeground]);
+  }, [client]);
 
   useEffect(() => {
     if (!notice) return;
