@@ -27,16 +27,23 @@ class KeepAliveService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    // intent 为 null = 系统在进程被杀后以 sticky 方式重启（不带任何 extras）。此时 WebView 与电脑的连接早已不在，
+    // 继续显示「AgentDeck 已连接」会失真，直接停掉；下次用户打开 App 连上电脑后由前端重新启动。
+    // （新版返回 START_NOT_STICKY，系统不会再这样重启；这里保留判断是为了兜住旧版本升级后遗留的 sticky 状态）
+    if (intent == null) {
+      stopSelf()
+      return START_NOT_STICKY
+    }
     active = true
     createChannel()
-    val text = intent?.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: DEFAULT_TEXT
+    val text = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() } ?: DEFAULT_TEXT
     val notification = buildNotification(text)
     if (Build.VERSION.SDK_INT >= 29) {
       startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     } else {
       startForeground(NOTIFICATION_ID, notification)
     }
-    val wantWakeLock = intent?.getBooleanExtra(EXTRA_WAKELOCK, false) == true
+    val wantWakeLock = intent.getBooleanExtra(EXTRA_WAKELOCK, false) == true
     if (wantWakeLock && wakeLock == null) {
       val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
       wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "agentdeck:keepalive").apply {
@@ -46,7 +53,9 @@ class KeepAliveService : Service() {
     } else if (!wantWakeLock) {
       releaseWakeLock()
     }
-    return START_STICKY
+    // 不用 START_STICKY：进程被杀后连接必须由前端重建，系统无法替我们恢复，重启出来的服务只会是个假的「已连接」提示。
+    // 另外 Android 12+ 后台启动前台服务本就受限，sticky 重启还可能抛 ForegroundServiceStartNotAllowedException。
+    return START_NOT_STICKY
   }
 
   override fun onDestroy() {
