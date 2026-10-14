@@ -2023,6 +2023,7 @@ export class CodexAgentSession implements AgentSession {
   }
 
   private emit(event: AgentSessionEvent): void {
+    this.active?.speed.observe(event);
     for (const listener of this.listeners) {
       try {
         listener(event);

@@ -1016,7 +1016,7 @@ interface AgentRateLimits {
 - 快照没有 `rateLimits` 时隐藏。额度为账户级：每个会话显示自己快照中最近收到的值。
 
 **输出速度（tok/s）**：
-- `AgentUsage` 增加 `outputTokensPerSecond?: number`：本回合输出 token 数 ÷（当前或结束时刻 − 本回合首个输出到达时刻）秒；首个输出不足 1 秒时不计算。随 `usage_updated`（回合中）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
+- `AgentUsage` 增加 `outputTokensPerSecond?: number`：本回合输出 token 数 ÷（当前或结束时刻 − 本回合首个输出到达时刻 − 审批等待时长）秒；首个输出不足 1 秒（扣除后不足 1 秒同样）时不计算。**审批等待时长** = 首个输出之后，每段 `permission_requested` → `permission_resolved` 之间的时间（同一时刻有多个请求挂起时取并集；首个输出之前的等待本来就不在分母里，不重复扣除；等待尚未结束时扣到当前时刻）。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker.observe`，在各自的事件出口（`emit`）喂入会话事件。随 `usage_updated`（回合中）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
 - Claude：主线程（不含子代理 sidechain）每条 assistant 消息的 `stream_event` `message_delta.usage.output_tokens`（该消息内累计）累加为本回合已输出 token，回合中最多每秒发一次只带 `outputTokensPerSecond` 的 `usage_updated`；result 时用最终输出 token 计算最终值。
 - Codex：本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径）到达时计算并下发；只在回合结束才有用量时只给最终值。
 - ACP：只在回合结束用 `PromptResponse.usage` 的输出 token 计算最终值（没有 usage 则不给）。

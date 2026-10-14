@@ -1965,6 +1965,7 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   private emit(event: AgentSessionEvent): void {
+    this.outputSpeed.observe(event);
     for (const listener of this.listeners) {
       try {
         listener(event);
