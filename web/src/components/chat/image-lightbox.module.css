@@ -113,3 +113,36 @@
   flex: none;
   color: var(--h-text-3);
 }
+
+/*
+ * 手机视口：左右各留 72px 给上一张 / 下一张按钮会让竖图只剩 100vw - 144px（388 宽屏上仅 244px）。
+ * 窄屏下左右只留 8px，图片按「宽或高先撑满」显示；上一张 / 下一张挪到底部两侧，不再压在图片上。桌面（> 640px）不受影响。
+ */
+@media (max-width: 640px) {
+  .canvas {
+    padding: 56px 8px;
+  }
+
+  .image {
+    max-width: calc(100vw - 16px);
+  }
+
+  .prev,
+  .next {
+    top: auto;
+    bottom: 12px;
+    transform: none;
+  }
+
+  .prev {
+    left: 8px;
+  }
+
+  .next {
+    right: 8px;
+  }
+
+  .footer {
+    max-width: calc(100vw - 112px);
+  }
+}

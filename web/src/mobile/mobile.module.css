@@ -683,6 +683,16 @@
   opacity: 0.85;
 }
 
+/* 视觉仍是 24x24；伪元素把可点区域向缩略图内侧扩到 44x44（不向外扩：外侧会压到相邻缩略图，且被 imageStrip 的 overflow 裁掉） */
+.imageRemove::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
+}
+
 .imageBusy {
   display: flex;
   align-items: center;
