@@ -47,9 +47,17 @@ import type { McpInteropEndpoint } from "./mcp-interop.js";
 
 export const RPC_PATH = "/rpc";
 
-/** 远程客户端（手机）不可调用的方法：`remote.*` 与 `settings.set`，一律按「方法不存在」处理（design.md 4.31） */
+/**
+ * 远程客户端（手机）不可调用的方法，一律按「方法不存在」处理（design.md 4.31）：
+ * `remote.*`、`settings.set`，以及会把自定义 provider 明文密钥交出去的 `provider.config.get` / `provider.config.set`
+ */
 function isRemoteForbiddenMethod(method: string): boolean {
-  return method.startsWith("remote.") || method === "settings.set";
+  return (
+    method.startsWith("remote.") ||
+    method === "settings.set" ||
+    method === "provider.config.get" ||
+    method === "provider.config.set"
+  );
 }
 
 /** `remote.*` RPC 的实现（remote/service.ts 的 RemoteService） */

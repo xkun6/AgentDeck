@@ -1073,7 +1073,7 @@ interface RemoteConnectionOffer {
    - 违规断开统一用 WS close code 1008（文本帧、解密失败、计数回退、认证超时等）。另有两项资源保护：未完成认证的连接最多 32 个（超出 HTTP 503），网关每 30 秒对每个连接做 WS ping、无 pong 的连接被终止（发现手机网络切换后的死连接）。
 5. 认证后，每条加密消息是一个 JSON-RPC 2.0 对象，语义与 `/rpc` 完全一致（同样收到全部广播通知），外加只发给远程客户端的 `client.attention`。
 
-**远程客户端的限制**：调用 `remote.*`、`settings.set` 返回 `-32601`（方法不存在）；其余方法照常（v1 不再细分，注意 `provider.config.get` 会把含明文 apiKey 的自定义 provider 配置交给已配对手机，持有已配对设备等同于信任）。`remote.devices.revoke` 立即断开该设备的所有连接。
+**远程客户端的限制**：以下方法对远程客户端一律返回 `-32601`（方法不存在）：`remote.*`、`settings.set`（防止手机改网关设置或管理配对）、`provider.config.get` / `provider.config.set`（自定义 provider 配置含明文 `apiKey` / `env` 里的密钥，不得交给手机）。其余方法照常；持有已配对设备等同于信任其能驱动 Agent 执行命令，因此 `agent.*`、`snapshot.*`、`schedule.*` 等不再细分。已逐项审查 4.1 方法表，除上述外没有方法返回密钥、token 或本机敏感配置：`settings.get` 只含快照 / 互通 / 网关开关，`provider.list` 只含 id / 可用性 / 启动命令，`provider.test` 只接受调用方自带的 profile 且不回显密钥，`agent.status` 仅含账户邮箱 / 订阅类型等非凭据信息。`remote.devices.revoke` 立即断开该设备的所有连接。
 
 **内部结构**：`RpcServer` 把客户端抽象为 `RpcClientConnection { kind: "local" | "remote"; deviceId?; send(text); close() }`，本机 `/rpc` 的 WS 与认证后的远程连接走同一套 `attachConnection`（调度、校验、广播完全一致）；加解密只在网关的 `RemoteConnection` 里。`remote.changed` 只广播给 `kind: "local"` 的连接，`client.attention` 只发给 `kind: "remote"` 的连接。日志层对 `deviceSecret` / `pairingSecret` 取值与 `agentdeck://pair#…` 链接统一脱敏。
 

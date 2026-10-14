@@ -412,13 +412,15 @@ describe("认证后的远程连接", () => {
     phone.close();
   });
 
-  test("settings.set / remote.* 返回 -32601；settings.get 与 client.presence 可用", async () => {
+  test("settings.set / remote.* / provider.config.* 返回 -32601；settings.get 与 client.presence 可用", async () => {
     const { phone } = await h.pairPhone();
     for (const [method, params] of [
       ["settings.set", { patch: { remote: { enabled: false } } }],
       ["remote.status", undefined],
       ["remote.pairing.create", undefined],
       ["remote.devices.revoke", { deviceId: "x" }],
+      ["provider.config.get", undefined],
+      ["provider.config.set", { providers: [] }],
     ] as const) {
       const error = await phone.errorOf(method, params);
       expect(error?.code, method).toBe(-32601);
@@ -427,6 +429,9 @@ describe("认证后的远程连接", () => {
     expect((await h.local.call("settings.get")).remote.enabled).toBe(true);
     expect(await phone.call("settings.get")).toMatchObject({ remote: { enabled: true } });
     expect(await phone.call("client.presence", { kind: "mobile", visible: true })).toEqual({});
+    // 本机仍可读 provider 配置；手机能用的 provider.list 不含密钥字段
+    expect(await h.local.call("provider.config.get")).toMatchObject({ providers: [] });
+    expect(JSON.stringify(await phone.call("provider.list"))).not.toMatch(/apiKey/);
     phone.close();
   });
 
