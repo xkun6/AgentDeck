@@ -81,6 +81,11 @@ import {
   toQuestionToolDetail,
 } from "./tool-call-detail-parser.js";
 import {
+  ELICITATION_FORM_ACTIONS,
+  ELICITATION_URL_ACTIONS,
+  normalizeElicitationSchema,
+} from "../shared/elicitation-schema.js";
+import {
   alwaysAllowActions,
   modeFromUpdates,
   parsePermissionSuggestions,
@@ -92,9 +97,12 @@ import type {
   ClaudeCommandsChangedMessage,
   ClaudeCompactBoundaryMessage,
   ClaudeContentBlock,
+  ClaudeElicitationCompleteMessage,
+  ClaudeElicitationResult,
   ClaudeImageMediaType,
   ClaudeInitializeResponse,
   ClaudeMcpStatusResponse,
+  ClaudeOnElicitation,
   ClaudeOutputMessage,
   ClaudePermissionMode,
   ClaudePermissionResult,
@@ -547,6 +555,12 @@ interface PendingPermission {
   toolUseId?: string;
   /** CLI 给出的 permission_suggestions（解析后，provider 私有，不进协议）：「始终允许」两档的来源 */
   suggestions?: ClaudePermissionUpdate[];
+  /** MCP elicitation 请求：用户应答走 elicitation.resolve；resolve（回合取消 / 会话关闭 / CLI 撤回时的兜底）统一回 cancel */
+  elicitation?: {
+    mode: "form" | "url";
+    elicitationId?: string;
+    resolve: (result: ClaudeElicitationResult) => void;
+  };
   resolve: (result: ClaudePermissionResult) => void;
   cleanup: () => void;
 }
@@ -757,6 +771,10 @@ export class ClaudeAgentSession implements AgentSession {
     this.pendingPermissions.delete(requestId);
     pending.cleanup();
 
+    if (pending.elicitation) {
+      await this.respondToElicitation(requestId, pending.elicitation, response);
+      return;
+    }
     const isPlan = pending.request.kind === "plan";
     if (pending.request.kind === "question") {
       this.respondToQuestion(requestId, pending, response);
@@ -789,6 +807,45 @@ export class ClaudeAgentSession implements AgentSession {
         response.message ?? (isPlan ? "用户希望继续完善计划，暂不执行" : "用户拒绝了该操作"),
       ...(response.interrupt ? { interrupt: true } : {}),
     });
+  }
+
+  /**
+   * MCP elicitation 的应答（design.md 4.32）：allow → accept（form 带 updatedInput.content，url 不带）；
+   * deny → decline；deny + interrupt（「取消」）→ cancel，并中断本回合。
+   */
+  private async respondToElicitation(
+    requestId: string,
+    elicitation: NonNullable<PendingPermission["elicitation"]>,
+    response: AgentPermissionResponse,
+  ): Promise<void> {
+    // 表单内容（可能含密码等）不写进 permission_resolved：该事件会广播并落盘
+    this.emit({
+      type: "permission_resolved",
+      requestId,
+      response:
+        response.behavior === "allow"
+          ? { behavior: "allow", ...(response.selectedActionId ? { selectedActionId: response.selectedActionId } : {}) }
+          : response,
+    });
+    if (response.behavior === "allow") {
+      const content = response.updatedInput?.content;
+      elicitation.resolve(
+        elicitation.mode === "url"
+          ? { action: "accept" }
+          : { action: "accept", content: isRecord(content) ? content : {} },
+      );
+      return;
+    }
+    if (response.interrupt === true) {
+      elicitation.resolve({ action: "cancel" });
+      // 让 cancel 应答先写进 stdin，再发 interrupt
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await this.interrupt().catch((error: unknown) => {
+        this.logger.warn("取消表单请求后中断回合失败：%s", errorMessage(error));
+      });
+      return;
+    }
+    elicitation.resolve({ action: "decline" });
   }
 
   /** 回传的权限更新里含 setMode 时，CLI 的模式已变：同步本地状态并发 mode_changed，界面与 CLI 一致 */
@@ -1107,6 +1164,7 @@ export class ClaudeAgentSession implements AgentSession {
           }
         : {}),
       canUseTool: this.handleCanUseTool,
+      onElicitation: this.handleElicitation,
       logger: this.logger,
       onStderr: this.handleStderr,
       ...(this.terminateProcess ? { terminateProcess: this.terminateProcess } : {}),
@@ -1259,6 +1317,8 @@ export class ClaudeAgentSession implements AgentSession {
           }
         } else if (message.subtype === "compact_boundary") {
           this.handleCompactBoundary(message as ClaudeCompactBoundaryMessage);
+        } else if (message.subtype === "elicitation_complete") {
+          this.handleElicitationComplete(message as ClaudeElicitationCompleteMessage);
         } else if (message.subtype === "commands_changed") {
           // 可用斜杠命令变化：整体替换缓存，不影响时间线（design.md 4.14）
           const commands = parseClaudeSlashCommands(
@@ -1789,6 +1849,102 @@ export class ClaudeAgentSession implements AgentSession {
       options.signal.addEventListener("abort", onAbort, { once: true });
     });
   };
+
+  /**
+   * MCP elicitation（design.md 4.32）：form 模式按 requested_schema 归一化出字段，url 模式带链接；
+   * 变成 kind "elicitation" 的 permission request，应答见 respondToElicitation。
+   */
+  private readonly handleElicitation: ClaudeOnElicitation = async (ctx) => {
+    const turn = this.closed ? null : this.startPendingBackgroundTurn();
+    if (this.closed || !turn) {
+      return { action: "cancel" };
+    }
+    const requestId = `perm-${randomUUID()}`;
+    const server = ctx.displayName || ctx.mcpServerName || "MCP";
+    const fields =
+      ctx.mode === "form" ? normalizeElicitationSchema(ctx.requestedSchema, ctx.propertyOrder) : undefined;
+    const detail: ToolCallDetail = {
+      type: "elicitation",
+      serverName: ctx.mcpServerName,
+      mode: ctx.mode,
+      message: ctx.message,
+      ...(ctx.url ? { url: ctx.url } : {}),
+      ...(ctx.elicitationId ? { elicitationId: ctx.elicitationId } : {}),
+      ...(fields ? { fields } : {}),
+    };
+    const request: AgentPermissionRequest = {
+      id: requestId,
+      provider: this.provider,
+      name: `mcp:${ctx.mcpServerName}`,
+      kind: "elicitation",
+      title: ctx.title || (ctx.mode === "url" ? `${server} 需要你在浏览器中完成操作` : `${server} 需要你填写表单`),
+      ...(ctx.description ? { description: ctx.description } : {}),
+      input: {
+        serverName: ctx.mcpServerName,
+        mode: ctx.mode,
+        message: ctx.message,
+        ...(ctx.url ? { url: ctx.url } : {}),
+        ...(ctx.elicitationId ? { elicitationId: ctx.elicitationId } : {}),
+      },
+      detail,
+      actions: (ctx.mode === "url" ? ELICITATION_URL_ACTIONS : ELICITATION_FORM_ACTIONS).map((action) => ({
+        ...action,
+      })),
+    };
+
+    return new Promise<ClaudeElicitationResult>((resolve) => {
+      const onAbort = () => {
+        if (!this.pendingPermissions.delete(requestId)) {
+          return;
+        }
+        this.emit({
+          type: "permission_resolved",
+          requestId,
+          response: { behavior: "deny", message: "表单请求已取消" },
+        });
+        resolve({ action: "cancel" });
+      };
+      const cleanup = () => ctx.signal.removeEventListener("abort", onAbort);
+      this.pendingPermissions.set(requestId, {
+        request,
+        input: request.input ?? {},
+        elicitation: {
+          mode: ctx.mode,
+          ...(ctx.elicitationId ? { elicitationId: ctx.elicitationId } : {}),
+          resolve,
+        },
+        resolve: () => resolve({ action: "cancel" }),
+        cleanup,
+      });
+      this.emit({ type: "permission_requested", turnId: turn.turnId, request });
+      if (ctx.signal.aborted) {
+        onAbort();
+        return;
+      }
+      ctx.signal.addEventListener("abort", onAbort, { once: true });
+    });
+  };
+
+  /** `system` `elicitation_complete`：url 模式在浏览器里完成了，对应的待处理请求视为已完成并回 accept */
+  private handleElicitationComplete(message: ClaudeElicitationCompleteMessage): void {
+    const elicitationId = message.elicitation_id;
+    if (typeof elicitationId !== "string" || !elicitationId) {
+      return;
+    }
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.elicitation?.mode !== "url" || pending.elicitation.elicitationId !== elicitationId) {
+        continue;
+      }
+      this.pendingPermissions.delete(requestId);
+      pending.cleanup();
+      this.emit({
+        type: "permission_resolved",
+        requestId,
+        response: { behavior: "allow", selectedActionId: "done" },
+      });
+      pending.elicitation.resolve({ action: "accept" });
+    }
+  }
 
   private denyAllPendingPermissions(message: string): void {
     for (const [requestId, pending] of this.pendingPermissions) {

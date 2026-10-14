@@ -25,6 +25,28 @@ describe("limitPermissionRequest", () => {
     expect(truncatedInput).toEqual([]);
   });
 
+  test("elicitation 的 detail 同样受限：超长 message 被截断，fields 与选项原样保留", () => {
+    const big = "m".repeat(PERMISSION_FIELD_MAX_BYTES + 100);
+    const fields = Array.from({ length: 50 }, (_, i) => ({
+      key: `f${i}`,
+      title: `字段 ${i}`,
+      required: i === 0,
+      type: "select" as const,
+      options: Array.from({ length: 20 }, (_, j) => ({ value: `v${j}`, label: `选项 ${j}` })),
+    }));
+    const original = request({
+      kind: "elicitation",
+      name: "mcp:forms",
+      input: { serverName: "forms", mode: "form", message: big },
+      detail: { type: "elicitation", serverName: "forms", mode: "form", message: big, fields },
+    });
+    const { request: limited } = limitPermissionRequest(original);
+    const detail = limited.detail as { message: string; fields: typeof fields };
+    expect(detail.message.endsWith("…已截断 100 字节")).toBe(true);
+    expect(detail.fields).toEqual(fields);
+    expect(detail.fields).toHaveLength(50);
+  });
+
   test("单字段超过 256KB：按 UTF-8 字节截断并附「…已截断 N 字节」，短字段与其它字段原样保留", () => {
     const big = "a".repeat(PERMISSION_FIELD_MAX_BYTES + 5000);
     const original = request({

@@ -1432,6 +1432,194 @@ describe("ClaudeAgentSession", () => {
     });
   });
 
+  describe("MCP elicitation", () => {
+    function elicit(cli: FakeCli, ctx: Partial<Parameters<NonNullable<ClaudeCliOptions["onElicitation"]>>[0]> = {}) {
+      return cli.options.onElicitation!({
+        signal: new AbortController().signal,
+        mode: "form",
+        mcpServerName: "forms",
+        message: "请填写表单",
+        ...ctx,
+      });
+    }
+
+    const SCHEMA = {
+      type: "object",
+      properties: {
+        name: { type: "string", title: "姓名" },
+        age: { type: "integer", minimum: 1, maximum: 120 },
+        tags: { type: "array", items: { enum: ["a", "b"] } },
+      },
+      required: ["name"],
+    };
+
+    async function openElicitation(ctx: Parameters<typeof elicit>[1]) {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("x");
+      const promise = elicit(h.clis[0]!, ctx);
+      const request = session.getPendingPermissions()[0]!;
+      return { h, session, events, promise, request };
+    }
+
+    test("form：变成 kind elicitation 的审批，fields 按 property_order 归一化，actions 为 提交 / 拒绝 / 取消", async () => {
+      const { events, request } = await openElicitation({
+        requestedSchema: SCHEMA,
+        propertyOrder: ["age", "name", "tags"],
+        title: "填写资料",
+      });
+      expect(request).toMatchObject({
+        provider: "claude",
+        name: "mcp:forms",
+        kind: "elicitation",
+        title: "填写资料",
+        input: { serverName: "forms", mode: "form", message: "请填写表单" },
+        detail: {
+          type: "elicitation",
+          serverName: "forms",
+          mode: "form",
+          message: "请填写表单",
+          fields: [
+            { key: "age", required: false, type: "integer", min: 1, max: 120 },
+            { key: "name", title: "姓名", required: true, type: "string" },
+            { key: "tags", required: false, type: "multiselect", options: [{ value: "a", label: "a" }, { value: "b", label: "b" }] },
+          ],
+        },
+        actions: [
+          { id: "submit", label: "提交", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      expect(events.find((e) => e.type === "permission_requested")).toMatchObject({
+        turnId: expect.any(String),
+        request: { id: request.id },
+      });
+    });
+
+    test("form：提交 → accept + content；拒绝 → decline；取消 → cancel 并中断回合", async () => {
+      const accept = await openElicitation({ requestedSchema: SCHEMA });
+      await accept.session.respondToPermission(accept.request.id, {
+        behavior: "allow",
+        selectedActionId: "submit",
+        updatedInput: { content: { name: "小明", age: 3 } },
+      });
+      await expect(accept.promise).resolves.toEqual({ action: "accept", content: { name: "小明", age: 3 } });
+      // 表单内容不进 permission_resolved（该事件会广播并落盘）
+      expect(accept.events.at(-1)).toEqual({
+        type: "permission_resolved",
+        requestId: accept.request.id,
+        response: { behavior: "allow", selectedActionId: "submit" },
+      });
+
+      const noContent = await openElicitation({ requestedSchema: SCHEMA });
+      await noContent.session.respondToPermission(noContent.request.id, { behavior: "allow" });
+      await expect(noContent.promise).resolves.toEqual({ action: "accept", content: {} });
+
+      const decline = await openElicitation({ requestedSchema: SCHEMA });
+      await decline.session.respondToPermission(decline.request.id, { behavior: "deny", selectedActionId: "decline" });
+      await expect(decline.promise).resolves.toEqual({ action: "decline" });
+      expect(decline.h.clis[0]!.calls.interrupt).toBe(0);
+
+      const cancel = await openElicitation({ requestedSchema: SCHEMA });
+      await cancel.session.respondToPermission(cancel.request.id, {
+        behavior: "deny",
+        selectedActionId: "cancel",
+        interrupt: true,
+      });
+      await expect(cancel.promise).resolves.toEqual({ action: "cancel" });
+      expect(cancel.h.clis[0]!.calls.interrupt).toBe(1);
+      expect(cancel.events.at(-1)).toMatchObject({ type: "turn_canceled", reason: "interrupted" });
+    });
+
+    test("url：actions 为 已完成 / 拒绝 / 取消，已完成回 accept 且不带 content；detail 带 url 与 elicitationId", async () => {
+      const { session, promise, request } = await openElicitation({
+        mode: "url",
+        mcpServerName: "oauth",
+        message: "请在浏览器里授权",
+        url: "https://example.com/auth",
+        elicitationId: "elic-1",
+      });
+      expect(request).toMatchObject({
+        kind: "elicitation",
+        title: "oauth 需要你在浏览器中完成操作",
+        detail: {
+          type: "elicitation",
+          mode: "url",
+          url: "https://example.com/auth",
+          elicitationId: "elic-1",
+        },
+        actions: [
+          { id: "done", label: "已完成", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      expect((request.detail as { fields?: unknown }).fields).toBeUndefined();
+      await session.respondToPermission(request.id, {
+        behavior: "allow",
+        selectedActionId: "done",
+        updatedInput: { content: { ignored: true } },
+      });
+      await expect(promise).resolves.toEqual({ action: "accept" });
+    });
+
+    test("system elicitation_complete：对应的 url 请求发 permission_resolved 并回 accept，其它 id 不受影响", async () => {
+      const { h, session, events, promise, request } = await openElicitation({
+        mode: "url",
+        mcpServerName: "oauth",
+        message: "授权",
+        url: "https://example.com/auth",
+        elicitationId: "elic-1",
+      });
+      h.clis[0]!.emit({ type: "system", subtype: "elicitation_complete", mcp_server_name: "oauth", elicitation_id: "other" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(session.getPendingPermissions()).toHaveLength(1);
+
+      h.clis[0]!.emit({ type: "system", subtype: "elicitation_complete", mcp_server_name: "oauth", elicitation_id: "elic-1" });
+      await expect(promise).resolves.toEqual({ action: "accept" });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+      expect(events.at(-1)).toEqual({
+        type: "permission_resolved",
+        requestId: request.id,
+        response: { behavior: "allow", selectedActionId: "done" },
+      });
+      await expect(session.respondToPermission(request.id, { behavior: "allow" })).rejects.toMatchObject({
+        code: "PERMISSION_NOT_FOUND",
+      });
+    });
+
+    test("CLI 撤回（abort）→ cancel + permission_resolved；回合取消时挂起的表单也回 cancel", async () => {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("x");
+
+      const controller = new AbortController();
+      const promise = elicit(h.clis[0]!, { signal: controller.signal });
+      expect(session.getPendingPermissions()).toHaveLength(1);
+      controller.abort();
+      await expect(promise).resolves.toEqual({ action: "cancel" });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+      expect(events.at(-1)).toMatchObject({ type: "permission_resolved", response: { behavior: "deny" } });
+
+      const pending = elicit(h.clis[0]!);
+      await session.interrupt();
+      await expect(pending).resolves.toEqual({ action: "cancel" });
+    });
+
+    test("会话已关闭 / 没有进行中的回合时直接回 cancel，不产生审批", async () => {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      await session.startTurn("x");
+      const cli = h.clis[0]!;
+      await session.close();
+      await expect(elicit(cli)).resolves.toEqual({ action: "cancel" });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+    });
+  });
+
   test("拒绝 / 继续规划附带的理由（message）原样作为 deny.message 回给 Claude", async () => {
     const h = createHarness();
     const session = await h.client.createSession({ cwd: "." });

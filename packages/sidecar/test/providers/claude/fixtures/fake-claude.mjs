@@ -3,6 +3,8 @@
 //   hello        → system init + stream_event 增量 + assistant + result
 //   perm:<Tool>  → 发 can_use_tool 控制请求，收到应答后把应答原样写进 assistant 文本，再发 result
 //   cancel-perm  → 发 can_use_tool 后紧接着发 control_cancel_request，收到应答后同上
+//   elicit:form | elicit:url | elicit:cancel → 发 MCP elicitation 控制请求（表单 / 浏览器链接 / 发出后紧接 control_cancel_request），
+//                  收到应答后把应答原样写进 assistant 文本；url 场景应答后再发 system elicitation_complete
 //   perm-sugg    → 发带 permission_suggestions / suppress_always_allow_rule / default_to_no / blocked_path 的 can_use_tool
 //   hang         → 只发 system init，等 interrupt 控制请求后以 error_during_execution 结束本轮
 //   crash        → stderr 打印错误并以退出码 3 退出
@@ -199,6 +201,34 @@ function requestPermission(requestId, toolName, cancel, extra = {}) {
   });
 }
 
+function requestElicitation(requestId, mode, cancel) {
+  return new Promise((resolve) => {
+    pendingResponses.set(requestId, resolve);
+    send({
+      type: "control_request",
+      request_id: requestId,
+      request: mode === "url"
+        ? {
+            subtype: "elicitation", mcp_server_name: "oauth", message: "请在浏览器里授权", mode: "url",
+            url: "https://example.com/auth", elicitation_id: "elic-1",
+          }
+        : {
+            subtype: "elicitation", mcp_server_name: "forms", message: "请填写表单", mode: "form",
+            requested_schema: {
+              type: "object",
+              properties: { b: { type: "string" }, a: { type: "integer", minimum: 1 } },
+              required: ["a"],
+            },
+            property_order: ["a", "b"],
+            title: "表单标题",
+          },
+    });
+    if (cancel) {
+      setTimeout(() => send({ type: "control_cancel_request", request_id: requestId }), 30);
+    }
+  });
+}
+
 async function handleUser(message) {
   const uuid = message.uuid;
   const text = message.message?.content?.find?.((block) => block.type === "text")?.text ?? "";
@@ -222,6 +252,15 @@ async function handleUser(message) {
   }
   if (text === "background" || text === "background-race") {
     backgroundScenario(uuid, text === "background-race");
+    return;
+  }
+  if (text.startsWith("elicit:")) {
+    const kind = text.slice(7);
+    const response = await requestElicitation(`elicit-${++counter}`, kind === "url" ? "url" : "form", kind === "cancel");
+    if (kind === "url") {
+      send({ type: "system", subtype: "elicitation_complete", mcp_server_name: "oauth", elicitation_id: "elic-1" });
+    }
+    reply(uuid, `decision:${JSON.stringify(response)}`);
     return;
   }
   if (text === "perm-sugg") {

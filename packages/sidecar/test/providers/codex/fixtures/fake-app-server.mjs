@@ -1,7 +1,7 @@
 // 假的 `codex app-server`：按行读 JSON-RPC，按剧本回放通知与审批请求（字段形状取自 codex-cli 0.162.1）。
 // 用法：node fake-app-server.mjs app-server
 // 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
-// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / shellavail / shellpolicy / legacyexec / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
+// 剧本由 turn/start 输入文本的第一个单词决定：hello / elicitform / eliciturl / elicitempty / elicitopenai / shell / shellavail / shellpolicy / legacyexec / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
 // thread/compact/start 按 compact 剧本开一个回合；mcpServerStatus/list 分两页返回三个服务器；config/mcpServer/reload 回 {}。
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
@@ -73,6 +73,17 @@ async function commandApprovalVariant(turnId, extra) {
   });
   await agentMessage(turnId, "msg_v", [`decision:${JSON.stringify(answer?.result?.decision)}`]);
   completeTurn(turnId, answer?.result?.decision === "cancel" ? "interrupted" : "completed");
+}
+
+async function elicitation(turnId, extra) {
+  const answer = await serverRequest("mcpServer/elicitation/request", { threadId: THREAD_ID, turnId, serverName: "forms", ...extra });
+  if (answer?.result?.action === "cancel") {
+    // cancel 之后等客户端的 turn/interrupt
+    activeTurn.onInterrupt = () => completeTurn(turnId, "interrupted");
+    return;
+  }
+  await agentMessage(turnId, "msg_e", [`answer:${JSON.stringify(answer?.result)}`]);
+  completeTurn(turnId, "completed");
 }
 
 const scenarios = {
@@ -159,6 +170,36 @@ const scenarios = {
     });
     await agentMessage(turnId, "msg_legacy", [`decision:${JSON.stringify(answer?.result?.decision)}`]);
     completeTurn(turnId, "completed");
+  },
+
+  // MCP elicitation：form（含全部原始类型）/ url / 空表单（MCP 工具审批式确认）/ 未声明的 openai 模式
+  async elicitform(turnId) {
+    await elicitation(turnId, {
+      mode: "form", message: "请填写表单", _meta: null,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", title: "姓名", minLength: 1 },
+          level: { type: "string", oneOf: [{ const: "lo", title: "低" }, { const: "hi", title: "高" }] },
+          agree: { type: "boolean", default: true },
+          score: { type: "number", minimum: 0, maximum: 10 },
+          tags: { type: "array", items: { type: "string", enum: ["a", "b"] }, maxItems: 2 },
+        },
+        required: ["name"],
+      },
+    });
+  },
+
+  async eliciturl(turnId) {
+    await elicitation(turnId, { mode: "url", message: "请在浏览器里授权", url: "https://example.com/auth", elicitationId: "elic-9", _meta: null });
+  },
+
+  async elicitempty(turnId) {
+    await elicitation(turnId, { mode: "form", message: "Allow the agentdeck MCP server to run tool delegate?", requestedSchema: { type: "object", properties: {} }, _meta: null });
+  },
+
+  async elicitopenai(turnId) {
+    await elicitation(turnId, { mode: "openai/form", message: "x", requestedSchema: {}, _meta: null });
   },
 
   async patch(turnId) {

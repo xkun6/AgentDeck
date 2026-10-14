@@ -35,6 +35,14 @@ function permissionBody(request: AgentPermissionRequest): string {
       return "Agent 提交了计划，等待你确认";
     case "mode":
       return "Agent 请求切换模式，等待你确认";
+    case "elicitation": {
+      // 只引用服务名，不带表单标题 / 说明 / 字段内容
+      const detail = request.detail?.type === "elicitation" ? request.detail : undefined;
+      const server = detail?.serverName || request.name;
+      return detail?.mode === "url"
+        ? `Agent 需要你在浏览器中完成操作：${server}`
+        : `Agent 需要你填写表单：${server}`;
+    }
     default:
       // 只引用请求标题 / 工具名，不带输入与命令原文
       return `Agent 请求审批：${request.title?.trim() || request.name}`;

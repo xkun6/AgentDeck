@@ -246,7 +246,47 @@ export type ToolCallDetail =
       questions: AgentQuestion[];
       answers?: Record<string, string>;
     }
+  /**
+   * MCP elicitation（design.md 4.32）：MCP 服务通过 Claude / Codex 向用户索取表单输入或要求在浏览器里完成一步操作。
+   * form 模式带 fields（已由 JSON Schema 归一化）；url 模式带 url 与 elicitationId。
+   */
+  | {
+      type: "elicitation";
+      serverName: string;
+      mode: "form" | "url";
+      message: string;
+      url?: string;
+      elicitationId?: string;
+      fields?: ElicitationField[];
+    }
   | { type: "unknown"; input: unknown; output: unknown };
+
+export type ElicitationFieldType = "string" | "number" | "integer" | "boolean" | "select" | "multiselect";
+export interface ElicitationFieldOption {
+  value: string;
+  label: string;
+}
+/** elicitation 表单的一个字段（由 requestedSchema 的 properties 归一化而来，见 sidecar providers/shared/elicitation-schema.ts） */
+export interface ElicitationField {
+  key: string;
+  title?: string;
+  description?: string;
+  required: boolean;
+  type: ElicitationFieldType;
+  /** select / multiselect 的选项 */
+  options?: ElicitationFieldOption[];
+  /** string 的 format：email / uri / date / date-time 等 */
+  format?: string;
+  /** number / integer 的 minimum / maximum；multiselect 的 minItems / maxItems */
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number;
+  /** string / number / boolean 的默认值；select 为选项 value，multiselect 为 value 数组 */
+  default?: string | number | boolean | string[];
+  /** 输入需要遮罩（format: "password" / writeOnly / 键名像密码） */
+  secret?: boolean;
+}
 
 export interface AgentQuestionOption {
   label: string;
@@ -314,7 +354,7 @@ export interface AgentPermissionRequest {
   id: string;
   provider: AgentProviderId;
   name: string;
-  kind: "tool" | "plan" | "question" | "mode" | "other";
+  kind: "tool" | "plan" | "question" | "mode" | "elicitation" | "other";
   title?: string;
   description?: string;
   input?: Record<string, unknown>;

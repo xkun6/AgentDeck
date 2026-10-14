@@ -55,6 +55,8 @@ function detailDisplay(
       return { displayName: "Plan" };
     case "question":
       return { displayName: "Question", summary: readString(detail.questions[0]?.question) };
+    case "elicitation":
+      return { displayName: "Elicitation", summary: readString(detail.serverName) };
     case "unknown":
       return {};
   }

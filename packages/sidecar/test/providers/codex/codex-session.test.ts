@@ -477,6 +477,150 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(replies.at(-1)?.result).toEqual({ decision: { denied: { rejection: "不行" } } });
   }, 20_000);
 
+  describe("mcpServer/elicitation/request", () => {
+    test("form：requestedSchema 归一化为 fields，actions 为 提交 / 拒绝 / 取消；提交回 accept + 真实 content + _meta", async () => {
+      const { session, events, request } = await openApproval("elicitform");
+      expect(request).toMatchObject({
+        provider: "codex",
+        kind: "elicitation",
+        name: "mcp:forms",
+        title: "forms 需要你填写表单",
+        detail: {
+          type: "elicitation",
+          serverName: "forms",
+          mode: "form",
+          message: "请填写表单",
+          fields: [
+            { key: "name", title: "姓名", required: true, type: "string", minLength: 1 },
+            {
+              key: "level",
+              required: false,
+              type: "select",
+              options: [
+                { value: "lo", label: "低" },
+                { value: "hi", label: "高" },
+              ],
+            },
+            { key: "agree", required: false, type: "boolean", default: true },
+            { key: "score", required: false, type: "number", min: 0, max: 10 },
+            { key: "tags", required: false, type: "multiselect", max: 2 },
+          ],
+        },
+        actions: [
+          { id: "submit", label: "提交", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      const content = { name: "小明", level: "hi", agree: false, score: 7.5, tags: ["a"] };
+      await session.respondToPermission(request.id, {
+        behavior: "allow",
+        selectedActionId: "submit",
+        updatedInput: { content },
+      });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "accept", content, _meta: null });
+      // 表单内容不进 permission_resolved（该事件会广播并落盘）
+      expect(events.find((e) => e.type === "permission_resolved")).toEqual({
+        type: "permission_resolved",
+        requestId: request.id,
+        response: { behavior: "allow", selectedActionId: "submit" },
+      });
+      expect(events.find((e) => e.type === "timeline" && e.item.type === "assistant_message")).toMatchObject({
+        item: { text: `answer:${JSON.stringify({ action: "accept", content, _meta: null })}` },
+      });
+    });
+
+    test("form：拒绝回 decline（content / _meta 为 null）；取消回 cancel 并中断回合", async () => {
+      const declined = await openApproval("elicitform");
+      await declined.session.respondToPermission(declined.request.id, {
+        behavior: "deny",
+        selectedActionId: "decline",
+      });
+      await waitUntil(() => declined.events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({
+        action: "decline",
+        content: null,
+        _meta: null,
+      });
+      expect(declined.events.at(-1)?.type).toBe("turn_completed");
+      await declined.session.close();
+
+      const canceled = await openApproval("elicitform");
+      await canceled.session.respondToPermission(canceled.request.id, {
+        behavior: "deny",
+        selectedActionId: "cancel",
+        interrupt: true,
+      });
+      await waitUntil(() => canceled.events.some(isTerminal));
+      const replies = received().filter((m) => m.method === undefined && m.result?.action !== undefined);
+      expect(replies.at(-1)?.result).toEqual({ action: "cancel", content: null, _meta: null });
+      expect(received().some((m) => m.method === "turn/interrupt")).toBe(true);
+      expect(canceled.events.at(-1)).toMatchObject({ type: "turn_canceled", reason: "interrupted" });
+    }, 20_000);
+
+    test("url：detail 带 url / elicitationId，已完成回 accept（content 为 null）", async () => {
+      const { session, events, request } = await openApproval("eliciturl");
+      expect(request).toMatchObject({
+        kind: "elicitation",
+        title: "forms 需要你在浏览器中完成操作",
+        detail: {
+          type: "elicitation",
+          mode: "url",
+          message: "请在浏览器里授权",
+          url: "https://example.com/auth",
+          elicitationId: "elic-9",
+        },
+        actions: [
+          { id: "done", label: "已完成", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      expect((request.detail as { fields?: unknown }).fields).toBeUndefined();
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "done" });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "accept", content: null, _meta: null });
+    });
+
+    test("没有字段的 form（MCP 工具审批式确认）仍是 tool 审批：允许回 accept + content {}", async () => {
+      const { session, events, request } = await openApproval("elicitempty");
+      expect(request).toMatchObject({
+        kind: "tool",
+        name: "mcp:forms",
+        actions: [
+          { id: "accept", label: "允许", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+        ],
+      });
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "accept" });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "accept", content: {}, _meta: null });
+    });
+
+    test("未声明的 openai/* 模式直接 decline，不产生审批", async () => {
+      const session = await newSession();
+      const events = collect(session);
+      await session.startTurn("elicitopenai");
+      await waitUntil(() => events.some(isTerminal));
+      expect(events.some((e) => e.type === "permission_requested")).toBe(false);
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "decline", content: null, _meta: null });
+    });
+
+    test("回合被中断时挂起的表单被清理并发 permission_resolved", async () => {
+      const session = await newSession();
+      const events = collect(session);
+      await session.startTurn("elicitform");
+      await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+      const [request] = session.getPendingPermissions();
+      // 假 server 的 elicitform 剧本不会主动撤销；直接结束回合同样会清理挂起的表单
+      await session.interrupt();
+      await waitUntil(() => events.some(isTerminal));
+      expect(session.getPendingPermissions()).toEqual([]);
+      expect(events.some((e) => e.type === "permission_resolved" && e.requestId === request!.id)).toBe(true);
+    });
+  });
+
   test("fileChange 审批：edit 详情带 unifiedDiff 与相对路径；新增文件映射为 write", async () => {
     const session = await newSession();
     const events = collect(session);

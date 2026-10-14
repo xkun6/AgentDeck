@@ -390,6 +390,37 @@ describe("codex 协议小工具", () => {
     });
   });
 
+  test("buildPermissionDecision：elicitation-form / elicitation-url 带齐 action / content / _meta", () => {
+    expect(
+      buildPermissionDecision("elicitation-form", { behavior: "allow", updatedInput: { content: { a: 1 } } }),
+    ).toEqual({ action: "accept", content: { a: 1 }, _meta: null });
+    expect(buildPermissionDecision("elicitation-form", { behavior: "allow", updatedInput: { content: [1] } })).toEqual({
+      action: "accept",
+      content: {},
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-form", { behavior: "deny" })).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-form", { behavior: "deny", interrupt: true })).toEqual({
+      action: "cancel",
+      content: null,
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-url", { behavior: "allow" })).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-url", { behavior: "deny" })).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+  });
+
   test("buildPermissionDecision：selectedActionId 命中 decisions 表时直接用表里的决定", () => {
     const decisions = new Map<string, unknown>([
       ["allow_session", "acceptForSession"],

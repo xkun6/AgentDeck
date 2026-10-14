@@ -59,6 +59,11 @@ import {
   legacyApprovalActions,
   type CodexApprovalActions,
 } from "./approval-actions.js";
+import {
+  ELICITATION_FORM_ACTIONS,
+  ELICITATION_URL_ACTIONS,
+  normalizeElicitationSchema,
+} from "../shared/elicitation-schema.js";
 import { describeCodexLaunch, resolveCodexLaunch, type CodexLaunch } from "./launch.js";
 import { CodexSubagentRouter } from "./subagent-router.js";
 import {
@@ -838,7 +843,18 @@ interface ActiveTurn {
   sawCompaction?: boolean;
 }
 
-type PermissionKind = "command" | "file" | "legacy-exec" | "legacy-patch" | "elicitation";
+/**
+ * elicitation：没有字段的确认（如 MCP 工具审批），沿用允许 / 拒绝；
+ * elicitation-form / elicitation-url：真正的表单 / 浏览器流程（design.md 4.32）。
+ */
+type PermissionKind =
+  | "command"
+  | "file"
+  | "legacy-exec"
+  | "legacy-patch"
+  | "elicitation"
+  | "elicitation-form"
+  | "elicitation-url";
 
 interface PendingPermission {
   request: AgentPermissionRequest;
@@ -901,6 +917,19 @@ export function buildPermissionDecision(
     case "elicitation":
       return allow
         ? { action: "accept", content: {}, _meta: null }
+        : { action: cancel ? "cancel" : "decline", content: null, _meta: null };
+    case "elicitation-form": {
+      if (!allow) return { action: cancel ? "cancel" : "decline", content: null, _meta: null };
+      const content = response.updatedInput?.content;
+      return {
+        action: "accept",
+        content: content !== null && typeof content === "object" && !Array.isArray(content) ? content : {},
+        _meta: null,
+      };
+    }
+    case "elicitation-url":
+      return allow
+        ? { action: "accept", content: null, _meta: null }
         : { action: cancel ? "cancel" : "decline", content: null, _meta: null };
   }
 }
@@ -1128,8 +1157,26 @@ export class CodexAgentSession implements AgentSession {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.pending.delete(requestId);
-    this.emit({ type: "permission_resolved", requestId, response });
+    // 表单内容（可能含密码等）不写进 permission_resolved：该事件会广播并落盘
+    this.emit({
+      type: "permission_resolved",
+      requestId,
+      response:
+        pending.kind === "elicitation-form" && response.behavior === "allow"
+          ? { behavior: "allow", ...(response.selectedActionId ? { selectedActionId: response.selectedActionId } : {}) }
+          : response,
+    });
     pending.resolve(buildPermissionDecision(pending.kind, response, pending.decisions));
+    // 表单 / 浏览器流程的「取消」（deny + interrupt）：MCP 的 cancel 只让该次调用失败，这里额外中断本回合
+    if (
+      (pending.kind === "elicitation-form" || pending.kind === "elicitation-url") &&
+      response.behavior === "deny" &&
+      response.interrupt === true
+    ) {
+      // 让 cancel 应答先写给 app-server，再发 turn/interrupt
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await this.interrupt();
+    }
   }
 
   async interrupt(): Promise<void> {
@@ -1887,7 +1934,10 @@ export class CodexAgentSession implements AgentSession {
     kind: PermissionKind,
     rpcId: JsonRpcId,
     request: Omit<AgentPermissionRequest, "id" | "provider" | "kind" | "actions">,
-    approval?: CodexApprovalActions,
+    approval?: Pick<CodexApprovalActions, "actions"> & {
+      decisions?: ReadonlyMap<string, unknown>;
+      requestKind?: AgentPermissionRequest["kind"];
+    },
   ): Promise<unknown> {
     if (this.closed) {
       return Promise.resolve(
@@ -1897,7 +1947,7 @@ export class CodexAgentSession implements AgentSession {
     const full: AgentPermissionRequest = {
       id: randomUUID(),
       provider: this.provider,
-      kind: "tool",
+      kind: approval?.requestKind ?? "tool",
       actions: (approval?.actions ?? PERMISSION_ACTIONS).map((a) => ({ ...a })),
       ...request,
     };
@@ -1906,7 +1956,7 @@ export class CodexAgentSession implements AgentSession {
         request: full,
         kind,
         rpcId,
-        ...(approval ? { decisions: approval.decisions } : {}),
+        ...(approval?.decisions ? { decisions: approval.decisions } : {}),
         resolve,
       });
       const turn = this.active;
@@ -2011,11 +2061,55 @@ export class CodexAgentSession implements AgentSession {
     );
   }
 
+  /**
+   * mcpServer/elicitation/request（design.md 4.32）：form 模式按 requestedSchema 归一化出表单字段，url 模式带链接；
+   * 没有任何字段的 form（如 MCP 工具审批）按确认处理（允许 / 拒绝）；openai/* 等未声明的模式直接 decline。
+   */
   private handleElicitation(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
     const params = asRecord(rawParams);
     const serverName = str(pick(params, "serverName", "server_name")) ?? "mcp";
     const message = str(params?.message) ?? "";
     const url = str(params?.url);
+    const mode = str(params?.mode);
+    if (mode !== undefined && mode !== "form" && mode !== "url") {
+      this.deps.logger.warn("[codex] 不支持的 elicitation 模式 %s，已拒绝", mode);
+      return Promise.resolve({ action: "decline", content: null, _meta: null });
+    }
+    const isUrl = mode === "url" || (mode === undefined && url !== undefined);
+    const fields = isUrl
+      ? []
+      : normalizeElicitationSchema(pick(params, "requestedSchema", "requested_schema"));
+    if (isUrl || fields.length > 0) {
+      const elicitationId = str(pick(params, "elicitationId", "elicitation_id"));
+      return this.requestPermission(
+        isUrl ? "elicitation-url" : "elicitation-form",
+        rpcId,
+        {
+          name: `mcp:${serverName}`,
+          title: isUrl ? `${serverName} 需要你在浏览器中完成操作` : `${serverName} 需要你填写表单`,
+          input: {
+            serverName,
+            mode: isUrl ? "url" : "form",
+            message,
+            ...(url ? { url } : {}),
+            ...(elicitationId ? { elicitationId } : {}),
+          },
+          detail: {
+            type: "elicitation",
+            serverName,
+            mode: isUrl ? "url" : "form",
+            message,
+            ...(url ? { url } : {}),
+            ...(elicitationId ? { elicitationId } : {}),
+            ...(isUrl ? {} : { fields }),
+          },
+        },
+        {
+          actions: [...(isUrl ? ELICITATION_URL_ACTIONS : ELICITATION_FORM_ACTIONS)],
+          requestKind: "elicitation",
+        },
+      );
+    }
     return this.requestPermission("elicitation", rpcId, {
       name: `mcp:${serverName}`,
       title: `MCP 服务 ${serverName} 请求确认`,

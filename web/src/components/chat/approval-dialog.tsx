@@ -9,6 +9,7 @@ import type {
 } from "@agentdeck/protocol";
 import { describeToolDetail } from "@/lib/agent-tool-detail";
 import type { PendingApproval } from "@/stores/chat";
+import { ElicitationCard } from "./elicitation-card";
 import { MessageText } from "./message-text";
 import { QuestionCard } from "./question-card";
 import { HANDLED_ELSEWHERE_MESSAGE, useApprovalFailure } from "./use-approval-failure";
@@ -30,6 +31,7 @@ function defaultTitle(request: AgentPermissionRequest | undefined): string {
   if (request?.kind === "plan") return "需要批准计划";
   if (request?.kind === "question") return "Agent 需要你的回答";
   if (request?.kind === "mode") return "需要确认切换模式";
+  if (request?.kind === "elicitation") return "Agent 需要你填写表单";
   return "需要确认执行";
 }
 
@@ -107,6 +109,18 @@ export function ApprovalDialog({ approval, onRespond, remaining }: ApprovalDialo
         approval={approval}
         request={request}
         questions={request.detail.questions}
+        onRespond={onRespond}
+        remaining={remaining}
+      />
+    );
+  }
+  // MCP 表单 / 浏览器流程（design.md 4.32）
+  if (request?.kind === "elicitation" && request.detail?.type === "elicitation") {
+    return (
+      <ElicitationCard
+        approval={approval}
+        request={request}
+        detail={request.detail}
         onRespond={onRespond}
         remaining={remaining}
       />

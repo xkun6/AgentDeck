@@ -153,6 +153,36 @@ describe("AttentionService 判定", () => {
     t.emit("a1", { type: "permission_requested", request: { id: "p", provider: "mock", name: "ExitPlanMode", kind: "plan" } });
     expect(t.sent.map((n) => n.body)).toEqual(["Agent 提出了问题，等待你的回答", "Agent 提交了计划，等待你确认"]);
   });
+
+  test("elicitation 类审批只引用服务名：表单「需要你填写表单」，url「需要你在浏览器中完成操作」", () => {
+    const t = setupUnit();
+    t.emit("a1", {
+      type: "permission_requested",
+      request: {
+        id: "e1",
+        provider: "claude",
+        name: "mcp:forms",
+        kind: "elicitation",
+        title: "含机密的标题",
+        detail: { type: "elicitation", serverName: "forms", mode: "form", message: "密码是 123456", fields: [] },
+      },
+    });
+    t.emit("a1", {
+      type: "permission_requested",
+      request: {
+        id: "e2",
+        provider: "codex",
+        name: "mcp:oauth",
+        kind: "elicitation",
+        detail: { type: "elicitation", serverName: "oauth", mode: "url", message: "授权", url: "https://example.com/?token=abc" },
+      },
+    });
+    expect(t.sent.map((n) => n.body)).toEqual([
+      "Agent 需要你填写表单：forms",
+      "Agent 需要你在浏览器中完成操作：oauth",
+    ]);
+    expect(t.sent[0]).toMatchObject({ kind: "permission", permissionKind: "elicitation" });
+  });
 });
 
 // ---------------------------------------------------------------------------

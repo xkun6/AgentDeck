@@ -204,7 +204,17 @@ export type ToolCallDetail =
       log: string; actions?: { index: number; toolName: string; summary?: string }[] }   // 4.11
   | { type: "plain_text"; label?: string; text?: string }
   | { type: "question"; questions: AgentQuestion[]; answers?: Record<string, string> }   // Claude AskUserQuestion，见 4.13
+  | { type: "elicitation"; serverName: string; mode: "form" | "url"; message: string;
+      url?: string; elicitationId?: string; fields?: ElicitationField[] }              // MCP 表单 / 浏览器流程，见 4.32
   | { type: "unknown"; input: unknown; output: unknown };
+
+export interface ElicitationField {   // 见 4.32
+  key: string; title?: string; description?: string; required: boolean;
+  type: "string" | "number" | "integer" | "boolean" | "select" | "multiselect";
+  options?: { value: string; label: string }[]; format?: string;
+  min?: number; max?: number; minLength?: number; maxLength?: number;
+  default?: string | number | boolean | string[]; secret?: boolean;
+}
 
 export interface AgentQuestionOption { label: string; description?: string; preview?: string }
 export interface AgentQuestion { question: string; header?: string; multiSelect: boolean; options: AgentQuestionOption[] }
@@ -233,7 +243,7 @@ export interface AgentPermissionAction {
 }
 export interface AgentPermissionRequest {
   id: string; provider: AgentProviderId; name: string;
-  kind: "tool" | "plan" | "question" | "mode" | "other";
+  kind: "tool" | "plan" | "question" | "mode" | "elicitation" | "other";
   title?: string; description?: string; input?: Record<string, unknown>;
   detail?: ToolCallDetail; actions?: AgentPermissionAction[];
   defaultDeny?: boolean;              // true 时前端不得把「允许」类按钮作为默认 / 主按钮（Claude default_to_no）
@@ -1147,21 +1157,21 @@ interface RemoteStatus {
 - sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。另外在 `permission_resolved`（审批在桌面 / 另一台手机处理、被取消或超时）时发一条 `kind: "resolved"` 的**撤回信号**（同样不发 judge 会话与已删除会话），不弹通知，只用来取消手机上对应的系统通知与应用内提示条。
 - 是否提醒完全由手机端决定（见下文手机端处理与 `docs/mobile.md`）。
 - 改动背景：v1 原设计用 `client.presence` 上报桌面窗口可见性，「桌面可见则不发」。真机测试发现 WebView2 在最小化、隐藏到托盘后 `document.visibilityState` 仍为 `visible`，手机永远收不到通知；且「人在不在电脑前」本身难以可靠判断。按用户决定（2026-10-14）删除 `client.presence` 与在线判定，改为手机端三档设置。
-- 摘要文本（`body`）：完成 = 「本轮已完成」；失败 = 「本轮失败：」+ 错误信息；审批 = 「Agent 请求审批：」+ 请求标题（`question` / `plan` / `mode` 类用固定句式）；调度 = `schedule.notice.message`。全部压成单行并截断到 120 字，只引用标题 / 错误 / 工具名，不含工具输入输出原文。`title` 取会话标题（缺省取首条消息预览，再缺省「未命名会话」）或调度名。
+- 摘要文本（`body`）：完成 = 「本轮已完成」；失败 = 「本轮失败：」+ 错误信息；审批 = 「Agent 请求审批：」+ 请求标题（`question` / `plan` / `mode` / `elicitation` 类用固定句式，elicitation 见 4.32）；调度 = `schedule.notice.message`。全部压成单行并截断到 120 字，只引用标题 / 错误 / 工具名，不含工具输入输出原文。`title` 取会话标题（缺省取首条消息预览，再缺省「未命名会话」）或调度名。
 ```ts
 interface AttentionNotice {
   id: string;                                   // 去重用
   kind: "finished" | "failed" | "permission" | "schedule" | "resolved";
   agentId?: string;
   requestId?: string;                           // permission / resolved：审批请求 id
-  permissionKind?: "tool" | "plan" | "question" | "mode" | "other"; // permission：审批类型（= AgentPermissionRequest.kind）
+  permissionKind?: "tool" | "plan" | "question" | "mode" | "elicitation" | "other"; // permission：审批类型（= AgentPermissionRequest.kind）
   title: string;                                // 会话标题或调度名
   body: string;                                 // 中文摘要，≤ 120 字（不含工具输出原文）；resolved 固定为「审批已处理」
   timestamp: number;
 }
 ```
 - **撤回（resolved）**：沿用同一个通知方法 `client.attention`，`kind: "resolved"` 带 `agentId` + `requestId`。手机收到后：（1）调用原生 `cancel_attention` 取消系统通知——系统通知 id 对审批类按 `agentId:requestId` 计算（`notificationIdFor`），permission 通知与撤回信号（各有自己的 `AttentionNotice.id`）因此指向同一条；完成 / 失败 / 调度仍按 `AttentionNotice.id`；（2）若应用内提示条正显示同一条审批（`kind: "permission"` 且 agentId / requestId 相同）则关掉。撤回不受「通知」档位与前后台影响；撤回先于异步发出的通知到达时，该通知不再发出。
-- **提示文案按 `permissionKind`**：提示条与会话列表角标——`question` 显示「待回答」，`plan` 显示「待确认计划」，其余（`tool` / `mode` / `other` 或缺省）显示「待审批」。会话列表读快照 `pendingPermissions[0].kind`。
+- **提示文案按 `permissionKind`**：提示条与会话列表角标——`question` 显示「待回答」，`plan` 显示「待确认计划」，`elicitation` 显示「待填写」，其余（`tool` / `mode` / `other` 或缺省）显示「待审批」。会话列表读快照 `pendingPermissions[0].kind`。
 - 手机收到后按手机端设置「通知」（存手机本地，默认「总是通知」）处理：
   | 设置 | App 在后台 | App 在前台 |
   |---|---|---|
@@ -1174,6 +1184,42 @@ interface AttentionNotice {
 - 内容：启用开关与端口（1024–65535）、`remote.status.error`、可用地址列表（局域网 / Tailscale 标签）、「生成配对二维码」（调用 `remote.pairing.create`，用 `qrcode` 把 `offerUrl` 渲染成 SVG，白底黑码不随主题变色，显示 5 分钟倒计时，过期后「重新生成」；有新设备配对成功或网关停止监听时自动收起）、已配对设备（名称、配对时间、最近在线、在线 / 离线、吊销需二次确认）。启用后提示 Windows 防火墙需对 node.exe 允许「专用网络」。
 - 实时刷新：`sidecar-client` 的 `onRemoteChanged` 订阅 `remote.changed`，`useSidecarBridge` 把载荷直接写入 `remote.status` 的查询缓存；页面还会在改设置 / 吊销后主动失效重取。
 - 调试面板的脱敏规则覆盖 `agentdeck://pair#…` 链接与 `deviceSecret` / `pairingSecret` 字段。
+
+### 4.32 MCP elicitation（表单 / 浏览器流程）
+
+MCP 服务可以通过 Agent 向用户索取结构化输入（form 模式）或要求在浏览器里完成一步操作（url 模式，如 OAuth）。Claude 与 Codex 各有一条通道，AgentDeck 统一成 `kind: "elicitation"` 的审批；ACP 本期不做（SDK 0.17.1 没有对应 handler）。协议证据来自本机 CLI 反查（Claude Code 2.1.299 的 zod schema、Codex 0.162.1 的 `generate-ts` / JSON Schema）。
+
+**协议（`packages/protocol/src/agent-api.ts`）**：
+- `AgentPermissionRequest.kind` 增加 `"elicitation"`；`detail` 为 `{ type: "elicitation", serverName, mode: "form" | "url", message, url?, elicitationId?, fields?: ElicitationField[] }`（`ToolCallDetail` 的新成员，只出现在审批请求里）。
+- `ElicitationField`：`key`、`title?`、`description?`、`required`、`type: "string" | "number" | "integer" | "boolean" | "select" | "multiselect"`、`options?: { value, label }[]`、`format?`、`min?` / `max?`（number / integer 的 minimum / maximum；multiselect 的 minItems / maxItems）、`minLength?` / `maxLength?`、`default?`、`secret?`。
+- `actions`：form 为 `submit`「提交」/ `decline`「拒绝」/ `cancel`「取消」，url 的第一项换成 `done`「已完成」。`input` 为 `{ serverName, mode, message, url?, elicitationId? }`（不含 schema）。
+- **应答**（`agent.permission.respond` 的 `AgentPermissionResponse`）：提交 = `{ behavior: "allow", selectedActionId: "submit", updatedInput: { content: {...} } }`；url 的已完成 = `{ behavior: "allow", selectedActionId: "done" }`（不带 content）；拒绝 = `{ behavior: "deny", selectedActionId: "decline" }`；取消 = `{ behavior: "deny", selectedActionId: "cancel", interrupt: true }`。provider 映射：allow → `accept`，deny → `decline`，deny + `interrupt` → `cancel`，且 `cancel` 之后 provider 额外中断本回合（MCP 的 cancel 只让该次调用失败，「取消会中断回合」由 AgentDeck 保证；sidecar 先写出 cancel 应答，下一轮事件循环再发 interrupt）。
+- **隐私**：provider 发出的 `permission_resolved` 不带 `updatedInput.content`（表单里可能有密码，该事件会广播并落盘）；`secret` 字段在界面里遮罩显示。
+
+**JSON Schema → fields**（`providers/shared/elicitation-schema.ts` 的 `normalizeElicitationSchema(schema, propertyOrder?)`，Claude 与 Codex 共用）：
+- 字段顺序：优先 `property_order`（Claude 给出的 properties 键顺序），其次 `properties` 的键序；`required` 数组决定 `required`；最多 50 个字段、每个字段最多 200 个选项。
+- 支持 MCP 2025-11-25 `ElicitRequestFormParams` 的全部原始类型：string（title / description / minLength / maxLength / format email|uri|date|date-time / default）、number / integer（minimum / maximum / default）、boolean（default）、单选（`enum`，可带旧版 `enumNames`；`oneOf: [{const, title}]`）→ `select`、多选（`type: "array"`，`items.enum` 或 `items.anyOf: [{const, title}]`，minItems / maxItems / default）→ `multiselect`；非法的 `default`（不在选项里）丢弃。
+- `secret`：`format: "password"`、`writeOnly: true` 或键名含 password / passwd / secret / api_key / token。
+- 不认识的类型 / 缺少类型 / 非对象的字段定义 / 选项形状不对的多选：降级为 `string`，并在 `description` 末尾注明（如「（不支持的类型：object，已按文本输入处理）」）。`type` 可为数组（取第一个非 null）。
+
+**Claude**（`claude-cli-session.ts` / `claude-agent.ts`）：
+- CLI → 我方 `control_request`，`request.subtype === "elicitation"`：`mcp_server_name`、`message`、`mode?`（缺省按 form）、`url?`、`elicitation_id?`、`requested_schema?`、`property_order?`、`title?` / `display_name?` / `description?`。`ClaudeCliSession` 分流到新的 `onElicitation` 回调（`ClaudeCliOptions.onElicitation`，与 `canUseTool` 同样的 AbortSignal：`control_cancel_request` 与进程退出都会触发）；没有回调或回调抛错时应答 `cancel`。
+- 应答：`control_response { subtype: "success", request_id, response: { action: "accept" | "decline" | "cancel", content? } }`——**不拼 `toolUseID`**，decline / cancel 不带 `content`。（原先对非 `can_use_tool` 的控制请求一律回 error，CLI 会把 error 当成 cancel，所有 MCP 表单请求都被取消了。）不需要在 `initialize` 里声明能力。
+- provider：`handleElicitation` 变成 `kind: "elicitation"`、`name: mcp:<server>` 的 permission request（title 优先用 CLI 的 `title`，否则「<server> 需要你填写表单 / 在浏览器中完成操作」）；仅在有进行中的回合（或可接管的自发轮次）时处理，否则直接 `cancel`；回合取消 / 会话关闭 / CLI 撤回时挂起的请求回 `cancel` 并发 `permission_resolved`。
+- url 模式完成：CLI 往 stdout 发 `{"type":"system","subtype":"elicitation_complete","mcp_server_name","elicitation_id"}`（`system` 在 `OUTPUT_MESSAGE_TYPES` 里，不会被吞）；provider 按 `elicitation_id` 找到挂起的 url 请求，发 `permission_resolved`（`allow` + `selectedActionId: "done"`）并向 CLI 回 `accept`。
+
+**Codex**（`codex-agent.ts` 的 `handleElicitation`）：
+- `mcpServer/elicitation/request` 的 params：`threadId`、`turnId`、`serverName` 加 `mode`（`form`：`message` + `requestedSchema`；`url`：`message` + `url` + `elicitationId`）。`openai/*`（`openai/form`、`openaiForm`、`openai/userVerification`）AgentDeck 不声明扩展、不会收到；收到就直接 `decline`，不产生审批。缺 `mode` 时有 `url` 按 url、否则按 form。
+- 应答 `{ action, content, _meta }` 三个字段必须齐：accept（form）= `content: <表单内容>`，accept（url）= `content: null`，decline / cancel = `content: null`；`_meta` 一律 `null`。
+- **没有任何字段的 form**（如 Codex 对 MCP 工具调用的审批，见 4.26）仍是原来的 `kind: "tool"`「允许 / 拒绝」审批（accept 回 `content: {}`），不变成表单卡片。
+- Codex 没有 url 流程的完成通知；url 请求靠用户点「已完成」，或回合结束 / `serverRequest/resolved` 时清理（与其它审批相同）。
+
+**前端**（`web/src/components/chat/elicitation-card.tsx`，在 `approval-dialog.tsx` 的分发里接入）：
+- form：按 `fields` 渲染——文本、数字（`inputMode` 数字键盘）、开关（复选框）、单选（选项 ≤4 个用单选组，更多用下拉）、多选（复选框组）、`secret` 用密码框（`autocomplete="off"`）；`format` 为 email / uri / date 时用对应的 input 类型。基本校验：必填、字符数范围、数值范围（含 integer）、多选数量；点「提交」才显示错误，未通过不发送；选填且为空的字段不放进 `content`，数字以 number 提交。按钮「提交」「拒绝」「取消」（取消的 tooltip 提示会中断本回合）。
+- url：显示说明与链接地址，按钮「在浏览器中打开」走 `openExternalUrl`（桌面经 Tauri 打开系统浏览器；手机端目前没有原生外链能力，回退 `window.open`，见 `lib/external-links.ts`）；只允许 http / https / mailto / obsidian，其它协议提示并禁用。按钮「已完成」「拒绝」「取消」。
+- 样式用 CSS Modules + tokens，窄屏 / 触屏下输入框与选项行 ≥44px、按钮换行铺开。
+- 标签与通知：`web/src/lib/permission-label.ts` 里 `elicitation` →「待填写」/「等待填写」；`client.attention` 摘要（4.31）form =「Agent 需要你填写表单：<serverName>」，url =「Agent 需要你在浏览器中完成操作：<serverName>」，只引用服务名，不含表单内容。
+- 超大内容：`permission-limits`（4.31）对 `detail` 里的字符串同样生效（`message` / 字段说明 / 选项文本超限会截断，字段与选项个数已被归一化函数限制在 50 / 200）。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
@@ -1234,7 +1280,7 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14）、`stop_task { task_id }`（见 4.15），默认 30 秒超时；initialize 带 `forwardSubagentText` 与 `perTaskStopAffordance`（见 4.11 / 4.15）；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, updatedPermissions?, toolUseID}` 或 `{behavior:"deny", message}`（`updatedPermissions` 见 5.3「始终允许」），`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14）、`stop_task { task_id }`（见 4.15），默认 30 秒超时；initialize 带 `forwardSubagentText` 与 `perTaskStopAffordance`（见 4.11 / 4.15）；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, updatedPermissions?, toolUseID}` 或 `{behavior:"deny", message}`（`updatedPermissions` 见 5.3「始终允许」），`elicitation`（MCP 表单 / url，见 4.32）→ `permission_requested`（kind `elicitation`），应答 `{action, content?}`；`control_cancel_request` 撤回挂起的权限 / elicitation 请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`elicitation_complete`（4.32），`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
 - **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision }`（`accept` / `acceptForSession` / `acceptWithExecpolicyAmendment` / `applyNetworkPolicyAmendment` / `decline` / `cancel`，见 5.3）；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
@@ -1323,6 +1369,7 @@ ACP：
 5. **审批**：`ApprovalDialog` 抽到 `components/chat/`，按 `AgentPermissionRequest.actions` 渲染多按钮。
    - **拒绝 / 继续规划附理由**：`PermissionCard` 在按钮行末尾有「理由」入口（`kind: "plan"` 时叫「意见」），默认折叠；点开出一个单行输入（自动聚焦，手机端等软键盘升起后 `scrollIntoView` 到可视区），在输入框回车（输入法选词中的回车除外）等同点第一个拒绝类按钮，或直接点任一拒绝类按钮提交；理由去首尾空白后非空才作为 `AgentPermissionResponse` deny 的 `message` 回传，允许类按钮忽略理由，不展开时与原来完全一致（不增加常规操作步骤）。提问卡（`QuestionCard`）不提供。各 provider 对 `message` 的处理：Claude 作为 `deny.message` 回给 CLI（计划的「继续规划」同样，缺省文案仍是「用户希望继续完善计划，暂不执行」）；Codex 旧版协议（`legacy-exec` / `legacy-patch`）放进 `denied.rejection`，v2 的 `decision: "decline"` 协议本身没有理由字段，理由被丢弃（仅出现在 AgentDeck 的 `permission_resolved` 事件里）；ACP 的 `RequestPermissionOutcome` 只有 `optionId`，同样无法传递理由；mock 会在回复里回显收到的理由。
    - **计划用 Markdown 渲染**：`detail.type === "plan"` 的正文复用时间线助手文本的 `MessageText`（Streamdown），容器最高 320px、超出滚动。
+   - **MCP 表单卡片**：`kind: "elicitation"` 且 `detail.type === "elicitation"` 时 `ApprovalDialog` 分发给 `ElicitationCard`（4.32），不走通用的允许 / 拒绝按钮。
    - **多按钮与「始终允许」**：`actions` 按序渲染，窄屏（≤640px 或触屏）自动换行铺开，按钮触控区 ≥44px；带 `persist` 的动作（`allow_session` / `allow_project` / ACP `allow_always` 等）用虚线描边的次要样式，且有 `description` 的动作其说明在按钮下方另起一行列出（同时是按钮 tooltip，手机没有 hover），不增加确认弹窗。`defaultDeny` 为 true 时拒绝类按钮排到最前并作为主按钮（加粗描边），允许类用中性描边，不自动聚焦任何允许按钮。
    - **标签按类型区分**（`web/src/lib/permission-label.ts`）：提示条、手机会话列表角标（取快照 `pendingPermissions[0].kind`，无则取运行时首条审批）、桌面面板卡片（「N 待审批」）：`question` →「待回答」，`plan` →「待确认计划」，其余「待审批」；看板关联会话角标同理为「等待回答 / 等待确认计划 / 等待审批」。
 6. **新建会话**：composer 上的模型选择器改为「Agent（provider）+ 模型 + 模式」，工作目录沿用 workspace picker。
