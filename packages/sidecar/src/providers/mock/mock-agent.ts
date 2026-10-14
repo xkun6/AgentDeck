@@ -10,6 +10,7 @@ import type {
   AgentPromptInput,
   AgentQuestion,
   AgentStreamEvent,
+  ElicitationField,
   ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 
@@ -100,14 +101,84 @@ interface ActiveTurn {
 }
 
 /** 交互场景（prompt 里带对应关键字触发，供真机 / 手工测试审批 UI；见 design.md 4.31「Mock 审批场景」） */
-type MockScenario = "question" | "plan" | "multi";
+type MockScenario =
+  | "question"
+  | "plan"
+  | "multi"
+  | "elicit"
+  | "elicit-url"
+  | "always"
+  | "always-deny"
+  | "textq";
 
 function pickScenario(text: string): MockScenario | undefined {
   if (text.includes("/question")) return "question";
   if (text.includes("/plan")) return "plan";
   if (text.includes("/multi")) return "multi";
+  // 必须先判断带后缀的：/elicit-url 包含 /elicit，/always-deny 包含 /always
+  if (text.includes("/elicit-url")) return "elicit-url";
+  if (text.includes("/elicit")) return "elicit";
+  if (text.includes("/always-deny")) return "always-deny";
+  if (text.includes("/always")) return "always";
+  if (text.includes("/textq")) return "textq";
   return undefined;
 }
+
+/** /elicit 的表单：string 必填、enum 单选（≤4 项，单选组）、boolean、number 带范围、多选 */
+export const MOCK_ELICIT_FIELDS: ElicitationField[] = [
+  { key: "name", title: "名称", description: "必填，至少 2 个字符", required: true, type: "string", minLength: 2 },
+  {
+    key: "level",
+    title: "等级",
+    required: false,
+    type: "select",
+    options: [
+      { value: "low", label: "低" },
+      { value: "mid", label: "中" },
+      { value: "high", label: "高" },
+    ],
+    default: "mid",
+  },
+  { key: "enabled", title: "启用", required: false, type: "boolean", default: true },
+  { key: "ratio", title: "比例", description: "0 到 10", required: false, type: "number", min: 0, max: 10 },
+  {
+    key: "tags",
+    title: "标签",
+    description: "最多选 2 项",
+    required: false,
+    type: "multiselect",
+    max: 2,
+    options: [
+      { value: "alpha", label: "Alpha" },
+      { value: "beta", label: "Beta" },
+      { value: "gamma", label: "Gamma" },
+    ],
+  },
+];
+
+/** /textq 的提问：纯文本题、遮罩的纯文本题，另有一道不允许「其他」的单选 */
+export const MOCK_TEXT_QUESTIONS: AgentQuestion[] = [
+  { question: "项目叫什么？", header: "名称", multiSelect: false, options: [], isOther: false, freeText: true },
+  {
+    question: "API Key 是什么？",
+    header: "密钥",
+    multiSelect: false,
+    options: [],
+    isOther: false,
+    isSecret: true,
+    freeText: true,
+  },
+  {
+    question: "选哪个环境？",
+    header: "环境",
+    multiSelect: false,
+    options: [
+      { label: "开发", description: "本机" },
+      { label: "生产", description: "线上" },
+    ],
+    isOther: false,
+  },
+];
 
 /** 与 Claude AskUserQuestion 映射后的 detail 一致：两题，一题单选带 preview，一题多选；界面都会再追加「其他」 */
 export const MOCK_QUESTIONS: AgentQuestion[] = [
@@ -224,8 +295,21 @@ export class MockAgentSession implements AgentSession {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.active!.pendingPermissions.delete(requestId);
-    this.emit({ type: "permission_resolved", requestId, response });
+    const isElicitation = pending.request.kind === "elicitation";
+    // 与真实 provider 一致：表单内容不进 permission_resolved（该事件会广播并落盘）
+    this.emit({
+      type: "permission_resolved",
+      requestId,
+      response:
+        isElicitation && response.behavior === "allow"
+          ? { behavior: "allow", ...(response.selectedActionId ? { selectedActionId: response.selectedActionId } : {}) }
+          : response,
+    });
     pending.resolve(response);
+    // 表单 / 浏览器流程的「取消」（deny + interrupt）会中断本回合
+    if (isElicitation && response.behavior === "deny" && response.interrupt === true) {
+      await this.interrupt();
+    }
   }
 
   async interrupt(): Promise<void> {
@@ -365,6 +449,112 @@ export class MockAgentSession implements AgentSession {
       return response.behavior === "allow"
         ? "Mock 收到：计划已批准"
         : `Mock 收到：继续规划，意见：${response.message?.trim() || "（无）"}`;
+    }
+    if (scenario === "elicit" || scenario === "elicit-url") {
+      const isUrl = scenario === "elicit-url";
+      const detail = isUrl
+        ? {
+            type: "elicitation" as const,
+            serverName: "mock-oauth",
+            mode: "url" as const,
+            message: "Mock 服务需要你在浏览器里完成授权，完成后回到这里点「已完成」。",
+            url: "https://example.com/mock-auth",
+            elicitationId: "mock-elicit-1",
+          }
+        : {
+            type: "elicitation" as const,
+            serverName: "mock-forms",
+            mode: "form" as const,
+            message: "请填写下面的资料。",
+            fields: MOCK_ELICIT_FIELDS,
+          };
+      const request: AgentPermissionRequest = {
+        id: randomUUID(),
+        provider: MOCK_PROVIDER_ID,
+        name: `mcp:${detail.serverName}`,
+        kind: "elicitation",
+        title: isUrl ? `${detail.serverName} 需要你在浏览器中完成操作` : `${detail.serverName} 需要你填写表单`,
+        input: { serverName: detail.serverName, mode: detail.mode, message: detail.message },
+        detail,
+        actions: [
+          { id: isUrl ? "done" : "submit", label: isUrl ? "已完成" : "提交", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      };
+      const response = await this.requestPermission(turn, request);
+      if (response.behavior === "deny") {
+        return `Mock 收到：${response.interrupt ? "取消（已中断回合）" : "拒绝"}`;
+      }
+      if (isUrl) {
+        return "Mock 收到：浏览器流程已完成";
+      }
+      const content = (response.updatedInput?.content ?? {}) as Record<string, unknown>;
+      const lines = Object.entries(content).map(([key, value]) => `- ${key} → ${JSON.stringify(value)}`);
+      return `Mock 收到的表单内容：\n${lines.length > 0 ? lines.join("\n") : "（空）"}`;
+    }
+    if (scenario === "always" || scenario === "always-deny") {
+      const command = "git status";
+      const request: AgentPermissionRequest = {
+        id: randomUUID(),
+        provider: MOCK_PROVIDER_ID,
+        name: "shell",
+        kind: "tool",
+        title: "运行命令",
+        description: `Mock 想要运行：${command}`,
+        input: { command },
+        detail: { type: "shell", command },
+        ...(scenario === "always-deny" ? { defaultDeny: true } : {}),
+        actions: [
+          { id: "allow", label: "允许一次", behavior: "allow" },
+          { id: "deny", label: "拒绝", behavior: "deny" },
+          {
+            id: "allow_session",
+            label: "本会话始终允许",
+            behavior: "allow",
+            persist: "session",
+            description: "仅本会话有效，不写入文件：Bash(git status)",
+          },
+          {
+            id: "allow_project",
+            label: "永久允许",
+            behavior: "allow",
+            persist: "permanent",
+            description: "写入项目的 .claude/settings.local.json：Bash(git status)",
+          },
+        ],
+      };
+      const response = await this.requestPermission(turn, request);
+      const action = request.actions?.find((item) => item.id === response.selectedActionId);
+      return `Mock 收到的动作：${response.selectedActionId ?? "（未带 selectedActionId）"}（${action?.label ?? "未知"}，${
+        response.behavior === "allow" ? "允许" : "拒绝"
+      }）`;
+    }
+    if (scenario === "textq") {
+      const request: AgentPermissionRequest = {
+        id: randomUUID(),
+        provider: MOCK_PROVIDER_ID,
+        name: "request_user_input",
+        kind: "question",
+        title: "Mock 有问题需要你回答",
+        input: { itemId: "mock-text-question" },
+        detail: { type: "question", questions: MOCK_TEXT_QUESTIONS },
+        actions: [
+          { id: "submit", label: "提交回答", behavior: "allow" },
+          { id: "skip", label: "跳过", behavior: "deny" },
+        ],
+      };
+      const response = await this.requestPermission(turn, request);
+      if (response.behavior === "deny") {
+        return `Mock 收到：跳过了问题${response.message ? `（${response.message}）` : ""}`;
+      }
+      const answers = (response.updatedInput?.answers ?? {}) as Record<string, string>;
+      const secret = new Set(MOCK_TEXT_QUESTIONS.filter((q) => q.isSecret).map((q) => q.question));
+      // 遮罩题只回显长度，避免把密钥写进时间线
+      const lines = Object.entries(answers).map(
+        ([question, answer]) => `- ${question} → ${secret.has(question) ? `（已收到，${Array.from(answer).length} 个字符）` : answer}`,
+      );
+      return `Mock 收到的回答：\n${lines.length > 0 ? lines.join("\n") : "（空）"}`;
     }
     // multi：同时挂起 2 条工具审批，用于验证「还有 N 条待处理」
     const requests = [1, 2].map((index): AgentPermissionRequest => {

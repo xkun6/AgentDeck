@@ -197,6 +197,146 @@ describe("MockAgentClient", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn_canceled" });
   });
 
+  test("/elicit：kind elicitation 的 form 模式，覆盖 string / select / boolean / number / multiselect；提交后回显内容", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/elicit");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    expect(request).toMatchObject({ kind: "elicitation", detail: { type: "elicitation", mode: "form" } });
+    const fields = (request!.detail as { fields: Array<{ type: string; required: boolean }> }).fields;
+    expect(fields.map((f) => f.type)).toEqual(["string", "select", "boolean", "number", "multiselect"]);
+    expect(fields[0]!.required).toBe(true);
+    expect(request!.actions?.map((a) => a.id)).toEqual(["submit", "decline", "cancel"]);
+    await session.respondToPermission(request!.id, {
+      behavior: "allow",
+      selectedActionId: "submit",
+      updatedInput: { content: { name: "abc", level: "high", enabled: false, ratio: 3, tags: ["alpha", "beta"] } },
+    });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe(
+      'Mock 收到的表单内容：\n- name → "abc"\n- level → "high"\n- enabled → false\n- ratio → 3\n- tags → ["alpha","beta"]',
+    );
+    // 表单内容不进 permission_resolved
+    expect(events.find((e) => e.type === "permission_resolved")).toMatchObject({
+      response: { behavior: "allow", selectedActionId: "submit" },
+    });
+    expect(JSON.stringify(events.find((e) => e.type === "permission_resolved"))).not.toContain("abc");
+  });
+
+  test("/elicit 拒绝只回显拒绝；取消会中断本回合", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/elicit");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    await session.respondToPermission(session.getPendingPermissions()[0]!.id, { behavior: "deny", selectedActionId: "decline" });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到：拒绝");
+
+    const events2 = collect(session);
+    await session.startTurn("/elicit");
+    await waitUntil(() => events2.some((e) => e.type === "permission_requested"));
+    await session.respondToPermission(session.getPendingPermissions()[0]!.id, {
+      behavior: "deny",
+      selectedActionId: "cancel",
+      interrupt: true,
+    });
+    await waitUntil(() => events2.some((e) => e.type === "turn_canceled"));
+    expect(session.getPendingPermissions()).toEqual([]);
+  });
+
+  test("/elicit-url：url 模式带链接，「已完成」后回显", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/elicit-url");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    expect(request).toMatchObject({
+      kind: "elicitation",
+      detail: { type: "elicitation", mode: "url", url: "https://example.com/mock-auth", elicitationId: "mock-elicit-1" },
+    });
+    expect(request!.actions?.map((a) => a.id)).toEqual(["done", "decline", "cancel"]);
+    await session.respondToPermission(request!.id, { behavior: "allow", selectedActionId: "done" });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到：浏览器流程已完成");
+  });
+
+  test("/always：工具审批带 allow_session / allow_project，回显收到的动作 id", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    for (const [index, id] of ["allow_session", "allow_project", "deny"].entries()) {
+      await session.startTurn("/always");
+      await waitUntil(() => events.filter((e) => e.type === "permission_requested").length === index + 1);
+      const [request] = session.getPendingPermissions();
+      expect(request).toMatchObject({ kind: "tool", name: "shell" });
+      expect(request!.defaultDeny).toBeUndefined();
+      expect(request!.actions?.map((a) => [a.id, a.persist])).toEqual([
+        ["allow", undefined],
+        ["deny", undefined],
+        ["allow_session", "session"],
+        ["allow_project", "permanent"],
+      ]);
+      await session.respondToPermission(request!.id, {
+        behavior: id === "deny" ? "deny" : "allow",
+        selectedActionId: id,
+      });
+      await waitUntil(() => events.filter((e) => e.type === "turn_completed").length === index + 1);
+    }
+    const replies = events
+      .filter((e) => e.type === "timeline" && e.item.type === "assistant_message")
+      .map((e) => (e.type === "timeline" && e.item.type === "assistant_message" ? e.item.text : ""))
+      .join("");
+    expect(replies).toContain("Mock 收到的动作：allow_session（本会话始终允许，允许）");
+    expect(replies).toContain("Mock 收到的动作：allow_project（永久允许，允许）");
+    expect(replies).toContain("Mock 收到的动作：deny（拒绝，拒绝）");
+  });
+
+  test("/always-deny：defaultDeny 为 true（不能与 /always 混淆）", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/always-deny");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    expect(session.getPendingPermissions()[0]).toMatchObject({ defaultDeny: true });
+    await session.interrupt();
+  });
+
+  test("/textq：纯文本题 + secret 题 + 不允许其他的单选；回显时遮罩题只显示长度", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/textq");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    expect(request).toMatchObject({ kind: "question", detail: { type: "question" } });
+    const questions = (request!.detail as { questions: AgentQuestion[] }).questions;
+    expect(questions.map((q) => [q.freeText === true, q.isSecret === true, q.isOther])).toEqual([
+      [true, false, false],
+      [true, true, false],
+      [false, false, false],
+    ]);
+    expect(questions[2]!.options.length).toBeGreaterThan(0);
+    await session.respondToPermission(request!.id, {
+      behavior: "allow",
+      selectedActionId: "submit",
+      updatedInput: { answers: { "项目叫什么？": "demo", "API Key 是什么？": "sk-secret", "选哪个环境？": "开发" } },
+    });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    const reply = replyOf(events);
+    expect(reply).toBe(
+      "Mock 收到的回答：\n- 项目叫什么？ → demo\n- API Key 是什么？ → （已收到，9 个字符）\n- 选哪个环境？ → 开发",
+    );
+    expect(reply).not.toContain("sk-secret");
+  });
+
+  test("/textq 跳过：回显跳过", async () => {
+    const session = await new MockAgentClient().createSession({ cwd: "." });
+    const events = collect(session);
+    await session.startTurn("/textq");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    await session.respondToPermission(session.getPendingPermissions()[0]!.id, { behavior: "deny", selectedActionId: "skip" });
+    await waitUntil(() => events.some((e) => e.type === "turn_completed"));
+    expect(replyOf(events)).toBe("Mock 收到：跳过了问题");
+  });
+
   test("splitIntoChunks 均分为 3~5 段且可无损拼回", () => {
     for (const text of ["Mock 回复：a", "Mock 回复：" + "长".repeat(100), "Mock 回复：🙂🙂🙂"]) {
       const chunks = splitIntoChunks(text);
