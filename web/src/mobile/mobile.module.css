@@ -564,12 +564,78 @@
 
 .inputBar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--h-line);
   background: var(--h-bg-pane);
   flex-shrink: 0;
+}
+
+.imageStrip {
+  display: flex;
+  flex: 0 0 100%;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.imageThumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-soft);
+}
+
+.imageThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.imageRemove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.imageBusy {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--h-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.imageMenuWrap {
+  position: relative;
+}
+
+.imageMenu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
 }
 
 .inputActions {

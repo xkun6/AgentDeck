@@ -17,8 +17,10 @@ import { humanizeSidecarError, isInactiveAgent, useAgentSession } from "@/hooks/
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useRetractMessage } from "@/hooks/use-retract-message";
 import { isRuntimeRunning } from "@/lib/session-activity";
+import { prepareAgentPrompt } from "@/lib/agent-prompt";
 import { AGENT_STATUS_LABELS, agentDisplayTitle } from "@/lib/agent-session-display";
 import { MobileComposer } from "./composer";
+import { addImages, compressImage, describeImageSendFailure, imagesToAttachments, type DraftImage } from "./image-attachments";
 import s from "./mobile.module.css";
 
 /** 首屏只渲染最近这么多条消息（手机 WebView 全量渲染长会话首开要数秒、流式只有约 3fps），更早的按需展开 / 向前分页 */
@@ -26,7 +28,16 @@ export const INITIAL_WINDOW = 60;
 export const WINDOW_STEP = 100;
 export const OLDER_PAGE_LIMIT = 300;
 
-export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: () => void }) {
+export function SessionDetail({
+  agentId,
+  onBack,
+  compress = compressImage,
+}: {
+  agentId: string;
+  onBack: () => void;
+  /** 图片压缩实现，测试注入 */
+  compress?: (file: File) => Promise<DraftImage>;
+}) {
   const actions = useAgentSession();
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
@@ -50,6 +61,10 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
   const loadingOlderRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");
+  const [images, setImages] = useState<DraftImage[]>([]);
+  const [imagesBusy, setImagesBusy] = useState(false);
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
 
   useEffect(() => {
     if (!connected) return;
@@ -100,28 +115,47 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
     [actions],
   );
 
+  // 选图后依次压缩（长边 ≤ 2048、JPEG 0.85、≤ 5MB），超出 4 张或单张失败给出提示
+  const pickImages = async (files: File[]) => {
+    setImagesBusy(true);
+    try {
+      const result = await addImages(imagesRef.current, files, compress);
+      setImages(result.images);
+      setError(result.errors.length > 0 ? result.errors.join("；") : null);
+    } finally {
+      setImagesBusy(false);
+    }
+  };
+
   const send = async () => {
     const value = text.trim();
-    if (!value) return;
+    const draft = images;
+    if (!value && draft.length === 0) return;
     setText("");
+    setImages([]);
     setError(null);
     try {
-      await actions.sendPrompt(agentId, value);
+      const prepared = await prepareAgentPrompt({ text: value, attachments: imagesToAttachments(draft) });
+      await actions.sendPrompt(agentId, prepared.prompt, { displayText: value, displayImages: prepared.displayImages });
     } catch (e) {
       setText(value);
-      setError(e instanceof Error ? e.message : String(e));
+      setImages(draft);
+      setError(describeImageSendFailure(e instanceof Error ? e.message : String(e), draft.length));
     }
   };
 
   const steer = async () => {
     const value = text.trim();
-    if (!value) return;
+    const draft = images;
+    if (!value && draft.length === 0) return;
     setError(null);
     try {
-      await actions.steerPrompt(agentId, value);
+      const prepared = await prepareAgentPrompt({ text: value, attachments: imagesToAttachments(draft) });
+      await actions.steerPrompt(agentId, prepared.prompt);
       setText("");
+      setImages([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeImageSendFailure(e instanceof Error ? e.message : String(e), draft.length));
     }
   };
 
@@ -205,6 +239,10 @@ export function SessionDetail({ agentId, onBack }: { agentId: string; onBack: ()
         busy={busy}
         connected={connected}
         steerSupported={steerSupported}
+        images={images}
+        imagesBusy={imagesBusy}
+        onAddImages={(files) => void pickImages(files)}
+        onRemoveImage={(id) => setImages((list) => list.filter((image) => image.id !== id))}
         onSend={() => void send()}
         onSteer={() => void steer()}
         onCancel={cancel}
