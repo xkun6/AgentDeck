@@ -31,6 +31,8 @@ const EVENT_TYPE_LABELS: Record<"all" | DebugEntryType, string> = {
   exception: "异常",
   backend: "backend",
 };
+// provider.list 的 id ↔ coding_agents_check 的 agent id（两边命名不同，合并为一行显示）
+const CODING_AGENT_ID_BY_PROVIDER: Record<string, string> = { claude: "claude-code", codex: "codex" };
 
 function useDebugEvents(): DebugEntry[] {
   return useSyncExternalStore(
@@ -170,6 +172,10 @@ export function DebugSection({ showHeading = true }: { showHeading?: boolean }) 
     }
   };
 
+  const detectedAgents = codingAgents.data?.agents ?? [];
+  const mergedAgentIds = new Set((providers.data ?? []).map((provider) => CODING_AGENT_ID_BY_PROVIDER[provider.id]));
+  const extraAgents = detectedAgents.filter((agent) => !mergedAgentIds.has(agent.id));
+
   const pathRows: Array<[string, string | undefined]> = [
     ["数据目录", paths.data?.dataDir],
     ["日志目录", paths.data?.logDir],
@@ -248,20 +254,23 @@ export function DebugSection({ showHeading = true }: { showHeading?: boolean }) 
           </Button>
         }
       >
-        <div className={s.list} aria-label="provider 可用状态">
-          {(providers.data ?? []).map((provider) => (
-            <div className={s.listRow} key={provider.id}>
-              <span>{provider.label}</span>
-              <span className={s.badge} data-ok={provider.available ? "true" : "false"}>
-                {provider.available ? "可用" : "不可用"}
-              </span>
-              <span className={s.muted}>{provider.unavailableReason ?? ""}</span>
-            </div>
-          ))}
+        <div className={s.list} aria-label="Agent 可用性">
+          {(providers.data ?? []).map((provider) => {
+            const detected = detectedAgents.find((agent) => agent.id === CODING_AGENT_ID_BY_PROVIDER[provider.id]);
+            return (
+              <div className={s.listRow} key={provider.id}>
+                <span>{provider.label}</span>
+                <span className={s.badge} data-ok={provider.available ? "true" : "false"}>
+                  {provider.available ? "可用" : "不可用"}
+                </span>
+                <span className={s.muted}>
+                  {[provider.unavailableReason, detected?.version, detected?.path].filter(Boolean).join(" · ")}
+                </span>
+              </div>
+            );
+          })}
           {!providers.data?.length ? <div className={s.muted}>{providers.isLoading ? "读取中…" : "无 provider（sidecar 未连接？）"}</div> : null}
-        </div>
-        <div className={s.list} aria-label="编程 Agent 检测">
-          {(codingAgents.data?.agents ?? []).map((agent) => (
+          {extraAgents.map((agent) => (
             <div className={s.listRow} key={agent.id}>
               <span>{agent.label}</span>
               <span className={s.badge} data-ok={agent.installed ? "true" : "false"}>

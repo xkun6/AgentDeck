@@ -673,7 +673,7 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 - 调试页（「高级」下新增「调试」子页，并在命令面板加入「打开调试面板」）：
   - 运行状态：应用版本 / 提交 / 构建日期；sidecar 状态、版本、pid、端口（来自 `get_sidecar_config`，**不显示 token**）；「重启 sidecar」按钮。
   - 路径：`debug_paths` 的各目录，每项带「打开」。
-  - Agent 可用性：`provider.list` 的可用状态与不可用原因，`coding_agents_check` 的版本与路径。
+  - Agent 可用性：`provider.list` 的可用状态与不可用原因，`coding_agents_check` 的版本与路径。两者合并为每个 Agent 一行：provider `claude` ↔ 检测项 `claude-code`、`codex` ↔ `codex`，版本与路径追加在 provider 行后；未对应到任何 provider 的检测项（如 sidecar 未连接时）才单独成行显示「已安装 / 未安装」。
   - 前端事件：按类型筛选、清空、复制。
   - sidecar 日志：`log_tail` 尾部，按级别（全部 / 警告及以上 / 错误）与关键字过滤，「自动刷新」开关（2 秒），「打开日志目录」。
   - 操作：「复制诊断信息」（diagnostics JSON 写入剪贴板）、「导出诊断包」。

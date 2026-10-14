@@ -6,14 +6,24 @@ import { Provider as JotaiProvider, createStore } from "jotai";
 
 vi.mock("@/hooks/use-agent-catalog", () => ({
   useAgentProviders: () => ({
-    data: [{ id: "codex", kind: "codex", label: "Codex", available: false, unavailableReason: "未安装" }],
+    data: [
+      { id: "claude", kind: "claude", label: "Claude Code", available: true },
+      { id: "codex", kind: "codex", label: "Codex", available: false, unavailableReason: "未安装" },
+    ],
     isLoading: false,
     refetch: vi.fn(),
   }),
 }));
 vi.mock("@/hooks/use-coding-agents", () => ({
   useCodingAgentsCheck: () => ({
-    data: { generatedAtMs: 0, platform: "win32", agents: [{ id: "claude", label: "Claude Code", installed: true, version: "2.1.0", path: "C:/claude.exe" }] },
+    data: {
+      generatedAtMs: 0,
+      platform: "win32",
+      agents: [
+        { id: "claude-code", label: "Claude Code", installed: true, version: "2.1.0", path: "C:/claude.exe" },
+        { id: "codex", label: "Codex", installed: false },
+      ],
+    },
     refetch: vi.fn(),
   }),
 }));
@@ -68,6 +78,15 @@ describe("DebugSection", () => {
     fireEvent.change(screen.getByLabelText("日志级别"), { target: { value: "error" } });
     expect(screen.getByLabelText("sidecar 日志").textContent).not.toContain("hello");
     expect(screen.getByLabelText("sidecar 日志").textContent).toContain("bad thing");
+  });
+
+  it("provider 与编程 Agent 检测合并为一行", () => {
+    window.agentdeckDesktop = { windowType: "tauri" } as never;
+    renderPage();
+    expect(screen.getAllByText("Claude Code")).toHaveLength(1);
+    expect(screen.getAllByText("Codex")).toHaveLength(1);
+    expect(screen.getByText("2.1.0 · C:/claude.exe")).toBeTruthy();
+    expect(screen.queryByText("已安装")).toBeNull();
   });
 
   it("清空按钮清除前端事件", () => {
