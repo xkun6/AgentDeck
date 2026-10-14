@@ -170,6 +170,15 @@ function ConnectedShell({
   const syncing = useClientSyncing(connection.client);
   const tab = navTabOf(route);
 
+  // 凭据失效（含被吊销）：旧会话数据已不可信也不能再操作，整页只留说明与重新配对入口
+  if (connection.phase === "auth_failed") {
+    return (
+      <div className={s.app}>
+        <AuthFailedPanel reason={connection.authReason} onRepair={() => navigate({ name: "pair" })} />
+      </div>
+    );
+  }
+
   return (
     <div className={s.app}>
       {connection.phase === "open" ? <BackgroundGuideDialog prefs={prefs} /> : null}
@@ -179,17 +188,8 @@ function ConnectedShell({
           <span>
             {connection.phase === "connecting"
               ? "正在连接电脑…"
-              : connection.phase === "auth_failed"
-                ? connection.authReason
-                  ? AUTH_REASON_TEXT[connection.authReason]
-                  : "凭据已失效，请重新配对"
-                : `连接已断开：${connection.error ?? "无法连接电脑"}，自动重试中`}
+              : `连接已断开：${connection.error ?? "无法连接电脑"}，自动重试中`}
           </span>
-          {connection.phase === "auth_failed" ? (
-            <button type="button" className={s.textButton} onClick={() => navigate({ name: "pair" })}>
-              重新配对
-            </button>
-          ) : null}
         </div>
       ) : syncing ? (
         <SyncBanner />
@@ -211,6 +211,31 @@ function ConnectedShell({
           ))}
         </nav>
       ) : null}
+    </div>
+  );
+}
+
+export function AuthFailedPanel({
+  reason,
+  onRepair,
+}: {
+  reason: ConnectionSnapshot["authReason"];
+  onRepair: () => void;
+}) {
+  return (
+    <div className={s.page}>
+      <header className={s.header}>
+        <h1 className={s.title}>需要重新配对</h1>
+      </header>
+      <div className={s.body}>
+        <div className={s.error} role="alert">
+          {reason === "revoked" ? "此设备已被吊销，请重新配对" : reason ? AUTH_REASON_TEXT[reason] : AUTH_REASON_TEXT.invalid}
+        </div>
+        <div className={s.hint}>电脑上的会话不会显示在这里，重新扫码配对后即可继续使用。</div>
+        <button type="button" className={s.primaryButton} onClick={onRepair}>
+          重新配对
+        </button>
+      </div>
     </div>
   );
 }
