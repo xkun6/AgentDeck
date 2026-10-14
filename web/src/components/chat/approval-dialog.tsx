@@ -1,7 +1,7 @@
 // 审批卡片：按 AgentPermissionRequest.actions 渲染按钮（design.md 4.3 / 5.3）。
 // Claude allow/deny、approve/keep_planning，Codex accept/decline，ACP 为 optionId，
 // 一律回传 { behavior, selectedActionId }；没有 actions 时给默认的 允许 / 拒绝。
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AgentPermissionAction,
   AgentPermissionRequest,
@@ -9,6 +9,7 @@ import type {
 } from "@agentdeck/protocol";
 import { describeToolDetail } from "@/lib/agent-tool-detail";
 import type { PendingApproval } from "@/stores/chat";
+import { MessageText } from "./message-text";
 import { QuestionCard } from "./question-card";
 import { HANDLED_ELSEWHERE_MESSAGE, useApprovalFailure } from "./use-approval-failure";
 import s from "./approval-dialog.module.css";
@@ -32,11 +33,16 @@ function defaultTitle(request: AgentPermissionRequest | undefined): string {
   return "需要确认执行";
 }
 
-export function responseForAction(action: AgentPermissionAction, hasActions: boolean): AgentPermissionResponse {
+/** message：拒绝 / 继续规划时附带的理由（给 Agent 的意见）；空串视为没有，允许类动作忽略 */
+export function responseForAction(
+  action: AgentPermissionAction,
+  hasActions: boolean,
+  message?: string,
+): AgentPermissionResponse {
   const selected = hasActions ? { selectedActionId: action.id } : {};
-  return action.behavior === "allow"
-    ? { behavior: "allow", ...selected }
-    : { behavior: "deny", ...selected };
+  if (action.behavior === "allow") return { behavior: "allow", ...selected };
+  const reason = message?.trim();
+  return { behavior: "deny", ...selected, ...(reason ? { message: reason } : {}) };
 }
 
 function ApprovalDetail({ request, fallback }: { request?: AgentPermissionRequest; fallback: string }) {
@@ -65,7 +71,11 @@ function ApprovalDetail({ request, fallback }: { request?: AgentPermissionReques
         </>
       );
     case "plan":
-      return <pre className={s.plan}>{detail.text}</pre>;
+      return (
+        <div className={s.plan} data-kind="plan">
+          <MessageText text={detail.text} />
+        </div>
+      );
     default:
       return (
         <>
@@ -99,17 +109,32 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
   const request = approval.permission;
   const [responding, setResponding] = useState<string | null>(null);
   const { error, handledElsewhere, fail, clearError } = useApprovalFailure(approval);
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const reasonRef = useRef<HTMLInputElement>(null);
   const hasActions = Boolean(request?.actions && request.actions.length > 0);
   const actions = hasActions ? request!.actions! : DEFAULT_ACTIONS;
   const title = request?.title || defaultTitle(request);
   const description = request?.description ?? approval.reason;
+  const denyActions = actions.filter((action) => action.behavior === "deny");
+  // plan 的「继续规划」附的是给 Agent 的意见，其余是拒绝理由
+  const reasonLabel = request?.kind === "plan" ? "意见" : "理由";
+
+  // 展开后聚焦输入框；手机软键盘弹出有动画，等它升起后再把输入框滚进可视区
+  useEffect(() => {
+    if (!reasonOpen) return;
+    const input = reasonRef.current;
+    input?.focus();
+    const timer = setTimeout(() => input?.scrollIntoView?.({ block: "center", behavior: "smooth" }), 250);
+    return () => clearTimeout(timer);
+  }, [reasonOpen]);
 
   const respond = async (action: AgentPermissionAction) => {
     if (responding || handledElsewhere) return;
     setResponding(action.id);
     clearError();
     try {
-      await onRespond(approval, responseForAction(action, hasActions));
+      await onRespond(approval, responseForAction(action, hasActions, reasonOpen ? reason : ""));
     } catch (err) {
       fail(err, "审批响应发送失败");
     } finally {
@@ -137,7 +162,37 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
             {responding === action.id ? "发送中…" : action.label}
           </button>
         ))}
+        {denyActions.length > 0 ? (
+          <button
+            type="button"
+            className={s.reasonToggle}
+            aria-expanded={reasonOpen}
+            aria-label={`${reasonOpen ? "收起" : "添加"}${reasonLabel}`}
+            onClick={() => setReasonOpen((open) => !open)}
+            disabled={responding !== null || handledElsewhere}
+          >
+            {reasonLabel}
+          </button>
+        ) : null}
       </div>
+      {reasonOpen ? (
+        <input
+          ref={reasonRef}
+          className={s.reasonInput}
+          type="text"
+          value={reason}
+          placeholder={`${reasonLabel}（可选），回车提交「${denyActions[0]?.label ?? "拒绝"}」`}
+          aria-label={reasonLabel}
+          disabled={responding !== null || handledElsewhere}
+          onChange={(event) => setReason(event.target.value)}
+          onKeyDown={(event) => {
+            // 输入法选词时的回车不提交
+            if (event.key !== "Enter" || event.nativeEvent.isComposing || denyActions.length === 0) return;
+            event.preventDefault();
+            void respond(denyActions[0]!);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

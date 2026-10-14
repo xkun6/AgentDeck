@@ -1237,6 +1237,26 @@ describe("ClaudeAgentSession", () => {
     });
   });
 
+  test("拒绝 / 继续规划附带的理由（message）原样作为 deny.message 回给 Claude", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    await session.startTurn("x");
+    const cli = h.clis[0]!;
+    const toolPromise = canUseTool(cli, "Bash", { command: "rm -rf /" }, { toolUseId: "t-reason" });
+    const tool = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(tool.id, { behavior: "deny", selectedActionId: "deny", message: "别动根目录" });
+    await expect(toolPromise).resolves.toEqual({ behavior: "deny", message: "别动根目录" });
+
+    const planPromise = canUseTool(cli, "ExitPlanMode", { plan: "1. 改代码" }, { toolUseId: "t-plan-reason" });
+    const plan = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(plan.id, {
+      behavior: "deny",
+      selectedActionId: "keep_planning",
+      message: "先补测试",
+    });
+    await expect(planPromise).resolves.toEqual({ behavior: "deny", message: "先补测试" });
+  });
+
   test("ExitPlanMode 为 plan 权限；批准后切出 plan 模式", async () => {
     const h = createHarness();
     const session = await h.client.createSession({ cwd: ".", modeId: "plan" });

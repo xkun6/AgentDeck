@@ -1,6 +1,7 @@
 // 看板（design.md 4.28）的展示与拖拽排序规则。
 import type { AgentSnapshot, Board, BoardTask, BoardTaskStatus } from "@agentdeck/protocol";
 import { AGENT_STATUS_LABELS } from "@/lib/agent-session-display";
+import { waitingPermissionLabel } from "@/lib/permission-label";
 
 export const BOARD_COLUMNS: ReadonlyArray<{ status: BoardTaskStatus; label: string }> = [
   { status: "todo", label: "待办" },
@@ -45,7 +46,9 @@ export interface SessionBadge {
 /** 关联会话的实时状态：等待审批 > 运行中 / 启动中 > 其它 */
 export function sessionBadge(agent: AgentSnapshot | undefined): SessionBadge | null {
   if (!agent) return null;
-  if (agent.pendingPermissions.length > 0) return { label: "等待审批", tone: "attention" };
+  if (agent.pendingPermissions.length > 0) {
+    return { label: waitingPermissionLabel(agent.pendingPermissions[0]?.kind), tone: "attention" };
+  }
   if (agent.status === "running" || agent.status === "starting") {
     return { label: AGENT_STATUS_LABELS[agent.status], tone: "running" };
   }

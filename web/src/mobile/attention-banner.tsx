@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { SidecarClient } from "@/lib/sidecar-client";
 import { attentionTarget, decideAttention, dispatchBackgroundAttention, dispatchResolvedAttention } from "./attention";
+import { pendingPermissionLabel } from "@/lib/permission-label";
 import { isAppForeground } from "./native/app-state";
 import type { NotifyMode } from "./preferences";
 import type { MobileRoute } from "./route";
@@ -11,13 +12,17 @@ import s from "./mobile.module.css";
 
 export const ATTENTION_BANNER_MS = 8_000;
 
-const KIND_LABEL: Record<AttentionNotice["kind"], string> = {
+const KIND_LABEL: Record<Exclude<AttentionNotice["kind"], "permission">, string> = {
   finished: "已完成",
   failed: "失败",
-  permission: "待审批",
   schedule: "定时任务",
   resolved: "已处理",
 };
+
+/** 提示条标签：审批类按 permissionKind 区分「待回答 / 待确认计划 / 待审批」 */
+export function attentionLabel(notice: Pick<AttentionNotice, "kind" | "permissionKind">): string {
+  return notice.kind === "permission" ? pendingPermissionLabel(notice.permissionKind) : KIND_LABEL[notice.kind];
+}
 
 /** 订阅 client.attention，按当前路由 / 前后台决定忽略、弹条或交给后台处理器；返回当前要显示的提示 */
 export function useAttentionNotice(
@@ -91,7 +96,7 @@ export function AttentionBanner({
         }}
       >
         <span className={s.attentionTitle}>
-          {notice.title} · {KIND_LABEL[notice.kind]}
+          {notice.title} · {attentionLabel(notice)}
         </span>
         <span className={s.attentionBody}>{notice.body}</span>
       </button>

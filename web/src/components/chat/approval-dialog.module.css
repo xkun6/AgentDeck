@@ -37,8 +37,7 @@
 }
 
 .command,
-.diff,
-.plan {
+.diff {
   margin: 0 0 8px;
   border: 1px solid var(--h-line-soft);
   border-radius: 0;
@@ -52,14 +51,24 @@
   word-break: break-word;
 }
 
-.diff,
-.plan {
+.diff {
   max-height: 320px;
   overflow: auto;
 }
 
+/* 计划用 Markdown 渲染，保留最高 320px 可滚动 */
 .plan {
+  margin: 0 0 8px;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-code);
+  color: var(--h-text);
   font-family: var(--h-font-cn);
+  font-size: var(--h-button-font-size-sm);
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 12px;
+  word-break: break-word;
 }
 
 .error {
@@ -90,6 +99,43 @@
   font-family: var(--h-font-cn);
   font-size: var(--h-button-font-size-sm);
   padding: 8px 16px;
+}
+
+.reasonToggle {
+  border: 0;
+  background: transparent;
+  color: var(--h-text-2);
+  cursor: pointer;
+  font-family: var(--h-font-cn);
+  font-size: var(--h-button-font-size-sm);
+  padding: 8px;
+  text-decoration: underline;
+}
+
+.reasonToggle:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.reasonToggle:focus-visible {
+  outline: var(--h-focus-outline);
+}
+
+.reasonInput {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  padding: 8px 12px;
+}
+
+.reasonInput:focus-visible {
+  outline: var(--h-focus-outline);
 }
 
 .allow:disabled,

@@ -1301,6 +1301,9 @@ ACP：
 3. **历史**：`detail.tsx` 从 `agent.timeline` 重建消息，替代 Hermes REST 历史。
 4. **传输**：新增 `lib/sidecar-client.ts`，复用原 Hermes `gateway-client.ts`（已删除）的 JSON-RPC 与重连/退避逻辑以及 `sidecar-socket-path.ts` 的原生 WS / Rust 中继回退；地址与 token 来自 `get_sidecar_config`，订阅 `sidecar-status` 事件。
 5. **审批**：`ApprovalDialog` 抽到 `components/chat/`，按 `AgentPermissionRequest.actions` 渲染多按钮。
+   - **拒绝 / 继续规划附理由**：`PermissionCard` 在按钮行末尾有「理由」入口（`kind: "plan"` 时叫「意见」），默认折叠；点开出一个单行输入（自动聚焦，手机端等软键盘升起后 `scrollIntoView` 到可视区），在输入框回车（输入法选词中的回车除外）等同点第一个拒绝类按钮，或直接点任一拒绝类按钮提交；理由去首尾空白后非空才作为 `AgentPermissionResponse` deny 的 `message` 回传，允许类按钮忽略理由，不展开时与原来完全一致（不增加常规操作步骤）。提问卡（`QuestionCard`）不提供。各 provider 对 `message` 的处理：Claude 作为 `deny.message` 回给 CLI（计划的「继续规划」同样，缺省文案仍是「用户希望继续完善计划，暂不执行」）；Codex 旧版协议（`legacy-exec` / `legacy-patch`）放进 `denied.rejection`，v2 的 `decision: "decline"` 协议本身没有理由字段，理由被丢弃（仅出现在 AgentDeck 的 `permission_resolved` 事件里）；ACP 的 `RequestPermissionOutcome` 只有 `optionId`，同样无法传递理由；mock 会在回复里回显收到的理由。
+   - **计划用 Markdown 渲染**：`detail.type === "plan"` 的正文复用时间线助手文本的 `MessageText`（Streamdown），容器最高 320px、超出滚动。
+   - **标签按类型区分**（`web/src/lib/permission-label.ts`）：提示条、手机会话列表角标（取快照 `pendingPermissions[0].kind`，无则取运行时首条审批）、桌面面板卡片（「N 待审批」）：`question` →「待回答」，`plan` →「待确认计划」，其余「待审批」；看板关联会话角标同理为「等待回答 / 等待确认计划 / 等待审批」。
 6. **新建会话**：composer 上的模型选择器改为「Agent（provider）+ 模型 + 模式」，工作目录沿用 workspace picker。
 
 ## 7. 阶段计划

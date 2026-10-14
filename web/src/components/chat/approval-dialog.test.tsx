@@ -49,6 +49,7 @@ describe("ApprovalDialog", () => {
       "允许一次",
       "总是允许",
       "拒绝",
+      "理由",
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "总是允许" }));
@@ -72,7 +73,7 @@ describe("ApprovalDialog", () => {
     await waitFor(() => expect(onRespond).toHaveBeenLastCalledWith(expect.anything(), { behavior: "deny" }));
   });
 
-  it("编辑请求展示 diff，计划请求展示计划正文", () => {
+  it("编辑请求展示 diff，计划请求展示计划正文", async () => {
     const onRespond = vi.fn().mockResolvedValue(undefined);
     const edit: AgentPermissionRequest = {
       id: "p2",
@@ -104,7 +105,8 @@ describe("ApprovalDialog", () => {
     };
     render(<ApprovalDialog approval={approval(plan)} onRespond={onRespond} />);
     expect(screen.getByText("需要批准计划")).toBeTruthy();
-    expect(screen.getByText(/1\. 读代码/)).toBeTruthy();
+    // Markdown 渲染器是懒加载的，加载前先显示纯文本兜底；两者都包含计划正文
+    await waitFor(() => expect(document.body.textContent).toContain("读代码"));
     expect(screen.getByRole("button", { name: "批准计划" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "继续规划" })).toBeTruthy();
   });
@@ -136,6 +138,118 @@ describe("ApprovalDialog", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("该审批请求已失效");
     expect((screen.getByRole("button", { name: "允许" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("ApprovalDialog：拒绝 / 继续规划附理由", () => {
+  const tool: AgentPermissionRequest = {
+    id: "p1",
+    provider: "claude",
+    name: "Bash",
+    kind: "tool",
+    actions: [
+      { id: "allow", label: "允许一次", behavior: "allow" },
+      { id: "deny", label: "拒绝", behavior: "deny" },
+    ],
+  };
+  const plan: AgentPermissionRequest = {
+    id: "p2",
+    provider: "claude",
+    name: "ExitPlanMode",
+    kind: "plan",
+    detail: { type: "plan", text: "## 步骤\n\n- 读代码\n- 改代码" },
+    actions: [
+      { id: "approve", label: "批准计划", behavior: "allow" },
+      { id: "keep_planning", label: "继续规划", behavior: "deny" },
+    ],
+  };
+
+  it("理由入口默认折叠；不展开时拒绝不带 message（常规操作不多一步）", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(tool)} onRespond={onRespond} />);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByRole("button", { name: "添加理由" }).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(1));
+    expect(onRespond.mock.calls[0]![1]).toEqual({ behavior: "deny", selectedActionId: "deny" });
+  });
+
+  it("点开出单行输入，再点拒绝提交理由（去首尾空白）；允许不带理由", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(tool)} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "添加理由" }));
+    const input = screen.getByRole("textbox", { name: "理由" }) as HTMLInputElement;
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: "  别动生产配置  " } });
+    fireEvent.click(screen.getByRole("button", { name: "拒绝" }));
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(1));
+    expect(onRespond.mock.calls[0]![1]).toEqual({ behavior: "deny", selectedActionId: "deny", message: "别动生产配置" });
+
+    fireEvent.click(screen.getByRole("button", { name: "允许一次" }));
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(2));
+    expect(onRespond.mock.calls[1]![1]).toEqual({ behavior: "allow", selectedActionId: "allow" });
+  });
+
+  it("在输入框里回车提交第一个拒绝动作；输入法选词中的回车不提交；空理由不带 message", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(tool)} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "添加理由" }));
+    const input = screen.getByRole("textbox", { name: "理由" });
+    fireEvent.change(input, { target: { value: "太危险" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(onRespond).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(1));
+    expect(onRespond.mock.calls[0]![1]).toEqual({ behavior: "deny", selectedActionId: "deny", message: "太危险" });
+  });
+
+  it("展开后把输入框滚进可视区（软键盘）；空输入回车等同直接拒绝", async () => {
+    vi.useFakeTimers();
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView as unknown as typeof Element.prototype.scrollIntoView;
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(tool)} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "添加理由" }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "理由" }), { key: "Enter" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onRespond.mock.calls[0]![1]).toEqual({ behavior: "deny", selectedActionId: "deny" });
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it("计划：「继续规划」的入口叫「意见」，意见作为 message 回传", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(plan)} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole("button", { name: "添加意见" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "意见" }), { target: { value: "先补测试再改" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续规划" }));
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(1));
+    expect(onRespond.mock.calls[0]![1]).toEqual({
+      behavior: "deny",
+      selectedActionId: "keep_planning",
+      message: "先补测试再改",
+    });
+  });
+
+  it("没有拒绝类动作时不显示理由入口；默认 允许 / 拒绝 也有", () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    const allowOnly: AgentPermissionRequest = { ...tool, actions: [{ id: "allow", label: "允许", behavior: "allow" }] };
+    const { unmount } = render(<ApprovalDialog approval={approval(allowOnly)} onRespond={onRespond} />);
+    expect(screen.queryByRole("button", { name: "添加理由" })).toBeNull();
+    unmount();
+    render(<ApprovalDialog approval={approval(undefined)} onRespond={onRespond} />);
+    expect(screen.getByRole("button", { name: "添加理由" })).toBeTruthy();
+  });
+
+  it("计划用 Markdown 渲染（列表 / 标题），容器限高 320px 可滚动", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<ApprovalDialog approval={approval(plan)} onRespond={onRespond} />);
+    const box = container.querySelector('[data-kind="plan"]');
+    expect(box).toBeTruthy();
+    await waitFor(() => expect(box!.querySelectorAll("li").length).toBe(2), { timeout: 5000 });
+    expect(box!.querySelector("pre")).toBeNull();
+    expect(screen.getByText("读代码")).toBeTruthy();
   });
 });
 

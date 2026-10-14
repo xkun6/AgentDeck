@@ -250,6 +250,21 @@ describe("useAttentionNotice 与后台处理器联动", () => {
     return current ? <AttentionBanner notice={current} onOpen={() => {}} onDismiss={dismiss} /> : <div>无提示</div>;
   }
 
+  it("提示条标签按 permissionKind 区分：question 待回答 / plan 待确认计划 / 其余待审批", () => {
+    const { client, emit } = fakeClient();
+    render(<Harness client={client} route={{ name: "sessions" }} foreground />);
+    emit(notice({ id: "k1", kind: "permission", permissionKind: "question" }));
+    expect(screen.getByRole("status").textContent).toContain("重构登录 · 待回答");
+    emit(notice({ id: "k2", kind: "permission", permissionKind: "plan" }));
+    expect(screen.getByRole("status").textContent).toContain("待确认计划");
+    emit(notice({ id: "k3", kind: "permission", permissionKind: "tool" }));
+    expect(screen.getByRole("status").textContent).toContain("待审批");
+    emit(notice({ id: "k4", kind: "permission" }));
+    expect(screen.getByRole("status").textContent).toContain("待审批");
+    emit(notice({ id: "k5", kind: "failed" }));
+    expect(screen.getByRole("status").textContent).toContain("失败");
+  });
+
   it("后台：交给本地通知处理器且不弹条；同一 id 只交一次", () => {
     const handler = vi.fn();
     setBackgroundAttentionHandler(handler);
