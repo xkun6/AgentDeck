@@ -634,6 +634,18 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
   return <>{items}</>;
 }
 
+/**
+ * 消息有没有可显示的内容。只有思考内容、而思考显示又关着时（失败 / 中断的回合常见）整行不渲染，
+ * 否则会留下一行只有时间 / 复制 / TTFT 的空消息；流式进行中仍保留（显示「思考中」进度）。
+ */
+function hasVisibleContent(message: ChatMessage, showReasoning: boolean): boolean {
+  if (message.text || message.images?.length || message.tools?.length) return true;
+  if (message.blocks?.some((block) => block.type !== "reasoning")) return true;
+  const hasReasoning = Boolean(message.reasoning) || Boolean(message.blocks?.length);
+  if (!hasReasoning) return false;
+  return showReasoning || message.status === "streaming";
+}
+
 function getCopyableText(message: ChatMessage): string | undefined {
   if (message.blocks?.length) {
     const text = message.blocks
@@ -1085,17 +1097,10 @@ export function MessageTimeline({
   const firstMessageIdRef = useRef<string | undefined>(undefined);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const showReasoning = useAtomValue(showReasoningAtom);
   const visibleMessages = useMemo(
-    () =>
-      messages.filter(
-        (message) =>
-          message.text ||
-          message.reasoning ||
-          message.images?.length ||
-          message.tools?.length ||
-          message.blocks?.length,
-      ),
-    [messages],
+    () => messages.filter((message) => hasVisibleContent(message, showReasoning)),
+    [messages, showReasoning],
   );
   // 进行中的回合（从最后一条用户消息起）还没结束，不能作为分叉点（design.md 4.23）
   const runningTurnStartIndex = useMemo(() => {
