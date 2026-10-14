@@ -198,8 +198,7 @@ export class AgentStore {
       if (dropped === 0) {
         return;
       }
-      await writeFileAtomic(file, entries.map((entry) => `${JSON.stringify(entry)}
-`).join(""));
+      await writeFileAtomic(file, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
       this.needsNewline.delete(agentId);
     } catch (error) {
       this.logger.warn("重写压缩后的 %s 失败：%s", file, String(error));
