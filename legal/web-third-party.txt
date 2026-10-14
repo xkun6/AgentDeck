@@ -3,7 +3,7 @@ AgentDeck 前端（web bundle，安装后内嵌于主程序）第三方组件许
 清单来源：pnpm --filter @agentdeck/web --filter @agentdeck/protocol --filter @agentdeck/shared-ui licenses list --prod --json
 范围：前端及其引用的 workspace 包（@agentdeck/protocol、@agentdeck/shared-ui）的全部生产依赖（含传递依赖）。
 这是依赖树层面的清单，可能多于经 Vite tree-shaking 后实际打进 bundle 的代码。
-共 402 个包版本。
+共 405 个包版本。
 
 一、包清单（包名@版本 — 许可证）
 
@@ -95,7 +95,10 @@ AgentDeck 前端（web bundle，安装后内嵌于主程序）第三方组件许
   - @tanstack/query-core@5.100.10 — MIT
   - @tanstack/react-query@5.100.10 — MIT
   - @tauri-apps/api@2.11.0 — Apache-2.0 OR MIT
+  - @tauri-apps/api@2.12.3 — Apache-2.0 OR MIT
+  - @tauri-apps/plugin-barcode-scanner@2.5.2 — MIT OR Apache-2.0
   - @tauri-apps/plugin-clipboard-manager@2.3.2 — MIT OR Apache-2.0
+  - @tauri-apps/plugin-store@2.5.0 — MIT OR Apache-2.0
   - @types/d3@7.4.3 — MIT
   - @types/d3-array@3.2.2 — MIT
   - @types/d3-axis@3.0.6 — MIT
@@ -1039,6 +1042,7 @@ SOFTWARE.
 ==============================================================================
 适用于：
   - @tauri-apps/api@2.11.0（Apache-2.0 OR MIT）
+  - @tauri-apps/api@2.12.3（Apache-2.0 OR MIT）
 ==============================================================================
 
                                  Apache License
@@ -1220,7 +1224,9 @@ SOFTWARE.
 
 ==============================================================================
 适用于：
+  - @tauri-apps/plugin-barcode-scanner@2.5.2（MIT OR Apache-2.0）
   - @tauri-apps/plugin-clipboard-manager@2.3.2（MIT OR Apache-2.0）
+  - @tauri-apps/plugin-store@2.5.0（MIT OR Apache-2.0）
 ==============================================================================
 SPDXVersion: SPDX-2.1
 DataLicense: CC0-1.0
