@@ -93,9 +93,9 @@ export async function openAppSettings(): Promise<boolean> {
   return (await call("open_app_settings")).ok;
 }
 
-/** 打开某类提醒的系统通知 channel 设置页（开启横幅 / 声音等）；默认「待审批」 */
-export async function openChannelSettings(kind: AttentionNotification["kind"] = "permission"): Promise<boolean> {
-  return (await call("open_channel_settings", { kind })).ok;
+/** 打开本应用的系统通知设置页（横幅 / 悬浮通知 / 声音等开关都在这里）；不支持时原生侧依次退到「待审批」channel 设置、应用详情页 */
+export async function openAppNotificationSettings(): Promise<boolean> {
+  return (await call("open_app_notification_settings")).ok;
 }
 
 // ── 后台提醒通知 ──────────────────────────────────────────────────────────────

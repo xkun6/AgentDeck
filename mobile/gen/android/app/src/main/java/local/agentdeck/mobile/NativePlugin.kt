@@ -45,12 +45,6 @@ class AttentionArgs {
   var agentId: String? = null
 }
 
-@InvokeArg
-class ChannelArgs {
-  /** finished / failed / permission / schedule，决定打开哪个 channel */
-  var kind: String = "permission"
-}
-
 @TauriPlugin
 class NativePlugin(private val activity: Activity) : Plugin(activity) {
   /** 冷启动时由点击通知拉起的目标；被前端取走一次后清空 */
@@ -224,26 +218,39 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   /**
-   * 某个通知 channel 的系统设置页（可在那里开启横幅 / 声音 / 锁屏显示）。部分厂商（如华为）会把「待审批」降为不弹横幅，
-   * 需要用户手动调回。channel 要先存在才能打开，所以先 ensureChannels；系统不支持（Android 8 以前）时退到应用通知设置。
+   * 本应用的通知设置页。部分厂商（如华为）会把「待审批」channel 的设置页重定向到只有「允许通知 / 静默通知 / 锁屏通知」的分组页，
+   * 里面没有「横幅」开关，所以改为打开应用级通知设置（那里才有横幅 / 悬浮通知开关）。
+   * 按顺序尝试：应用通知设置 → 「待审批」channel 设置（需要 channel 已存在，所以先 ensureChannels）→ 应用详情页；
+   * 前一个 Intent 在该机型上无法启动（抛异常）才退到下一个。
    */
   @Command
-  fun openChannelSettings(invoke: Invoke) {
-    val args = invoke.parseArgs(ChannelArgs::class.java)
+  fun openAppNotificationSettings(invoke: Invoke) {
     ensureChannels()
-    val intent = if (Build.VERSION.SDK_INT >= 26) {
-      Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
-        .putExtra(Settings.EXTRA_CHANNEL_ID, channelOf(args.kind))
+    val pkg = activity.packageName
+    val candidates = mutableListOf<Intent>()
+    if (Build.VERSION.SDK_INT >= 26) {
+      candidates.add(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, pkg))
+      candidates.add(
+        Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+          .putExtra(Settings.EXTRA_APP_PACKAGE, pkg)
+          .putExtra(Settings.EXTRA_CHANNEL_ID, CHANNEL_PERMISSION)
+      )
     } else {
-      Intent("android.settings.APP_NOTIFICATION_SETTINGS").putExtra("app_package", activity.packageName)
+      candidates.add(Intent("android.settings.APP_NOTIFICATION_SETTINGS").putExtra("app_package", pkg))
     }
-    try {
-      activity.startActivity(intent)
-      invoke.resolve()
-    } catch (e: Exception) {
-      invoke.reject("无法打开通知设置：${e.message}")
+    candidates.add(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg")))
+
+    var lastError: Exception? = null
+    for (intent in candidates) {
+      try {
+        activity.startActivity(intent)
+        invoke.resolve()
+        return
+      } catch (e: Exception) {
+        lastError = e
+      }
     }
+    invoke.reject("无法打开通知设置：${lastError?.message}")
   }
 
   /** 本应用的系统设置页（自启动 / 后台活动 / 通知开关都从这里进） */

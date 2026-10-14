@@ -60,12 +60,13 @@ describe("设置页「后台运行」小节", () => {
     expect(calls).toContain("request_ignore_battery_optimization");
     expect(calls).toContain("open_app_settings");
 
-    // 华为等机型把「待审批」降为不弹横幅：给出引导文案与直达 channel 设置页的按钮
+    // 华为等机型把「待审批」降为不弹横幅：给出通用引导文案与直达应用通知设置页的按钮
     expect(screen.getByText(BANNER_HINT)).toBeTruthy();
-    expect(BANNER_HINT).toContain("系统设置 → 通知 → AgentDeck → 待审批");
-    fireEvent.click(screen.getByRole("button", { name: "打开「待审批」通知设置" }));
+    expect(BANNER_HINT).toContain("横幅通知");
+    expect(BANNER_HINT).toContain("悬浮通知");
+    fireEvent.click(screen.getByRole("button", { name: "打开通知设置" }));
     await flush();
-    expect(calls).toContain("open_channel_settings");
+    expect(calls).toContain("open_app_notification_settings");
   });
 
   it("已放行：显示已忽略 / 已开启，不再给请求按钮", async () => {

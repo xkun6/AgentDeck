@@ -76,7 +76,7 @@ mobile/                      新增：Tauri Android 工程（独立 crate，不�
 
 **前台服务被系统杀后重启**：`KeepAliveService` 改为 `START_NOT_STICKY`，并在 `onStartCommand` 收到 null intent（旧版本遗留的 sticky 重启，不带 extras）时直接 `stopSelf`。原因：进程被杀后与电脑的连接早已不在，必须由前端重建，系统重启出来的服务只会显示一条假的「AgentDeck 已连接」；Android 12+ 后台启动前台服务本就受限。二选一里选 NOT_STICKY 为主、stopSelf 兜底。
 
-**华为的审批通知不弹横幅**：华为会把「待审批」channel 降为 importance 3，不弹横幅。设置页「后台运行」小节加了引导文案，并提供「打开『待审批』通知设置」按钮（`NativePlugin.openChannelSettings` → `Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS`，channel 不存在时先创建）。
+**华为的审批通知不弹横幅**：华为会把「待审批」channel 降为 importance 3，不弹横幅。设置页「后台运行」小节加了通用引导文案（各机型开关名称不同：「横幅通知」/「悬浮通知」），并提供「打开通知设置」按钮（`NativePlugin.openAppNotificationSettings` → `Settings.ACTION_APP_NOTIFICATION_SETTINGS`；不支持时依次退到「待审批」channel 设置、应用详情页）。不直接打开 channel 设置，因为华为会把它重定向到只有「允许通知 / 静默通知 / 锁屏通知」的「社交通讯」分组页，里面没有横幅开关。
 
 **长会话卡顿**（真机测试：向前分页加载完整个 5000+ 条会话后约 3 万 DOM 节点，滑动帧耗时 p95 76ms、14 个长任务）：没有做真正的列表虚拟化，而是给会话详情加了「同时渲染消息数上限」（`MAX_RENDERED` = 400）。选它的理由：虚拟化要改 `MessageTimeline` 内部的滚动贴底 / 前插补偿 / 轮次导航 / 搜索定位，这些逻辑桌面共用，而变高行（Markdown、代码块、工具卡）的高度估算在真机上很难调稳，风险大且没有真机无法验证；折叠方案只动 `SessionDetail`，效果确定（DOM 节点数有硬上限，有单测）。做法：首屏 60 条、「显示更早」每次 +100 条原地展开；再展开会超过上限时，改为「较早的消息」视图——只渲染更早的一段（与刚看过的部分重叠 20 条衔接），时间线换 key 重挂按首次渲染贴底，顶部提示条「正在查看较早的消息 · 返回最新」；发送 / 插话 / 来了待审批时自动回到最新。没有新增依赖。
 
