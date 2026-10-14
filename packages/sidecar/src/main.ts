@@ -4,11 +4,14 @@
  * 读环境变量 → 起 HTTP+WS 服务 → stdout 输出且只输出一行 ready JSON →
  * 监视 stdin end/close、SIGINT/SIGTERM、父进程存活，任一触发即优雅关闭并 exit 0。
  */
+import path from "node:path";
+
 import packageJson from "../package.json" with { type: "json" };
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
 import { GroupService } from "./groups/group-service.js";
 import { GroupStore } from "./groups/store.js";
+import { installProcessDiagnostics, startMemorySampler } from "./diagnostics.js";
 import { createLogger, type Logger } from "./logger.js";
 import { BoardService } from "./kanban/board-service.js";
 import { BoardStore } from "./kanban/store.js";
@@ -95,6 +98,12 @@ async function main(): Promise<void> {
   const config = readEnv(process.env);
   const logger = createLogger(config.logDir ? { logDir: config.logDir } : {});
   protectStdout(logger);
+  // 致命错误 / 退出事件同步落盘（design.md 4.18）；fatal 后走下面的 shutdown
+  const diagnostics = installProcessDiagnostics({
+    logger,
+    ...(config.logDir ? { logFile: path.join(config.logDir, "sidecar.log") } : {}),
+    onFatal: (reason, exitCode) => void shutdown(reason, exitCode),
+  });
   logger.info("sidecar %s 启动（pid=%d, node=%s）", SIDECAR_VERSION, process.pid, process.version);
 
   let registry: ProviderRegistry | null = null;
@@ -111,6 +120,7 @@ async function main(): Promise<void> {
       return;
     }
     shuttingDown = true;
+    diagnostics.setExitReason(reason);
     logger.info("开始关闭：%s", reason);
     if (parentTimer) {
       clearInterval(parentTimer);
@@ -145,13 +155,6 @@ async function main(): Promise<void> {
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("unhandledRejection", (error) => {
-    logger.error("未处理的 Promise 拒绝：%s", error instanceof Error ? error.stack : String(error));
-  });
-  process.on("uncaughtException", (error) => {
-    logger.error("未捕获的异常：%s", error.stack ?? String(error));
-    void shutdown("uncaughtException", 1);
-  });
 
   // Rust 关闭 stdin 即要求退出；必须让 stdin 处于 flowing 状态才能收到 end
   process.stdin.on("end", () => void shutdown("stdin end"));
@@ -300,6 +303,12 @@ async function main(): Promise<void> {
     }));
     void usage.backfill(backfillAgents, (agentId) => store.streamTimeline(agentId));
   }
+  startMemorySampler(logger, {
+    extra: () => {
+      const subagents = manager?.subagentStats() ?? { rows: 0, bytes: 0 };
+      return `sessions=${manager?.listAgents().length ?? 0} subagentRows=${subagents.rows} subagentBytes=${subagents.bytes}`;
+    },
+  });
   logger.info(
     "已监听 127.0.0.1:%d（epoch=%s, providers=%s）",
     port,

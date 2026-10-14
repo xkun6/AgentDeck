@@ -36,6 +36,7 @@ import {
 } from "./provider-subagent-store.js";
 import { dedupeSlashCommands } from "./slash-commands.js";
 import { searchSources, type SearchResult } from "./timeline-search.js";
+import { limitTimelineItem } from "./timeline-limits.js";
 import type {
   AgentClient,
   AgentSession,
@@ -1375,7 +1376,7 @@ export class AgentManager {
       this.applySubagentEvent(agent, rawEvent.event);
       return;
     }
-    const event = this.attachTurnId(agent, rawEvent);
+    const event = this.limitToolCallSize(this.attachTurnId(agent, rawEvent));
     const sentTurn = agent.sentTurn;
     if (sentTurn) {
       if (sentTurn.retracted && event.type === "timeline") {
@@ -1400,6 +1401,20 @@ export class AgentManager {
     // 非合并事件：先把缓冲的文本冲出去，保证顺序
     this.coalescer.flushFor(agent.id);
     this.applyAndEmit(agent, event);
+  }
+
+  /** 工具调用项统一限制大小（文本截断、图片占位），先于合并 / 快照 / 广播 / 落盘（design.md 5.3） */
+  private limitToolCallSize(event: AgentStreamEvent): AgentStreamEvent {
+    if (event.type !== "timeline" || event.item.type !== "tool_call") {
+      return event;
+    }
+    const item = limitTimelineItem(event.item);
+    return item === event.item ? event : { ...event, item };
+  }
+
+  /** 子代理时间线占用（内存采样用） */
+  subagentStats(): { rows: number; bytes: number } {
+    return this.subagents.stats();
   }
 
   /** timeline / permission_requested 没带 turnId 时补上当前 turn */

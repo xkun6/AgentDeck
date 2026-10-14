@@ -57,7 +57,7 @@ sidecar 入口：
 
 - sidecar 监听 `127.0.0.1:<port>` 成功后，向 **stdout 输出且只输出一行**：
   `{"type":"ready","port":<number>,"version":"<sidecar 版本>","pid":<number>}`
-- 其余所有日志写 stderr 和日志文件。Rust 持续读空 stdout/stderr 并转发到 `log`。
+- 其余所有日志写 stderr 和日志文件。Rust 持续读空 stdout/stderr，并写入 `<data>/logs/desktop.log`（3.6）。
 - Rust 等待 ready 行，超时 20 秒判定启动失败。
 - 退出：
   1. Rust 关闭 sidecar 的 stdin → sidecar 监听到 `stdin end` 后关闭所有 Agent 子进程（tree-kill）并退出；
@@ -84,6 +84,18 @@ sidecar 入口：
 - sidecar 未就绪时 `wsUrl` 为空字符串；`starting` 状态已带 token。
 - 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`（Windows 为 `%APPDATA%local.agentdeck.desktop`）；WebView2 数据在设置了 `AGENTDECK_HOME` 时为 `<home>webview2`，否则为 `%LOCALAPPDATA%local.agentdeck.desktopEBWebView`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
 - WS 中继沿用命令 `sidecar_ws_open/send/close` 与事件 `sidecar-ws-message` / `sidecar-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
+
+### 3.6 Rust 外壳日志 `desktop.log`
+
+**现状（事故前）**：Rust 侧用 `log` + `env_logger::init()`，输出到进程 stderr，且默认过滤级别只有 `error`；release 构建是 `windows_subsystem = "windows"`，进程没有控制台，stderr 无处可去。sidecar 的 stdout / stderr 经读线程转成 `log::info!` / `warn!`，因此同样既被默认级别过滤、又没有落点。结果：外壳没有任何日志文件，sidecar 的 stderr 与退出码全部丢失。
+
+**落盘**：`<data>/logs/desktop.log`（data 目录见 3.5）。
+- 日志初始化（`desktop_log::init`，`main` 最先调用）：仍用 `env_logger`（保留 `RUST_LOG`），默认过滤改为 `warn,agentdeck=info,agentdeck_core=info`，输出目标改为「写入异步队列 + 同步 tee 到 stderr（供开发态控制台）」。日志目录在 `setup` 里才能确定，此前的日志留在队列中，`desktop_log::attach(log_dir)` 后补写。
+- **写文件不阻塞调用方**：所有日志经容量 16384 的有界队列交给独立写线程；队列满时丢弃新行并计数，写线程随后补一行「日志队列已满，丢弃 N 行」。sidecar stdout / stderr 的读线程只做 `try_send`，不会因磁盘慢而停止读管道，从而不会反压 sidecar。
+- 记录内容：Rust 侧所有 `log` 记录（含 panic，经 panic hook 写成 error）；sidecar **stderr 的全部行**与 ready 之后 stdout 的行（直写日志队列，不受 `RUST_LOG` 过滤；单行超过 16 KB 截断并注明原长度，读线程对无换行的超长输出只保留前 16 KB，非 UTF-8 字节宽松解码，读线程不会因坏字节提前退出）；sidecar 进程退出时的退出码 / 信号（意外退出记 `warn`，主动停止记 `info`，Windows 同时给出十六进制如 `0xC0000409`）；监管重启事件（沿用 supervisor 现有日志）。应用退出时 `flush`（最多等 1 秒）。
+- 轮转：写入前若会使文件超过 5 MB，则把 `desktop.log` 改名为 `desktop.log.1`（覆盖旧的）再新建，只保留一份；启动 attach 时对已超限的旧文件同样处理；改名失败（被占用）则继续追加，不丢日志。
+- **脱敏**（写入前，规则同 4.26）：`adi_[0-9a-f]{16,}` → `adi_***`；`AGENTDECK_TOKEN` 后面紧跟 `=` / `:` 的值 → `***`；`token=` 查询参数中 ≥16 位的 token 串 → `***`；以及本进程生成过的 sidecar token 原文（`generate_token` 时登记，保留最近 16 个）。
+- 诊断包（4.18）：`logs/desktop.log`、`logs/desktop.log.1`（存在才放，各取最后 5 MB）。读出后用同一脱敏函数再处理一遍。
 
 ## 4. 前端 ↔ sidecar 协议（JSON-RPC 2.0 over WebSocket）
 
@@ -463,7 +475,10 @@ interface ProviderProfile {
   - `{ type: "upsert"; id; title?; description?; status?; toolCallId?; cwd?; subtitle?; parentSubagentId?; timestamp? }`：字段**省略 = 保留原值，显式 null = 清空**；status 省略时保留（新建默认 running）。
   - `{ type: "timeline"; id; item; timestamp? }`：追加到该子代理时间线（不存在则先建空时间线，但不建描述）。
   - `{ type: "remove"; id }`。
-- `ProviderSubagentStore`（`agent/provider-subagent-store.ts`）：键 `parentAgentId\0subagentId`；每个子代理时间线最多保留 2000 行（超出丢最旧的，hasOlder 以实际保留为准）。AgentManager 在事件尾链中拦截 `provider_subagent` 写入 store，并经监听器 `onSubagent` 推给 RpcServer 广播。
+- `ProviderSubagentStore`（`agent/provider-subagent-store.ts`）：键 `parentAgentId\0subagentId`；每个子代理时间线最多保留 2000 行（超出丢最旧的，hasOlder 以实际保留为准）；**另有大小限制**（事故背景：多个子代理大量读取截图，base64 经 stream-json 流入 sidecar，会话 `timeline.jsonl` 达 31 MB，而此前只限行数不限单行大小）：
+  - 单行（一条 `ProviderSubagentTimelineRow` 的 item）经 `limitTimelineItem`（`agent/timeline-limits.ts`，规则见 5.3「时间线大小限制」）处理：文本总预算 64 KB，超出截断；图片内容替换为占位文本「[图片 约 N KB，已省略]」。截断发生在写入 store 之前，因此广播给前端的 `agent.subagents.update` 与 `agent.subagents.timeline` 返回的都是截断后的内容。
+  - 每个父会话的全部子代理时间线合计字节数（各行截断后 JSON 长度之和）上限 8 MB；超出时按时间（timestamp，同刻按 seq）从**最早的行**开始丢弃，跨该父会话的所有子代理时间线，直到回到上限内（至少保留刚写入的那一行）。丢弃后 `hasOlder` 以实际保留为准。
+  - AgentManager 在事件尾链中拦截 `provider_subagent` 写入 store，并经监听器 `onSubagent` 推给 RpcServer 广播。
 - 清理：会话关闭（`agent.close`、shutdown）与删除时清空该会话的全部子代理，并逐个广播 `remove`。
 
 **Claude**：
@@ -662,6 +677,13 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 
 **sidecar 日志轮转**：sidecar 启动打开 `sidecar.log` 前，若文件超过 10 MB，先把它重命名为 `sidecar.log.1`（覆盖旧的 `.1`），再新建。运行中不轮转。
 
+**sidecar 致命错误与资源诊断**（`packages/sidecar/src/diagnostics.ts`；事故背景：sidecar 无征兆退出且 `sidecar.log` 里没有任何线索）：
+- `uncaughtException`：用 `fs.appendFileSync` **同步**把错误、堆栈与当时的 `process.memoryUsage()`（rss / heapUsed / heapTotal / external / arrayBuffers）写入 `sidecar.log`（级别 `error`，独立于 logger 的文件句柄，logger 关闭后仍可写），再走原有优雅关闭（tree-kill 各 Agent 子进程）并以退出码 1 退出，另设 4 秒硬退出兜底。
+- `unhandledRejection`：**保持现有行为（只记日志、不退出）**，但同样同步写入堆栈与内存，不因此引入新的崩溃。
+- `process.on("exit")`：同步记一行「进程退出事件：code=<码> 原因=<原因>」。原因来自 `shutdown(reason)`（`stdin end` / `stdin close` / `stdin error` / `SIGINT` / `SIGTERM` / `父进程 <pid> 已退出` / `uncaughtException`），未经过 shutdown 的 `process.exit`（启动失败、配置错误等）记为「未经过 shutdown 流程」。被 `TerminateProcess` / 系统 OOM 杀死时 exit 事件不会触发，此时日志最后一条记录与内存采样就是线索。
+- 内存采样：启动时记一条，之后每 5 分钟写一条 `info`「内存采样 rss=… heapUsed=… heapTotal=… external=… arrayBuffers=… heapLimit=…」，附带会话数与子代理时间线占用（行数 / 字节）；`heapUsed` 超过 `v8.getHeapStatistics().heap_size_limit` 的 80% 时额外写一条 `warn`。定时器 `unref`，不阻止退出。
+- V8 的 `FATAL ERROR: Reached heap limit` 无法在 JS 里捕获（进程直接 abort，exit 事件也不触发），只能由 Rust 外壳记录 sidecar 的 stderr 与退出状态（见 3.6）。
+
 **Rust 命令**：
 - `log_tail { input: { maxBytes?: number } }` → `{ path: string, text: string, truncated: boolean, size: number }`：读取 `<日志目录>/sidecar.log` 尾部，`maxBytes` 默认 256 KB、上限 2 MB；从截断处跳到下一个换行再返回，按 UTF-8 宽松解码。文件不存在时 `text` 为空字符串、`size` 为 0，不报错。
 - `debug_paths {}` → `{ dataDir, logDir, webviewDataDir? }`。
@@ -669,6 +691,7 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
   - `diagnostics.json`：前端收集的诊断信息（见下）；
   - `frontend-events.jsonl`：前端调试事件；
   - `logs/sidecar.log`、`logs/sidecar.log.1`（存在才放，各取最后 5 MB）；
+  - `logs/desktop.log`、`logs/desktop.log.1`（Rust 外壳日志，见 3.6；存在才放，各取最后 5 MB，读出后按 3.6 的规则脱敏 token）；
   - `config/providers.json`：按 4.7 规则脱敏（apiKey 一律脱敏，`env` / `settings.env` 中长度 ≥ 6 的值脱敏）；`config/coding-agent-paths.json` 原样。
   - **绝不包含** `AGENTDECK_TOKEN`、WS 地址中的 token、ui.sqlite 与会话时间线。
 - 前端传入的 `diagnostics` / `frontendEvents` 在前端已经过 `debug-redact.ts` 脱敏；Rust 再对 providers.json 单独脱敏。
@@ -1183,6 +1206,14 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 - `assistant_message` 一轮内可能有多条（不同 `messageId`），前端按 messageId 分段拼接；`reasoning` 不带 messageId。
 - 首轮 `thread_started` 与 `turn_started` 的先后不固定（Claude、ACP 先 thread_started，Codex 先 turn_started），前端不得依赖二者顺序。
 - `turn_started` 之前不一定有 `user_message`：CLI 自发轮次（4.12）只有 `turn_started { origin: "background" }`。
+
+**时间线大小限制**（`agent/timeline-limits.ts` 的 `limitTimelineItem`，主时间线与子代理时间线共用）：
+- **文本预算**：一个时间线项里所有字符串合计最多约 64 K 字符（`TIMELINE_ITEM_TEXT_BUDGET = 65536`，按 JS 字符数计，不是字节）。遍历整个项（`detail`、`error`、`metadata` 等任意深度，深度上限 8），每个字符串最多保留「剩余预算」（但至少 1024 字符，保证后面的字段不至于全空）；超出部分截断，并在末尾追加 `…[已截断 N 字符]`。
+- **图片**：任何 `type` 为 `image`（含 MCP 的 image 内容块）或带 `source.type === "base64"` 的对象，整体替换为 `{ "type": "text", "text": "[图片 约 N KB，已省略]" }`（N 按其 base64 数据长度 ×3/4 估算）；`data:image/…;base64,…` 形式的字符串替换为同样的占位文本。
+- 未超限的项原样返回（同一引用，不复制）。
+- **主时间线**：Claude provider 的 `toolResultText` 本来就只取 `tool_result.content` 里的文本块（图片块被丢弃），但结构化的 `tool_use_result` 会作为候选输出：未知（多为 MCP）工具的 `tool_use_result` 若含图片（如浏览器截图工具），解析不出结构化 detail 时会退回 `unknown` detail，**base64 会整段进入 `detail.output`、被广播并写入 `timeline.jsonl`**；Bash / Read 等的超大文本输出同样无上限。因此 AgentManager 在 `processEvent` 里对**所有 provider 的 `tool_call` 项**统一应用 `limitTimelineItem`（先于合并、快照、广播、落盘，所以内存、前端、`timeline.jsonl` 三处一致）。`user_message` / `assistant_message` / `reasoning` 不处理（来自用户或模型本身的文本，不是工具产物）。已落盘的旧会话不改写。
+- **对前端的影响**：前端从不渲染 `unknown` detail 里的图片，只把 `detail.input` / `detail.output` 序列化成文本并截到 20000 字符（`web/src/lib/agent-tool-detail.ts`），因此显示上几乎无差别；变化只有：① 超过 64 K 字符的工具输出末尾多一行「…[已截断 N 字符]」（前端自己的 20000 字符截断通常先生效）；② `unknown` 输出里的图片块显示为「[图片 约 N KB，已省略]」文本块而不是一长串 base64；③ 会话导出（`session-export`）里同一工具卡片的输出同样是截断后的内容。
+- **与 paseo 对照**：paseo 的 `limitAgentTimelineItemContent`（`TOOL_CALL_CONTENT_MAX_LENGTH = 64 * 1024`）在工具调用事件持久化、流式推送、历史回放前截断 shell 输出、失败 shell 的错误内容与 plain_text；图片由 Claude provider 从 tool_result 中取出，按 `materializeProviderImage` 物化为 assistant markdown 图片，不再以 base64 进时间线。AgentDeck 保留 64 K 的阈值，但覆盖范围更宽（任意 detail 的任意字符串字段，因为 `unknown` detail 的 output 是任意结构），图片不物化、直接占位（前端没有对应的图片消息通道）。
 
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。

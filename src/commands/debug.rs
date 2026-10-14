@@ -13,6 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 const LOG_FILE: &str = "sidecar.log";
+const DESKTOP_LOG_FILE: &str = crate::desktop_log::LOG_FILE_NAME;
 const DEFAULT_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 /// 诊断包里每个日志文件最多取最后 5 MB。
@@ -214,6 +215,16 @@ fn write_bundle(
     ] {
         if let Some(bytes) = read_last_bytes(&log_dir.join(entry), BUNDLE_LOG_BYTES) {
             add(name, &bytes)?;
+        }
+    }
+    // Rust 外壳日志（design.md 3.6）：读出后再按 token 规则脱敏一遍。
+    for name in [
+        DESKTOP_LOG_FILE.to_string(),
+        format!("{DESKTOP_LOG_FILE}.1"),
+    ] {
+        if let Some(bytes) = read_last_bytes(&log_dir.join(&name), BUNDLE_LOG_BYTES) {
+            let redacted = crate::desktop_log::redact(&String::from_utf8_lossy(&bytes));
+            add(&format!("logs/{name}"), redacted.as_bytes())?;
         }
     }
     if let Some(redacted) = fs::read_to_string(data_dir.join("providers.json"))
@@ -472,6 +483,47 @@ mod tests {
             .read_to_string(&mut text)
             .unwrap();
         assert!(!text.contains("topsecret"));
+    }
+
+    #[test]
+    fn bundle_includes_desktop_logs_with_tokens_redacted() {
+        let data = TempDir::new().unwrap();
+        let logs = data.path().join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            logs.join(DESKTOP_LOG_FILE),
+            "start AGENTDECK_TOKEN=deadbeefdeadbeef0123456789\nBearer adi_0123456789abcdef0123456789abcdef ok\n",
+        )
+        .unwrap();
+        fs::write(
+            logs.join(format!("{DESKTOP_LOG_FILE}.1")),
+            "ws://127.0.0.1:1/rpc?token=0123456789abcdef0123456789abcdef\n",
+        )
+        .unwrap();
+        let out = TempDir::new().unwrap();
+        let target = out.path().join("bundle.zip");
+        write_bundle(&target, data.path(), &logs, "{}", "").unwrap();
+        assert_eq!(
+            entry_names(&target),
+            vec![
+                "diagnostics.json",
+                "frontend-events.jsonl",
+                "logs/desktop.log",
+                "logs/desktop.log.1",
+            ]
+        );
+        let mut archive = zip::ZipArchive::new(File::open(&target).unwrap()).unwrap();
+        for name in ["logs/desktop.log", "logs/desktop.log.1"] {
+            let mut text = String::new();
+            archive
+                .by_name(name)
+                .unwrap()
+                .read_to_string(&mut text)
+                .unwrap();
+            assert!(!text.contains("deadbeef"), "{name}: {text}");
+            assert!(!text.contains("0123456789abcdef"), "{name}: {text}");
+            assert!(text.contains("***"), "{name}: {text}");
+        }
     }
 
     #[test]
