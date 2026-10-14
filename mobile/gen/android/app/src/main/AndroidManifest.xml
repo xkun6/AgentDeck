@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- M0 后台存活验证：前台服务（specialUse 类型）+ 常驻通知 + 可选 CPU 唤醒锁 -->
+    <!-- 后台保持连接：前台服务（specialUse 类型，targetSdk 34+ 需声明类型权限）+ 常驻通知 + 可选 CPU 唤醒锁 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 本地通知（Android 13+ 需运行时申请）与电池优化白名单申请 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- 扫码配对：相机非必需（barcode-scanner 插件会合并 CAMERA 权限） -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
