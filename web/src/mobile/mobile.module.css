@@ -738,3 +738,17 @@
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* 正在看较早的消息（长会话分段视图）：时间线上方的提示条 */
+.historyBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 12px;
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+  font-size: 12px;
+  flex-shrink: 0;
+}

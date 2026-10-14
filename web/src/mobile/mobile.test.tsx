@@ -18,7 +18,7 @@ import type { ConnectionSnapshot } from "./connection-manager";
 import { HostList } from "./host-list";
 import { NewSession } from "./new-session";
 import { PairScreen } from "./pair-screen";
-import { SessionDetail } from "./session-detail";
+import { CHUNK_OVERLAP, INITIAL_WINDOW, MAX_RENDERED, SessionDetail, WINDOW_STEP } from "./session-detail";
 import { SessionList } from "./session-list";
 import { agent } from "./test-fixtures";
 import type { MobileRoute } from "./route";
@@ -563,4 +563,86 @@ describe("SessionDetail 时间线向前分页", () => {
     expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
     expect(screen.queryByTestId("composer-status-row")).toBeNull();
   });
+});
+
+describe("SessionDetail 长会话：渲染节点数上限", () => {
+  const TURNS = 300; // 600 条消息（用户 + 助手），足以走完「原地展开 → 分段视图」
+
+  function setupLong() {
+    const client = makeClient((method) => (method === "provider.list" ? [] : {}));
+    __setSidecarClientForTests(client as unknown as SidecarClient);
+    const store = createStore();
+    store.set(sidecarConnectionAtom, "open");
+    store.set(replaceAgentSnapshotsAtom, [agent("a1", { title: "超长会话" })]);
+    store.set(ensureChatSessionAtom, "a1");
+    for (let turn = 1; turn <= TURNS; turn += 1) {
+      const base = turn * 4;
+      const e = (seq: number, event: AgentStreamEvent): AgentStreamEnvelope => ({ agentId: "a1", seq, epoch: "e1", timestamp: 10_000 + seq, event });
+      for (const envelope of [
+        e(base + 1, { type: "timeline", item: { type: "user_message", text: `问题${turn}` } }),
+        e(base + 2, { type: "turn_started", turnId: `t${turn}` }),
+        e(base + 3, { type: "timeline", turnId: `t${turn}`, item: { type: "assistant_message", text: `回答${turn}` } }),
+        e(base + 4, { type: "turn_completed", turnId: `t${turn}` }),
+      ]) {
+        store.set(applyAgentEventAtom, envelope, true);
+      }
+    }
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <JotaiProvider store={store}>
+          <SessionDetail agentId="a1" onBack={() => {}} />
+        </JotaiProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  const renderedMessages = () => screen.queryAllByText(/^(问题|回答)\d+$/).length;
+  const showEarlier = async () => {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /显示更早的/ }));
+    });
+  };
+
+  it("首屏只渲染最近 INITIAL_WINDOW 条；反复展开更早的消息，同时渲染的消息数始终不超过上限，DOM 节点数有界", async () => {
+    setupLong();
+    await screen.findByText(`问题${TURNS}`);
+    expect(renderedMessages()).toBe(INITIAL_WINDOW);
+    let peak = renderedMessages();
+    let peakNodes = document.body.querySelectorAll("*").length;
+    // 一直展开到没有更早的消息为止（600 条 > 上限，必然经过分段视图）
+    for (let i = 0; i < 20 && screen.queryByRole("button", { name: /显示更早的/ }); i += 1) {
+      await showEarlier();
+      peak = Math.max(peak, renderedMessages());
+      peakNodes = Math.max(peakNodes, document.body.querySelectorAll("*").length);
+    }
+    expect(peak).toBeLessThanOrEqual(MAX_RENDERED);
+    expect(peak).toBeGreaterThan(INITIAL_WINDOW);
+    expect(TURNS * 2).toBeGreaterThan(MAX_RENDERED); // 全部消息多于上限，上限确实起了作用
+    expect(WINDOW_STEP).toBeGreaterThan(0);
+    expect(peakNodes).toBeLessThan(MAX_RENDERED * 18); // 每条消息约 16 个节点；600 条全渲染会超过 9600
+  }, 60_000);
+
+  it("到达上限后换成「较早的消息」视图（与已看过的部分重叠衔接），可一键返回最新", async () => {
+    setupLong();
+    await screen.findByText(`问题${TURNS}`);
+    // 展开到上限：INITIAL_WINDOW + n × WINDOW_STEP > MAX_RENDERED 之前都是原地展开
+    const inPlaceSteps = Math.floor((MAX_RENDERED - INITIAL_WINDOW) / WINDOW_STEP);
+    for (let i = 0; i < inPlaceSteps; i += 1) await showEarlier();
+    expect(screen.queryByText("正在查看较早的消息")).toBeNull();
+    const oldestBefore = screen.queryAllByText(/^(问题|回答)\d+$/)[0]!.textContent!;
+
+    await showEarlier();
+    expect(screen.getByText("正在查看较早的消息")).toBeTruthy();
+    expect(renderedMessages()).toBeLessThanOrEqual(MAX_RENDERED);
+    // 新视图的最后几条正是之前最早看到的那些（重叠 CHUNK_OVERLAP 条），而不是凭空跳到更早
+    expect(screen.queryByText(oldestBefore)).toBeTruthy();
+    expect(screen.queryByText(`问题${TURNS}`)).toBeNull();
+    expect(CHUNK_OVERLAP).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "返回最新" }));
+    expect(screen.queryByText("正在查看较早的消息")).toBeNull();
+    expect(await screen.findByText(`问题${TURNS}`)).toBeTruthy();
+    expect(renderedMessages()).toBe(INITIAL_WINDOW);
+  }, 60_000);
 });

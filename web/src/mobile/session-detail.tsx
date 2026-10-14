@@ -27,6 +27,13 @@ import s from "./mobile.module.css";
 export const INITIAL_WINDOW = 60;
 export const WINDOW_STEP = 100;
 export const OLDER_PAGE_LIMIT = 300;
+/**
+ * 同时渲染的消息数上限。5000+ 条会话全部展开后约 3 万个 DOM 节点，WebView 里滑动帧耗时 p95 达 76ms；
+ * 所以窗口最多这么大，再往前翻就换成「较早的消息」视图：只渲染更早的一段（与已看过的部分重叠 CHUNK_OVERLAP 条以便衔接），
+ * 顶部提示条可一键返回最新。
+ */
+export const MAX_RENDERED = 400;
+export const CHUNK_OVERLAP = 20;
 
 export function SessionDetail({
   agentId,
@@ -46,10 +53,21 @@ export function SessionDetail({
   const runtime = useMemo(() => runtimeBySession[agentId] ?? createEmptyChatRuntime(), [runtimeBySession, agentId]);
   const allMessages = useMemo(() => agentUIMessagesToChatMessages(runtime.messages), [runtime.messages]);
   const [windowSize, setWindowSize] = useState(INITIAL_WINDOW);
-  const hidden = Math.max(0, allMessages.length - windowSize);
+  // 「较早的消息」视图：以该视图最后一条消息的 id 为锚（向前分页会改变数组下标，id 不会）；null = 跟随最新
+  const [historyEndId, setHistoryEndId] = useState<string | null>(null);
+  // 切换视图时换 key 重挂时间线，让它按「首次渲染」贴底（避免和前插 / 裁剪的滚动补偿互相打架）
+  const [viewKey, setViewKey] = useState(0);
+  const historyEnd = useMemo(() => {
+    if (historyEndId === null) return -1;
+    const index = allMessages.findIndex((message) => message.id === historyEndId);
+    return index < 0 ? -1 : index + 1;
+  }, [allMessages, historyEndId]);
+  const inHistory = historyEnd > 0;
+  const viewStart = inHistory ? Math.max(0, historyEnd - MAX_RENDERED) : Math.max(0, allMessages.length - windowSize);
+  const hidden = viewStart;
   const chatMessages = useMemo(
-    () => (hidden > 0 ? allMessages.slice(-windowSize) : allMessages),
-    [allMessages, hidden, windowSize],
+    () => (inHistory ? allMessages.slice(viewStart, historyEnd) : viewStart > 0 ? allMessages.slice(viewStart) : allMessages),
+    [allMessages, inHistory, viewStart, historyEnd],
   );
   const busy = isRuntimeRunning(runtime) || snapshot?.status === "running";
   const inactive = isInactiveAgent(snapshot);
@@ -88,9 +106,31 @@ export function SessionDetail({
   }, [actions, agentId, connected]);
 
   // 滚到顶部 / 点「加载更早」：先展开本地已有的，再向 sidecar 取更早一页（beforeSeq）
+  const enterHistory = useCallback(
+    (endIndex: number) => {
+      const anchor = allMessages[Math.min(Math.max(endIndex, 1), allMessages.length) - 1];
+      if (!anchor) return;
+      setHistoryEndId(anchor.id);
+      setViewKey((key) => key + 1);
+    },
+    [allMessages],
+  );
+  const backToLatest = useCallback(() => {
+    setHistoryEndId(null);
+    setWindowSize(INITIAL_WINDOW);
+    setViewKey((key) => key + 1);
+  }, []);
+
   const loadEarlier = useCallback(() => {
     if (hidden > 0) {
-      setWindowSize((n) => n + WINDOW_STEP);
+      if (inHistory) {
+        enterHistory(viewStart + CHUNK_OVERLAP);
+      } else if (Math.min(windowSize + WINDOW_STEP, allMessages.length) <= MAX_RENDERED) {
+        setWindowSize((n) => n + WINDOW_STEP);
+      } else {
+        // 窗口已到上限：换成更早的一段，而不是继续把全部消息塞进 DOM
+        enterHistory(allMessages.length - windowSize + CHUNK_OVERLAP);
+      }
       return;
     }
     if (!hasOlder || loadingOlderRef.current || !connected) return;
@@ -100,14 +140,14 @@ export function SessionDetail({
       .loadOlderTimeline(agentId, OLDER_PAGE_LIMIT)
       .then(({ hasOlder: more }) => {
         setHasOlder(more);
-        setWindowSize((n) => n + WINDOW_STEP);
+        setWindowSize((n) => Math.min(n + WINDOW_STEP, MAX_RENDERED));
       })
       .catch((e: unknown) => setError(humanizeSidecarError(e)))
       .finally(() => {
         loadingOlderRef.current = false;
         setLoadingOlder(false);
       });
-  }, [actions, agentId, connected, hasOlder, hidden]);
+  }, [actions, agentId, allMessages.length, connected, enterHistory, hasOlder, hidden, inHistory, viewStart, windowSize]);
 
   const onRespond = useCallback(
     (approval: PendingApproval, response: AgentPermissionResponse) =>
@@ -131,6 +171,7 @@ export function SessionDetail({
     const value = text.trim();
     const draft = images;
     if (!value && draft.length === 0) return;
+    if (inHistory) backToLatest();
     setText("");
     setImages([]);
     setError(null);
@@ -148,6 +189,7 @@ export function SessionDetail({
     const value = text.trim();
     const draft = images;
     if (!value && draft.length === 0) return;
+    if (inHistory) backToLatest();
     setError(null);
     try {
       const prepared = await prepareAgentPrompt({ text: value, attachments: imagesToAttachments(draft) });
@@ -170,6 +212,10 @@ export function SessionDetail({
   });
 
   const pendingApproval = inactive ? null : (runtime.pendingApprovals[0] ?? null);
+  // 审批卡片只出现在最新消息之后：正在看较早的消息时来了待审批，直接回到最新，避免错过
+  useEffect(() => {
+    if (pendingApproval && inHistory) backToLatest();
+  }, [pendingApproval, inHistory, backToLatest]);
   const title = snapshot ? agentDisplayTitle(snapshot, runtime, providers) : "会话";
   const outputSpeed = runtime.agentUsage?.outputTokensPerSecond ?? snapshot?.lastUsage?.outputTokensPerSecond;
 
@@ -182,9 +228,17 @@ export function SessionDetail({
         <h1 className={s.titleSmall}>{title}</h1>
         {snapshot ? <span className={s.conn}>{AGENT_STATUS_LABELS[snapshot.status]}</span> : null}
       </header>
+      {inHistory ? (
+        <div className={s.historyBar} role="status">
+          <span>正在查看较早的消息</span>
+          <button type="button" className={s.textButton} onClick={backToLatest}>
+            返回最新
+          </button>
+        </div>
+      ) : null}
       <div className={s.timeline}>
         <MessageTimeline
-          key={agentId}
+          key={`${agentId}:${viewKey}`}
           messages={chatMessages}
           loading={loading && runtime.messages.length === 0}
           statusMessage={runtime.statusMessage || (!connected ? "正在连接电脑…" : undefined)}
@@ -207,7 +261,7 @@ export function SessionDetail({
                 {loadingOlder
                   ? "正在加载更早的消息…"
                   : hidden > 0
-                    ? `显示更早的 ${Math.min(hidden, WINDOW_STEP)} 条（还有 ${hidden} 条未显示）`
+                    ? `显示更早的 ${Math.min(hidden, inHistory || windowSize + WINDOW_STEP > MAX_RENDERED ? MAX_RENDERED - CHUNK_OVERLAP : WINDOW_STEP)} 条（还有 ${hidden} 条未显示）`
                     : "加载更早的消息"}
               </button>
             ) : undefined
