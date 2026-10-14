@@ -105,6 +105,20 @@ export class SidecarRpcError extends Error {
 }
 
 /**
+ * 请求发出后连接断开，结果未知：服务端可能已经处理（例如页面被系统挂起期间发出的 agent.send）。
+ * 与「未连接」「请求超时」「RPC 错误」区分开，调用方据此在重连补齐后核对是否已落地（见 `confirmUserMessage`）。
+ */
+export class SidecarConnectionLostError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SidecarConnectionLostError";
+  }
+}
+
+/** 记住最近这么多条已收到的用户消息 clientMessageId（用于断线后判断 agent.send / steer 是否已落地） */
+const DELIVERED_MESSAGE_LIMIT = 500;
+
+/**
  * 终止性关闭码区间：socket 以 4400–4499 关闭表示「重试也没用」（例如远程网关的凭据失效），
  * 此时不再自动重连，由上层提示用户处理后手动 `connect()` / `forceReconnect()`。
  */
@@ -208,6 +222,9 @@ export class SidecarClient {
   private probing: Promise<void> | null = null;
   private syncDepth = 0;
   private unsubscribeSystemResume: (() => void) | null = null;
+
+  /** 已收到的用户消息：clientMessageId → turnId（空串 = 事件没带 turnId），FIFO 淘汰 */
+  private deliveredMessages = new Map<string, string>();
 
   private _epoch: string | null = null;
   private trackers = new Map<string, AgentSeqTracker>();
@@ -472,7 +489,7 @@ export class SidecarClient {
         if (!isCurrent()) return;
         this.ws = null;
         clearTimeout(connectTimer);
-        this.rejectPending(message);
+        this.rejectPending(message, true);
         this._lastError = message;
         if (terminal) this._terminalError = terminal;
         if (!settled) {
@@ -511,10 +528,10 @@ export class SidecarClient {
     });
   }
 
-  private rejectPending(message: string): void {
+  private rejectPending(message: string, connectionLost = false): void {
     this.pending.forEach(({ reject, timer }) => {
       clearTimeout(timer);
-      reject(new Error(message));
+      reject(connectionLost ? new SidecarConnectionLostError(message) : new Error(message));
     });
     this.pending.clear();
   }
@@ -552,7 +569,7 @@ export class SidecarClient {
     if (ws || this.connectPromise) {
       this.ws = null;
       this.connectPromise = null;
-      this.rejectPending("与 Agent 服务的连接已断开");
+      this.rejectPending("与 Agent 服务的连接已断开", true);
       if (ws) {
         try { ws.close(); } catch {}
       }
@@ -854,6 +871,7 @@ export class SidecarClient {
       tracker.hasOlder = envelope.seq > 1;
     }
     tracker.lastSeq = envelope.seq;
+    this.rememberUserMessage(envelope);
     const meta: SidecarStreamMeta = { replay };
     for (const listener of [...this.streamListeners]) {
       try {
@@ -862,6 +880,29 @@ export class SidecarClient {
         console.error("[sidecar-client] 订阅回调出错", error);
       }
     }
+  }
+
+  private rememberUserMessage(envelope: AgentStreamEnvelope): void {
+    const event = envelope.event;
+    if (event.type !== "timeline" || event.item.type !== "user_message" || !event.item.clientMessageId) return;
+    this.deliveredMessages.set(event.item.clientMessageId, event.turnId ?? "");
+    if (this.deliveredMessages.size > DELIVERED_MESSAGE_LIMIT) {
+      this.deliveredMessages.delete(this.deliveredMessages.keys().next().value as string);
+    }
+  }
+
+  /**
+   * `agent.send` / `agent.steer` 因连接断开失败（`SidecarConnectionLostError`）后调用：重连并按 `sinceSeq` 补齐该会话时间线，
+   * 看里面有没有带这个 `clientMessageId` 的 `user_message`（sidecar 写入时间线时原样带上，design.md 4.3）。
+   * 有 = 服务端其实已收到并开始处理，返回其 turnId；没有 = 确实没发出去，返回 null。重连失败时抛出（结果仍然未知）。
+   */
+  async confirmUserMessage(agentId: string, clientMessageId: string): Promise<{ turnId: string } | null> {
+    if (!this.deliveredMessages.has(clientMessageId)) {
+      await this.connect();
+      await this.syncAgent(agentId);
+    }
+    const turnId = this.deliveredMessages.get(clientMessageId);
+    return turnId === undefined ? null : { turnId };
   }
 
   private handleLiveEnvelope(envelope: AgentStreamEnvelope): void {

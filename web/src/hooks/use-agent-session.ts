@@ -44,6 +44,7 @@ import type {
 } from "@agentdeck/protocol";
 import {
   getSidecarClient,
+  SidecarConnectionLostError,
   SidecarRpcError,
   type SidecarClient,
 } from "@/lib/sidecar-client";
@@ -318,6 +319,24 @@ export function bindRemoteToQueries(
   });
 }
 
+/**
+ * `agent.send` / `agent.steer` 因连接断开而失败时，核对该消息是否其实已被服务端接收（时间线里有同 clientMessageId 的 user_message）。
+ * 其它类型的失败（未连接、RPC 错误、超时）与核对本身失败都返回 null，按原有方式报错。
+ */
+async function confirmLostSend(
+  client: Pick<SidecarClient, "confirmUserMessage">,
+  agentId: string,
+  clientMessageId: string,
+  error: unknown,
+): Promise<{ turnId: string } | null> {
+  if (!(error instanceof SidecarConnectionLostError)) return null;
+  try {
+    return await client.confirmUserMessage(agentId, clientMessageId);
+  } catch {
+    return null;
+  }
+}
+
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -409,6 +428,9 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         const { turnId } = await client.request("agent.send", { agentId, prompt, clientMessageId });
         return { turnId, clientMessageId };
       } catch (error) {
+        // 请求发出后连接断开（例如页面被系统挂起期间发送）：服务端可能已经执行，重连补齐后按 clientMessageId 核对，已落地就当成功
+        const recovered = await confirmLostSend(client, agentId, clientMessageId, error);
+        if (recovered) return { turnId: recovered.turnId, clientMessageId };
         const info = describeAgentSendError(error, {
           resuming,
           lastError: store.get(agentSnapshotsAtom)[agentId]?.lastError,
@@ -436,6 +458,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       try {
         await client.request("agent.steer", { agentId, prompt, clientMessageId });
       } catch (error) {
+        if (await confirmLostSend(client, agentId, clientMessageId, error)) return { clientMessageId };
         throw new Error(humanizeSidecarError(error));
       }
       return { clientMessageId };

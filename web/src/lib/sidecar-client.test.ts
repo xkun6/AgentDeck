@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentSnapshot, AgentStreamEnvelope } from "@agentdeck/protocol";
 import { QueryClient } from "@tanstack/react-query";
-import { SidecarClient, SidecarRpcError } from "./sidecar-client";
+import { SidecarClient, SidecarConnectionLostError, SidecarRpcError } from "./sidecar-client";
 import { bindProviderChangesToQueries } from "@/hooks/use-agent-session";
 
 interface RpcFrame {
@@ -399,5 +399,84 @@ describe("SidecarClient", () => {
     expect(notified).toBe(2);
     expect(invalidated(["agentdeck", "providers"])).toBe(false);
     queryClient.clear();
+  });
+});
+
+describe("agent.send 因断线失败后的核对（confirmUserMessage）", () => {
+  function userMessage(seq: number, clientMessageId: string): AgentStreamEnvelope {
+    return {
+      agentId: "a1",
+      seq,
+      epoch: "e1",
+      timestamp: 1_000 + seq,
+      event: { type: "timeline", turnId: "turn-9", item: { type: "user_message", text: "hi", clientMessageId } },
+    };
+  }
+
+  it("请求发出后连接断开：请求以 SidecarConnectionLostError 失败，与未连接 / RPC 错误可区分", async () => {
+    const { client, current } = setup(server((frame, socket) => {
+      if (frame.method === "agent.send") {
+        socket.drop();
+        return true;
+      }
+      return false;
+    }));
+    const error = await client.request("agent.send", { agentId: "a1", prompt: "hi" }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(SidecarConnectionLostError);
+    expect(current().readyState).toBe(3);
+  });
+
+  it("重连补齐后时间线里已有同 clientMessageId 的 user_message：返回其 turnId（服务端其实已执行）", async () => {
+    let firstSend = true;
+    const { client, delivered } = setup(
+      server((frame, socket) => {
+        if (frame.method === "agent.send" && firstSend) {
+          firstSend = false;
+          socket.drop(); // 页面挂起期间服务端已收到并开始处理，只是响应丢了
+          return true;
+        }
+        if (frame.method === "agent.timeline") {
+          socket.reply(frame.id, { epoch: "e1", entries: [envelope("a1", 1), userMessage(2, "cm-lost"), envelope("a1", 3)] });
+          return true;
+        }
+        return false;
+      }),
+      { autoReconnect: true },
+    );
+    client.onStream(() => {});
+    // 先让客户端认识 a1
+    await client.connect();
+    const error = await client.request("agent.send", { agentId: "a1", prompt: "hi", clientMessageId: "cm-lost" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SidecarConnectionLostError);
+    await expect(client.confirmUserMessage("a1", "cm-lost")).resolves.toEqual({ turnId: "turn-9" });
+    expect(delivered.map((item) => item.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("补齐后时间线里没有该 clientMessageId：返回 null（确实没发出去）", async () => {
+    const { client } = setup(
+      server((frame, socket) => {
+        if (frame.method === "agent.timeline") {
+          socket.reply(frame.id, { epoch: "e1", entries: [envelope("a1", 1), userMessage(2, "cm-other")] });
+          return true;
+        }
+        return false;
+      }),
+    );
+    await client.connect();
+    await expect(client.confirmUserMessage("a1", "cm-none")).resolves.toBeNull();
+  });
+
+  it("已经收到过的 user_message 直接确认，不再发请求", async () => {
+    const timelineCalls: unknown[] = [];
+    const { client, current } = setup(
+      server((frame) => {
+        if (frame.method === "agent.timeline") timelineCalls.push(frame.params);
+        return false;
+      }),
+    );
+    await client.connect();
+    current().push({ jsonrpc: "2.0", method: "agent.stream", params: userMessage(1, "cm-live") });
+    await expect(client.confirmUserMessage("a1", "cm-live")).resolves.toEqual({ turnId: "turn-9" });
+    expect(timelineCalls).toEqual([]);
   });
 });
