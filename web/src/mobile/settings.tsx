@@ -1,15 +1,17 @@
 // 设置页：当前电脑与设备名、断开、删除配对（二次确认）、关于。
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { DESKTOP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/build-info";
 import { hostStatusText } from "./host-list";
 import type { ConnectionSnapshot } from "./connection-manager";
+import type { PreferencesStore } from "./preferences";
 import s from "./mobile.module.css";
 
 export interface SettingsProps {
   host: PairedHost | undefined;
   connection: ConnectionSnapshot;
   deviceName: string;
+  prefs: PreferencesStore;
   onRenameDevice: (name: string) => void;
   onSwitchHost: () => void;
   onDisconnect: () => void;
@@ -20,6 +22,7 @@ export function Settings({
   host,
   connection,
   deviceName,
+  prefs,
   onRenameDevice,
   onSwitchHost,
   onDisconnect,
@@ -28,6 +31,7 @@ export function Settings({
   const [name, setName] = useState(deviceName);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const status = host ? hostStatusText(host, connection) : null;
+  const { keepAlive } = useSyncExternalStore(prefs.subscribe, prefs.getState);
 
   return (
     <div className={s.page}>
@@ -81,6 +85,23 @@ export function Settings({
               </button>
             )
           ) : null}
+        </section>
+
+        <section className={s.section} aria-label="后台保持连接">
+          <h2 className={s.sectionTitle}>后台运行</h2>
+          <label className={s.switchRow}>
+            <input
+              type="checkbox"
+              role="switch"
+              aria-label="后台保持连接"
+              checked={keepAlive}
+              onChange={(event) => prefs.setKeepAlive(event.target.checked)}
+            />
+            <span>后台保持连接</span>
+          </label>
+          <div className={s.hint}>
+            连上电脑后保持一条常驻通知，让 App 切到后台或锁屏时仍能收到任务完成 / 待审批提醒。
+          </div>
         </section>
 
         <section className={s.section} aria-label="本机">

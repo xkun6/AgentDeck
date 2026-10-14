@@ -58,7 +58,20 @@ export interface SidecarClientOptions {
    * 更早的历史用 `fetchOlder` 按需向前翻页。手机端设置；桌面不设，保持整段补齐。
    */
   historyLimit?: number;
+  /**
+   * 回前台 / 网络恢复时的死连接探测（手机端设置，桌面不设）：连接看起来还开着，但距最后一次收到数据已超过 `idleMs`，
+   * 就立即发一次 `sidecar.info`，`timeoutMs` 内没有回应则强制断开重连（不等 TCP 自然超时），重连后照常 `sinceSeq` 补齐。
+   */
+  livenessProbe?: LivenessProbeOptions;
 }
+
+export interface LivenessProbeOptions {
+  idleMs: number;
+  timeoutMs: number;
+}
+
+/** 手机端默认值：15 秒没收到任何数据才探活，3 秒内无回应即判定连接已死 */
+export const DEFAULT_LIVENESS_PROBE: LivenessProbeOptions = { idleMs: 15_000, timeoutMs: 3_000 };
 
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
@@ -162,6 +175,7 @@ export class SidecarClient {
   private readonly reconnectMaxDelayMs: number;
   private readonly wakeListenersEnabled: boolean;
   private readonly historyLimit: number | undefined;
+  private readonly livenessProbe: LivenessProbeOptions | undefined;
 
   private ws: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
@@ -182,6 +196,10 @@ export class SidecarClient {
   private lastWakeTickAt = 0;
   private boundOnline: (() => void) | null = null;
   private boundVisibility: (() => void) | null = null;
+  private boundNetworkChange: (() => void) | null = null;
+  private lastActivityAt = 0;
+  private probing: Promise<void> | null = null;
+  private syncDepth = 0;
   private unsubscribeSystemResume: (() => void) | null = null;
 
   private _epoch: string | null = null;
@@ -204,6 +222,7 @@ export class SidecarClient {
   private remoteChangedListeners = new Set<Listener<RemoteStatus>>();
   private terminalListeners = new Set<Listener<SidecarTerminalError>>();
   private attentionListeners = new Set<Listener<AttentionNotice>>();
+  private syncingListeners = new Set<Listener<boolean>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -214,6 +233,7 @@ export class SidecarClient {
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? RECONNECT_MAX_DELAY_MS;
     this.wakeListenersEnabled = options.wakeListeners ?? true;
     this.historyLimit = options.historyLimit;
+    this.livenessProbe = options.livenessProbe;
   }
 
   get state(): SidecarConnectionState {
@@ -233,6 +253,11 @@ export class SidecarClient {
   /** 最近一次建连 / 断线的原因（成功建连后清空），供 UI 展示。 */
   get lastError(): string | null {
     return this._lastError;
+  }
+
+  /** 重连后正在按 `sinceSeq` 补齐各会话（手机端据此显示「正在同步…」）；首次连接不算。 */
+  get syncing(): boolean {
+    return this.syncDepth > 0;
   }
 
   /** 当前已知的 sidecar epoch（尚未从事件或 timeline 得知时为 null）。 */
@@ -318,6 +343,12 @@ export class SidecarClient {
   /** `client.attention` 通知（只发给远程客户端：完成 / 失败 / 待审批 / 调度，design.md 4.31）。 */
   onAttention(listener: Listener<AttentionNotice>): () => void {
     return subscribe(this.attentionListeners, listener);
+  }
+
+  /** 重连后补齐的开始 / 结束（订阅时立即回调当前值）。 */
+  onSyncing(listener: Listener<boolean>): () => void {
+    listener(this.syncing);
+    return subscribe(this.syncingListeners, listener);
   }
 
   /** 终止性关闭（见 SIDECAR_TERMINAL_CLOSE_MIN）：已停止自动重连，需要用户介入。 */
@@ -422,6 +453,7 @@ export class SidecarClient {
         this._terminalError = null;
         this._lastError = null;
         this._currentUrl = url;
+        this.lastActivityAt = Date.now();
         this.setState("open");
         resolve();
         void this.afterOpen();
@@ -457,6 +489,7 @@ export class SidecarClient {
       ws.onerror = () => handleDrop("无法连接 Agent 服务");
       ws.onmessage = (event: MessageEvent) => {
         if (!isCurrent()) return;
+        this.lastActivityAt = Date.now();
         let frame: unknown;
         try {
           frame = JSON.parse(String(event.data));
@@ -563,6 +596,12 @@ export class SidecarClient {
       };
       document.addEventListener("visibilitychange", this.boundVisibility);
     }
+    // 移动网络 / Wi-Fi 切换（Network Information API）：只在配置了探活时监听，桌面行为不变
+    const connection = this.livenessProbe ? networkInformation() : null;
+    if (connection) {
+      this.boundNetworkChange = () => this.handleWake(false);
+      connection.addEventListener("change", this.boundNetworkChange);
+    }
   }
 
   private removeWakeListeners(): void {
@@ -580,14 +619,53 @@ export class SidecarClient {
       document.removeEventListener("visibilitychange", this.boundVisibility);
       this.boundVisibility = null;
     }
+    if (this.boundNetworkChange) {
+      networkInformation()?.removeEventListener("change", this.boundNetworkChange);
+      this.boundNetworkChange = null;
+    }
     this.unsubscribeSystemResume?.();
     this.unsubscribeSystemResume = null;
   }
 
   private handleWake(forceful: boolean): void {
     if (!this.autoReconnect || this.intentionalClose || this._terminalError) return;
-    if (!forceful && this.ws?.readyState === SOCKET_OPEN) return;
+    if (!forceful && this.ws?.readyState === SOCKET_OPEN) {
+      if (this.livenessProbe) void this.probeIfIdle();
+      return;
+    }
     this.forceReconnect(forceful ? "wake" : "hint");
+  }
+
+  /**
+   * 回前台 / 网络恢复时的死连接探测（需配置 `livenessProbe`）：距最后一次收到数据不足 `idleMs` 视为健康；
+   * 否则发 `sidecar.info`，超时（对端无任何回应）即强制重连。对端回了 RPC 错误也说明连接是活的。
+   */
+  probeIfIdle(): Promise<void> {
+    const probe = this.livenessProbe;
+    const ws = this.ws;
+    if (!probe || !ws || ws.readyState !== SOCKET_OPEN || this._state !== "open") return Promise.resolve();
+    if (this.probing) return this.probing;
+    if (Date.now() - this.lastActivityAt < probe.idleMs) return Promise.resolve();
+    const run = (async () => {
+      try {
+        await this.sendRequest("sidecar.info", {}, { timeoutMs: probe.timeoutMs });
+      } catch (error) {
+        if (error instanceof SidecarRpcError) return;
+        // 探测期间已经断线 / 换了连接：由 onclose 与重连流程处理
+        if (this.ws !== ws) return;
+        debugBus.push({
+          type: "sidecar",
+          level: "warn",
+          summary: "连接探活无回应，强制重连",
+          payload: { idleMs: Date.now() - this.lastActivityAt },
+        });
+        this.forceReconnect("probe");
+      }
+    })().finally(() => {
+      if (this.probing === run) this.probing = null;
+    });
+    this.probing = run;
+    return run;
   }
 
   // ── 请求 ────────────────────────────────────────────────────────────────
@@ -862,9 +940,16 @@ export class SidecarClient {
     return agents;
   }
 
+  private setSyncDepth(delta: number): void {
+    const before = this.syncing;
+    this.syncDepth = Math.max(0, this.syncDepth + delta);
+    if (before !== this.syncing) emitTo(this.syncingListeners, this.syncing);
+  }
+
   private async afterOpen(): Promise<void> {
     const reconnect = this.openedOnce;
     this.openedOnce = true;
+    if (reconnect) this.setSyncDepth(1);
     try {
       if (reconnect) {
         for (const agentId of [...this.trackers.keys()]) {
@@ -884,8 +969,16 @@ export class SidecarClient {
       await this.refreshAgents();
     } catch (error) {
       console.warn("[sidecar-client] 连接后同步失败", error);
+    } finally {
+      if (reconnect) this.setSyncDepth(-1);
     }
   }
+}
+
+function networkInformation(): EventTarget | null {
+  if (typeof navigator === "undefined") return null;
+  const connection = (navigator as Navigator & { connection?: EventTarget }).connection;
+  return connection && typeof connection.addEventListener === "function" ? connection : null;
 }
 
 // ── 单例与注入 ────────────────────────────────────────────────────────────

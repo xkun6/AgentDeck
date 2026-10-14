@@ -9,11 +9,13 @@ import { AttentionBanner, useAttentionNotice } from "./attention-banner";
 import { HostList } from "./host-list";
 import { NewSession } from "./new-session";
 import { PairScreen } from "./pair-screen";
+import type { PreferencesStore } from "./preferences";
 import { detectDeviceName } from "./platform";
 import { navTabOf, type MobileRoute } from "./route";
 import { SessionDetail } from "./session-detail";
 import { SessionList } from "./session-list";
 import { Settings } from "./settings";
+import { SyncBanner, useClientSyncing } from "./sync-indicator";
 import { useHashRoute } from "./use-route";
 import { DEFAULT_DEVICE_NAME } from "@/lib/remote/hosts";
 import s from "./mobile.module.css";
@@ -21,6 +23,7 @@ import s from "./mobile.module.css";
 export interface MobileAppProps {
   hosts: HostStore;
   manager: ConnectionManager;
+  prefs: PreferencesStore;
   /** 测试注入：替换配对时的底层 socket */
   pairOverrides?: PairOverrides;
 }
@@ -31,7 +34,7 @@ const NAV_ITEMS: Array<{ tab: "sessions" | "new" | "settings"; label: string }> 
   { tab: "settings", label: "设置" },
 ];
 
-export function MobileApp({ hosts, manager, pairOverrides }: MobileAppProps) {
+export function MobileApp({ hosts, manager, prefs, pairOverrides }: MobileAppProps) {
   const hostsState = useSyncExternalStore(hosts.subscribe, hosts.getState);
   const connection = useSyncExternalStore(manager.subscribe, manager.getSnapshot);
   const { route, navigate, back } = useHashRoute();
@@ -136,6 +139,7 @@ export function MobileApp({ hosts, manager, pairOverrides }: MobileAppProps) {
             deviceName={deviceName}
             hosts={hosts}
             manager={manager}
+            prefs={prefs}
             deleteHost={deleteHost}
           />
         }
@@ -157,6 +161,7 @@ function ConnectedShell({
 }) {
   useSidecarBridge();
   const [notice, dismiss] = useAttentionNotice(connection.client, route);
+  const syncing = useClientSyncing(connection.client);
   const tab = navTabOf(route);
 
   return (
@@ -179,6 +184,8 @@ function ConnectedShell({
             </button>
           ) : null}
         </div>
+      ) : syncing ? (
+        <SyncBanner />
       ) : null}
       {content}
       {tab ? (
@@ -210,6 +217,7 @@ function ShellContent({
   deviceName,
   hosts,
   manager,
+  prefs,
   deleteHost,
 }: {
   route: MobileRoute;
@@ -220,6 +228,7 @@ function ShellContent({
   deviceName: string;
   hosts: HostStore;
   manager: ConnectionManager;
+  prefs: PreferencesStore;
   deleteHost: (hostId: string) => Promise<void>;
 }) {
   switch (route.name) {
@@ -239,6 +248,7 @@ function ShellContent({
           host={host}
           connection={connection}
           deviceName={deviceName}
+          prefs={prefs}
           onRenameDevice={(name) => void hosts.setDeviceName(name)}
           onSwitchHost={() => navigate({ name: "hosts" })}
           onDisconnect={() => {

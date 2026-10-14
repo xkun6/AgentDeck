@@ -305,6 +305,23 @@
   height: 20px;
 }
 
+.switchRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  font-size: 14px;
+}
+
+.switchRow input {
+  width: 20px;
+  height: 20px;
+}
+
 .pullHint {
   padding: 8px;
   color: var(--h-text-3);
@@ -456,6 +473,15 @@
 .connBanner[data-state="failed"] {
   background: var(--h-err-soft);
   color: var(--h-danger);
+}
+
+.syncBanner {
+  padding: 2px 12px;
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+  font-size: 12px;
+  text-align: center;
+  flex-shrink: 0;
 }
 
 .attention {

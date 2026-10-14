@@ -15,6 +15,9 @@ import { HostStore } from "@/lib/remote/hosts";
 import { ConnectionManager } from "./connection-manager";
 import { MobileApp } from "./mobile-app";
 import { createHostStorage } from "./platform";
+import { createPreferencesStore } from "./preferences";
+import { KeepAliveController } from "./native/keepalive-controller";
+import { keepaliveStart, keepaliveStop } from "./native/native-plugin";
 import "@/styles/global.css";
 
 // 手机上即使在 Tauri 壳里也不是桌面：显式声明，避免任何代码按 platform==="tauri" 去调桌面命令
@@ -31,11 +34,23 @@ async function bootstrap() {
   const hosts = new HostStore(createHostStorage());
   await hosts.load();
   const manager = new ConnectionManager(hosts, queryClient);
+  const prefs = createPreferencesStore();
+  // 后台保持连接：随连接状态与开关启停前台服务（非 Tauri 环境下原生调用是 no-op）
+  new KeepAliveController(
+    {
+      getConnection: manager.getSnapshot,
+      subscribeConnection: manager.subscribe,
+      getPreferences: prefs.getState,
+      subscribePreferences: prefs.subscribe,
+      hostName: (hostId) => hosts.get(hostId)?.name,
+    },
+    { start: (text) => keepaliveStart(text), stop: keepaliveStop },
+  );
 
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <MobileApp hosts={hosts} manager={manager} />
+        <MobileApp hosts={hosts} manager={manager} prefs={prefs} />
       </QueryClientProvider>
     </StrictMode>,
   );

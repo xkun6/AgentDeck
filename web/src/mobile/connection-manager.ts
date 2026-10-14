@@ -4,7 +4,7 @@ import { createStore } from "jotai";
 import type { QueryClient } from "@tanstack/react-query";
 import { DEFAULT_THEME_CONFIG, themeAtom } from "@agentdeck/shared-ui";
 import type { AuthFailedReason } from "@agentdeck/remote";
-import { configureSidecarClient, type SidecarClient } from "@/lib/sidecar-client";
+import { DEFAULT_LIVENESS_PROBE, configureSidecarClient, type SidecarClient } from "@/lib/sidecar-client";
 import { createHostClient } from "@/lib/remote/connection";
 import type { HostStore } from "@/lib/remote/hosts";
 
@@ -52,7 +52,11 @@ export class ConnectionManager {
     private readonly queryClient: Pick<QueryClient, "clear">,
     private readonly createClient: (hostId: string) => SidecarClient | null = (hostId) => {
       const host = this.hosts.get(hostId);
-      return host ? createHostClient(host, this.hosts, { client: { historyLimit: MOBILE_HISTORY_LIMIT } }) : null;
+      return host
+        ? createHostClient(host, this.hosts, {
+            client: { historyLimit: MOBILE_HISTORY_LIMIT, livenessProbe: DEFAULT_LIVENESS_PROBE },
+          })
+        : null;
     },
   ) {}
 
