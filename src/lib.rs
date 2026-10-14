@@ -1,5 +1,6 @@
 pub mod coding_agents;
 pub mod commands;
+pub mod desktop_log;
 pub mod environment;
 pub mod error;
 pub mod path_resolver;

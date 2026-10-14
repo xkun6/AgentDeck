@@ -8,14 +8,16 @@
 // `crate::supervisor`。
 
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_log::{read_capped_line, LogSink, MAX_LINE_BYTES};
 
 /// 等待 ready 行的超时。
 pub const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -69,7 +71,10 @@ pub fn ws_url(port: u16) -> String {
 pub fn generate_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|e| format!("生成 sidecar token 失败: {e}"))?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    // 登记后，desktop.log 与诊断包里出现的该 token 原文会被脱敏（design.md 3.6）。
+    crate::desktop_log::register_secret(&token);
+    Ok(token)
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +399,8 @@ pub struct SidecarHandle {
     /// ready 行报告的 pid。
     pub reported_pid: u32,
     stopped: bool,
+    /// 退出状态是否已写入日志（只记一次）。
+    exit_logged: bool,
 }
 
 impl SidecarHandle {
@@ -409,7 +416,32 @@ impl SidecarHandle {
 
     /// 进程是否已退出（不阻塞）。
     pub fn has_exited(&mut self) -> bool {
-        self.stopped || matches!(self.child.try_wait(), Ok(Some(_)) | Err(_))
+        if self.stopped {
+            return true;
+        }
+        match self.child.try_wait() {
+            Ok(None) => false,
+            Ok(Some(status)) => {
+                self.log_exit(&status, false);
+                true
+            }
+            Err(_) => true,
+        }
+    }
+
+    /// 把退出状态写入日志（desktop.log，design.md 3.6）；`expected` 为我们主动关闭。
+    fn log_exit(&mut self, status: &ExitStatus, expected: bool) {
+        if self.exit_logged {
+            return;
+        }
+        self.exit_logged = true;
+        let pid = self.child.id();
+        let desc = describe_exit(status);
+        if expected {
+            log::info!("sidecar (pid {pid}) 已停止：{desc}");
+        } else {
+            log::warn!("sidecar (pid {pid}) 意外退出：{desc}（最后输出见上方 sidecar.stderr 行）");
+        }
     }
 
     /// 按契约关闭：关 stdin → 等待 3 秒 → 强杀进程树。返回进程是否已退出。
@@ -434,6 +466,9 @@ impl SidecarHandle {
         // 即使进程已自行退出，也结束 Job/进程组里可能残留的孙进程。
         self.kill_leftover_tree();
         self.job = None;
+        if let Ok(Some(status)) = self.child.try_wait() {
+            self.log_exit(&status, true);
+        }
         self.stopped = exited;
         exited
     }
@@ -479,15 +514,43 @@ fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> bool {
     }
 }
 
-fn spawn_log_reader<R>(stream: &'static str, reader: R, ready_tx: Option<mpsc::Sender<ReadyLine>>)
-where
+/// 一行 sidecar 输出：有日志队列时直写 `desktop.log`（不受 `RUST_LOG` 过滤），否则退回 `log`。
+fn emit_sidecar_line(sink: Option<&LogSink>, stream: &str, level: log::Level, line: &str) {
+    match sink {
+        Some(sink) => sink.write_record(level.as_str(), &format!("sidecar.{stream}"), line),
+        None => log::log!(level, "[sidecar {stream}] {line}"),
+    }
+}
+
+/// 读 sidecar 的一路输出直到 EOF。按字节读行（不要求 UTF-8、单行限长），
+/// 写日志只入队不阻塞，保证管道始终被读空、不会反压 sidecar。
+fn spawn_log_reader<R>(
+    stream: &'static str,
+    reader: R,
+    ready_tx: Option<mpsc::Sender<ReadyLine>>,
+    sink: Option<LogSink>,
+) where
     R: Read + Send + 'static,
 {
     let _ = thread::Builder::new()
         .name(format!("agentdeck-sidecar-{stream}"))
         .spawn(move || {
             let mut ready_tx = ready_tx;
-            for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            let mut reader = BufReader::new(reader);
+            let mut buf = Vec::new();
+            loop {
+                let total = match read_capped_line(&mut reader, &mut buf, MAX_LINE_BYTES) {
+                    Ok(Some(total)) => total,
+                    Ok(None) => break,
+                    Err(err) => {
+                        log::warn!("读取 sidecar {stream} 失败，读线程结束: {err}");
+                        break;
+                    }
+                };
+                let mut line = String::from_utf8_lossy(&buf).into_owned();
+                if total > buf.len() {
+                    line.push_str(&format!("…（已截断，原长 {total} 字节）"));
+                }
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -496,20 +559,37 @@ where
                         Ok(ready) => {
                             let _ = tx.send(ready);
                             ready_tx = None;
-                            continue;
                         }
                         Err(err) => {
-                            log::warn!("[sidecar {stream}] 非 ready 行（{err}）: {line}");
-                            continue;
+                            let message = format!("非 ready 行（{err}）: {line}");
+                            emit_sidecar_line(sink.as_ref(), stream, log::Level::Warn, &message);
                         }
                     }
+                    continue;
                 }
-                match stream {
-                    "stdout" => log::warn!("[sidecar stdout] {line}"),
-                    _ => log::info!("[sidecar {stream}] {line}"),
-                }
+                let level = if stream == "stdout" {
+                    log::Level::Warn
+                } else {
+                    log::Level::Info
+                };
+                emit_sidecar_line(sink.as_ref(), stream, level, &line);
             }
         });
+}
+
+/// 把退出状态写成人能读懂的文字：退出码（含十六进制，便于识别 0xC0000409 等 Windows 崩溃码）或信号。
+pub fn describe_exit(status: &ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("被信号 {signal} 终止");
+        }
+    }
+    match status.code() {
+        Some(code) => format!("退出码 {code} (0x{:X})", code as u32),
+        None => status.to_string(),
+    }
 }
 
 /// 拉起 sidecar 并阻塞等待 ready 行（最长 [`READY_TIMEOUT`]）。
@@ -577,11 +657,12 @@ pub fn spawn_sidecar_with_timeout(
 
     let stdin = child.stdin.take();
     let (ready_tx, ready_rx) = mpsc::channel();
+    let sink = crate::desktop_log::global();
     if let Some(stdout) = child.stdout.take() {
-        spawn_log_reader("stdout", stdout, Some(ready_tx));
+        spawn_log_reader("stdout", stdout, Some(ready_tx), sink.clone());
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_reader("stderr", stderr, None);
+        spawn_log_reader("stderr", stderr, None, sink);
     }
 
     let mut handle = SidecarHandle {
@@ -592,6 +673,7 @@ pub fn spawn_sidecar_with_timeout(
         version: String::new(),
         reported_pid: 0,
         stopped: false,
+        exit_logged: false,
     };
 
     let deadline = Instant::now() + ready_timeout;
@@ -617,7 +699,10 @@ pub fn spawn_sidecar_with_timeout(
         }
         if let Ok(Some(status)) = handle.child.try_wait() {
             handle.stopped = true;
-            return Err(format!("sidecar 在输出 ready 行之前退出（{status}）"));
+            return Err(format!(
+                "sidecar 在输出 ready 行之前退出（{}）",
+                describe_exit(&status)
+            ));
         }
         if Instant::now() >= deadline {
             handle.stop();
@@ -672,6 +757,78 @@ mod tests {
         assert!(parse_ready_line(r#"{"type":"log","port":1,"version":"v","pid":1}"#).is_err());
         assert!(parse_ready_line(r#"{"type":"ready","port":0,"version":"v","pid":1}"#).is_err());
         assert!(parse_ready_line(r#"{"type":"ready","port":"80","version":"v","pid":1}"#).is_err());
+    }
+
+    #[test]
+    fn describe_exit_shows_code_and_hex() {
+        let status = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" })
+            .args(if cfg!(windows) {
+                ["/C", "exit 7"]
+            } else {
+                ["-c", "exit 7"]
+            })
+            .status()
+            .unwrap();
+        assert_eq!(describe_exit(&status), "退出码 7 (0x7)");
+    }
+
+    #[test]
+    fn log_reader_writes_every_stderr_line_to_sink_with_redaction_and_survives_bad_bytes() {
+        let dir = TempDir::new().unwrap();
+        let sink = LogSink::spawn(crate::desktop_log::MAX_LOG_BYTES, 8192, false);
+        sink.attach(dir.path());
+
+        let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice(b"first line\r\n");
+        input.extend_from_slice(&[0xff, 0xfe, b'b', b'a', b'd', b'\n']);
+        input.extend_from_slice(b"token AGENTDECK_TOKEN=deadbeefdeadbeef01234567 end\n");
+        input.extend(std::iter::repeat_n(b'x', MAX_LINE_BYTES * 3));
+        input.extend_from_slice(b"\nlast line after huge line");
+        for i in 0..2000 {
+            input.extend_from_slice(format!("\nbulk-{i}").as_bytes());
+        }
+
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        struct Notify<R>(R, Option<mpsc::Sender<()>>);
+        impl<R: Read> Read for Notify<R> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.0.read(buf)?;
+                if n == 0 {
+                    if let Some(tx) = self.1.take() {
+                        let _ = tx.send(());
+                    }
+                }
+                Ok(n)
+            }
+        }
+        spawn_log_reader(
+            "stderr",
+            Notify(std::io::Cursor::new(input), Some(done_tx)),
+            None,
+            Some(sink.clone()),
+        );
+        done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        // EOF 通知先于「无换行的最后一行」入队，轮询到最后一行落盘为止
+        let log_path = dir.path().join(crate::desktop_log::LOG_FILE_NAME);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let text = loop {
+            assert!(sink.flush(Duration::from_secs(10)));
+            let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if text.contains("bulk-1999\n") || Instant::now() > deadline {
+                break text;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(
+            text.contains("[INFO ] sidecar.stderr: first line\n"),
+            "{text}"
+        );
+        assert!(text.contains("\u{fffd}\u{fffd}bad"), "坏字节应宽松解码");
+        assert!(text.contains("AGENTDECK_TOKEN=***"));
+        assert!(!text.contains("deadbeefdeadbeef"));
+        assert!(text.contains("已截断，原长 49152 字节"));
+        assert!(text.contains("last line after huge line"));
+        assert!(text.contains("bulk-0\n") && text.contains("bulk-1999\n"));
     }
 
     #[test]

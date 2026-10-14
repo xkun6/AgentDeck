@@ -57,7 +57,7 @@ sidecar 入口：
 
 - sidecar 监听 `127.0.0.1:<port>` 成功后，向 **stdout 输出且只输出一行**：
   `{"type":"ready","port":<number>,"version":"<sidecar 版本>","pid":<number>}`
-- 其余所有日志写 stderr 和日志文件。Rust 持续读空 stdout/stderr 并转发到 `log`。
+- 其余所有日志写 stderr 和日志文件。Rust 持续读空 stdout/stderr，并写入 `<data>/logs/desktop.log`（3.6）。
 - Rust 等待 ready 行，超时 20 秒判定启动失败。
 - 退出：
   1. Rust 关闭 sidecar 的 stdin → sidecar 监听到 `stdin end` 后关闭所有 Agent 子进程（tree-kill）并退出；
@@ -84,6 +84,18 @@ sidecar 入口：
 - sidecar 未就绪时 `wsUrl` 为空字符串；`starting` 状态已带 token。
 - 数据目录：`AGENTDECK_HOME`，否则 Tauri `app_data_dir`（Windows 为 `%APPDATA%local.agentdeck.desktop`）；WebView2 数据在设置了 `AGENTDECK_HOME` 时为 `<home>webview2`，否则为 `%LOCALAPPDATA%local.agentdeck.desktopEBWebView`；日志 `<data>/logs`；ui_store 数据库 `<data>/ui.sqlite`；单实例锁按数据目录，开关变量 `AGENTDECK_SINGLE_INSTANCE`；开发地址变量 `AGENTDECK_DEV_URL`。
 - WS 中继沿用命令 `sidecar_ws_open/send/close` 与事件 `sidecar-ws-message` / `sidecar-ws-closed`，目标为当前 sidecar 的 `wsUrl?token=...`，sidecar 未就绪时返回错误。
+
+### 3.6 Rust 外壳日志 `desktop.log`
+
+**现状（事故前）**：Rust 侧用 `log` + `env_logger::init()`，输出到进程 stderr，且默认过滤级别只有 `error`；release 构建是 `windows_subsystem = "windows"`，进程没有控制台，stderr 无处可去。sidecar 的 stdout / stderr 经读线程转成 `log::info!` / `warn!`，因此同样既被默认级别过滤、又没有落点。结果：外壳没有任何日志文件，sidecar 的 stderr 与退出码全部丢失。
+
+**落盘**：`<data>/logs/desktop.log`（data 目录见 3.5）。
+- 日志初始化（`desktop_log::init`，`main` 最先调用）：仍用 `env_logger`（保留 `RUST_LOG`），默认过滤改为 `warn,agentdeck=info,agentdeck_core=info`，输出目标改为「写入异步队列 + 同步 tee 到 stderr（供开发态控制台）」。日志目录在 `setup` 里才能确定，此前的日志留在队列中，`desktop_log::attach(log_dir)` 后补写。
+- **写文件不阻塞调用方**：所有日志经容量 16384 的有界队列交给独立写线程；队列满时丢弃新行并计数，写线程随后补一行「日志队列已满，丢弃 N 行」。sidecar stdout / stderr 的读线程只做 `try_send`，不会因磁盘慢而停止读管道，从而不会反压 sidecar。
+- 记录内容：Rust 侧所有 `log` 记录（含 panic，经 panic hook 写成 error）；sidecar **stderr 的全部行**与 ready 之后 stdout 的行（直写日志队列，不受 `RUST_LOG` 过滤；单行超过 16 KB 截断并注明原长度，读线程对无换行的超长输出只保留前 16 KB，非 UTF-8 字节宽松解码，读线程不会因坏字节提前退出）；sidecar 进程退出时的退出码 / 信号（意外退出记 `warn`，主动停止记 `info`，Windows 同时给出十六进制如 `0xC0000409`）；监管重启事件（沿用 supervisor 现有日志）。应用退出时 `flush`（最多等 1 秒）。
+- 轮转：写入前若会使文件超过 5 MB，则把 `desktop.log` 改名为 `desktop.log.1`（覆盖旧的）再新建，只保留一份；启动 attach 时对已超限的旧文件同样处理；改名失败（被占用）则继续追加，不丢日志。
+- **脱敏**（写入前，规则同 4.26）：`adi_[0-9a-f]{16,}` → `adi_***`；`AGENTDECK_TOKEN` 后面紧跟 `=` / `:` 的值 → `***`；`token=` 查询参数中 ≥16 位的 token 串 → `***`；以及本进程生成过的 sidecar token 原文（`generate_token` 时登记，保留最近 16 个）。
+- 诊断包（4.18）：`logs/desktop.log`、`logs/desktop.log.1`（存在才放，各取最后 5 MB）。读出后用同一脱敏函数再处理一遍。
 
 ## 4. 前端 ↔ sidecar 协议（JSON-RPC 2.0 over WebSocket）
 
@@ -676,6 +688,7 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
   - `diagnostics.json`：前端收集的诊断信息（见下）；
   - `frontend-events.jsonl`：前端调试事件；
   - `logs/sidecar.log`、`logs/sidecar.log.1`（存在才放，各取最后 5 MB）；
+  - `logs/desktop.log`、`logs/desktop.log.1`（Rust 外壳日志，见 3.6；存在才放，各取最后 5 MB，读出后按 3.6 的规则脱敏 token）；
   - `config/providers.json`：按 4.7 规则脱敏（apiKey 一律脱敏，`env` / `settings.env` 中长度 ≥ 6 的值脱敏）；`config/coding-agent-paths.json` 原样。
   - **绝不包含** `AGENTDECK_TOKEN`、WS 地址中的 token、ui.sqlite 与会话时间线。
 - 前端传入的 `diagnostics` / `frontendEvents` 在前端已经过 `debug-redact.ts` 脱敏；Rust 再对 providers.json 单独脱敏。
