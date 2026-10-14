@@ -24,6 +24,7 @@ Rust（Tauri）── src/process/sidecar.rs ───────────�
 - Rust 只负责：拉起与监管 sidecar、把 sidecar 地址和 token 交给前端、本地能力（git / terminal / 文件预览 / ui_store / 通知 / 托盘 / CLI 检测）。
 - sidecar 负责：Agent 会话管理、provider 适配、事件归一化、权限审批中转。
 - 前端直连 sidecar 的 WS；webview 拦截 `ws://` 时走 Rust 中继 `ws_proxy.rs`（线协议不变）。
+- 安卓 App（规划中，见 `docs/mobile.md`）经 sidecar 的远程网关接入（4.31）：独立端口、默认关闭、扫码配对、端到端加密，加密信道内跑的仍是第 4 节的 JSON-RPC。
 
 ## 3. Rust ↔ sidecar 启动契约
 
@@ -108,7 +109,7 @@ sidecar 入口：
 | `agent.setMode` | `{ agentId, modeId }` | `{ agent: AgentSnapshot }` |
 | `agent.setThinking` | `{ agentId, thinkingOptionId: string \| null }` | `{ agent: AgentSnapshot, notice?: string }`（见 4.10） |
 | `agent.close` | `{ agentId }` | `{}` |
-| `agent.timeline` | `{ agentId, sinceSeq? }` | `{ epoch, entries: AgentStreamEnvelope[] }` |
+| `agent.timeline` | `{ agentId, sinceSeq?, beforeSeq?, limit? }` | `{ epoch, entries: AgentStreamEnvelope[], hasOlder?: boolean }`（`beforeSeq` / `limit` 为向前分页，见 4.31） |
 | `agent.subagents.list` | `{ agentId }` | `{ subagents: ProviderSubagentDescriptor[] }`（见 4.11） |
 | `agent.subagents.timeline` | `{ agentId, subagentId, direction?, cursorSeq?, limit? }` | `{ rows, hasOlder, hasNewer }`（见 4.11） |
 | `agent.commands` | `{ agentId }` | `{ commands: AgentSlashCommand[] }`（见 4.14） |
@@ -128,6 +129,8 @@ sidecar 入口：
 | `schedule.list` / `schedule.upsert` / `schedule.delete` / `schedule.runNow` / `schedule.runs` / `schedule.setPaused` | 见 4.25 | 定时任务、心跳、目标循环 |
 | `group.create` / `group.list` / `group.get` / `group.delete` | 见 4.27 | 并行协作组（扇出 + 汇总） |
 | `board.get` / `board.updateSettings` / `board.upsertTask` / `board.deleteTask` / `board.moveTask` / `board.merge` | 见 4.28 | 看板式任务分派 |
+| `remote.status` / `remote.pairing.create` / `remote.devices.revoke` | 见 4.31 | 远程网关（手机接入）；远程客户端不可调用 |
+| `client.presence` | `{ kind: "desktop" \| "mobile", visible: boolean }` | `{}`（客户端在线 / 可见状态，见 4.31） |
 
 同一 agent 同一时刻只允许一个进行中的 turn；忙时 `agent.send` 返回 `-32000` + `TURN_IN_PROGRESS`。例外：进行中的是 CLI 自发轮次（`turn_started.origin === "background"`）时允许 send，见 4.12。
 
@@ -144,6 +147,8 @@ sidecar 入口：
 | `board.changed` | `{ projectPath, board: Board }`（看板整张替换，见 4.28） |
 | `group.changed` | `{ group: AgentGroup }`（协作组新建 / 状态 / 成员变化，见 4.27） |
 | `group.removed` | `{ groupId }`（协作组被删除，见 4.27） |
+| `remote.changed` | `RemoteStatus`（网关启停、设备配对 / 吊销 / 连接 / 断开，见 4.31） |
+| `client.attention` | `AttentionNotice`（只发给远程客户端，手机据此弹本地通知，见 4.31） |
 
 `seq` 每个 agent 从 1 自增；`epoch` 是 sidecar 进程启动时生成的随机串，用来让前端识别 sidecar 重启。断线重连后前端调用 `agent.timeline { sinceSeq }` 补齐。
 
@@ -1016,6 +1021,84 @@ interface AgentRateLimits {
 - Codex：本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径）到达时计算并下发；只在回合结束才有用量时只给最终值。
 - ACP：只在回合结束用 `PromptResponse.usage` 的输出 token 计算最终值（没有 usage 则不给）。
 - 首个输出时刻：本回合第一个 `assistant_message` 或 `reasoning` 事件。
+
+### 4.31 远程网关（安卓 App 接入）
+
+> 状态：契约已定（2026-10-14），尚未实现。路线、阶段与手机端结构见 `docs/mobile.md`。握手与加密参照 paseo `packages/relay/src/{crypto,encrypted-channel}.ts`（tweetnacl box），在其基础上增加一次性配对密钥、设备凭据、服务端挑战与递增计数 nonce（防重放）。
+
+**原则**：原有 `127.0.0.1` 的 `/rpc`、`/mcp` 不变、不对外；手机走另起的远程监听，默认关闭。v1 只支持局域网与 Tailscale 直连，不做 relay 中转、不做 FCM 推送。
+
+**设置**（4.24 的 `SidecarSettings` 增加，经 `settings.get` / `settings.set` 读写）：
+```ts
+remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535 */ }
+```
+- `enabled` 由 false 变 true 时在 `0.0.0.0:<port>` 起独立 HTTP 服务，只接受 `GET /remote` 的 WS 升级，其余路径 404，不提供 `/health`；变 false 时关闭监听并断开所有远程连接。端口被占用时不影响 sidecar 本身，`remote.status.error` 给出中文原因。
+- 首次监听时 Windows 防火墙会对 node.exe 弹窗，前端设置页提示用户允许「专用网络」。
+
+**存储**（`<AGENTDECK_DATA_DIR>/remote/`，原子写入；未设置数据目录时远程网关不可启用）：
+- `daemon-keypair.json`：`{ publicKey, secretKey }`（`nacl.box.keyPair()`，base64），首次启用时生成，之后不变（换钥匙 = 所有设备需重新配对）。
+- `devices.json`：`RemoteDevice[]`，凭据只存哈希。
+```ts
+interface RemoteDevice { deviceId: string; name: string; pairedAt: number; lastSeenAt?: number; secretSha256: string /* 不出 sidecar */ }
+```
+
+**配对二维码**：`remote.pairing.create {}` → `{ offerUrl, expiresAt }`，`offerUrl = "agentdeck://pair#" + base64url(JSON(offer))`：
+```ts
+interface RemoteConnectionOffer {
+  v: 1;
+  name: string;                       // 电脑主机名，手机里作为默认名称
+  daemonPublicKey: string;            // base64
+  addresses: Array<{ host: string; port: number; kind: "lan" | "tailscale" }>;
+  pairingSecret: string;              // 32 字节随机 base64url，一次性
+  expiresAt: number;                  // ms，签发后 5 分钟
+}
+```
+- `addresses` 取 `os.networkInterfaces()` 中非内部的 IPv4：`100.64.0.0/10` 记为 `tailscale`，其余私网段（10/8、172.16/12、192.168/16）记为 `lan`，其它地址不列出。
+- 同一时刻只有一个有效 pairingSecret，新签发即作废旧的；使用一次或过期即失效。二维码由桌面前端渲染，sidecar 只给字符串。
+
+**握手**（每个 WS 连接）：
+1. 客户端明文文本帧：`{ "type": "e2ee_hello", "v": 1, "clientKey": <每次连接新生成的 nacl.box 公钥 base64> }`。
+2. 服务端明文文本帧：`{ "type": "e2ee_ready", "v": 1, "challenge": <32 字节随机 base64> }`。双方 `shared = nacl.box.before(对方公钥, 己方私钥)`（服务端用 daemon 长期私钥）。
+3. 此后**只允许二进制帧**，每帧 = `nonce(24) || nacl.box.after(明文 UTF-8, nonce, shared)`。nonce 第 0 字节为方向（`0x01` 客户端→服务端、`0x02` 服务端→客户端），第 16–23 字节为该方向从 1 开始的大端 64 位计数，其余为 0；接收方要求计数严格递增，否则立即断开。解密失败、出现文本帧、单帧明文超过 16 MiB 一律断开。
+4. 客户端第一条加密消息必须是以下之一（10 秒内未完成认证则断开）：
+   - 配对：`{ "type": "pair", "pairingSecret", "challenge", "deviceName" }` → 成功回 `{ "type": "paired", "deviceId", "deviceSecret" }`（`deviceSecret` 32 字节随机 base64，只在此时出现一次）。
+   - 认证：`{ "type": "auth", "deviceId", "deviceSecret", "challenge" }` → 成功回 `{ "type": "authed", "name" }`。
+   - `challenge` 必须等于本连接第 2 步下发的值（防止重放旧连接录下的帧）；失败回 `{ "type": "auth_failed", "reason": "expired" | "invalid" | "revoked" }` 后断开。连续 5 次认证失败的来源 IP 冷却 60 秒。
+5. 认证后，每条加密消息是一个 JSON-RPC 2.0 对象，语义与 `/rpc` 完全一致（同样收到全部广播通知），外加只发给远程客户端的 `client.attention`。
+
+**远程客户端的限制**：调用 `remote.*`、`settings.set` 返回 `-32601`（方法不存在）；其余方法照常。`remote.devices.revoke` 立即断开该设备的所有连接。
+
+**RPC（只限本机 `/rpc`）**：
+```ts
+interface RemoteStatus {
+  enabled: boolean; port: number; listening: boolean; error?: string;
+  addresses: RemoteConnectionOffer["addresses"];
+  devices: Array<Omit<RemoteDevice, "secretSha256"> & { connected: boolean }>;
+}
+```
+- `remote.status {}` → `RemoteStatus`；`remote.pairing.create {}` → `{ offerUrl, expiresAt }`（网关未监听时 `NOT_SUPPORTED`）；`remote.devices.revoke { deviceId }` → `{}`。
+- 通知 `remote.changed`（载荷 `RemoteStatus`）：启停、配对成功、吊销、设备连接 / 断开时广播给本机客户端。
+
+**时间线向前分页**（`agent.timeline` 扩展，兼容旧调用）：
+- 只给 `sinceSeq` 或什么都不给：行为不变（不带 `hasOlder`）。
+- 给 `limit`（1–2000）时为向前分页：从 `beforeSeq`（缺省为末尾之后）往前取至少 `limit` 条，再继续往前扩到最近的**回合起点**（`user_message`；某回合没有 `user_message` 时取其 `turn_started`），保证页首是完整回合；返回 `hasOlder` 表示更早还有条目。`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 `-32602`。
+- 手机打开会话取 `{ limit: 300 }`，向上滚动到顶取 `{ beforeSeq: 当前最早 seq, limit: 300 }`；断线重连仍用 `sinceSeq` 补齐。
+
+**在线状态与通知（attention）**：
+- 客户端在连接成功、可见性变化时调用 `client.presence { kind, visible }`，可见期间每 30 秒再调用一次作为心跳。远程连接的 `kind` 一律按 `mobile` 处理。
+- sidecar 在以下事件发生时决定是否向远程客户端发 `client.attention`：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。
+- 判定：最近 120 秒内有 `kind: "desktop"` 且 `visible: true` 的心跳 → 不发（用户在电脑前）；否则发给所有已认证的远程连接。
+```ts
+interface AttentionNotice {
+  id: string;                                   // 去重用
+  kind: "finished" | "failed" | "permission" | "schedule";
+  agentId?: string;
+  title: string;                                // 会话标题或调度名
+  body: string;                                 // 中文摘要，≤ 120 字（不含工具输出原文）
+  timestamp: number;
+}
+```
+- 手机收到后：App 在前台且正停留在该会话 → 忽略；App 在前台其它页面 → 应用内提示；App 在后台 → Android 本地通知，点击跳转到对应会话。桌面端现有通知逻辑不变，只在其可见性变化时补发 `client.presence`。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
