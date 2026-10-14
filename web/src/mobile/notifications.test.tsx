@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import { AttentionBanner, useAttentionNotice } from "./attention-banner";
-import { decideAttention, setBackgroundAttentionHandler } from "./attention";
-import { BackgroundNotifier, notificationIdOf, type NotifierDeps } from "./native/local-notifications";
+import { decideAttention, setBackgroundAttentionHandler, setResolvedAttentionHandler } from "./attention";
+import { BackgroundNotifier, notificationIdFor, notificationIdOf, type NotifierDeps } from "./native/local-notifications";
 import { setNativeBackend, type AttentionNotification } from "./native/native-plugin";
 import { routeOfClickTarget, useNotificationClicks } from "./native/use-notification-clicks";
 import type { NotifyMode } from "./preferences";
@@ -14,6 +14,7 @@ import type { MobileRoute } from "./route";
 afterEach(() => {
   cleanup();
   setBackgroundAttentionHandler(null);
+  setResolvedAttentionHandler(null);
   setNativeBackend(null);
 });
 
@@ -26,6 +27,7 @@ function fakeDeps(enabled: boolean | null = true) {
     enabled: vi.fn(async () => enabled),
     request: vi.fn(async () => "granted" as const),
     show: vi.fn(async (_notification: AttentionNotification) => true),
+    cancel: vi.fn(async (_id: number) => true),
   } satisfies NotifierDeps;
   return deps;
 }
@@ -98,6 +100,51 @@ describe("通知档位 × 前台 / 后台 / 当前会话", () => {
   });
 });
 
+describe("resolved 撤回信号（useAttentionNotice）", () => {
+  const elsewhere: MobileRoute = { name: "sessions" };
+
+  function setup(foreground: boolean, mode: NotifyMode = "always") {
+    let listener: ((n: AttentionNotice) => void) | null = null;
+    const client = {
+      onAttention: (l: (n: AttentionNotice) => void) => {
+        listener = l;
+        return () => {};
+      },
+    };
+    function Probe() {
+      const [current] = useAttentionNotice(client, elsewhere, () => foreground, () => mode);
+      return <div>{current ? `提示:${current.requestId}` : "无提示"}</div>;
+    }
+    render(<Probe />);
+    return (n: AttentionNotice) => act(() => listener!(n));
+  }
+
+  it("收到撤回：调用取消处理器，并关掉同一条审批的应用内提示条", () => {
+    const cancel = vi.fn();
+    setResolvedAttentionHandler(cancel);
+    const emit = setup(true);
+    emit(notice({ id: "p1", kind: "permission", requestId: "r1" }));
+    expect(screen.getByText("提示:r1")).toBeTruthy();
+    // 其它审批的撤回不影响当前提示条，但仍会取消对应系统通知
+    emit(notice({ id: "x1", kind: "resolved", requestId: "other" }));
+    expect(screen.getByText("提示:r1")).toBeTruthy();
+    emit(notice({ id: "x2", kind: "resolved", requestId: "r1" }));
+    expect(screen.getByText("无提示")).toBeTruthy();
+    expect(cancel.mock.calls.map(([n]) => n.requestId)).toEqual(["other", "r1"]);
+  });
+
+  it("撤回不受通知档位影响（never 也取消），且不进入后台通知通道", () => {
+    const cancel = vi.fn();
+    const background = vi.fn();
+    setResolvedAttentionHandler(cancel);
+    setBackgroundAttentionHandler(background);
+    const emit = setup(false, "never");
+    emit(notice({ id: "x1", kind: "resolved", requestId: "r1" }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(background).not.toHaveBeenCalled();
+  });
+});
+
 describe("BackgroundNotifier", () => {
   it("按 kind 传给原生（决定 channel），带 agentId 与稳定的通知 id", async () => {
     const deps = fakeDeps();
@@ -113,6 +160,38 @@ describe("BackgroundNotifier", () => {
     expect(deps.show.mock.calls[0]![0]).toMatchObject({ title: "T", body: "Agent 请求审批：运行命令" });
     expect(notificationIdOf("p1")).toBe(notificationIdOf("p1"));
     expect(notificationIdOf("p1")).not.toBe(notificationIdOf("p2"));
+  });
+
+  it("审批通知的系统 id 按 agentId + requestId 算：resolved 撤回与原通知指向同一条", async () => {
+    const permission = notice({ id: "n-perm", kind: "permission", requestId: "r1" });
+    const resolved = notice({ id: "n-res", kind: "resolved", requestId: "r1" });
+    expect(notificationIdFor(permission)).toBe(notificationIdFor(resolved));
+    expect(notificationIdFor(permission)).not.toBe(notificationIdOf("n-perm"));
+    expect(notificationIdFor(permission)).not.toBe(notificationIdFor(notice({ kind: "permission", requestId: "r2" })));
+    expect(notificationIdFor(permission)).not.toBe(notificationIdFor({ ...permission, agentId: "a2" }));
+    // 没有 requestId 的通知（完成 / 失败 / 调度）仍按自身 id
+    expect(notificationIdFor(notice({ id: "f1" }))).toBe(notificationIdOf("f1"));
+
+    const deps = fakeDeps();
+    const notifier = new BackgroundNotifier(deps);
+    await notifier.notify(permission);
+    await notifier.cancel(resolved);
+    expect(deps.cancel).toHaveBeenCalledWith(deps.show.mock.calls[0]![0].id);
+  });
+
+  it("撤回信号本身不弹通知；撤回先于异步发出的通知到达时，该通知不再发出", async () => {
+    const deps = fakeDeps();
+    const notifier = new BackgroundNotifier(deps);
+    expect(await notifier.notify(notice({ id: "n-res", kind: "resolved", requestId: "r1" }))).toBe(false);
+    expect(deps.show).not.toHaveBeenCalled();
+
+    let releaseEnabled: (value: boolean) => void = () => {};
+    deps.enabled.mockImplementationOnce(() => new Promise<boolean>((resolve) => (releaseEnabled = resolve)));
+    const pending = notifier.notify(notice({ id: "n-perm", kind: "permission", requestId: "r9" }));
+    await notifier.cancel(notice({ id: "n-res2", kind: "resolved", requestId: "r9" }));
+    releaseEnabled(true);
+    expect(await pending).toBe(false);
+    expect(deps.show).not.toHaveBeenCalled();
   });
 
   it("同一个 id 只通知一次", async () => {

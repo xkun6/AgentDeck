@@ -797,12 +797,19 @@ export interface RemoteStatus {
   devices: Array<RemoteDevice & { connected: boolean }>;
 }
 
-/** `client.attention`：只发给远程客户端，手机据此弹本地通知 */
+/**
+ * `client.attention`：只发给远程客户端，手机据此弹本地通知。
+ * `kind: "resolved"` 是撤回信号（permission_resolved 时发出）：手机据 `agentId` + `requestId` 取消对应的系统通知并关掉应用内提示条，不弹新通知。
+ */
 export interface AttentionNotice {
   /** 去重用 */
   id: string;
-  kind: "finished" | "failed" | "permission" | "schedule";
+  kind: "finished" | "failed" | "permission" | "schedule" | "resolved";
   agentId?: string;
+  /** kind 为 "permission" / "resolved" 时的审批请求 id；手机据 agentId + requestId 算出同一个系统通知 id */
+  requestId?: string;
+  /** kind 为 "permission" 时的审批类型（与 AgentPermissionRequest.kind 一致），手机据此区分「待审批 / 待回答 / 待确认计划」 */
+  permissionKind?: AgentPermissionRequest["kind"];
   /** 会话标题或调度名 */
   title: string;
   /** 中文摘要，≤ 120 字（不含工具输出原文） */

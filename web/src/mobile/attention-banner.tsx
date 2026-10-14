@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { SidecarClient } from "@/lib/sidecar-client";
-import { attentionTarget, decideAttention, dispatchBackgroundAttention } from "./attention";
+import { attentionTarget, decideAttention, dispatchBackgroundAttention, dispatchResolvedAttention } from "./attention";
 import { isAppForeground } from "./native/app-state";
 import type { NotifyMode } from "./preferences";
 import type { MobileRoute } from "./route";
@@ -16,6 +16,7 @@ const KIND_LABEL: Record<AttentionNotice["kind"], string> = {
   failed: "失败",
   permission: "待审批",
   schedule: "定时任务",
+  resolved: "已处理",
 };
 
 /** 订阅 client.attention，按当前路由 / 前后台决定忽略、弹条或交给后台处理器；返回当前要显示的提示 */
@@ -40,6 +41,16 @@ export function useAttentionNotice(
     return client.onAttention((incoming) => {
       if (seen.current.has(incoming.id)) return;
       seen.current.add(incoming.id);
+      if (incoming.kind === "resolved") {
+        // 审批已在别处处理：取消系统通知（不受通知档位 / 前后台影响），并关掉正显示的同一条提示条
+        dispatchResolvedAttention(incoming);
+        setNotice((current) =>
+          current?.kind === "permission" && current.agentId === incoming.agentId && current.requestId === incoming.requestId
+            ? null
+            : current,
+        );
+        return;
+      }
       const decision = decideAttention(incoming, routeRef.current, foregroundRef.current(), modeRef.current());
       if (decision === "banner") setNotice(incoming);
       else if (decision === "background") dispatchBackgroundAttention(incoming);

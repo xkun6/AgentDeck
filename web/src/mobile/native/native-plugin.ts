@@ -114,6 +114,11 @@ export async function showAttentionNotification(notification: AttentionNotificat
   return (await call("show_attention", { ...notification })).ok;
 }
 
+/** 取消一条已发出的 attention 通知（别处已处理审批时撤回）；通知不存在也算成功 */
+export async function cancelAttentionNotification(id: number): Promise<boolean> {
+  return (await call("cancel_attention", { id })).ok;
+}
+
 /** 系统层面的通知开关是否开着；null = 当前环境无法查询（浏览器 / 测试） */
 export async function getNotificationsEnabled(): Promise<boolean | null> {
   const result = await call("notification_status");

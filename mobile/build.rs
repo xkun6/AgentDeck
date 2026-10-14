@@ -1,5 +1,5 @@
 fn main() {
-    // 本地插件 native（前台服务 / 电池优化 / 应用设置 / 后台提醒通知 / 前后台状态）：声明命令，生成 native:default 权限供 capabilities 引用
+    // 本地插件 native（前台服务 / 电池优化 / 应用设置 / 后台提醒通知及其撤回 / 前后台状态）：声明命令，生成 native:default 权限供 capabilities 引用
     tauri_build::try_build(
         tauri_build::Attributes::new().plugin(
             "native",
@@ -12,6 +12,7 @@ fn main() {
                     "open_app_settings",
                     "open_app_notification_settings",
                     "show_attention",
+                    "cancel_attention",
                     "notification_status",
                     "take_launch_target",
                     "app_state",

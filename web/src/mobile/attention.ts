@@ -37,6 +37,17 @@ export function dispatchBackgroundAttention(notice: AttentionNotice): void {
   backgroundHandler?.(notice);
 }
 
+/** 撤回信号（别处已处理审批）的处理器：main.tsx 注册 BackgroundNotifier.cancel */
+let resolvedHandler: BackgroundAttentionHandler | null = null;
+
+export function setResolvedAttentionHandler(handler: BackgroundAttentionHandler | null): void {
+  resolvedHandler = handler;
+}
+
+export function dispatchResolvedAttention(notice: AttentionNotice): void {
+  resolvedHandler?.(notice);
+}
+
 /** 提示条上的跳转目标：有 agentId 去该会话，调度类通知去会话列表 */
 export function attentionTarget(notice: AttentionNotice): MobileRoute {
   return notice.agentId ? { name: "session", agentId: notice.agentId } : { name: "sessions" };

@@ -10,6 +10,7 @@ import {
   requestIgnoreBatteryOptimization,
   requestNotificationPermission,
   setNativeBackend,
+  cancelAttentionNotification,
   showAttentionNotification,
   takeLaunchTarget,
 } from "./native-plugin";
@@ -28,6 +29,7 @@ describe("原生包装在非 Tauri 环境下是 no-op", () => {
     expect(await requestIgnoreBatteryOptimization()).toBe(false);
     expect(await openAppSettings()).toBe(false);
     expect(await showAttentionNotification({ id: 1, title: "t", body: "b", kind: "finished" })).toBe(false);
+    expect(await cancelAttentionNotification(1)).toBe(false);
     expect(await getNotificationsEnabled()).toBeNull();
     expect(await requestNotificationPermission()).toBe("unsupported");
     expect(await takeLaunchTarget()).toBeNull();
@@ -56,6 +58,7 @@ describe("原生包装转发命令", () => {
     expect(await openAppSettings()).toBe(true);
     expect(await getNotificationsEnabled()).toBe(false);
     expect(await showAttentionNotification({ id: 7, title: "标题", body: "正文", kind: "permission", agentId: "a1" })).toBe(true);
+    expect(await cancelAttentionNotification(7)).toBe(true);
     expect(calls).toEqual([
       ["keepalive_start", { text: "AgentDeck 已连接：PC", wakeLock: false }],
       ["keepalive_start", { text: "x", wakeLock: true }],
@@ -65,6 +68,7 @@ describe("原生包装转发命令", () => {
       ["open_app_settings", undefined],
       ["notification_status", undefined],
       ["show_attention", { id: 7, title: "标题", body: "正文", kind: "permission", agentId: "a1" }],
+      ["cancel_attention", { id: 7 }],
     ]);
   });
 

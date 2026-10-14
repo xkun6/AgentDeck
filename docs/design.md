@@ -1136,20 +1136,24 @@ interface RemoteStatus {
 - **设置页「连接诊断」**（手机端设置页，通知 / 后台运行小节之后）：显示最近 20 条（时间 + 事件 + 触发路径 + code，最新在上），「复制全部」把缓冲区全部条目的 JSON 写入剪贴板（`navigator.clipboard` 失败则展示可全选的文本框兜底），「清空」同时清掉持久化。
 
 **通知（attention）**：
-- sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。
+- sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。另外在 `permission_resolved`（审批在桌面 / 另一台手机处理、被取消或超时）时发一条 `kind: "resolved"` 的**撤回信号**（同样不发 judge 会话与已删除会话），不弹通知，只用来取消手机上对应的系统通知与应用内提示条。
 - 是否提醒完全由手机端决定（见下文手机端处理与 `docs/mobile.md`）。
 - 改动背景：v1 原设计用 `client.presence` 上报桌面窗口可见性，「桌面可见则不发」。真机测试发现 WebView2 在最小化、隐藏到托盘后 `document.visibilityState` 仍为 `visible`，手机永远收不到通知；且「人在不在电脑前」本身难以可靠判断。按用户决定（2026-10-14）删除 `client.presence` 与在线判定，改为手机端三档设置。
 - 摘要文本（`body`）：完成 = 「本轮已完成」；失败 = 「本轮失败：」+ 错误信息；审批 = 「Agent 请求审批：」+ 请求标题（`question` / `plan` / `mode` 类用固定句式）；调度 = `schedule.notice.message`。全部压成单行并截断到 120 字，只引用标题 / 错误 / 工具名，不含工具输入输出原文。`title` 取会话标题（缺省取首条消息预览，再缺省「未命名会话」）或调度名。
 ```ts
 interface AttentionNotice {
   id: string;                                   // 去重用
-  kind: "finished" | "failed" | "permission" | "schedule";
+  kind: "finished" | "failed" | "permission" | "schedule" | "resolved";
   agentId?: string;
+  requestId?: string;                           // permission / resolved：审批请求 id
+  permissionKind?: "tool" | "plan" | "question" | "mode" | "other"; // permission：审批类型（= AgentPermissionRequest.kind）
   title: string;                                // 会话标题或调度名
-  body: string;                                 // 中文摘要，≤ 120 字（不含工具输出原文）
+  body: string;                                 // 中文摘要，≤ 120 字（不含工具输出原文）；resolved 固定为「审批已处理」
   timestamp: number;
 }
 ```
+- **撤回（resolved）**：沿用同一个通知方法 `client.attention`，`kind: "resolved"` 带 `agentId` + `requestId`。手机收到后：（1）调用原生 `cancel_attention` 取消系统通知——系统通知 id 对审批类按 `agentId:requestId` 计算（`notificationIdFor`），permission 通知与撤回信号（各有自己的 `AttentionNotice.id`）因此指向同一条；完成 / 失败 / 调度仍按 `AttentionNotice.id`；（2）若应用内提示条正显示同一条审批（`kind: "permission"` 且 agentId / requestId 相同）则关掉。撤回不受「通知」档位与前后台影响；撤回先于异步发出的通知到达时，该通知不再发出。
+- **提示文案按 `permissionKind`**：提示条与会话列表角标——`question` 显示「待回答」，`plan` 显示「待确认计划」，其余（`tool` / `mode` / `other` 或缺省）显示「待审批」。会话列表读快照 `pendingPermissions[0].kind`。
 - 手机收到后按手机端设置「通知」（存手机本地，默认「总是通知」）处理：
   | 设置 | App 在后台 | App 在前台 |
   |---|---|---|

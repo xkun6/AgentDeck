@@ -45,6 +45,11 @@ class AttentionArgs {
   var agentId: String? = null
 }
 
+@InvokeArg
+class CancelAttentionArgs {
+  var id: Int = 0
+}
+
 @TauriPlugin
 class NativePlugin(private val activity: Activity) : Plugin(activity) {
   /** 冷启动时由点击通知拉起的目标；被前端取走一次后清空 */
@@ -144,6 +149,14 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
     } catch (e: Exception) {
       invoke.reject("发送通知失败：${e.message}")
     }
+  }
+
+  /** 取消一条已发出的 attention 通知（别处已处理审批时由前端撤回）；通知已不存在时无副作用 */
+  @Command
+  fun cancelAttention(invoke: Invoke) {
+    val args = invoke.parseArgs(CancelAttentionArgs::class.java)
+    NotificationManagerCompat.from(activity).cancel(args.id)
+    invoke.resolve()
   }
 
   private fun channelOf(kind: String): String =
