@@ -24,7 +24,7 @@ vi.mock("@/hooks/use-agent-session", () => ({
   humanizeSidecarError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
 }));
 
-import { RemoteSettingsSection } from "./remote-settings";
+import { PUBLIC_NETWORK_HINT, RemoteSettingsSection } from "./remote-settings";
 
 const ALL_MOCKS = [getSidecarSettings, setSidecarSettings, getRemoteStatus, createRemotePairing, revokeRemoteDevice];
 
@@ -76,6 +76,34 @@ function renderPage(options: { settings?: SidecarSettings; status?: RemoteStatus
 }
 
 describe("RemoteSettingsSection", () => {
+  afterEach(() => {
+    delete (window as { agentdeckDesktop?: unknown }).agentdeckDesktop;
+  });
+
+  it("所在网卡为公用网络的地址标红并给出提示；专用网络的地址不标", async () => {
+    (window as { agentdeckDesktop?: unknown }).agentdeckDesktop = {
+      networkCategories: async () => [
+        { address: "192.168.1.20", interfaceAlias: "以太网", category: "public" },
+        { address: "100.101.102.103", interfaceAlias: "Tailscale", category: "private" },
+      ],
+    };
+    renderPage();
+    const publicRow = (await screen.findByText("192.168.1.20:47631")).closest("li")!;
+    await waitFor(() => expect(publicRow.getAttribute("data-public")).toBe("true"));
+    expect(screen.getByText("公用网络")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(PUBLIC_NETWORK_HINT);
+    expect(screen.getByText("100.101.102.103:47631").closest("li")!.getAttribute("data-public")).toBeNull();
+  });
+
+  it("检测结果为空（非 Windows / 失败）时不提示", async () => {
+    (window as { agentdeckDesktop?: unknown }).agentdeckDesktop = { networkCategories: async () => [] };
+    renderPage();
+    await screen.findByText("192.168.1.20:47631");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByText("公用网络")).toBeNull();
+    expect(screen.queryByText(PUBLIC_NETWORK_HINT)).toBeNull();
+  });
+
   it("未连接 sidecar 时给出提示", () => {
     renderPage({ connected: false });
     expect(screen.getByText(/Agent 服务未连接/)).toBeTruthy();

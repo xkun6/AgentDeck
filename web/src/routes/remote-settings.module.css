@@ -97,6 +97,14 @@
   white-space: nowrap;
 }
 
+.addressRow[data-public="true"] .address {
+  color: var(--h-danger);
+}
+
+.tag[data-tone="danger"] {
+  color: var(--h-danger);
+}
+
 .tag[data-on="true"] {
   color: var(--h-ok);
   background: var(--h-ok-soft);

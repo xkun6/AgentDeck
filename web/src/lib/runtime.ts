@@ -292,6 +292,13 @@ export interface FsListInput {
   showHidden?: boolean;
 }
 
+/** Rust `network_categories` 命令的一行（docs/design.md 4.31「网络类别检测」）；非 Windows / 检测失败时命令返回空数组。 */
+export interface NetworkCategoryInfo {
+  address: string;
+  interfaceAlias: string;
+  category: "public" | "private" | "domain" | "unknown";
+}
+
 export interface FsListResult {
   path: string;
   parent: string | null;
@@ -360,6 +367,8 @@ declare global {
       readWorkspaceFile?(input: ReadWorkspaceFileInput): Promise<FilePreview>;
       /** 本地目录列表（Rust `fs_list`）。 */
       fsList?(input: FsListInput): Promise<FsListResult>;
+      /** 本机 IPv4 地址所在网卡的 Windows 网络类别（Rust `network_categories`）。 */
+      networkCategories?(): Promise<NetworkCategoryInfo[]>;
       writeWorkspaceFile?(input: WriteWorkspaceFileInput): Promise<WriteWorkspaceFileResult>;
       /** Git ops backing the review pane (issue #328). */
       git?: AgentGitBridge;

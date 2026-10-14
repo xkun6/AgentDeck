@@ -224,6 +224,14 @@ describe("tauri bridge", () => {
   });
 });
 
+describe("tauri bridge network_categories", () => {
+  it("networkCategories 无参调用 network_categories", async () => {
+    await installTauriBridge();
+    await window.agentdeckDesktop?.networkCategories?.();
+    expect(mockInvoke).toHaveBeenCalledWith("network_categories", undefined);
+  });
+});
+
 describe("tauri bridge fs_list", () => {
   it("fsList 按仓库惯例把参数包在 input 里调 fs_list", async () => {
     await installTauriBridge();

@@ -17,6 +17,10 @@ const SETTINGS_KEY = ["agentdeck", "sidecar-settings"] as const;
 const MIN_PORT = 1024;
 const MAX_PORT = 65_535;
 
+/** design.md 4.31「网络类别检测」给出的提示原文 */
+export const PUBLIC_NETWORK_HINT =
+  "该网络被 Windows 标为「公用」，防火墙会阻止手机连接。请在 设置 → 网络和 Internet → 该网络 中改为「专用网络」";
+
 const ADDRESS_LABELS: Record<RemoteAddress["kind"], string> = {
   lan: "局域网",
   tailscale: "Tailscale",
@@ -150,6 +154,19 @@ export function RemoteSettingsSection({ showHeading = true }: { showHeading?: bo
   const remote: RemoteStatus | undefined = status.data;
   const listening = remote?.listening === true;
 
+  // 网络类别（仅 Windows 桌面壳有；其它环境 / 检测失败 = 空，不提示）。回到窗口时重新检测，方便改完立刻看到结果
+  const addressKey = remote?.addresses.map((address) => address.host).join(",") ?? "";
+  const categories = useQuery({
+    queryKey: ["agentdeck", "network-categories", addressKey],
+    queryFn: async () => (await window.agentdeckDesktop?.networkCategories?.()) ?? [],
+    enabled: remote?.enabled === true && addressKey !== "",
+    retry: false,
+  });
+  const publicHosts = useMemo(
+    () => new Set((categories.data ?? []).filter((row) => row.category === "public").map((row) => row.address)),
+    [categories.data],
+  );
+
   // 二维码倒计时：只在有二维码时每秒刷新
   useEffect(() => {
     if (!pairing) return undefined;
@@ -255,10 +272,19 @@ export function RemoteSettingsSection({ showHeading = true }: { showHeading?: bo
           {remote.addresses.length > 0 ? (
             <ul className={s.addressList}>
               {remote.addresses.map((address) => (
-                <li key={`${address.host}:${address.port}`} className={s.addressRow}>
+                <li
+                  key={`${address.host}:${address.port}`}
+                  className={s.addressRow}
+                  data-public={publicHosts.has(address.host) ? "true" : undefined}
+                >
                   <span className={s.address}>
                     {address.host}:{address.port}
                   </span>
+                  {publicHosts.has(address.host) ? (
+                    <span className={s.tag} data-tone="danger">
+                      公用网络
+                    </span>
+                  ) : null}
                   <span className={s.tag}>{ADDRESS_LABELS[address.kind]}</span>
                 </li>
               ))}
@@ -266,6 +292,11 @@ export function RemoteSettingsSection({ showHeading = true }: { showHeading?: bo
           ) : (
             <p className={s.empty}>没有找到局域网或 Tailscale 地址，请确认电脑已连上 Wi-Fi / 有线网络或已登录 Tailscale。</p>
           )}
+          {publicHosts.size > 0 ? (
+            <p className={s.message} data-tone="error" role="alert">
+              {PUBLIC_NETWORK_HINT}
+            </p>
+          ) : null}
 
           <h3 className={s.subheading}>配对新手机</h3>
           {pairing ? (
