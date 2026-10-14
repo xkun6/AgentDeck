@@ -199,12 +199,24 @@ function canUseTool(
   cli: FakeCli,
   toolName: string,
   input: Record<string, unknown>,
-  ctx: { signal?: AbortSignal; toolUseId?: string; title?: string } = {},
+  ctx: {
+    signal?: AbortSignal;
+    toolUseId?: string;
+    title?: string;
+    suggestions?: unknown;
+    suppressAlwaysAllowRule?: boolean;
+    defaultToNo?: boolean;
+    blockedPath?: string;
+  } = {},
 ): Promise<ClaudePermissionResult> {
   return cli.options.canUseTool(toolName, input, {
     signal: ctx.signal ?? new AbortController().signal,
     ...(ctx.toolUseId ? { toolUseId: ctx.toolUseId } : {}),
     ...(ctx.title ? { title: ctx.title } : {}),
+    ...(ctx.suggestions !== undefined ? { suggestions: ctx.suggestions } : {}),
+    ...(ctx.suppressAlwaysAllowRule ? { suppressAlwaysAllowRule: true } : {}),
+    ...(ctx.defaultToNo ? { defaultToNo: true } : {}),
+    ...(ctx.blockedPath ? { blockedPath: ctx.blockedPath } : {}),
   });
 }
 
@@ -1234,6 +1246,189 @@ describe("ClaudeAgentSession", () => {
     });
     await expect(session.respondToPermission(third.id, { behavior: "deny" })).rejects.toMatchObject({
       code: "PERMISSION_NOT_FOUND",
+    });
+  });
+
+  describe("始终允许（permission_suggestions）", () => {
+    const BASH_SUGGESTIONS = [
+      {
+        type: "addRules",
+        rules: [{ toolName: "Bash", ruleContent: "git status" }],
+        behavior: "allow",
+        destination: "localSettings",
+      },
+    ];
+
+    async function openPermission(
+      toolName: string,
+      input: Record<string, unknown>,
+      ctx: Parameters<typeof canUseTool>[3],
+    ) {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("x");
+      const promise = canUseTool(h.clis[0]!, toolName, input, { toolUseId: "toolu_a", ...ctx });
+      const request = session.getPendingPermissions()[0]!;
+      return { h, session, events, promise, request };
+    }
+
+    test("有建议时追加 allow_session / allow_project，原始建议不进协议", async () => {
+      const { request, events } = await openPermission("Bash", { command: "git status" }, { suggestions: BASH_SUGGESTIONS });
+      expect(request.actions).toEqual([
+        { id: "allow", label: "允许一次", behavior: "allow" },
+        { id: "deny", label: "拒绝", behavior: "deny" },
+        {
+          id: "allow_session",
+          label: "本会话始终允许",
+          behavior: "allow",
+          persist: "session",
+          description: "仅本会话有效，不写入文件：Bash(git status)",
+        },
+        {
+          id: "allow_project",
+          label: "永久允许",
+          behavior: "allow",
+          persist: "permanent",
+          description: "写入项目的 .claude/settings.local.json：Bash(git status)",
+        },
+      ]);
+      expect(request.defaultDeny).toBeUndefined();
+      expect(JSON.stringify(events)).not.toContain("permission_suggestions");
+      expect(JSON.stringify(events)).not.toContain("destination");
+    });
+
+    test("allow_session 把建议的 destination 改写成 session 回传", async () => {
+      const { session, promise, request } = await openPermission(
+        "Bash",
+        { command: "git status" },
+        { suggestions: BASH_SUGGESTIONS },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_session" });
+      await expect(promise).resolves.toEqual({
+        behavior: "allow",
+        updatedInput: { command: "git status" },
+        updatedPermissions: [
+          {
+            type: "addRules",
+            rules: [{ toolName: "Bash", ruleContent: "git status" }],
+            behavior: "allow",
+            destination: "session",
+          },
+        ],
+      });
+    });
+
+    test("allow_project 把规则 / 目录改写成 localSettings，setMode 保持 session", async () => {
+      const { session, promise, request } = await openPermission(
+        "Edit",
+        { file_path: "a.txt" },
+        {
+          suggestions: [
+            { type: "addRules", rules: [{ toolName: "Edit" }], behavior: "allow", destination: "session" },
+            { type: "addDirectories", directories: ["C:/work"], destination: "session" },
+            { type: "setMode", mode: "acceptEdits", destination: "session" },
+          ],
+        },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_project" });
+      await expect(promise).resolves.toMatchObject({
+        behavior: "allow",
+        updatedPermissions: [
+          { type: "addRules", rules: [{ toolName: "Edit" }], destination: "localSettings" },
+          { type: "addDirectories", directories: ["C:/work"], destination: "localSettings" },
+          { type: "setMode", mode: "acceptEdits", destination: "session" },
+        ],
+      });
+    });
+
+    test("普通「允许一次」不带 updatedPermissions", async () => {
+      const { session, promise, request } = await openPermission(
+        "Bash",
+        { command: "git status" },
+        { suggestions: BASH_SUGGESTIONS },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow" });
+      await expect(promise).resolves.toEqual({ behavior: "allow", updatedInput: { command: "git status" } });
+    });
+
+    test("suppress_always_allow_rule 为 true 时不显示任何始终允许入口", async () => {
+      const { request } = await openPermission(
+        "Bash",
+        { command: "rm x" },
+        { suggestions: BASH_SUGGESTIONS, suppressAlwaysAllowRule: true },
+      );
+      expect(request.actions?.map((a) => a.id)).toEqual(["allow", "deny"]);
+    });
+
+    test("default_to_no 为 true 时请求带 defaultDeny", async () => {
+      const { request } = await openPermission("Bash", { command: "rm x" }, { defaultToNo: true });
+      expect(request.defaultDeny).toBe(true);
+    });
+
+    test("受限路径补充到说明里", async () => {
+      const { request } = await openPermission(
+        "Read",
+        { file_path: "D:/other/a.txt" },
+        { blockedPath: "D:/other" },
+      );
+      expect(request.description).toBe("受限路径：D:/other");
+    });
+
+    test("仅 setMode 的建议只有本会话档，bypassPermissions 不进永久档，非允许规则被丢弃", async () => {
+      const onlyMode = await openPermission(
+        "Edit",
+        { file_path: "a.txt" },
+        { suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }] },
+      );
+      expect(onlyMode.request.actions?.map((a) => a.id)).toEqual(["allow", "deny", "allow_session"]);
+      expect(onlyMode.request.actions?.[2]?.description).toBe(
+        "仅本会话有效，不写入文件：切换为「自动接受编辑」模式",
+      );
+
+      const bypass = await openPermission(
+        "Bash",
+        { command: "x" },
+        {
+          suggestions: [
+            { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "x" }], behavior: "allow", destination: "session" },
+            { type: "setMode", mode: "bypassPermissions", destination: "session" },
+            { type: "addRules", rules: [{ toolName: "Bash" }], behavior: "deny", destination: "session" },
+            { type: "replaceRules", rules: [{ toolName: "Bash" }], behavior: "allow", destination: "session" },
+          ],
+        },
+      );
+      await bypass.session.respondToPermission(bypass.request.id, {
+        behavior: "allow",
+        selectedActionId: "allow_project",
+      });
+      const result = await bypass.promise;
+      expect(result).toMatchObject({ updatedPermissions: [{ type: "addRules", destination: "localSettings" }] });
+      expect(result.behavior === "allow" ? result.updatedPermissions : []).toHaveLength(1);
+    });
+
+    test("ExitPlanMode / AskUserQuestion 不提供始终允许", async () => {
+      const plan = await openPermission("ExitPlanMode", { plan: "p" }, { suggestions: BASH_SUGGESTIONS });
+      expect(plan.request.actions?.map((a) => a.id)).toEqual(["approve", "keep_planning"]);
+      const ask = await openPermission("AskUserQuestion", { questions: [] }, { suggestions: BASH_SUGGESTIONS });
+      expect(ask.request.actions?.map((a) => a.id)).toEqual(["allow", "deny"]);
+    });
+
+    test("回传 setMode 后同步本地 mode 并发 mode_changed（不重复调用 set_permission_mode）", async () => {
+      const { h, session, events, promise, request } = await openPermission(
+        "Edit",
+        { file_path: "a.txt" },
+        {
+          suggestions: [
+            { type: "addRules", rules: [{ toolName: "Edit" }], behavior: "allow", destination: "session" },
+            { type: "setMode", mode: "acceptEdits", destination: "session" },
+          ],
+        },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_session" });
+      await promise;
+      expect(events.at(-1)).toEqual({ type: "mode_changed", modeId: "acceptEdits" });
+      expect(h.clis[0]!.calls.setPermissionMode).toEqual([]);
     });
   });
 

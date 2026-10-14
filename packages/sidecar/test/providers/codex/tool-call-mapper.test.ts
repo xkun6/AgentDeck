@@ -389,4 +389,29 @@ describe("codex 协议小工具", () => {
       _meta: null,
     });
   });
+
+  test("buildPermissionDecision：selectedActionId 命中 decisions 表时直接用表里的决定", () => {
+    const decisions = new Map<string, unknown>([
+      ["allow_session", "acceptForSession"],
+      ["allow_project", { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } }],
+    ]);
+    expect(
+      buildPermissionDecision("command", { behavior: "allow", selectedActionId: "allow_session" }, decisions),
+    ).toEqual({ decision: "acceptForSession" });
+    expect(
+      buildPermissionDecision("command", { behavior: "allow", selectedActionId: "allow_project" }, decisions),
+    ).toEqual({ decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } } });
+    // 表里没有的 id（如 accept / decline）回退到按 behavior 构造
+    expect(buildPermissionDecision("command", { behavior: "deny", selectedActionId: "decline" }, decisions)).toEqual({
+      decision: "decline",
+    });
+    // 旧版 decline 的表项为 undefined：按 denied + 理由构造
+    expect(
+      buildPermissionDecision(
+        "legacy-exec",
+        { behavior: "deny", selectedActionId: "decline", message: "不行" },
+        new Map([["decline", undefined]]),
+      ),
+    ).toEqual({ decision: { denied: { rejection: "不行" } } });
+  });
 });

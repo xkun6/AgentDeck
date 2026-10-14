@@ -45,6 +45,16 @@ export function responseForAction(
   return { behavior: "deny", ...selected, ...(reason ? { message: reason } : {}) };
 }
 
+/**
+ * 按钮样式：「始终允许」类（persist）用次要样式避免误点；defaultDeny 时拒绝为主按钮、允许类不抢眼
+ * （每条 allow 都是 s.allowNeutral，包括普通「允许一次」）。
+ */
+function actionClass(action: AgentPermissionAction, defaultDeny: boolean): string {
+  if (action.behavior === "deny") return defaultDeny ? s.denyPrimary : s.deny;
+  if (action.persist) return s.allowAlways;
+  return defaultDeny ? s.allowNeutral : s.allow;
+}
+
 function ApprovalDetail({ request, fallback }: { request?: AgentPermissionRequest; fallback: string }) {
   const detail = request?.detail;
   if (!detail) {
@@ -117,6 +127,10 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
   const title = request?.title || defaultTitle(request);
   const description = request?.description ?? approval.reason;
   const denyActions = actions.filter((action) => action.behavior === "deny");
+  // defaultDeny（Claude default_to_no）：不预选「允许」，拒绝排在最前并作为主按钮
+  const defaultDeny = request?.defaultDeny === true;
+  const orderedActions = defaultDeny ? [...denyActions, ...actions.filter((action) => action.behavior === "allow")] : actions;
+  const hintActions = actions.filter((action) => action.description);
   // plan 的「继续规划」附的是给 Agent 的意见，其余是拒绝理由
   const reasonLabel = request?.kind === "plan" ? "意见" : "理由";
 
@@ -151,11 +165,14 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
       {error ? <div className={s.error} role="alert">发送失败：{error}</div> : null}
       {handledElsewhere ? <div className={s.handled} role="status">{HANDLED_ELSEWHERE_MESSAGE}</div> : null}
       <div className={s.actions}>
-        {actions.map((action) => (
+        {orderedActions.map((action) => (
           <button
             key={action.id}
             type="button"
-            className={action.behavior === "allow" ? s.allow : s.deny}
+            className={actionClass(action, defaultDeny)}
+            title={action.description}
+            data-persist={action.persist}
+            data-primary={defaultDeny && action.behavior === "deny" ? "true" : undefined}
             onClick={() => void respond(action)}
             disabled={responding !== null || handledElsewhere}
           >
@@ -175,6 +192,15 @@ function PermissionCard({ approval, onRespond, remaining }: ApprovalDialogProps)
           </button>
         ) : null}
       </div>
+      {hintActions.length > 0 ? (
+        <ul className={s.hints}>
+          {hintActions.map((action) => (
+            <li key={action.id}>
+              <span className={s.hintLabel}>{action.label}</span>：{action.description}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {reasonOpen ? (
         <input
           ref={reasonRef}

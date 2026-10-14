@@ -265,6 +265,13 @@ export interface ClaudeCanUseToolRequest {
   display_name?: string;
   description?: string;
   decision_reason?: string;
+  /** CLI 建议的权限更新（「始终允许」的来源）；形状见 ClaudePermissionUpdate，解析时宽松处理 */
+  permission_suggestions?: unknown;
+  /** 为 true 时宿主不得提供任何持久化 / 不再询问入口 */
+  suppress_always_allow_rule?: boolean;
+  /** 为 true 时宿主不得预选「允许」 */
+  default_to_no?: boolean;
+  blocked_path?: string;
 }
 
 /** initialize 应答里用到的部分 */
@@ -292,8 +299,41 @@ export interface ClaudeInitializeResponse {
 // 权限回调
 // ---------------------------------------------------------------------------
 
+/** 权限更新的落点：session 只在内存生效；localSettings 写 `<cwd>/.claude/settings.local.json` */
+export type ClaudePermissionDestination =
+  | "userSettings"
+  | "projectSettings"
+  | "localSettings"
+  | "session"
+  | "cliArg";
+
+export interface ClaudePermissionRule {
+  toolName: string;
+  ruleContent?: string;
+}
+
+/** CLI 的 PermissionUpdate（canUseTool 的 permission_suggestions / updatedPermissions，按 type 区分） */
+export type ClaudePermissionUpdate =
+  | {
+      type: "addRules" | "replaceRules" | "removeRules";
+      rules: ClaudePermissionRule[];
+      behavior: "allow" | "deny" | "ask";
+      destination: ClaudePermissionDestination;
+    }
+  | { type: "setMode"; mode: string; destination: ClaudePermissionDestination }
+  | {
+      type: "addDirectories" | "removeDirectories";
+      directories: string[];
+      destination: ClaudePermissionDestination;
+    };
+
 export type ClaudePermissionResult =
-  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | {
+      behavior: "allow";
+      updatedInput: Record<string, unknown>;
+      /** 「始终允许」：回传改写过 destination 的 permission_suggestions */
+      updatedPermissions?: ClaudePermissionUpdate[];
+    }
   | { behavior: "deny"; message: string; interrupt?: boolean };
 
 export interface ClaudeCanUseToolContext {
@@ -304,6 +344,11 @@ export interface ClaudeCanUseToolContext {
   displayName?: string;
   description?: string;
   decisionReason?: string;
+  /** CLI 原始 permission_suggestions（未经解析，provider 内部处理） */
+  suggestions?: unknown;
+  suppressAlwaysAllowRule?: boolean;
+  defaultToNo?: boolean;
+  blockedPath?: string;
 }
 
 export type ClaudeCanUseTool = (

@@ -225,12 +225,18 @@ export type AgentTimelineItem =
   | { type: "compaction"; compactionId: string; status: "running" | "completed" | "failed";
       trigger?: "auto" | "manual"; preTokens?: number; error?: string };   // 上下文压缩，同 compactionId 后者覆盖前者（4.13）
 
-export interface AgentPermissionAction { id: string; label: string; behavior: "allow" | "deny" }
+export interface AgentPermissionAction {
+  id: string;                         // 约定 id：allow_session「本会话始终允许」、allow_project「永久允许」；其余由 provider 自定
+  label: string; behavior: "allow" | "deny";
+  persist?: "session" | "permanent";  // 「始终允许」类的持久化范围；前端据此用次要样式（ACP 的 optionId 不固定，不能只靠 id）
+  description?: string;               // 补充说明（永久规则内容与写入位置等），前端放 tooltip 与按钮下方说明行
+}
 export interface AgentPermissionRequest {
   id: string; provider: AgentProviderId; name: string;
   kind: "tool" | "plan" | "question" | "mode" | "other";
   title?: string; description?: string; input?: Record<string, unknown>;
   detail?: ToolCallDetail; actions?: AgentPermissionAction[];
+  defaultDeny?: boolean;              // true 时前端不得把「允许」类按钮作为默认 / 主按钮（Claude default_to_no）
 }
 export type AgentPermissionResponse =
   | { behavior: "allow"; selectedActionId?: string; updatedInput?: Record<string, unknown> }
@@ -1228,9 +1234,9 @@ interface AgentClient {
 
 ### 5.1 provider 要点（P3）
 
-- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14）、`stop_task { task_id }`（见 4.15），默认 30 秒超时；initialize 带 `forwardSubagentText` 与 `perTaskStopAffordance`（见 4.11 / 4.15）；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, toolUseID}` 或 `{behavior:"deny", message}`，`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
+- **Claude**（`providers/claude/claude-cli-session.ts`，协议类型自写于 `stream-json-types.ts`）：一个会话一个长生命周期 `claude` 子进程，参数 `--print --verbose --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio --setting-sources user,project,local [--permission-mode <m>] --allow-dangerously-skip-permissions [--model m] [--resume <id>]`；每轮向 stdin 写一条带 `uuid` 的 `user` 消息，以 `result.user_message_uuid` 识别中断后过期的 result。控制请求（我方 → CLI）：`initialize`（应答含 `models`、`current_permission_mode`、`commands`）、`interrupt`（外包 3 秒超时）、`set_model`、`set_permission_mode`、`mcp_status`、`mcp_reconnect { serverName }`（60 秒超时，见 4.14）、`stop_task { task_id }`（见 4.15），默认 30 秒超时；initialize 带 `forwardSubagentText` 与 `perTaskStopAffordance`（见 4.11 / 4.15）；CLI → 我方：`can_use_tool` → `permission_requested`，应答 `{behavior:"allow", updatedInput, updatedPermissions?, toolUseID}` 或 `{behavior:"deny", message}`（`updatedPermissions` 见 5.3「始终允许」），`control_cancel_request` 撤回挂起的权限请求；`keep_alive` 忽略；`system` 的 status 只用 requesting（4.12）与 compacting / 压缩结果，`compact_boundary` 见 4.13，`commands_changed` 整体替换斜杠命令缓存（4.14），其余子类型忽略。子进程意外退出 → `turn_failed`，下一轮自动以 `--resume` 重启。
   可执行文件定位顺序：「编程 Agent」页配置的路径（见 4.8；配置了就只用它，无效即不可用、不回退）→ 环境变量 `AGENTDECK_CLAUDE_PATH` → PATH 上的 `claude.exe` → 解析 npm `claude.cmd` shim 得到真实 exe → 报不可用；PATH 中位于 `node_modules` 内的目录一律跳过（`tauri:dev` 会把仓库 `node_modules/.bin` 加进 PATH）。**必须直接执行真实 exe（`shell:false`），不能经 .cmd**。
-- **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision: "accept" | "decline" | "cancel" }`；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
+- **Codex**：`codex app-server` 子进程；`initialize`（`clientInfo` + `capabilities.experimentalApi: true`）→ `initialized` 通知 → `thread/start { model?, cwd, approvalPolicy, sandbox }` → `turn/start { threadId, input:[{type:"text",text,text_elements:[]}] }`；处理通知 `item/agentMessage/delta`、`item/reasoning/summaryTextDelta`、`item/started`、`item/completed`、`turn/started`、`turn/completed`、`thread/tokenUsage/updated`；审批请求 `item/commandExecution/requestApproval`、`item/fileChange/requestApproval` 应答 `{ decision }`（`accept` / `acceptForSession` / `acceptWithExecpolicyAmendment` / `applyNetworkPolicyAmendment` / `decline` / `cancel`，见 5.3）；中断 `turn/interrupt { threadId, turnId }`（需先拿到 turn/started 的原生 turnId）；`model/list` 拉模型。
   模式预设：`read-only`（on-request + read-only）、`auto`（on-request + workspace-write，默认）、`full-access`（never + danger-full-access）。
   可执行文件定位：「编程 Agent」页配置的路径（见 4.8，规则同上）→ `AGENTDECK_CODEX_PATH` → PATH 上的 `codex.exe` → 解析 PATH 或 `%APPDATA%
 pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；同样跳过 `node_modules` 内的 PATH 目录，只运行用户本机全局安装的 codex。
@@ -1263,6 +1269,13 @@ pm` 下的 npm `codex.cmd` 得到全局安装的真实 exe → 报不可用；�
 
 Claude：
 - 权限 actions：普通工具 `allow`「允许一次」/ `deny`「拒绝」；计划（kind `plan`，detail `{type:"plan"}`）`approve`「批准计划」/ `keep_planning`「继续规划」；批准计划后自动切回 `default` 模式。
+- **始终允许**（`providers/claude/permission-suggestions.ts`）：`can_use_tool` 请求可带 `permission_suggestions`（PermissionUpdate 数组）、`suppress_always_allow_rule`、`default_to_no`、`blocked_path`（证据：claude.exe 2.1.299 的 zod schema）。仅 kind `tool` 且不是 `AskUserQuestion`、且 `suppress_always_allow_rule` 不为 true、且解析出至少一条可用建议时，在 `allow` / `deny` 之后追加：
+  - `allow_session`「本会话始终允许」（`persist: "session"`）：把建议里所有更新的 `destination` 改写成 `"session"` 后作为 `updatedPermissions` 回传（只在 CLI 内存里生效，不写盘）；
+  - `allow_project`「永久允许」（`persist: "permanent"`）：`addRules` / `addDirectories` 的 `destination` 改写成 `"localSettings"`（写 `<cwd>/.claude/settings.local.json`，不进版本库），`setMode` 保持 `"session"` 且 `bypassPermissions` 一律排除；没有任何规则 / 目录类建议（只有 setMode）时不提供该档；
+  - 只采纳 `addRules`（`behavior: "allow"`）、`setMode`、`addDirectories`；`replaceRules` / `removeRules` / deny 规则不属于「允许」语义，丢弃。每档的 `description` 写出规则内容与落点，如「写入项目的 .claude/settings.local.json：Bash(git status)」「仅本会话有效，不写入文件：切换为「自动接受编辑」模式」。
+  - 原始建议只保存在 provider 的待处理记录里（不进协议）；应答的 `selectedActionId` 是上述两个 id 时回传改写后的 `updatedPermissions`，其它 id（含 `allow`）不带。
+  - 回传的更新含 `setMode` 时 CLI 的模式已变：provider 同步本地 mode 并发 `mode_changed`（不再向 CLI 发 `set_permission_mode`），界面显示的模式与 CLI 一致。
+  - `default_to_no` 为 true → `AgentPermissionRequest.defaultDeny = true`；`blocked_path` 追加到说明（「受限路径：…」）。
 - detail 分布：Bash / PowerShell→shell（无 exitCode）、Read→read、Write→write、Edit / MultiEdit→edit、Grep / Glob / WebSearch→search、WebFetch→fetch、Task / Agent→sub_agent（见 4.11）、Skill→plain_text、MCP 等→unknown；TodoWrite 与 TaskCreate / TaskUpdate / TaskList 不发 `tool_call`，只发 `todo`（见下两条）。
 - Claude 的待办工具有两套（Claude Code 2.1.299 实测）：旧的 `TodoWrite`（input `todos[{content,status,activeForm}]`，整表覆盖，每次发一条 `todo`）只在 `CLAUDE_CODE_ENABLE_TASKS=false` 时启用；新的 `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` 默认启用，但仅当模型在内置名单内（Claude 3.x、Opus 4.0–4.7、Sonnet 4.0–4.6、Haiku 4.5）或设了 `CLAUDE_CODE_ENABLE_TODO_TOOLS=true` 时才会提供（Claude 5 系列不在名单内，AgentDeck 不注入该环境变量，所以 5 系列不出待办）。它们是延迟加载工具，模型要先调 `ToolSearch`（`select:TaskCreate,TaskUpdate,TaskList`）取回 schema，这一步是普通工具卡片。
 - 新 Task 工具的协议（实测，id 是字符串形式的自增数字，从 "1" 起）：
@@ -1283,14 +1296,19 @@ Claude：
 
 Codex（以本机 0.162.1 协议为准）：
 - 模式 `read-only` / `auto`（默认）/ `full-access`；`setMode` 只在切换后的下一轮带一次 approvalPolicy + sandboxPolicy。
-- 审批 actions：`accept`「允许」/ `decline`「拒绝」；拒绝时 `interrupt:true` 使本轮以 `turn_canceled` 结束；被拒绝的命令 tool_call 为 failed，error「用户拒绝了该操作」。
+- 审批 actions（`providers/codex/approval-actions.ts`，每个 action 的 id 对应一个 decision 值，应答按 `selectedActionId` 取回；未带 `selectedActionId` 时按 behavior / `interrupt` 回 `accept` / `decline` / `cancel`）：
+  - 命令审批 `item/commandExecution/requestApproval`：params 带 `availableDecisions`（实验 API，AgentDeck 已声明 `experimentalApi`）时**只呈现其中列出的决定**；没有时给 `accept` / `acceptForSession` / `decline` / `cancel`，且带 `proposedExecpolicyAmendment` 时再补一项永久允许。
+  - 映射：`accept`「允许」（有任何「始终」变体时标签改为「允许一次」）、`decline`「拒绝」、`cancel`「拒绝并中断本轮」（Codex 文档：拒绝且立即中断回合）、`acceptForSession` → `allow_session`「本会话始终允许」、`{acceptWithExecpolicyAmendment:{execpolicy_amendment}}` → `allow_project`「永久允许」（description「以后允许以 `<前缀>` 开头的命令（写入 Codex 执行策略）」）、`{applyNetworkPolicyAmendment:{network_policy_amendment:{host,action}}}` → `network_allow:<host>`「始终允许访问 host」/ `network_deny:<host>`「始终禁止访问 host」（后者 behavior 为 deny）。展示顺序固定：允许一次、拒绝、各种始终允许、拒绝并中断。
+  - 文件改动 `item/fileChange/requestApproval`：`accept` / `acceptForSession` / `decline` / `cancel`（decision 枚举与命令审批的前缀一致，没有 execpolicy / 网络策略）。
+  - 旧版 `execCommandApproval` / `applyPatchApproval`（ReviewDecision）：`approved` / `approved_for_session`（`allow_session`）/ `denied`（带理由）/ `abort`。
+  - 拒绝时 `interrupt:true`（或点「拒绝并中断本轮」）使本轮以 `turn_canceled` 结束；被拒绝的命令 tool_call 为 failed，error「用户拒绝了该操作」。
 - 多文件 fileChange 的 detail 只显示第一个文件，完整列表在 `metadata.files`；新增文件为 `write` detail。
 - `turn_completed.usage` 的 token 数为本轮合计：取本轮内 `thread/tokenUsage/updated` 的 `total`（缺省读 `total_token_usage`）相对本轮起点的差值（起点 = 本轮首条更新的 total − last）；没有 total 时退回 last。上下文窗口字段仍取最近一次 last。
 - 子进程意外退出后下一轮自动重启并 `thread/resume`。
 
 ACP：
 - models / modes 只有建会话后才可得；首次建会话前 `provider.listModels` 返回空，之后返回最近一次会话的缓存。
-- 权限 actions 为 `{ id: optionId, label: name, behavior }`，可能含 allow_once / allow_always / reject_once / reject_always 多项，前端按 actions 渲染并回传 `selectedActionId`。
+- 权限 actions 为 `{ id: optionId, label: name, behavior }`，可能含 allow_once / allow_always / reject_once / reject_always 多项，前端按 actions 渲染并回传 `selectedActionId`。`allow_always` / `reject_always` 的标签统一为「始终允许」/「始终拒绝」（agent 的原名放进 `description`「生效范围由 Agent 决定（原选项：…）」），`allow_always` 标记 `persist: "permanent"`（ACP 协议不区分本会话 / 永久，按更谨慎的处理，前端用次要样式）；`allow_once` / `reject_once` 沿用 agent 给的名字。本期不做 ACP elicitation（SDK 0.17.1 没有 handler）。
 - `turn_failed.code`：`REFUSAL`、`PROCESS_EXITED`、`ACP_<错误码>`；进程崩溃后该 agent 不可再用（再 send 返回 `PROVIDER_UNAVAILABLE`），前端应提示新建会话。
 - 工具 `name` 为 ACP kind（如 execute），完整标题在 `metadata.title`。
 - `turn_completed.usage` 的 token 数只取本轮 `PromptResponse.usage`；本轮应答没带 usage 时不带 token 字段（不沿用上一轮的值），上下文窗口 / 费用字段仍为最新值。
@@ -1305,6 +1323,7 @@ ACP：
 5. **审批**：`ApprovalDialog` 抽到 `components/chat/`，按 `AgentPermissionRequest.actions` 渲染多按钮。
    - **拒绝 / 继续规划附理由**：`PermissionCard` 在按钮行末尾有「理由」入口（`kind: "plan"` 时叫「意见」），默认折叠；点开出一个单行输入（自动聚焦，手机端等软键盘升起后 `scrollIntoView` 到可视区），在输入框回车（输入法选词中的回车除外）等同点第一个拒绝类按钮，或直接点任一拒绝类按钮提交；理由去首尾空白后非空才作为 `AgentPermissionResponse` deny 的 `message` 回传，允许类按钮忽略理由，不展开时与原来完全一致（不增加常规操作步骤）。提问卡（`QuestionCard`）不提供。各 provider 对 `message` 的处理：Claude 作为 `deny.message` 回给 CLI（计划的「继续规划」同样，缺省文案仍是「用户希望继续完善计划，暂不执行」）；Codex 旧版协议（`legacy-exec` / `legacy-patch`）放进 `denied.rejection`，v2 的 `decision: "decline"` 协议本身没有理由字段，理由被丢弃（仅出现在 AgentDeck 的 `permission_resolved` 事件里）；ACP 的 `RequestPermissionOutcome` 只有 `optionId`，同样无法传递理由；mock 会在回复里回显收到的理由。
    - **计划用 Markdown 渲染**：`detail.type === "plan"` 的正文复用时间线助手文本的 `MessageText`（Streamdown），容器最高 320px、超出滚动。
+   - **多按钮与「始终允许」**：`actions` 按序渲染，窄屏（≤640px 或触屏）自动换行铺开，按钮触控区 ≥44px；带 `persist` 的动作（`allow_session` / `allow_project` / ACP `allow_always` 等）用虚线描边的次要样式，且有 `description` 的动作其说明在按钮下方另起一行列出（同时是按钮 tooltip，手机没有 hover），不增加确认弹窗。`defaultDeny` 为 true 时拒绝类按钮排到最前并作为主按钮（加粗描边），允许类用中性描边，不自动聚焦任何允许按钮。
    - **标签按类型区分**（`web/src/lib/permission-label.ts`）：提示条、手机会话列表角标（取快照 `pendingPermissions[0].kind`，无则取运行时首条审批）、桌面面板卡片（「N 待审批」）：`question` →「待回答」，`plan` →「待确认计划」，其余「待审批」；看板关联会话角标同理为「等待回答 / 等待确认计划 / 等待审批」。
 6. **新建会话**：composer 上的模型选择器改为「Agent（provider）+ 模型 + 模式」，工作目录沿用 workspace picker。
 

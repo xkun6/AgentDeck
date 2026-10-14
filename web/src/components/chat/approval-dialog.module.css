@@ -93,7 +93,10 @@
 }
 
 .allow,
-.deny {
+.deny,
+.allowAlways,
+.allowNeutral,
+.denyPrimary {
   border-radius: 0;
   cursor: pointer;
   font-family: var(--h-font-cn);
@@ -139,7 +142,10 @@
 }
 
 .allow:disabled,
-.deny:disabled {
+.deny:disabled,
+.allowAlways:disabled,
+.allowNeutral:disabled,
+.denyPrimary:disabled {
   cursor: wait;
   opacity: 0.65;
 }
@@ -156,7 +162,70 @@
   color: var(--h-text);
 }
 
+/* 「始终允许」类：次要样式（描边、不填充），避免与「允许一次」混淆 */
+.allowAlways {
+  border: 1px dashed var(--h-ok);
+  background: transparent;
+  color: var(--h-text);
+}
+
+/* defaultDeny：允许类不抢眼，拒绝为主按钮 */
+.allowNeutral {
+  border: 1px solid var(--h-line);
+  background: transparent;
+  color: var(--h-text);
+}
+
+.denyPrimary {
+  border: 1px solid var(--h-text);
+  background: var(--h-bg-chip);
+  color: var(--h-text);
+  font-weight: 600;
+}
+
 .allow:focus-visible,
-.deny:focus-visible {
+.deny:focus-visible,
+.allowAlways:focus-visible,
+.allowNeutral:focus-visible,
+.denyPrimary:focus-visible {
   outline: var(--h-focus-outline);
+}
+
+/* 动作说明（永久规则内容与写入位置等） */
+.hints {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--h-text-2);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.hintLabel {
+  color: var(--h-text);
+}
+
+/* 手机 / 触屏：按钮换行铺开，触控区 >= 44px */
+@media (max-width: 640px), (pointer: coarse) {
+  .actions {
+    gap: 8px;
+  }
+
+  .allow,
+  .deny,
+  .allowAlways,
+  .allowNeutral,
+  .denyPrimary,
+  .reasonToggle {
+    min-height: 44px;
+  }
+
+  .allow,
+  .deny,
+  .allowAlways,
+  .allowNeutral,
+  .denyPrimary {
+    flex: 1 1 40%;
+  }
 }

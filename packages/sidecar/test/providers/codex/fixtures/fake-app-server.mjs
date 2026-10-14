@@ -1,7 +1,7 @@
 // 假的 `codex app-server`：按行读 JSON-RPC，按剧本回放通知与审批请求（字段形状取自 codex-cli 0.162.1）。
 // 用法：node fake-app-server.mjs app-server
 // 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
-// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
+// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / shellavail / shellpolicy / legacyexec / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
 // thread/compact/start 按 compact 剧本开一个回合；mcpServerStatus/list 分两页返回三个服务器；config/mcpServer/reload 回 {}。
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
@@ -66,6 +66,15 @@ function tokenUsage(turnId) {
   notify("thread/tokenUsage/updated", { ...base(turnId), tokenUsage: { total: last, last, modelContextWindow: 200000 } });
 }
 
+async function commandApprovalVariant(turnId, extra) {
+  const answer = await serverRequest("item/commandExecution/requestApproval", {
+    kind: "command", ...base(turnId), itemId: "exec_v", startedAtMs: Date.now(), environmentId: null,
+    reason: "需要运行命令", command: "git status", cwd: "C:/work", ...extra,
+  });
+  await agentMessage(turnId, "msg_v", [`decision:${JSON.stringify(answer?.result?.decision)}`]);
+  completeTurn(turnId, answer?.result?.decision === "cancel" ? "interrupted" : "completed");
+}
+
 const scenarios = {
   async hello(turnId) {
     notify("item/started", { ...base(turnId), item: { type: "reasoning", id: "rs_1", summary: [], content: [] } });
@@ -121,6 +130,34 @@ const scenarios = {
       return;
     }
     await agentMessage(turnId, "msg_shell", [accepted ? "done" : "skipped"]);
+    completeTurn(turnId, "completed");
+  },
+
+  // 命令审批的变体：availableDecisions（含全部五种决定）/ 只有 proposedExecpolicyAmendment / 无任何附加字段的旧行为
+  async shellavail(turnId) {
+    await commandApprovalVariant(turnId, {
+      proposedExecpolicyAmendment: ["git", "status"],
+      availableDecisions: [
+        "accept",
+        "acceptForSession",
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } },
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "example.com", action: "allow" } } },
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "evil.test", action: "deny" } } },
+        "cancel",
+      ],
+    });
+  },
+
+  async shellpolicy(turnId) {
+    await commandApprovalVariant(turnId, { proposedExecpolicyAmendment: ["npm", "test"] });
+  },
+
+  // 旧版 execCommandApproval / applyPatchApproval（ReviewDecision）
+  async legacyexec(turnId) {
+    const answer = await serverRequest("execCommandApproval", {
+      conversationId: THREAD_ID, callId: "legacy_1", command: ["ls", "-la"], cwd: "C:/work", reason: "旧版审批", parsedCmd: [],
+    });
+    await agentMessage(turnId, "msg_legacy", [`decision:${JSON.stringify(answer?.result?.decision)}`]);
     completeTurn(turnId, "completed");
   },
 

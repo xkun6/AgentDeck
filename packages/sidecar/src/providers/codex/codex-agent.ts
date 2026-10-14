@@ -53,6 +53,12 @@ import {
   CodexAppServerRpcError,
   type JsonRpcId,
 } from "./app-server-transport.js";
+import {
+  commandApprovalActions,
+  fileChangeApprovalActions,
+  legacyApprovalActions,
+  type CodexApprovalActions,
+} from "./approval-actions.js";
 import { describeCodexLaunch, resolveCodexLaunch, type CodexLaunch } from "./launch.js";
 import { CodexSubagentRouter } from "./subagent-router.js";
 import {
@@ -838,6 +844,8 @@ interface PendingPermission {
   request: AgentPermissionRequest;
   kind: PermissionKind;
   rpcId: JsonRpcId;
+  /** actionId → decision 值（命令 / 文件 / 旧版审批）；应答时按 selectedActionId 取回 */
+  decisions?: ReadonlyMap<string, unknown>;
   resolve: (result: unknown) => void;
 }
 
@@ -862,19 +870,27 @@ interface CodexSessionDeps {
   onClosed?: (session: CodexAgentSession) => void;
 }
 
-/** 把 AgentPermissionResponse 转成 codex 期望的应答体 */
+/**
+ * 把 AgentPermissionResponse 转成 codex 期望的应答体。
+ * decisions：审批请求生成 actions 时记下的 actionId → decision 值（含 acceptForSession、execpolicy / 网络策略修订等），
+ * 带 selectedActionId 且命中时直接用；否则按 behavior / interrupt 回 accept / decline / cancel。
+ */
 export function buildPermissionDecision(
   kind: PermissionKind,
   response: AgentPermissionResponse,
+  decisions?: ReadonlyMap<string, unknown>,
 ): unknown {
   const allow = response.behavior === "allow";
   const cancel = response.behavior === "deny" && response.interrupt === true;
+  const chosen =
+    response.selectedActionId !== undefined ? decisions?.get(response.selectedActionId) : undefined;
   switch (kind) {
     case "command":
     case "file":
-      return { decision: allow ? "accept" : cancel ? "cancel" : "decline" };
+      return { decision: chosen ?? (allow ? "accept" : cancel ? "cancel" : "decline") };
     case "legacy-exec":
     case "legacy-patch":
+      if (chosen !== undefined) return { decision: chosen };
       if (allow) return { decision: "approved" };
       if (cancel) return { decision: "abort" };
       return {
@@ -1113,7 +1129,7 @@ export class CodexAgentSession implements AgentSession {
     }
     this.pending.delete(requestId);
     this.emit({ type: "permission_resolved", requestId, response });
-    pending.resolve(buildPermissionDecision(pending.kind, response));
+    pending.resolve(buildPermissionDecision(pending.kind, response, pending.decisions));
   }
 
   async interrupt(): Promise<void> {
@@ -1248,10 +1264,10 @@ export class CodexAgentSession implements AgentSession {
       {
         title: "会话",
         rows: buildRows([
-          ["线程 ID", this.threadId],
-          ["工作目录", this.deps.cwd],
-          ["模型", this.model ?? "默认（跟随设置）"],
-          ["模式", modeLabel ? `${modeLabel}（${this.modeId}）` : this.modeId],
+        ["线程 ID", this.threadId],
+        ["工作目录", this.deps.cwd],
+        ["模型", this.model ?? "默认（跟随设置）"],
+        ["模式", modeLabel ? `${modeLabel}（${this.modeId}）` : this.modeId],
         ]),
       },
     ];
@@ -1871,6 +1887,7 @@ export class CodexAgentSession implements AgentSession {
     kind: PermissionKind,
     rpcId: JsonRpcId,
     request: Omit<AgentPermissionRequest, "id" | "provider" | "kind" | "actions">,
+    approval?: CodexApprovalActions,
   ): Promise<unknown> {
     if (this.closed) {
       return Promise.resolve(
@@ -1881,11 +1898,17 @@ export class CodexAgentSession implements AgentSession {
       id: randomUUID(),
       provider: this.provider,
       kind: "tool",
-      actions: PERMISSION_ACTIONS.map((a) => ({ ...a })),
+      actions: (approval?.actions ?? PERMISSION_ACTIONS).map((a) => ({ ...a })),
       ...request,
     };
     return new Promise((resolve) => {
-      this.pending.set(full.id, { request: full, kind, rpcId, resolve });
+      this.pending.set(full.id, {
+        request: full,
+        kind,
+        rpcId,
+        ...(approval ? { decisions: approval.decisions } : {}),
+        resolve,
+      });
       const turn = this.active;
       this.emit({
         type: "permission_requested",
@@ -1906,13 +1929,18 @@ export class CodexAgentSession implements AgentSession {
     const cwd = str(params?.cwd) ?? this.deps.cwd;
     const reason = str(params?.reason);
     const writeStdin = params?.kind === "writeStdin";
-    return this.requestPermission("command", rpcId, {
-      name: "shell",
-      title: writeStdin ? "向终端写入输入" : command ? `运行命令：${command}` : "运行命令",
-      ...(reason ? { description: reason } : {}),
-      input: { command, cwd, ...(itemId ? { itemId } : {}) },
-      detail: { type: "shell", command, cwd },
-    });
+    return this.requestPermission(
+      "command",
+      rpcId,
+      {
+        name: "shell",
+        title: writeStdin ? "向终端写入输入" : command ? `运行命令：${command}` : "运行命令",
+        ...(reason ? { description: reason } : {}),
+        input: { command, cwd, ...(itemId ? { itemId } : {}) },
+        detail: { type: "shell", command, cwd },
+      },
+      commandApprovalActions(params),
+    );
   }
 
   private handleFileChangeApproval(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
@@ -1926,13 +1954,18 @@ export class CodexAgentSession implements AgentSession {
         ? cached.detail
         : { type: "unknown", input: { reason: reason ?? null, grantRoot: grantRoot ?? null }, output: null };
     const filePath = detail.type === "edit" || detail.type === "write" ? detail.filePath : undefined;
-    return this.requestPermission("file", rpcId, {
-      name: "apply_patch",
-      title: filePath ? `修改文件：${filePath}` : "修改文件",
-      ...(reason ? { description: reason } : {}),
-      input: { ...(itemId ? { itemId } : {}), ...(grantRoot ? { grantRoot } : {}) },
-      detail,
-    });
+    return this.requestPermission(
+      "file",
+      rpcId,
+      {
+        name: "apply_patch",
+        title: filePath ? `修改文件：${filePath}` : "修改文件",
+        ...(reason ? { description: reason } : {}),
+        input: { ...(itemId ? { itemId } : {}), ...(grantRoot ? { grantRoot } : {}) },
+        detail,
+      },
+      fileChangeApprovalActions(params),
+    );
   }
 
   private handleLegacyExecApproval(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
@@ -1940,13 +1973,18 @@ export class CodexAgentSession implements AgentSession {
     const command = normalizeCommandExecutionCommand(params?.command) ?? "";
     const cwd = str(params?.cwd) ?? this.deps.cwd;
     const reason = str(params?.reason);
-    return this.requestPermission("legacy-exec", rpcId, {
-      name: "shell",
-      title: command ? `运行命令：${command}` : "运行命令",
-      ...(reason ? { description: reason } : {}),
-      input: { command, cwd },
-      detail: { type: "shell", command, cwd },
-    });
+    return this.requestPermission(
+      "legacy-exec",
+      rpcId,
+      {
+        name: "shell",
+        title: command ? `运行命令：${command}` : "运行命令",
+        ...(reason ? { description: reason } : {}),
+        input: { command, cwd },
+        detail: { type: "shell", command, cwd },
+      },
+      legacyApprovalActions("命令"),
+    );
   }
 
   private handleLegacyPatchApproval(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
@@ -1959,13 +1997,18 @@ export class CodexAgentSession implements AgentSession {
     const reason = str(params?.reason);
     const detail: ToolCallDetail = mapped?.detail ?? { type: "unknown", input: params, output: null };
     const filePath = detail.type === "edit" || detail.type === "write" ? detail.filePath : undefined;
-    return this.requestPermission("legacy-patch", rpcId, {
-      name: "apply_patch",
-      title: filePath ? `修改文件：${filePath}` : "修改文件",
-      ...(reason ? { description: reason } : {}),
-      input: { callId },
-      detail,
-    });
+    return this.requestPermission(
+      "legacy-patch",
+      rpcId,
+      {
+        name: "apply_patch",
+        title: filePath ? `修改文件：${filePath}` : "修改文件",
+        ...(reason ? { description: reason } : {}),
+        input: { callId },
+        detail,
+      },
+      legacyApprovalActions("文件改动"),
+    );
   }
 
   private handleElicitation(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {

@@ -189,12 +189,27 @@ export function permissionBehavior(kind: PermissionOptionKind): "allow" | "deny"
   return kind === "allow_once" || kind === "allow_always" ? "allow" : "deny";
 }
 
+/**
+ * options → actions（id 为 optionId）。*_always 选项给统一的中文标签「始终允许 / 始终拒绝」
+ * （agent 的原名常是英文或带具体规则，放进 description）；始终允许标记 persist，前端用次要样式。
+ * 生效范围由 agent 自己决定（ACP 协议不区分本会话 / 永久），因此按更谨慎的 permanent 处理。
+ */
 export function permissionActions(options: PermissionOption[]): AgentPermissionAction[] {
-  return options.map((option) => ({
-    id: option.optionId,
-    label: option.name,
-    behavior: permissionBehavior(option.kind),
-  }));
+  return options.map((option) => {
+    const base = { id: option.optionId, behavior: permissionBehavior(option.kind) };
+    if (option.kind !== "allow_always" && option.kind !== "reject_always") {
+      return { ...base, label: option.name };
+    }
+    const label = option.kind === "allow_always" ? "始终允许" : "始终拒绝";
+    return {
+      ...base,
+      label,
+      ...(option.kind === "allow_always" ? { persist: "permanent" as const } : {}),
+      ...(option.name && option.name !== label
+        ? { description: `生效范围由 Agent 决定（原选项：${option.name}）` }
+        : {}),
+    };
+  });
 }
 
 /**

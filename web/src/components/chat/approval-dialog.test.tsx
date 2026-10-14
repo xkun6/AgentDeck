@@ -415,3 +415,78 @@ describe("ApprovalDialog：Agent 提问（design.md 4.13）", () => {
     });
   });
 });
+
+describe("PermissionCard：始终允许与 defaultDeny", () => {
+  const ALWAYS_REQUEST: AgentPermissionRequest = {
+    id: "pa1",
+    provider: "claude",
+    name: "Bash",
+    kind: "tool",
+    detail: { type: "shell", command: "git status" },
+    actions: [
+      { id: "allow", label: "允许一次", behavior: "allow" },
+      { id: "deny", label: "拒绝", behavior: "deny" },
+      {
+        id: "allow_session",
+        label: "本会话始终允许",
+        behavior: "allow",
+        persist: "session",
+        description: "仅本会话有效，不写入文件：Bash(git status)",
+      },
+      {
+        id: "allow_project",
+        label: "永久允许",
+        behavior: "allow",
+        persist: "permanent",
+        description: "写入项目的 .claude/settings.local.json：Bash(git status)",
+      },
+    ],
+  };
+
+  it("始终允许类按钮标记 persist，回传对应 selectedActionId；动作说明显示在按钮下方并带 tooltip", async () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(ALWAYS_REQUEST)} onRespond={onRespond} />);
+
+    const project = screen.getByRole("button", { name: "永久允许" });
+    expect(project.getAttribute("data-persist")).toBe("permanent");
+    expect(project.getAttribute("title")).toBe("写入项目的 .claude/settings.local.json：Bash(git status)");
+    expect(screen.getByRole("button", { name: "本会话始终允许" }).getAttribute("data-persist")).toBe("session");
+    expect(screen.getByRole("button", { name: "允许一次" }).getAttribute("data-persist")).toBeNull();
+    // 说明行（手机没有 hover，tooltip 之外再显示一份）
+    expect(screen.getByText(/写入项目的 \.claude\/settings\.local\.json：Bash\(git status\)/, { selector: "li" })).toBeTruthy();
+
+    fireEvent.click(project);
+    await waitFor(() => expect(onRespond).toHaveBeenCalledTimes(1));
+    expect(onRespond.mock.calls[0]![1]).toEqual({ behavior: "allow", selectedActionId: "allow_project" });
+  });
+
+  it("没有说明的动作不渲染说明行", () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    const plain: AgentPermissionRequest = { ...ALWAYS_REQUEST, actions: ALWAYS_REQUEST.actions!.slice(0, 2) };
+    const { container } = render(<ApprovalDialog approval={approval(plain)} onRespond={onRespond} />);
+    expect(container.querySelector("ul")).toBeNull();
+  });
+
+  it("defaultDeny：拒绝排在最前并标为主按钮，允许类不带主按钮标记", () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval({ ...ALWAYS_REQUEST, defaultDeny: true })} onRespond={onRespond} />);
+    const labels = screen.getAllByRole("button").map((button) => button.textContent);
+    expect(labels).toEqual(["拒绝", "允许一次", "本会话始终允许", "永久允许", "理由"]);
+    expect(screen.getByRole("button", { name: "拒绝" }).getAttribute("data-primary")).toBe("true");
+    expect(screen.getByRole("button", { name: "允许一次" }).getAttribute("data-primary")).toBeNull();
+    expect(document.activeElement).not.toBe(screen.getByRole("button", { name: "允许一次" }));
+  });
+
+  it("未设置 defaultDeny 时保持原有顺序且无主按钮标记", () => {
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalDialog approval={approval(ALWAYS_REQUEST)} onRespond={onRespond} />);
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "允许一次",
+      "拒绝",
+      "本会话始终允许",
+      "永久允许",
+      "理由",
+    ]);
+    expect(screen.getByRole("button", { name: "拒绝" }).getAttribute("data-primary")).toBeNull();
+  });
+});

@@ -252,6 +252,45 @@ describe("ClaudeCliSession（假 claude 脚本）", () => {
     });
   });
 
+  test("can_use_tool 的 permission_suggestions 等字段交给回调，updatedPermissions 原样回传给 CLI", async () => {
+    const seen: unknown[] = [];
+    const session = start({
+      canUseTool: async (_tool, input, ctx) => {
+        seen.push({
+          suggestions: ctx.suggestions,
+          suppressAlwaysAllowRule: ctx.suppressAlwaysAllowRule,
+          defaultToNo: ctx.defaultToNo,
+          blockedPath: ctx.blockedPath,
+        });
+        return {
+          behavior: "allow",
+          updatedInput: input,
+          updatedPermissions: [
+            { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "git status" }], behavior: "allow", destination: "session" },
+          ],
+        };
+      },
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    session.sendUserMessage(userMessage("perm-sugg"));
+    const decision = JSON.parse(assistantText(await readTurn(iterator)).replace(/^decision:/, ""));
+    expect(seen).toEqual([
+      {
+        suggestions: [
+          { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "git status" }], behavior: "allow", destination: "localSettings" },
+        ],
+        suppressAlwaysAllowRule: true,
+        defaultToNo: true,
+        blockedPath: "/outside",
+      },
+    ]);
+    expect(decision.response).toMatchObject({
+      behavior: "allow",
+      toolUseID: "toolu_1",
+      updatedPermissions: [{ type: "addRules", destination: "session" }],
+    });
+  });
+
   test("权限 deny：应答带 message", async () => {
     const session = start({
       canUseTool: async () => ({ behavior: "deny", message: "用户拒绝了该操作" }),

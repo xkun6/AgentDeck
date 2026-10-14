@@ -419,6 +419,12 @@ export class ClaudeCliSession implements ClaudeCliHandle {
           ...optionalString("displayName", permission.display_name),
           ...optionalString("description", permission.description),
           ...optionalString("decisionReason", permission.decision_reason),
+          ...optionalString("blockedPath", permission.blocked_path),
+          ...(permission.permission_suggestions !== undefined
+            ? { suggestions: permission.permission_suggestions }
+            : {}),
+          ...(permission.suppress_always_allow_rule === true ? { suppressAlwaysAllowRule: true } : {}),
+          ...(permission.default_to_no === true ? { defaultToNo: true } : {}),
         },
       );
       this.respond({

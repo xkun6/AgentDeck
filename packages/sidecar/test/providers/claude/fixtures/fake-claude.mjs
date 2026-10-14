@@ -3,6 +3,7 @@
 //   hello        → system init + stream_event 增量 + assistant + result
 //   perm:<Tool>  → 发 can_use_tool 控制请求，收到应答后把应答原样写进 assistant 文本，再发 result
 //   cancel-perm  → 发 can_use_tool 后紧接着发 control_cancel_request，收到应答后同上
+//   perm-sugg    → 发带 permission_suggestions / suppress_always_allow_rule / default_to_no / blocked_path 的 can_use_tool
 //   hang         → 只发 system init，等 interrupt 控制请求后以 error_during_execution 结束本轮
 //   crash        → stderr 打印错误并以退出码 3 退出
 //   noisy        → 先输出一行非 JSON，再按 hello 回复
@@ -177,7 +178,7 @@ function backgroundScenario(uuid, race) {
   }, 50);
 }
 
-function requestPermission(requestId, toolName, cancel) {
+function requestPermission(requestId, toolName, cancel, extra = {}) {
   return new Promise((resolve) => {
     pendingResponses.set(requestId, resolve);
     send({
@@ -189,6 +190,7 @@ function requestPermission(requestId, toolName, cancel) {
         input: { file_path: "a.txt", content: "x" },
         tool_use_id: "toolu_1",
         title: `Claude wants to use ${toolName}`,
+        ...extra,
       },
     });
     if (cancel) {
@@ -220,6 +222,19 @@ async function handleUser(message) {
   }
   if (text === "background" || text === "background-race") {
     backgroundScenario(uuid, text === "background-race");
+    return;
+  }
+  if (text === "perm-sugg") {
+    // 带 permission_suggestions / suppress_always_allow_rule / default_to_no / blocked_path 的 can_use_tool
+    const response = await requestPermission(`perm-${++counter}`, "Bash", false, {
+      permission_suggestions: [
+        { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "git status" }], behavior: "allow", destination: "localSettings" },
+      ],
+      suppress_always_allow_rule: true,
+      default_to_no: true,
+      blocked_path: "/outside",
+    });
+    reply(uuid, `decision:${JSON.stringify(response)}`);
     return;
   }
   if (text.startsWith("perm:") || text === "cancel-perm") {

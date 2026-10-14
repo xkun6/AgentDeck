@@ -298,9 +298,17 @@ export type AgentTimelineItem =
   | { type: "notice"; text: string };
 
 export interface AgentPermissionAction {
+  /**
+   * 约定 id（design.md 5.3）：`allow_session` = 本会话始终允许，`allow_project` = 永久允许（写入项目 / 执行策略）；
+   * 其余 id 由 provider 自定（Claude allow/deny、Codex accept/decline/cancel、ACP optionId 等）。
+   */
   id: string;
   label: string;
   behavior: "allow" | "deny";
+  /** 「始终允许」类动作的持久化范围；前端据此用次要样式，避免误点（ACP 的 optionId 不固定，不能只靠 id 判断） */
+  persist?: "session" | "permanent";
+  /** 动作的补充说明（如永久规则内容与写入位置），前端放在 tooltip 与按钮下方的说明行 */
+  description?: string;
 }
 export interface AgentPermissionRequest {
   id: string;
@@ -312,6 +320,8 @@ export interface AgentPermissionRequest {
   input?: Record<string, unknown>;
   detail?: ToolCallDetail;
   actions?: AgentPermissionAction[];
+  /** 为 true 时前端不得把「允许」类按钮作为默认 / 主按钮（Claude `default_to_no`，高风险请求） */
+  defaultDeny?: boolean;
 }
 export type AgentPermissionResponse =
   | { behavior: "allow"; selectedActionId?: string; updatedInput?: Record<string, unknown> }

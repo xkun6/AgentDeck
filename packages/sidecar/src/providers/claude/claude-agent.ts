@@ -80,6 +80,12 @@ import {
   readQuestionAnswers,
   toQuestionToolDetail,
 } from "./tool-call-detail-parser.js";
+import {
+  alwaysAllowActions,
+  modeFromUpdates,
+  parsePermissionSuggestions,
+  updatesForAction,
+} from "./permission-suggestions.js";
 import type {
   ClaudeAssistantMessage,
   ClaudeCanUseTool,
@@ -92,6 +98,7 @@ import type {
   ClaudeOutputMessage,
   ClaudePermissionMode,
   ClaudePermissionResult,
+  ClaudePermissionUpdate,
   ClaudeResultMessage,
   ClaudeStatusSystemMessage,
   ClaudeStreamEvent,
@@ -538,6 +545,8 @@ interface PendingPermission {
   input: Record<string, unknown>;
   /** CLI 给出的 tool_use_id（与 toolUses 的键一致），回答问题后据此更新工具卡片的 input */
   toolUseId?: string;
+  /** CLI 给出的 permission_suggestions（解析后，provider 私有，不进协议）：「始终允许」两档的来源 */
+  suggestions?: ClaudePermissionUpdate[];
   resolve: (result: ClaudePermissionResult) => void;
   cleanup: () => void;
 }
@@ -755,10 +764,17 @@ export class ClaudeAgentSession implements AgentSession {
     }
     this.emit({ type: "permission_resolved", requestId, response });
     if (response.behavior === "allow") {
+      // 「本会话始终允许 / 永久允许」：回传改写过 destination 的建议；动作无效（无建议）时按普通允许
+      const updatedPermissions =
+        pending.suggestions && updatesForAction(response.selectedActionId, pending.suggestions);
       pending.resolve({
         behavior: "allow",
         updatedInput: response.updatedInput ?? pending.input,
+        ...(updatedPermissions ? { updatedPermissions } : {}),
       });
+      if (updatedPermissions) {
+        this.syncModeFromPermissionUpdates(updatedPermissions);
+      }
       // 批准计划后离开 plan 模式，切回进入 plan 之前的模式
       if (isPlan && this.mode === "plan") {
         await this.leavePlanMode().catch((error: unknown) => {
@@ -773,6 +789,19 @@ export class ClaudeAgentSession implements AgentSession {
         response.message ?? (isPlan ? "用户希望继续完善计划，暂不执行" : "用户拒绝了该操作"),
       ...(response.interrupt ? { interrupt: true } : {}),
     });
+  }
+
+  /** 回传的权限更新里含 setMode 时，CLI 的模式已变：同步本地状态并发 mode_changed，界面与 CLI 一致 */
+  private syncModeFromPermissionUpdates(updates: readonly ClaudePermissionUpdate[]): void {
+    const mode = modeFromUpdates(updates);
+    if (!mode || !CLAUDE_MODES.some((item) => item.id === mode) || mode === this.mode) {
+      return;
+    }
+    if (mode === "plan" && this.mode !== "plan") {
+      this.modeBeforePlan = this.mode;
+    }
+    this.mode = mode as ClaudePermissionMode;
+    this.emit({ type: "mode_changed", modeId: mode });
   }
 
   /**
@@ -1693,7 +1722,12 @@ export class ClaudeAgentSession implements AgentSession {
           name: toolName,
           input,
         })?.detail);
-    const description = options.description ?? options.decisionReason;
+    const baseDescription = options.description ?? options.decisionReason;
+    // CLI 标出的受限路径（如工作目录之外的路径）补在说明里，让用户知道为什么要审批
+    const description =
+      options.blockedPath && !isPlan && !question
+        ? [baseDescription, `受限路径：${options.blockedPath}`].filter(Boolean).join("\n")
+        : baseDescription;
     const kind: AgentPermissionRequest["kind"] = isPlan ? "plan" : question ? "question" : "tool";
     const title =
       kind === "plan"
@@ -1701,12 +1735,17 @@ export class ClaudeAgentSession implements AgentSession {
         : kind === "question"
           ? "Claude 有问题需要你回答"
           : (options.title ?? `允许使用 ${options.displayName ?? toolName}？`);
+    // 「始终允许」只给普通工具审批，且 CLI 明确要求不得提供时（suppress_always_allow_rule）不显示
+    const suggestions =
+      kind === "tool" && toolName !== CLAUDE_ASK_USER_QUESTION_TOOL && !options.suppressAlwaysAllowRule
+        ? parsePermissionSuggestions(options.suggestions)
+        : [];
     const actions =
       kind === "plan"
         ? PLAN_PERMISSION_ACTIONS
         : kind === "question"
           ? QUESTION_PERMISSION_ACTIONS
-          : TOOL_PERMISSION_ACTIONS;
+          : [...TOOL_PERMISSION_ACTIONS, ...alwaysAllowActions(suggestions)];
     const request: AgentPermissionRequest = {
       id: requestId,
       provider: this.provider,
@@ -1717,6 +1756,7 @@ export class ClaudeAgentSession implements AgentSession {
       input,
       ...(detail ? { detail } : {}),
       actions: actions.map((action) => ({ ...action })),
+      ...(kind === "tool" && options.defaultToNo ? { defaultDeny: true } : {}),
     };
 
     return new Promise<ClaudePermissionResult>((resolve) => {
@@ -1737,6 +1777,7 @@ export class ClaudeAgentSession implements AgentSession {
         request,
         input,
         ...(options.toolUseId ? { toolUseId: options.toolUseId } : {}),
+        ...(suggestions.length > 0 ? { suggestions } : {}),
         resolve,
         cleanup,
       });

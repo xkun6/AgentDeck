@@ -308,7 +308,13 @@ describe("AcpAgentSession 权限", () => {
       detail: { type: "shell", command: "rm -rf build" },
       actions: [
         { id: "opt-allow-once", label: "允许一次", behavior: "allow" },
-        { id: "opt-allow-always", label: "总是允许", behavior: "allow" },
+        {
+          id: "opt-allow-always",
+          label: "始终允许",
+          behavior: "allow",
+          persist: "permanent",
+          description: "生效范围由 Agent 决定（原选项：总是允许）",
+        },
         { id: "opt-reject", label: "拒绝", behavior: "deny" },
       ],
     });

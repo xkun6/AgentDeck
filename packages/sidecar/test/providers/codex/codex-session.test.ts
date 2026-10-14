@@ -262,9 +262,12 @@ describe("CodexAgentSession（假 app-server）", () => {
       name: "shell",
       description: "需要运行命令",
       detail: { type: "shell", command: "echo hi", cwd: "C:\\work" },
+      // 没有 availableDecisions 的旧行为：accept / acceptForSession / decline / cancel
       actions: [
-        { id: "accept", label: "允许", behavior: "allow" },
+        { id: "accept", label: "允许一次", behavior: "allow" },
         { id: "decline", label: "拒绝", behavior: "deny" },
+        { id: "allow_session", label: "本会话始终允许", behavior: "allow", persist: "session" },
+        { id: "cancel", label: "拒绝并中断本轮", behavior: "deny" },
       ],
     });
     expect(session.getPendingPermissions()).toHaveLength(1);
@@ -337,6 +340,142 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "cancel" });
     expect(events.at(-1)).toMatchObject({ type: "turn_canceled", reason: "interrupted" });
   });
+
+  /** 触发一个审批剧本并返回挂起的请求 */
+  async function openApproval(scenario: string) {
+    const session = await newSession();
+    const events = collect(session);
+    await session.startTurn(scenario);
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    return { session, events, request: request! };
+  }
+
+  test("availableDecisions：只呈现列出的决定；allow_project 回 acceptWithExecpolicyAmendment", async () => {
+    const { session, events, request } = await openApproval("shellavail");
+    expect(request.actions).toEqual([
+      { id: "accept", label: "允许一次", behavior: "allow" },
+      {
+        id: "allow_session",
+        label: "本会话始终允许",
+        behavior: "allow",
+        persist: "session",
+        description: "本会话内同类命令不再询问",
+      },
+      {
+        id: "allow_project",
+        label: "永久允许",
+        behavior: "allow",
+        persist: "permanent",
+        description: "以后允许以 `git status` 开头的命令（写入 Codex 执行策略）",
+      },
+      {
+        id: "network_allow:example.com",
+        label: "始终允许访问 example.com",
+        behavior: "allow",
+        persist: "permanent",
+        description: "写入 Codex 网络策略：以后允许访问 example.com",
+      },
+      {
+        id: "network_deny:evil.test",
+        label: "始终禁止访问 evil.test",
+        behavior: "deny",
+        description: "写入 Codex 网络策略：以后禁止访问 evil.test",
+      },
+      { id: "cancel", label: "拒绝并中断本轮", behavior: "deny" },
+    ]);
+    await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_project" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({
+      decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } },
+    });
+  });
+
+  test("availableDecisions：allow_session 回 acceptForSession，网络策略回 applyNetworkPolicyAmendment，cancel 回 cancel", async () => {
+    for (const [actionId, behavior, expected] of [
+      ["allow_session", "allow", "acceptForSession"],
+      [
+        "network_allow:example.com",
+        "allow",
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "example.com", action: "allow" } } },
+      ],
+      [
+        "network_deny:evil.test",
+        "deny",
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "evil.test", action: "deny" } } },
+      ],
+      ["cancel", "deny", "cancel"],
+    ] as const) {
+      const { session, events, request } = await openApproval("shellavail");
+      await session.respondToPermission(request.id, { behavior, selectedActionId: actionId });
+      await waitUntil(() => events.some(isTerminal));
+      const replies = received().filter((m) => m.method === undefined && m.result?.decision !== undefined);
+      expect(replies.at(-1)?.result).toEqual({ decision: expected });
+      await session.close();
+    }
+  }, 30_000);
+
+  test("只有 proposedExecpolicyAmendment 时补一项 allow_project", async () => {
+    const { session, events, request } = await openApproval("shellpolicy");
+    expect(request.actions?.map((a) => a.id)).toEqual(["accept", "decline", "allow_session", "allow_project", "cancel"]);
+    expect(request.actions?.find((a) => a.id === "allow_project")).toMatchObject({
+      label: "永久允许",
+      description: "以后允许以 `npm test` 开头的命令（写入 Codex 执行策略）",
+    });
+    await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_project" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({
+      decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["npm", "test"] } },
+    });
+  });
+
+  test("没有 selectedActionId 时按 behavior 回 accept / decline，不受 availableDecisions 影响", async () => {
+    const { session, events, request } = await openApproval("shellavail");
+    await session.respondToPermission(request.id, { behavior: "allow" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "accept" });
+  });
+
+  test("fileChange 审批：accept / acceptForSession / decline / cancel，allow_session 回 acceptForSession", async () => {
+    const { session, events, request } = await openApproval("patch");
+    expect(request.actions).toEqual([
+      { id: "accept", label: "允许一次", behavior: "allow" },
+      { id: "decline", label: "拒绝", behavior: "deny" },
+      {
+        id: "allow_session",
+        label: "本会话始终允许",
+        behavior: "allow",
+        persist: "session",
+        description: "本会话内对这些文件的修改不再询问",
+      },
+      { id: "cancel", label: "拒绝并中断本轮", behavior: "deny" },
+    ]);
+    await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_session" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "acceptForSession" });
+  });
+
+  test("旧版 execCommandApproval：allow_session 回 approved_for_session，拒绝带理由回 denied", async () => {
+    const first = await openApproval("legacyexec");
+    expect(first.request.actions?.map((a) => a.id)).toEqual(["accept", "decline", "allow_session", "cancel"]);
+    await first.session.respondToPermission(first.request.id, {
+      behavior: "allow",
+      selectedActionId: "allow_session",
+    });
+    await waitUntil(() => first.events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "approved_for_session" });
+    await first.session.close();
+
+    const second = await openApproval("legacyexec");
+    await second.session.respondToPermission(second.request.id, {
+      behavior: "deny",
+      selectedActionId: "decline",
+      message: "不行",
+    });
+    await waitUntil(() => second.events.some(isTerminal));
+    const replies = received().filter((m) => m.method === undefined && m.result?.decision !== undefined);
+    expect(replies.at(-1)?.result).toEqual({ decision: { denied: { rejection: "不行" } } });
+  }, 20_000);
 
   test("fileChange 审批：edit 详情带 unifiedDiff 与相对路径；新增文件映射为 write", async () => {
     const session = await newSession();
