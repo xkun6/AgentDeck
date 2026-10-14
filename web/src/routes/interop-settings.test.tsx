@@ -24,6 +24,7 @@ afterEach(() => {
 const SETTINGS: SidecarSettings = {
   snapshots: { enabled: true, maxFiles: 20_000, maxFileBytes: 5 * 1024 * 1024 },
   interop: { enabled: true },
+  remote: { enabled: false, port: 47_631 },
 };
 
 function renderPage(connected = true) {

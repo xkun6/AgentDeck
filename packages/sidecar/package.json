@@ -13,6 +13,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.17.1",
     "@agentdeck/protocol": "workspace:*",
+    "@agentdeck/remote": "workspace:*",
     "croner": "^10.0.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "tree-kill": "^1.2.2",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.14",
+    "tweetnacl": "^1.0.3",
     "esbuild": "0.28.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.3",

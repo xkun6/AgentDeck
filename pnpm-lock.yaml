@@ -82,6 +82,9 @@ importers:
       '@agentdeck/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@agentdeck/remote':
+        specifier: workspace:*
+        version: link:../remote
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.1(zod@4.6.6)
@@ -113,6 +116,9 @@ importers:
       tsx:
         specifier: ^4.20.0
         version: 4.23.15
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

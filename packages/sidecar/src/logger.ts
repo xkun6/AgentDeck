@@ -3,6 +3,7 @@ import path from "node:path";
 import { format } from "node:util";
 
 import { redactInteropTokens } from "./utils/redact-interop.js";
+import { redactRemoteSecrets } from "./utils/redact-remote.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -54,7 +55,7 @@ export function createLogger(options: CreateLoggerOptions = {}): Logger {
   }
 
   const write = (level: LogLevel, message: string, args: unknown[]) => {
-    const line = `${new Date().toISOString()} [${level}] ${redactInteropTokens(format(message, ...args))}\n`;
+    const line = `${new Date().toISOString()} [${level}] ${redactRemoteSecrets(redactInteropTokens(format(message, ...args)))}\n`;
     if (toStderr) {
       process.stderr.write(line);
     }
