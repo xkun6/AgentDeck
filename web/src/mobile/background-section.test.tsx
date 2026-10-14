@@ -2,7 +2,7 @@
 // 后台运行小节：电池优化 / 通知状态与按钮、厂商指引、被冻结的说明，以及首次开启「后台保持连接」的一次性引导。
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { BackgroundGuideDialog, BackgroundSection, FROZEN_NOTE, NotifyModeSection } from "./background-section";
+import { BATTERY_NOT_WHITELISTED, BackgroundGuideDialog, BackgroundSection, FROZEN_NOTE, NotifyModeSection } from "./background-section";
 import { setNativeBackend, type NativeBackend } from "./native/native-plugin";
 import { PreferencesStore } from "./preferences";
 
@@ -51,7 +51,8 @@ describe("设置页「后台运行」小节", () => {
     render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
     await flush();
     expect(screen.getByText("未开启：后台收不到提醒")).toBeTruthy();
-    expect(screen.getByText("受系统电池优化限制")).toBeTruthy();
+    expect(screen.getByText(BATTERY_NOT_WHITELISTED)).toBeTruthy();
+    expect(screen.getByText(BATTERY_NOT_WHITELISTED).getAttribute("data-state")).toBeNull(); // 中性，不标红
 
     fireEvent.click(screen.getByRole("button", { name: "请求忽略电池优化" }));
     fireEvent.click(screen.getByRole("button", { name: "打开应用设置" }));
@@ -93,7 +94,7 @@ describe("设置页「后台运行」小节", () => {
     const { state } = fakeBackend({ ignoring: false, notifications: true });
     render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
     await flush();
-    expect(screen.getByText("受系统电池优化限制")).toBeTruthy();
+    expect(screen.getByText(BATTERY_NOT_WHITELISTED)).toBeTruthy();
     state.ignoring = true;
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));

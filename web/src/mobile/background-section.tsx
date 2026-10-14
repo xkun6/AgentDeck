@@ -14,6 +14,9 @@ import { subscribeAppForeground } from "./native/app-state";
 import type { NotifyMode, PreferencesStore } from "./preferences";
 import s from "./mobile.module.css";
 
+/** 华为 / 荣耀的「应用启动管理」不会写入 AOSP 白名单，即使用户在那里放行了这里也显示未加入，所以文案保持中性、不标红 */
+export const BATTERY_NOT_WHITELISTED = "未加入系统电池优化白名单（华为等机型请以「应用启动管理」中的设置为准）";
+
 export const FROZEN_NOTE = "被系统冻结时，回到 App 会自动重连并补齐，不会丢消息；只是 App 在后台被冻结期间收不到提醒。";
 
 const VENDOR_TIPS: Array<{ vendor: string; steps: string[] }> = [
@@ -160,8 +163,8 @@ export function BackgroundSection({ prefs }: { prefs: PreferencesStore }) {
 
           <div className={s.card}>
             <div className={s.rowTitle}>电池优化</div>
-            <div className={s.hostStatus} data-state={status.battery.ignoring ? "open" : "error"}>
-              {!status.battery.supported ? "检测中…" : status.battery.ignoring ? "已忽略（不受电池优化限制）" : "受系统电池优化限制"}
+            <div className={s.hostStatus} data-state={status.battery.ignoring ? "open" : undefined}>
+              {!status.battery.supported ? "检测中…" : status.battery.ignoring ? "已忽略（不受电池优化限制）" : BATTERY_NOT_WHITELISTED}
             </div>
             {status.battery.supported && !status.battery.ignoring ? (
               <button type="button" className={s.secondaryButton} onClick={() => void requestIgnoreBatteryOptimization()}>
