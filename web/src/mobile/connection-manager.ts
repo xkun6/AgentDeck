@@ -7,6 +7,7 @@ import type { AuthFailedReason } from "@agentdeck/remote";
 import { DEFAULT_LIVENESS_PROBE, configureSidecarClient, type SidecarClient } from "@/lib/sidecar-client";
 import { createHostClient } from "@/lib/remote/connection";
 import type { HostStore } from "@/lib/remote/hosts";
+import { isAppForeground } from "./native/app-state";
 
 /** 手机首屏取最近这么多条时间线条目，更早的向前翻页（design.md 4.31） */
 export const MOBILE_HISTORY_LIMIT = 300;
@@ -54,7 +55,11 @@ export class ConnectionManager {
       const host = this.hosts.get(hostId);
       return host
         ? createHostClient(host, this.hosts, {
-            client: { historyLimit: MOBILE_HISTORY_LIMIT, livenessProbe: DEFAULT_LIVENESS_PROBE },
+            client: {
+              historyLimit: MOBILE_HISTORY_LIMIT,
+              livenessProbe: DEFAULT_LIVENESS_PROBE,
+              isBackground: () => !isAppForeground(),
+            },
           })
         : null;
     },

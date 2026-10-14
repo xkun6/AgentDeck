@@ -63,6 +63,12 @@ export interface SidecarClientOptions {
    * 就立即发一次 `sidecar.info`，`timeoutMs` 内没有回应则强制断开重连（不等 TCP 自然超时），重连后照常 `sinceSeq` 补齐。
    */
   livenessProbe?: LivenessProbeOptions;
+  /**
+   * 页面当前是否处于后台（手机端设置，默认看 `document.visibilityState`）。后台时浏览器会把定时器限速到每秒甚至每分钟一次，
+   * 时钟跳变 watchdog 看到的「间隔」只是限速而不是系统休眠，所以此时的跳变不再无条件强制重连，改走 `livenessProbe`。
+   * 原生壳里后台保活会让页面一直保持可见，由调用方改用原生前后台状态判断。
+   */
+  isBackground?: () => boolean;
 }
 
 export interface LivenessProbeOptions {
@@ -176,6 +182,7 @@ export class SidecarClient {
   private readonly wakeListenersEnabled: boolean;
   private readonly historyLimit: number | undefined;
   private readonly livenessProbe: LivenessProbeOptions | undefined;
+  private readonly isBackground: () => boolean;
 
   private ws: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
@@ -234,6 +241,8 @@ export class SidecarClient {
     this.wakeListenersEnabled = options.wakeListeners ?? true;
     this.historyLimit = options.historyLimit;
     this.livenessProbe = options.livenessProbe;
+    this.isBackground =
+      options.isBackground ?? (() => typeof document !== "undefined" && document.visibilityState !== "visible");
   }
 
   get state(): SidecarConnectionState {
@@ -584,7 +593,11 @@ export class SidecarClient {
       const now = Date.now();
       const gap = now - this.lastWakeTickAt;
       this.lastWakeTickAt = now;
-      if (gap > WAKE_GAP_THRESHOLD_MS) this.handleWake(true);
+      if (gap > WAKE_GAP_THRESHOLD_MS) {
+        // 手机端后台：定时器被限速造成的跳变不等于系统休眠，不强制重连，连着就探活（3 秒无回应才重连）
+        const throttledInBackground = this.livenessProbe !== undefined && this.isBackground();
+        this.handleWake(!throttledInBackground);
+      }
     }, WAKE_WATCHDOG_INTERVAL_MS);
     if (typeof window.addEventListener === "function") {
       this.boundOnline = () => this.handleWake(false);

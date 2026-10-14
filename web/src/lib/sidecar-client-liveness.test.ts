@@ -59,7 +59,7 @@ interface Rig {
 
 const clients: SidecarClient[] = [];
 
-async function setup(options: { probe?: boolean } = {}): Promise<Rig> {
+async function setup(options: { probe?: boolean; isBackground?: () => boolean } = {}): Promise<Rig> {
   const sockets: FakeSocket[] = [];
   const answerInfo = { value: true };
   const hold = { value: false, pending: [] as Array<() => void> };
@@ -90,6 +90,7 @@ async function setup(options: { probe?: boolean } = {}): Promise<Rig> {
     reconnectBaseDelayMs: 1,
     reconnectMaxDelayMs: 2,
     ...(options.probe === false ? {} : { livenessProbe: DEFAULT_LIVENESS_PROBE }),
+    ...(options.isBackground ? { isBackground: options.isBackground } : {}),
   });
   client.enableAutoReconnect();
   clients.push(client);
@@ -186,6 +187,88 @@ describe("回前台探活", () => {
     setVisibility("visible");
     await vi.advanceTimersByTimeAsync(10);
     expect(infoCount(rig.sockets[0]!)).toBe(1);
+  });
+});
+
+/** 模拟后台定时器被限速 / 进程挂起后恢复：墙上时钟一次跳过 ms，再让 2 秒一次的 watchdog 触发 */
+async function jumpClock(ms: number): Promise<void> {
+  vi.setSystemTime(Date.now() + ms);
+  await vi.advanceTimersByTimeAsync(2_000);
+}
+
+describe("时钟跳变 watchdog", () => {
+  it("手机端页面不可见：跳变不强制重连，连着就探活，有回应则保持连接", async () => {
+    const rig = await setup();
+    setVisibility("hidden");
+    await jumpClock(60_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    expect(rig.sockets).toHaveLength(1);
+    expect(rig.client.state).toBe("open");
+  });
+
+  it("手机端页面不可见 + 连接已死：探活 3 秒无回应后才重连", async () => {
+    const rig = await setup();
+    rig.answerInfo.value = false;
+    setVisibility("hidden");
+    await jumpClock(60_000);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    expect(rig.sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rig.sockets).toHaveLength(2);
+    expect(rig.client.state).toBe("open");
+  });
+
+  it("手机端页面不可见但最近有数据：只是限速，不探活也不重连", async () => {
+    const rig = await setup();
+    setVisibility("hidden");
+    vi.setSystemTime(Date.now() + 60_000);
+    rig.sockets[0]!.push({ jsonrpc: "2.0", method: "agent.stream", params: envelope(2) });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(infoCount(rig.sockets[0]!)).toBe(0);
+    expect(rig.sockets).toHaveLength(1);
+  });
+
+  it("手机端页面可见：跳变仍无条件强制重连（回前台时的老行为）", async () => {
+    const rig = await setup();
+    await jumpClock(60_000);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rig.sockets).toHaveLength(2);
+    expect(infoCount(rig.sockets[0]!)).toBe(0);
+  });
+
+  it("isBackground 可由调用方接管（原生壳后台页面一直 visible）", async () => {
+    const background = { value: true };
+    const rig = await setup({ isBackground: () => background.value });
+    await jumpClock(60_000);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rig.sockets).toHaveLength(1);
+    background.value = false;
+    await jumpClock(60_000);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rig.sockets).toHaveLength(2);
+  });
+
+  it("桌面（未配置 livenessProbe）：页面不可见时跳变仍强制重连，行为不变", async () => {
+    const rig = await setup({ probe: false });
+    setVisibility("hidden");
+    await jumpClock(60_000);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rig.sockets).toHaveLength(2);
+  });
+});
+
+describe("hintWake（原生回前台）", () => {
+  it("连着时探活，断着时重连", async () => {
+    const rig = await setup();
+    rig.answerInfo.value = false;
+    await vi.advanceTimersByTimeAsync(20_000);
+    rig.client.hintWake();
+    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(infoCount(rig.sockets[0]!)).toBe(1);
+    expect(rig.sockets).toHaveLength(2);
   });
 });
 
