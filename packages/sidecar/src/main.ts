@@ -11,7 +11,12 @@ import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
 import { GroupService } from "./groups/group-service.js";
 import { GroupStore } from "./groups/store.js";
-import { installProcessDiagnostics, startMemorySampler } from "./diagnostics.js";
+import {
+  claimRunningMarker,
+  installProcessDiagnostics,
+  RUNNING_MARKER_FILE,
+  startMemorySampler,
+} from "./diagnostics.js";
 import { createLogger, type Logger } from "./logger.js";
 import { BoardService } from "./kanban/board-service.js";
 import { BoardStore } from "./kanban/store.js";
@@ -101,11 +106,15 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logDir ? { logDir: config.logDir } : {});
   protectStdout(logger);
   // 致命错误 / 退出事件同步落盘（design.md 4.18）；fatal 后走下面的 shutdown
+  // 运行标记 `<logDir>/sidecar.running`（未配置日志目录时不写）：残留 = 上次被外部硬杀或进程级崩溃
+  const runningMarkerFile = config.logDir ? path.join(config.logDir, RUNNING_MARKER_FILE) : undefined;
   const diagnostics = installProcessDiagnostics({
     logger,
     ...(config.logDir ? { logFile: path.join(config.logDir, "sidecar.log") } : {}),
+    ...(runningMarkerFile ? { runningMarkerFile } : {}),
     onFatal: (reason, exitCode) => void shutdown(reason, exitCode),
   });
+  if (runningMarkerFile) claimRunningMarker(runningMarkerFile, logger);
   logger.info("sidecar %s 启动（pid=%d, node=%s）", SIDECAR_VERSION, process.pid, process.version);
 
   let registry: ProviderRegistry | null = null;

@@ -76,7 +76,7 @@ class RemoteConnection implements RpcClientConnection {
     readonly deviceId: string,
     private readonly ws: WebSocket,
     private readonly channel: E2eeChannel,
-    private readonly drop: (code: number, reason: string) => void,
+    private readonly drop: (code: number, reason: string, path: RemoteDropPath) => void,
   ) {}
 
   send(payload: string): void {
@@ -84,7 +84,7 @@ class RemoteConnection implements RpcClientConnection {
       return;
     }
     if (this.ws.bufferedAmount > MAX_BUFFERED_BYTES) {
-      this.drop(1013, "接收过慢");
+      this.drop(1013, "接收过慢", "buffer-overflow");
       return;
     }
     try {
@@ -94,10 +94,33 @@ class RemoteConnection implements RpcClientConnection {
     }
   }
 
+  /** RpcServer 关闭时调用 */
   close(): void {
-    this.drop(1000, "closed");
+    this.drop(1000, "closed", "shutdown");
+  }
+
+  /** 吊销设备等本端主动断开 */
+  closeBecause(path: RemoteDropPath): void {
+    this.drop(1000, "closed", path);
   }
 }
+
+/**
+ * 本端关闭连接的路径（写入「远程连接关闭」日志的 path 字段，定位断线原因，design.md 4.31「断线诊断」）。
+ * 日志里没有 path（`peer-close`）表示对端先关闭或网络层断开。
+ */
+export type RemoteDropPath =
+  | "auth-timeout"
+  | "auth-failed"
+  | "bad-hello"
+  | "binary-in-hello"
+  | "bad-frame"
+  | "internal-error"
+  | "pong-timeout"
+  | "buffer-overflow"
+  | "revoked"
+  | "gateway-stop"
+  | "shutdown";
 
 /** 每条已升级 WS 的心跳 / 诊断状态 */
 interface SocketState {
@@ -108,6 +131,8 @@ interface SocketState {
   missedPongs: number;
   /** 认证成功后才有 */
   deviceId?: string;
+  /** 本端主动关闭 / 终止的路径；未设置表示对端先关闭 */
+  path?: RemoteDropPath;
 }
 
 /** 连续这么多次 ping 没收到 pong 才终止连接（单次丢失 / 手机主线程繁忙不算死） */
@@ -191,7 +216,8 @@ export class RemoteGateway {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
-    for (const ws of this.sockets.keys()) {
+    for (const [ws, state] of this.sockets) {
+      state.path ??= "gateway-stop";
       ws.terminate();
     }
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
@@ -215,7 +241,7 @@ export class RemoteGateway {
     let count = 0;
     for (const connection of Array.from(this.connections)) {
       if (connection.deviceId === deviceId) {
-        connection.close();
+        connection.closeBecause("revoked");
         count += 1;
       }
     }
@@ -288,6 +314,7 @@ export class RemoteGateway {
           Math.round((now - state.openedAt) / 1000),
           now - state.lastPongAt,
         );
+        state.path ??= "pong-timeout";
         ws.terminate();
         continue;
       }
@@ -295,6 +322,7 @@ export class RemoteGateway {
       try {
         ws.ping();
       } catch {
+        state.path ??= "pong-timeout";
         ws.terminate();
       }
     }
@@ -326,7 +354,8 @@ export class RemoteGateway {
       }
     };
 
-    const drop = (code: number, reason: string) => {
+    const drop = (code: number, reason: string, path: RemoteDropPath) => {
+      state.path ??= path;
       if (phase !== "closed") {
         phase = "closed";
       }
@@ -343,7 +372,7 @@ export class RemoteGateway {
     const authTimer = setTimeout(() => {
       if (phase !== "ready" && phase !== "closed") {
         this.logger.warn("远程连接认证超时（来源 %s）", ip);
-        drop(1008, "认证超时");
+        drop(1008, "认证超时", "auth-timeout");
       }
     }, this.tuning.authTimeoutMs);
     authTimer.unref();
@@ -362,7 +391,7 @@ export class RemoteGateway {
       } catch {
         // 连接已断
       }
-      drop(1008, "认证失败");
+      drop(1008, "认证失败", "auth-failed");
     };
 
     const completeAuth = (deviceId: string, reply: ServerAuthReply) => {
@@ -401,7 +430,7 @@ export class RemoteGateway {
           }));
         } catch (error) {
           this.logger.error("保存配对设备失败：%s", String(error));
-          drop(1011, "内部错误");
+          drop(1011, "内部错误", "internal-error");
           return;
         }
         if (phase === "closed") {
@@ -445,12 +474,12 @@ export class RemoteGateway {
       }
       if (phase === "hello") {
         if (isBinary) {
-          drop(1008, "首帧必须是文本");
+          drop(1008, "首帧必须是文本", "binary-in-hello");
           return;
         }
         const hello = parseE2eeHello(toBytesToString(data));
         if (!hello) {
-          drop(1008, "握手格式错误");
+          drop(1008, "握手格式错误", "bad-hello");
           return;
         }
         try {
@@ -459,7 +488,7 @@ export class RemoteGateway {
             "server",
           );
         } catch {
-          drop(1008, "握手格式错误");
+          drop(1008, "握手格式错误", "bad-hello");
           return;
         }
         challenge = toBase64(randomBytes(32));
@@ -469,11 +498,11 @@ export class RemoteGateway {
       }
       // 握手之后只允许加密二进制帧
       if (!isBinary) {
-        drop(1008, "只允许二进制帧");
+        drop(1008, "只允许二进制帧", "bad-frame");
         return;
       }
       if (phase === "authenticating") {
-        drop(1008, "认证期间不允许发送其它帧");
+        drop(1008, "认证期间不允许发送其它帧", "bad-frame");
         return;
       }
       let text: string;
@@ -485,7 +514,7 @@ export class RemoteGateway {
           ip,
           error instanceof FrameError ? error.code : "unknown",
         );
-        drop(1008, "帧非法");
+        drop(1008, "帧非法", "bad-frame");
         return;
       }
       if (phase === "auth") {
@@ -497,14 +526,27 @@ export class RemoteGateway {
         phase = "authenticating";
         void authenticate(message).catch((error: unknown) => {
           this.logger.error("远程认证出错：%s", String(error));
-          drop(1011, "内部错误");
+          drop(1011, "内部错误", "internal-error");
         });
         return;
       }
       void handle?.receive(text);
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code: number, reasonBuffer: Buffer) => {
+      const closedAt = this.now();
+      this.logger.info(
+        "远程连接关闭 device=%s ip=%s 存活=%ds code=%d reason=%s by=%s path=%s 距上次pong=%dms buffered=%d",
+        state.deviceId?.slice(0, 8) ?? "-",
+        ip,
+        Math.round((closedAt - state.openedAt) / 1000),
+        code,
+        reasonBuffer.toString("utf8") || "-",
+        state.path ? "local" : "peer",
+        state.path ?? "peer-close",
+        closedAt - state.lastPongAt,
+        ws.bufferedAmount,
+      );
       clearTimeout(authTimer);
       leavePending();
       phase = "closed";

@@ -762,3 +762,30 @@
   font-size: 12px;
   flex-shrink: 0;
 }
+
+/* 连接诊断（设置页） */
+.diagList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.diagLine {
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.diagActions {
+  display: flex;
+  gap: 8px;
+}

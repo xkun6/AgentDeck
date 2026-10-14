@@ -310,6 +310,70 @@ describe("WS 心跳：连续 2 次无 pong 才终止", () => {
   });
 });
 
+describe("断线诊断：远程连接关闭日志", () => {
+  async function withLogs() {
+    const logs = captureLogger();
+    await h.close();
+    h = await startHarness({ enable: true, logger: logs.logger });
+    const closeLine = async (predicate: (line: string) => boolean = () => true) => {
+      for (let i = 0; i < 200; i++) {
+        const line = logs.lines.find((l) => l.includes("远程连接关闭") && predicate(l));
+        if (line) return line;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`没有等到关闭日志：${logs.lines.join("\n")}`);
+    };
+    return { logs, closeLine };
+  }
+
+  const FIELDS =
+    /^\[info\] 远程连接关闭 device=(\S+) ip=127\.0\.0\.1 存活=\d+s code=(\d+) reason=(\S+) by=(local|peer) path=(\S+) 距上次pong=\d+ms buffered=\d+$/;
+
+  test("本端因协议违规关闭：by=local，path 标明原因（首帧二进制 = binary-in-hello）", async () => {
+    const { closeLine } = await withLogs();
+    const raw = await RawPhone.open(h.port);
+    raw.ws.send(new Uint8Array([1, 2, 3]));
+    await raw.closed;
+    const match = FIELDS.exec(await closeLine());
+    expect(match?.slice(1)).toEqual(["-", "1008", expect.any(String), "local", "binary-in-hello", ]);
+  });
+
+  test("认证后对端主动关闭：带 device 前 8 位，by=peer、path=peer-close", async () => {
+    const { closeLine } = await withLogs();
+    const { phone, deviceId } = await h.pairPhone();
+    phone.close();
+    const match = FIELDS.exec(await closeLine());
+    expect(match?.[1]).toBe(deviceId.slice(0, 8));
+    expect(match?.[4]).toBe("peer");
+    expect(match?.[5]).toBe("peer-close");
+  });
+
+  test("吊销设备：path=revoked；rpc-server 的连接 / 断开日志也带 device 前 8 位", async () => {
+    const { logs, closeLine } = await withLogs();
+    const { phone, deviceId } = await h.pairPhone();
+    await h.local.call("remote.devices.revoke", { deviceId });
+    await phone.closed;
+    const match = FIELDS.exec(await closeLine((l) => l.includes("path=revoked")));
+    expect(match?.[1]).toBe(deviceId.slice(0, 8));
+    expect(match?.[4]).toBe("local");
+    const short = deviceId.slice(0, 8);
+    expect(logs.lines.some((l) => l.includes(`远程客户端已连接 device=${short}`))).toBe(true);
+    expect(logs.lines.some((l) => l.includes(`远程客户端已断开 device=${short}`))).toBe(true);
+  });
+
+  test("认证超时：path=auth-timeout", async () => {
+    const logs = captureLogger();
+    await h.close();
+    h = await startHarness({ enable: true, tuning: { authTimeoutMs: 150 }, logger: logs.logger });
+    const raw = await RawPhone.open(h.port);
+    await raw.closed;
+    for (let i = 0; i < 200 && !logs.lines.some((l) => l.includes("path=auth-timeout")); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(logs.lines.some((l) => l.includes("远程连接关闭") && l.includes("code=1008") && l.includes("path=auth-timeout"))).toBe(true);
+  });
+});
+
 describe("帧与连接", () => {
   async function authedRaw() {
     const offer = await h.newOffer();

@@ -4,7 +4,7 @@
  * 目标：sidecar 意外退出时 `sidecar.log` 里一定留下线索——致命错误堆栈、退出码与原因、
  * 退出前最近一次内存采样。fatal / exit 路径一律用 `appendFileSync` 同步写，独立于 logger 的 fd。
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import v8 from "node:v8";
 
 import { formatLogLine, type LogLevel, type Logger } from "./logger.js";
@@ -100,8 +100,74 @@ export function startMemorySampler(logger: Logger, options: MemorySamplerOptions
   return () => clearInterval(timer);
 }
 
+/** 日志目录下的运行标记文件名：启动时写入、进程自己退出（含 fatal）时删除，残留 = 被外部硬杀或进程级崩溃 */
+export const RUNNING_MARKER_FILE = "sidecar.running";
+
+export interface RunningMarker {
+  pid: number;
+  startedAt: string;
+}
+
+/** 读取运行标记；文件不存在返回 null，内容损坏返回 `{ pid: 0, startedAt: "" }`（仍表示上次未正常退出） */
+export function readRunningMarker(file: string): RunningMarker | null {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<RunningMarker>;
+    return {
+      pid: typeof parsed.pid === "number" ? parsed.pid : 0,
+      startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : "",
+    };
+  } catch {
+    return { pid: 0, startedAt: "" };
+  }
+}
+
+/**
+ * 启动时调用：发现残留标记就 warn「上次 sidecar 未正常退出」，然后用本进程的 pid 与启动时间覆盖。
+ * 返回发现的残留标记（没有为 null）。写文件失败只忽略，不影响启动。
+ */
+export function claimRunningMarker(
+  file: string,
+  logger: Pick<Logger, "warn">,
+  now: () => Date = () => new Date(),
+): RunningMarker | null {
+  const stale = readRunningMarker(file);
+  if (stale) {
+    logger.warn(
+      "上次 sidecar（pid=%s%s）未正常退出（被外部结束或进程级崩溃）",
+      stale.pid > 0 ? stale.pid : "未知",
+      stale.startedAt ? `，启动于 ${stale.startedAt}` : "",
+    );
+  }
+  try {
+    const marker: RunningMarker = { pid: process.pid, startedAt: now().toISOString() };
+    writeFileSync(file, JSON.stringify(marker));
+  } catch {
+    // 标记写不了不能影响启动
+  }
+  return stale;
+}
+
+/** 进程退出时同步删除本进程写的运行标记（pid 不是自己的不删，避免误删另一实例的标记） */
+export function removeRunningMarker(file: string): void {
+  try {
+    const marker = readRunningMarker(file);
+    if (marker && marker.pid !== process.pid) return;
+    unlinkSync(file);
+  } catch {
+    // 不存在或删除失败：忽略
+  }
+}
+
 export interface ProcessDiagnosticsOptions {
   logger: Logger;
+  /** 运行标记文件（`<logDir>/sidecar.running`）；设置后进程退出事件里同步删除 */
+  runningMarkerFile?: string;
   /** sidecar.log 路径；未设置日志目录时只写 stderr */
   logFile?: string;
   /** uncaughtException 后的优雅关闭（应以非零码退出） */
@@ -175,6 +241,8 @@ export function installProcessDiagnostics(options: ProcessDiagnosticsOptions): P
       code === 0 ? "info" : "error",
       `进程退出事件：code=${code} 原因=${exitReason ?? "未经过 shutdown 流程（启动失败或直接 process.exit）"}`,
     );
+    // 能走到 exit 事件说明是进程自己退出（含 fatal），不是被外部硬杀：清除运行标记
+    if (options.runningMarkerFile) removeRunningMarker(options.runningMarkerFile);
   });
 
   return {

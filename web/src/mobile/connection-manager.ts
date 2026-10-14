@@ -5,6 +5,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { DEFAULT_THEME_CONFIG, themeAtom } from "@agentdeck/shared-ui";
 import type { AuthFailedReason } from "@agentdeck/remote";
 import { DEFAULT_LIVENESS_PROBE, configureSidecarClient, type SidecarClient } from "@/lib/sidecar-client";
+import { getMobileConnectionLog } from "@/lib/connection-log";
 import { createHostClient } from "@/lib/remote/connection";
 import type { HostStore } from "@/lib/remote/hosts";
 import { isAppForeground } from "./native/app-state";
@@ -59,6 +60,7 @@ export class ConnectionManager {
               historyLimit: MOBILE_HISTORY_LIMIT,
               livenessProbe: DEFAULT_LIVENESS_PROBE,
               isBackground: () => !isAppForeground(),
+              eventLog: getMobileConnectionLog(),
             },
           })
         : null;

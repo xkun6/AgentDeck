@@ -681,6 +681,7 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 - `uncaughtException`：用 `fs.appendFileSync` **同步**把错误、堆栈与当时的 `process.memoryUsage()`（rss / heapUsed / heapTotal / external / arrayBuffers）写入 `sidecar.log`（级别 `error`，独立于 logger 的文件句柄，logger 关闭后仍可写），再走原有优雅关闭（tree-kill 各 Agent 子进程）并以退出码 1 退出，另设 4 秒硬退出兜底。
 - `unhandledRejection`：**保持现有行为（只记日志、不退出）**，但同样同步写入堆栈与内存，不因此引入新的崩溃。
 - `process.on("exit")`：同步记一行「进程退出事件：code=<码> 原因=<原因>」。原因来自 `shutdown(reason)`（`stdin end` / `stdin close` / `stdin error` / `SIGINT` / `SIGTERM` / `父进程 <pid> 已退出` / `uncaughtException`），未经过 shutdown 的 `process.exit`（启动失败、配置错误等）记为「未经过 shutdown 流程」。被 `TerminateProcess` / 系统 OOM 杀死时 exit 事件不会触发，此时日志最后一条记录与内存采样就是线索。
+- 运行标记：`<日志目录>/sidecar.running`（`{ pid, startedAt }`）启动时写入、`exit` 事件里同步删除；启动时发现残留即 warn「上次 sidecar（pid=…）未正常退出（被外部结束或进程级崩溃）」，用来区分被 `TerminateProcess` / OOM 硬杀（exit 事件不触发，标记残留）与进程自己退出（见 4.31「断线诊断」）。
 - 内存采样：启动时记一条，之后每 5 分钟写一条 `info`「内存采样 rss=… heapUsed=… heapTotal=… external=… arrayBuffers=… heapLimit=…」，附带会话数与子代理时间线占用（行数 / 字节）；`heapUsed` 超过 `v8.getHeapStatistics().heap_size_limit` 的 80% 时额外写一条 `warn`。定时器 `unref`，不阻止退出。
 - V8 的 `FATAL ERROR: Reached heap limit` 无法在 JS 里捕获（进程直接 abort，exit 事件也不触发），只能由 Rust 外壳记录 sidecar 的 stderr 与退出状态（见 3.6）。
 
@@ -1120,6 +1121,14 @@ interface RemoteStatus {
 - 给 `limit`（1–2000）时为向前分页：从 `beforeSeq`（缺省为末尾之后）往前取至少 `limit` 条，再继续往前扩到最近的**回合起点**（`user_message`；某回合没有 `user_message` 时取其 `turn_started`），保证页首是完整回合；返回 `hasOlder` 表示更早还有条目。`sinceSeq` 与 `beforeSeq` / `limit` 同时给出为 `-32602`。
 - `beforeSeq`（≥ 1）必须与 `limit` 一起给；单独给 `beforeSeq`、`limit` 越界（非 1–2000 的整数）同样是 `-32602`。回合起点按时间线上的 `user_message`（非插话）判定，其后紧跟的同回合 `turn_started` 不再单独算起点；CLI 自发轮次等没有 `user_message` 的回合以 `turn_started` 为起点。一个回合比 `limit` 还长时整回合返回。
 - 手机打开会话取 `{ limit: 300 }`，向上滚动到顶取 `{ beforeSeq: 当前最早 seq, limit: 300 }`；断线重连仍用 `sinceSeq` 补齐。
+
+**断线诊断**（事故背景：真机「总在重连」，但网关与手机都没有留下断线原因）：
+- **网关关闭日志**（`sidecar.log`，info）：每条远程 WS 关闭时统一写一行
+  `远程连接关闭 device=<deviceId 前 8 位，未认证为 -> ip=<ip> 存活=<s>s code=<code> reason=<reason> by=<local|peer> path=<path> 距上次pong=<ms>ms buffered=<n>`。
+  `by=local` 表示本端先关闭 / 终止，`path` 说明走的哪条路径：`auth-timeout`（10 秒未认证）、`auth-failed`、`bad-hello`（握手格式 / 公钥非法）、`binary-in-hello`（首帧是二进制）、`bad-frame`（握手后的文本帧、解密失败、计数回退、认证期间多余帧）、`internal-error`、`pong-timeout`（连续 2 次 ping 无 pong）、`buffer-overflow`（发送缓冲超 64 MiB）、`revoked`（吊销设备）、`gateway-stop`（网关停止 / 端口变更）、`shutdown`（RpcServer 关闭）；`by=peer` 时 `path=peer-close`（对端先关闭或网络层断开）。`距上次pong` 以连接建立时刻为起点。`rpc-server` 的「远程客户端已连接 / 已断开」日志同样带 `device=<前 8 位>`。
+- **sidecar 运行标记** `<AGENTDECK_LOG_DIR>/sidecar.running`（未配置日志目录时不写）：启动时写入 `{ pid, startedAt }`；进程自己退出（含 fatal 与 `process.exit`，即触发 `exit` 事件的所有退出，见 4.18）时同步删除。启动时若发现残留，`warn`「上次 sidecar（pid=…，启动于 …）未正常退出（被外部结束或进程级崩溃）」后覆盖。退出码本身由 4.18 的「进程退出事件」日志与 Rust 的 `desktop.log`（3.6）记录，不重复。
+- **手机连接事件缓冲**（`web/src/lib/connection-log.ts`，只在手机入口注入，桌面不写）：环形缓冲最多 100 条，持久化到 `localStorage`（键 `agentdeck.mobile.connection-log`，事件后 1 秒合并写一次，页面隐藏时立即写）。每条记录：ISO 时间 `at`、`event`、触发路径 `trigger`、`gapMs`、关闭的 `code` / `reason` / `wasClean`、`aliveMs`（本连接存活）、`idleMs`（距最后入站帧）、`online` / `netType` / `effectiveType`（`navigator.onLine` 与 Network Information，有则记）、`foreground`（`isBackground` 回调）。`event` 取值：`open`、`close`、`error`、`force-reconnect`、`probe-start`、`probe-ok`、`probe-timeout`、`schedule-reconnect`、`connect-timeout`、`manual-close`、`wake-ignored`（CONNECTING 时忽略非强制唤醒），以及 E2eeSocket 的 `attempt-ok` / `attempt-fail`（每个地址的结果与耗时）、`protocol-error`（赢家连接的协议错误）。`trigger` 取值：`gap-watchdog`（附 `gapMs`）、`hint`、`online`、`visibility`、`network-change`、`system-resume`、`probe`、`manual` 等。
+- **设置页「连接诊断」**（手机端设置页，通知 / 后台运行小节之后）：显示最近 20 条（时间 + 事件 + 触发路径 + code，最新在上），「复制全部」把缓冲区全部条目的 JSON 写入剪贴板（`navigator.clipboard` 失败则展示可全选的文本框兜底），「清空」同时清掉持久化。
 
 **通知（attention）**：
 - sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。

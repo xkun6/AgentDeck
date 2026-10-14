@@ -358,14 +358,21 @@ export class RpcServer {
    */
   attachConnection(connection: RpcClientConnection): RpcConnectionHandle {
     this.clients.add(connection);
-    this.logger.info("%s客户端已连接（当前 %d 个）", connection.kind === "remote" ? "远程" : "WS ", this.clients.size);
+    const device = connection.deviceId ? ` device=${connection.deviceId.slice(0, 8)}` : "";
+    this.logger.info(
+      "%s客户端已连接%s（当前 %d 个）",
+      connection.kind === "remote" ? "远程" : "WS ",
+      device,
+      this.clients.size,
+    );
     return {
       receive: (text) => this.handleText(connection, text),
       detach: () => {
         if (this.clients.delete(connection)) {
           this.logger.info(
-            "%s客户端已断开（当前 %d 个）",
+            "%s客户端已断开%s（当前 %d 个）",
             connection.kind === "remote" ? "远程" : "WS ",
+            device,
             this.clients.size,
           );
         }

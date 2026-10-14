@@ -26,6 +26,7 @@ export function createHostClient(host: PairedHost, store: HostStore, overrides: 
         onAddressSelected: (address) => {
           void store.setLastAddress(host.id, address);
         },
+        ...(clientOptions?.eventLog ? { eventLog: clientOptions.eventLog } : {}),
         ...socketOverrides,
       };
     }),

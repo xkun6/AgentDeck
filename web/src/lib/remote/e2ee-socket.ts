@@ -9,6 +9,7 @@ import {
   type RemoteClientCredentials,
   type RemoteClientSession,
 } from "@agentdeck/remote";
+import type { ConnectionEventLog } from "@/lib/connection-log";
 
 /** 认证失败的终止性关闭码（落在 sidecar-client 的 4400–4499 终止区间内），reason 为 AuthFailedReason。 */
 export const E2EE_AUTH_FAILED_CLOSE_CODE = 4401;
@@ -53,6 +54,8 @@ export interface E2eeSocketOptions {
   onAddressSelected?: (address: RemoteAddressRef) => void;
   /** 配对成功：deviceSecret 只出现这一次，调用方必须立即保存 */
   onPaired?: (result: { deviceId: string; deviceSecret: string; address: RemoteAddressRef }) => void;
+  /** 连接事件环形缓冲（手机端注入）：每个地址尝试的结果与耗时、赢家连接的协议错误 */
+  eventLog?: ConnectionEventLog;
 }
 
 const READY_STATE = { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 } as const;
@@ -66,6 +69,8 @@ interface Attempt {
   timer: ReturnType<typeof setTimeout> | null;
   startTimer: ReturnType<typeof setTimeout> | null;
   done: boolean;
+  /** 发起连接的时刻（用于记录耗时） */
+  startedAt: number;
 }
 
 export class E2eeSocket {
@@ -108,7 +113,15 @@ export class E2eeSocket {
     const stagger = this.options.staggerMs ?? 300;
     for (const { host, port } of addresses) {
       const address = { host, port };
-      const attempt: Attempt = { address, socket: null, session: null, timer: null, startTimer: null, done: false };
+      const attempt: Attempt = {
+        address,
+        socket: null,
+        session: null,
+        timer: null,
+        startTimer: null,
+        done: false,
+        startedAt: 0,
+      };
       this.attempts.push(attempt);
       const delay = hasPreferred && addressKey(address) !== preferredKey ? stagger : 0;
       if (delay > 0) {
@@ -122,6 +135,7 @@ export class E2eeSocket {
   private startAttempt(attempt: Attempt): void {
     attempt.startTimer = null;
     if (attempt.done || this.winner || this.readyState !== READY_STATE.CONNECTING) return;
+    attempt.startedAt = Date.now();
     const timeout = this.options.attemptTimeoutMs ?? 10_000;
     attempt.timer = setTimeout(() => this.failAttempt(attempt, { kind: "network", message: "连接超时" }), timeout);
     let socket: RawSocket;
@@ -192,6 +206,11 @@ export class E2eeSocket {
       return;
     }
     this.winner = attempt;
+    this.options.eventLog?.push({
+      event: "attempt-ok",
+      address: addressKey(attempt.address),
+      durationMs: Date.now() - attempt.startedAt,
+    });
     this.clearGrace();
     this.selectedAddress = attempt.address;
     if (attempt.timer) clearTimeout(attempt.timer);
@@ -208,6 +227,12 @@ export class E2eeSocket {
     if (attempt.done) return;
     this.disposeAttempt(attempt);
     if (this.winner || this.readyState !== READY_STATE.CONNECTING) return;
+    this.options.eventLog?.push({
+      event: "attempt-fail",
+      address: addressKey(attempt.address),
+      durationMs: attempt.startedAt > 0 ? Date.now() - attempt.startedAt : 0,
+      detail: failure.kind === "auth" ? `认证被拒：${failure.reason}` : failure.message,
+    });
     if (failure.kind === "auth") {
       // 认证被拒是电脑用共享密钥加密回的，只有真正的电脑能发出，因此是定论，不必等其它（可能不可达的）地址超时；
       // 唯一例外：配对时一次性密钥可能已被并发的兄弟连接用掉，这里的 invalid 只是输家，稍等兄弟连接的结果
@@ -241,7 +266,14 @@ export class E2eeSocket {
       }
     }
     const code = (error as { code?: unknown }).code;
-    this.finishClosed(1011, `protocol_error:${typeof code === "string" ? code : error.message}`);
+    const detail = typeof code === "string" ? code : error.message;
+    this.options.eventLog?.push({
+      event: "protocol-error",
+      address: addressKey(winner.address),
+      durationMs: Date.now() - winner.startedAt,
+      detail,
+    });
+    this.finishClosed(1011, `protocol_error:${detail}`);
   }
 
   private finishAuthFailed(reason: AuthFailedReason): void {

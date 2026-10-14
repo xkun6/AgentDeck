@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { DESKTOP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/build-info";
 import { BackgroundSection, NotifyModeSection } from "./background-section";
+import { ConnectionDiagnosticsSection } from "./connection-diagnostics";
 import { hostStatusText } from "./host-list";
 import type { ConnectionSnapshot } from "./connection-manager";
 import type { PreferencesStore } from "./preferences";
@@ -90,6 +91,8 @@ export function Settings({
         <NotifyModeSection prefs={prefs} />
 
         <BackgroundSection prefs={prefs} />
+
+        <ConnectionDiagnosticsSection />
 
         <section className={s.section} aria-label="本机">
           <h2 className={s.sectionTitle}>本机名称</h2>

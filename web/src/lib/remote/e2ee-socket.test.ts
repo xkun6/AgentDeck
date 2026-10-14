@@ -9,6 +9,7 @@ import {
   generateKeyPair,
   importPublicKey,
 } from "@agentdeck/remote";
+import { ConnectionEventLog } from "../connection-log";
 import { E2eeSocket, type RawSocket } from "./e2ee-socket";
 
 /** 扮演网关的假 socket：收到 hello 回 ready，收到加密的 auth 回 authed，之后由测试推帧 */
@@ -48,7 +49,7 @@ class FakeGatewaySocket implements RawSocket {
   }
 }
 
-async function openAuthed() {
+async function openAuthed(eventLog?: ConnectionEventLog) {
   const serverKeys = generateKeyPair();
   const raw = new FakeGatewaySocket(serverKeys);
   const socket = new E2eeSocket({
@@ -60,6 +61,7 @@ async function openAuthed() {
       deviceSecret: "s",
     },
     createSocket: () => raw,
+    ...(eventLog ? { eventLog } : {}),
   });
   const received: string[] = [];
   socket.onmessage = (event) => received.push(event.data);
@@ -108,5 +110,38 @@ describe("E2eeSocket 赢家连接的协议错误", () => {
     raw.deliver(raw.channel!.seal(JSON.stringify({ late: true })));
     expect(received).toEqual([]);
     expect(closes).toHaveLength(1);
+  });
+});
+
+describe("E2eeSocket 连接事件记录", () => {
+  it("每个地址尝试的结果与耗时：成功记 attempt-ok，赢家协议错误记 protocol-error", async () => {
+    const log = new ConnectionEventLog();
+    const { raw } = await openAuthed(log);
+    expect(log.entries()).toHaveLength(1);
+    expect(log.entries()[0]).toMatchObject({ event: "attempt-ok", address: "10.0.0.2:1" });
+    expect(log.entries()[0]!.durationMs).toBeGreaterThanOrEqual(0);
+
+    raw.deliver(new Uint8Array(80).fill(7));
+    expect(log.entries()[1]).toMatchObject({ event: "protocol-error", address: "10.0.0.2:1" });
+    expect(log.entries()[1]!.detail).toMatch(/bad_direction|decrypt_failed/);
+  });
+
+  it("地址连不上：记 attempt-fail 与失败原因", async () => {
+    const log = new ConnectionEventLog();
+    const serverKeys = generateKeyPair();
+    const socket = new E2eeSocket({
+      addresses: [{ host: "10.0.0.9", port: 1 }],
+      credentials: { mode: "auth", daemonPublicKey: exportKey(serverKeys.publicKey), deviceId: "d", deviceSecret: "s" },
+      createSocket: () => {
+        throw new Error("网络不可达");
+      },
+      eventLog: log,
+    });
+    const closed = new Promise<{ code: number }>((resolve) => {
+      socket.onclose = resolve;
+    });
+    expect((await closed).code).toBe(1006);
+    expect(log.entries()).toHaveLength(1);
+    expect(log.entries()[0]).toMatchObject({ event: "attempt-fail", address: "10.0.0.9:1", detail: "网络不可达" });
   });
 });
