@@ -350,6 +350,19 @@ describe("SidecarClient", () => {
     expect(updates).toEqual([params]);
   });
 
+  it("remote.changed 通知：把 RemoteStatus 分发给订阅方，退订后不再收到", async () => {
+    const { client, current } = setup(server());
+    const seen: unknown[] = [];
+    const unsubscribe = client.onRemoteChanged((status) => seen.push(status));
+    await client.connect();
+    const status = { enabled: true, port: 47631, listening: true, addresses: [], devices: [] };
+    current().push({ jsonrpc: "2.0", method: "remote.changed", params: status });
+    expect(seen).toEqual([status]);
+    unsubscribe();
+    current().push({ jsonrpc: "2.0", method: "remote.changed", params: status });
+    expect(seen).toHaveLength(1);
+  });
+
   it("provider.changed 通知：通知订阅方，经 bindProviderChangesToQueries 让 provider 相关查询失效", async () => {
     const { client, current } = setup(server());
     const queryClient = new QueryClient();

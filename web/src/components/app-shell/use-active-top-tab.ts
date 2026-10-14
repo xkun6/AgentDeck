@@ -21,6 +21,7 @@ export const SETTINGS_ROUTES = [
   "/env",
   "/snapshots",
   "/interop",
+  "/remote",
   "/debug",
   "/about",
   "/advanced",

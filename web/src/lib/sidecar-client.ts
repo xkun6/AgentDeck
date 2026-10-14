@@ -28,6 +28,7 @@ import {
   type AgentGroup,
   type Schedule,
   type ScheduleNotice,
+  type RemoteStatus,
   type Board,
 } from "@agentdeck/protocol";
 import { debugBus } from "./debug-bus";
@@ -168,6 +169,7 @@ export class SidecarClient {
   private boardChangedListeners = new Set<Listener<{ projectPath: string; board: Board }>>();
   private groupChangedListeners = new Set<Listener<AgentGroup>>();
   private groupRemovedListeners = new Set<Listener<string>>();
+  private remoteChangedListeners = new Set<Listener<RemoteStatus>>();
 
   constructor(options: SidecarClientOptions) {
     this.resolveUrl = options.resolveUrl;
@@ -261,6 +263,11 @@ export class SidecarClient {
   /** `group.removed` 通知（协作组被删除，参数为 groupId）。 */
   onGroupRemoved(listener: Listener<string>): () => void {
     return subscribe(this.groupRemovedListeners, listener);
+  }
+
+  /** `remote.changed` 通知（远程网关启停、设备配对 / 吊销 / 连接 / 断开，design.md 4.31）。 */
+  onRemoteChanged(listener: Listener<RemoteStatus>): () => void {
+    return subscribe(this.remoteChangedListeners, listener);
   }
 
   /** `agent.tasks.update` 通知（后台任务整表，design.md 4.15）。 */
@@ -619,6 +626,10 @@ export class SidecarClient {
     if (record.method === AGENT_RPC_NOTIFICATIONS.groupRemoved && record.params) {
       const groupId = (record.params as { groupId?: unknown }).groupId;
       if (typeof groupId === "string") emitTo(this.groupRemovedListeners, groupId);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.remoteChanged && record.params) {
+      emitTo(this.remoteChangedListeners, record.params as RemoteStatus);
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.providerChanged) {

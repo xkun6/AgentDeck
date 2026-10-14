@@ -26,6 +26,7 @@ import type {
   ProviderSubagentDescriptor,
   ProviderSubagentTimelineRow,
   ProviderTestResult,
+  RemoteStatus,
   SidecarSettings,
   SidecarSettingsPatch,
   SnapshotTurn,
@@ -81,7 +82,7 @@ import {
   subagentsByAgentAtom,
   type SubagentTimelineCache,
 } from "@/stores/subagents";
-import { invalidateProviderQueries } from "@/lib/agent-query-keys";
+import { AGENT_QUERY_KEYS, invalidateProviderQueries } from "@/lib/agent-query-keys";
 import { notifyFromSchedule } from "@/lib/notifications";
 import { replaceBoardAtom } from "@/stores/boards";
 import { replaceSchedulesAtom } from "@/stores/schedules";
@@ -306,6 +307,54 @@ export function bindGroupsToStore(client: SidecarClient, store: JotaiStore): () 
   return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
+/** `remote.changed` → remote.status 查询缓存（design.md 4.31），「手机连接」设置页据此实时刷新。 */
+export function bindRemoteToQueries(
+  client: Pick<SidecarClient, "onRemoteChanged">,
+  queryClient: Pick<QueryClient, "setQueryData">,
+): () => void {
+  return client.onRemoteChanged((status) => {
+    queryClient.setQueryData<RemoteStatus>(AGENT_QUERY_KEYS.remoteStatus, status);
+  });
+}
+
+/** client.presence 心跳间隔（design.md 4.31：可见期间每 30 秒一次） */
+export const PRESENCE_HEARTBEAT_MS = 30_000;
+
+type PresenceClient = Pick<SidecarClient, "onState" | "request">;
+type PresenceDocument = Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
+
+/**
+ * 桌面端在线状态（design.md 4.31）：连接成功、窗口可见性变化时上报 `client.presence { kind: "desktop", visible }`，
+ * 可见期间每 30 秒再报一次作为心跳。sidecar 据此判断「用户在电脑前」，决定要不要给手机发通知。
+ */
+export function bindDesktopPresence(
+  client: PresenceClient,
+  doc: PresenceDocument = document,
+  heartbeatMs = PRESENCE_HEARTBEAT_MS,
+): () => void {
+  let open = false;
+  const report = () => {
+    if (!open) return;
+    client
+      .request("client.presence", { kind: "desktop", visible: doc.visibilityState === "visible" })
+      .catch(() => {});
+  };
+  const unsubscribe = client.onState((state) => {
+    const wasOpen = open;
+    open = state === "open";
+    if (open && !wasOpen) report();
+  });
+  doc.addEventListener("visibilitychange", report);
+  const timer = setInterval(() => {
+    if (doc.visibilityState === "visible") report();
+  }, heartbeatMs);
+  return () => {
+    unsubscribe();
+    doc.removeEventListener("visibilitychange", report);
+    clearInterval(timer);
+  };
+}
+
 /** 在应用根部调用一次：绑定 store / 查询缓存并发起首次连接。 */
 export function useSidecarBridge(): void {
   const store = useStore();
@@ -317,6 +366,8 @@ export function useSidecarBridge(): void {
     const unbindBoards = bindBoardsToStore(client, store);
     const unbindGroups = bindGroupsToStore(client, store);
     const unbindProviders = bindProviderChangesToQueries(client, queryClient);
+    const unbindRemote = bindRemoteToQueries(client, queryClient);
+    const unbindPresence = bindDesktopPresence(client);
     client.connect().catch(() => {});
     return () => {
       unbind();
@@ -324,6 +375,8 @@ export function useSidecarBridge(): void {
       unbindBoards();
       unbindGroups();
       unbindProviders();
+      unbindRemote();
+      unbindPresence();
     };
   }, [queryClient, store]);
 }
@@ -594,6 +647,17 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     },
     async setSidecarSettings(patch: SidecarSettingsPatch): Promise<SidecarSettings> {
       return client.request("settings.set", { patch });
+    },
+
+    /** remote.status / remote.pairing.create / remote.devices.revoke：远程网关（design.md 4.31）。 */
+    async getRemoteStatus(): Promise<RemoteStatus> {
+      return client.request("remote.status", {});
+    },
+    async createRemotePairing(): Promise<{ offerUrl: string; expiresAt: number }> {
+      return client.request("remote.pairing.create", {});
+    },
+    async revokeRemoteDevice(deviceId: string): Promise<void> {
+      await client.request("remote.devices.revoke", { deviceId });
     },
 
     /** snapshot.list：按回合的文件快照索引（design.md 4.24）。 */

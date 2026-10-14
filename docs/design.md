@@ -1111,6 +1111,12 @@ interface AttentionNotice {
 ```
 - 手机收到后：App 在前台且正停留在该会话 → 忽略；App 在前台其它页面 → 应用内提示；App 在后台 → Android 本地通知，点击跳转到对应会话。桌面端现有通知逻辑不变，只在其可见性变化时补发 `client.presence`。
 
+**桌面前端（设置页「手机连接」，路径 `/remote`，侧栏「设置」下）**：
+- 内容：启用开关与端口（1024–65535）、`remote.status.error`、可用地址列表（局域网 / Tailscale 标签）、「生成配对二维码」（调用 `remote.pairing.create`，用 `qrcode` 把 `offerUrl` 渲染成 SVG，白底黑码不随主题变色，显示 5 分钟倒计时，过期后「重新生成」；有新设备配对成功或网关停止监听时自动收起）、已配对设备（名称、配对时间、最近在线、在线 / 离线、吊销需二次确认）。启用后提示 Windows 防火墙需对 node.exe 允许「专用网络」。
+- 实时刷新：`sidecar-client` 的 `onRemoteChanged` 订阅 `remote.changed`，`useSidecarBridge` 把载荷直接写入 `remote.status` 的查询缓存；页面还会在改设置 / 吊销后主动失效重取。
+- 在线状态：`useSidecarBridge` 同时挂 `bindDesktopPresence`——连接成功（含重连）、`visibilitychange` 时上报 `client.presence { kind: "desktop", visible }`，窗口可见期间每 30 秒心跳一次。
+- 调试面板的脱敏规则覆盖 `agentdeck://pair#…` 链接与 `deviceSecret` / `pairingSecret` 字段。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
