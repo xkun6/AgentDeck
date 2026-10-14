@@ -10,6 +10,7 @@ fn main() {
                     "battery_optimization_status",
                     "request_ignore_battery_optimization",
                     "open_app_settings",
+                    "open_channel_settings",
                     "show_attention",
                     "notification_status",
                     "take_launch_target",

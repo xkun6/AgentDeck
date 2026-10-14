@@ -6,6 +6,7 @@ import {
   getNotificationsEnabled,
   nativeAvailable,
   openAppSettings,
+  openChannelSettings,
   requestIgnoreBatteryOptimization,
   requestNotificationPermission,
   type BatteryOptimizationStatus,
@@ -16,6 +17,9 @@ import s from "./mobile.module.css";
 
 /** 华为 / 荣耀的「应用启动管理」不会写入 AOSP 白名单，即使用户在那里放行了这里也显示未加入，所以文案保持中性、不标红 */
 export const BATTERY_NOT_WHITELISTED = "未加入系统电池优化白名单（华为等机型请以「应用启动管理」中的设置为准）";
+
+/** 部分厂商（如华为）会把「待审批」channel 降为不弹横幅，需要用户手动调回 */
+export const BANNER_HINT = "如需审批弹出横幅，请在 系统设置 → 通知 → AgentDeck → 待审批 中开启横幅";
 
 export const FROZEN_NOTE = "被系统冻结时，回到 App 会自动重连并补齐，不会丢消息；只是 App 在后台被冻结期间收不到提醒。";
 
@@ -175,6 +179,10 @@ export function BackgroundSection({ prefs }: { prefs: PreferencesStore }) {
 
           <button type="button" className={s.secondaryButton} onClick={() => void openAppSettings()}>
             打开应用设置
+          </button>
+          <div className={s.hint}>{BANNER_HINT}</div>
+          <button type="button" className={s.secondaryButton} onClick={() => void openChannelSettings("permission")}>
+            打开「待审批」通知设置
           </button>
         </>
       ) : null}
