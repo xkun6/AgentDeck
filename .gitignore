@@ -40,3 +40,8 @@ tmp/
 # 打包产物（scripts/fetch-node.mjs、scripts/build-sidecar.mjs 生成）
 binaries/
 dist-sidecar/
+
+# Android release 签名（密钥放仓库外，防误放进仓库）
+keystore.properties
+*.jks
+*.keystore
