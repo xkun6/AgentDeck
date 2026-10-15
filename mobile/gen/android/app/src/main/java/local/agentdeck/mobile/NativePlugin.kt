@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -14,6 +15,8 @@ import android.webkit.WebView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -48,6 +51,11 @@ class AttentionArgs {
 @InvokeArg
 class CancelAttentionArgs {
   var id: Int = 0
+}
+
+@InvokeArg
+class OpenUrlArgs {
+  var url: String = ""
 }
 
 @TauriPlugin
@@ -264,6 +272,51 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
       }
     }
     invoke.reject("无法打开通知设置：${lastError?.message}")
+  }
+
+  /**
+   * 用系统浏览器打开链接。只放行 http / https；不用 resolveActivity 预判（Android 11+ 包可见性会让它误返回 null），
+   * 直接 startActivity 并捕获 ActivityNotFoundException。App 自己的 WebView 绝不能去导航外部地址（会替换整个界面并断开连接）。
+   */
+  @Command
+  fun openUrl(invoke: Invoke) {
+    val args = invoke.parseArgs(OpenUrlArgs::class.java)
+    val uri = Uri.parse(args.url.trim())
+    val scheme = uri.scheme?.lowercase()
+    if ((scheme != "http" && scheme != "https") || uri.host.isNullOrEmpty()) {
+      invoke.reject("只允许打开 http / https 链接")
+      return
+    }
+    try {
+      activity.startActivity(
+        Intent(Intent.ACTION_VIEW, uri)
+          .addCategory(Intent.CATEGORY_BROWSABLE)
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      )
+      invoke.resolve()
+    } catch (e: ActivityNotFoundException) {
+      invoke.reject("没有可打开链接的浏览器")
+    } catch (e: Exception) {
+      invoke.reject("无法打开链接：${e.message}")
+    }
+  }
+
+  /**
+   * 顶部系统栏（状态栏 / 刘海）高度，单位 CSS px（dp）。Android WebView 的 env(safe-area-inset-top) 在 edge-to-edge 下不一定包含状态栏，
+   * 前端据此设置 CSS 变量 --ad-safe-top（见 web/src/mobile/safe-area.ts）；窗口还没拿到 insets 时 reject，前端稍后重试。
+   */
+  @Command
+  fun safeAreaInsets(invoke: Invoke) {
+    val root = ViewCompat.getRootWindowInsets(activity.window.decorView)
+    if (root == null) {
+      invoke.reject("窗口尚未就绪")
+      return
+    }
+    val insets = root.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+    val density = activity.resources.displayMetrics.density
+    val result = JSObject()
+    result.put("top", (insets.top / density).toDouble())
+    invoke.resolve(result)
   }
 
   /** 本应用的系统设置页（自启动 / 后台活动 / 通知开关都从这里进） */

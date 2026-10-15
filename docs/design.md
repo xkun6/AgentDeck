@@ -1226,8 +1226,8 @@ MCP 服务可以通过 Agent 向用户索取结构化输入（form 模式）或�
 - Codex 没有 url 流程的完成通知；url 请求靠用户点「已完成」，或回合结束 / `serverRequest/resolved` 时清理（与其它审批相同）。
 
 **前端**（`web/src/components/chat/elicitation-card.tsx`，在 `approval-dialog.tsx` 的分发里接入）：
-- form：按 `fields` 渲染——文本、数字（`inputMode` 数字键盘）、开关（复选框）、单选（选项 ≤4 个用单选组，更多用下拉）、多选（复选框组）、`secret` 用密码框（`autocomplete="off"`）；`format` 为 email / uri / date 时用对应的 input 类型。基本校验：必填、字符数范围、数值范围（含 integer）、多选数量；点「提交」才显示错误，未通过不发送；选填且为空的字段不放进 `content`，数字以 number 提交。按钮「提交」「拒绝」「取消」（取消的 tooltip 提示会中断本回合）。
-- url：显示说明与链接地址，按钮「在浏览器中打开」走 `openExternalUrl`（桌面经 Tauri 打开系统浏览器；手机端目前没有原生外链能力，回退 `window.open`，见 `lib/external-links.ts`）；只允许 http / https / mailto / obsidian，其它协议提示并禁用。按钮「已完成」「拒绝」「取消」。
+- form：按 `fields` 渲染——文本、数字（`inputMode` 数字键盘）、开关（复选框）、单选（选项 ≤4 个用单选组，更多用下拉）、多选（复选框组；设了 `max` 的字段，已选满后未选中的选项禁用、已选的仍可取消，字段标题旁提示「最多选 N 项」）、`secret` 用密码框（`autocomplete="off"`）；`format` 为 email / uri / date 时用对应的 input 类型。基本校验：必填、字符数范围、数值范围（含 integer）、多选数量；点「提交」才显示错误，未通过不发送；选填且为空的字段不放进 `content`，数字以 number 提交。按钮「提交」「拒绝」「取消」（取消的 tooltip 提示会中断本回合）。
+- url：显示说明与链接地址，按钮「在浏览器中打开」走 `openExternalUrl`（桌面经 Tauri 打开系统浏览器；手机端经注册的原生打开器调用 `native.open_url`，失败也不退回 `window.open`——Android WebView 会在本页内导航把 App 界面替换掉；手机入口另全局拦截外部 `a[href]` 点击与 `window.open`，见 `lib/external-links.ts`、`mobile/external-links.ts`）；只允许 http / https / mailto / obsidian，其它协议提示并禁用。按钮「已完成」「拒绝」「取消」。
 - 样式用 CSS Modules + tokens，窄屏 / 触屏下输入框与选项行 ≥44px、按钮换行铺开。
 - 标签与通知：`web/src/lib/permission-label.ts` 里 `elicitation` →「待填写」/「等待填写」；`client.attention` 摘要（4.31）form =「Agent 需要你填写表单：<serverName>」，url =「Agent 需要你在浏览器中完成操作：<serverName>」，只引用服务名，不含表单内容。
 - 超大内容：`permission-limits`（4.31）对 `detail` 里的字符串同样生效（`message` / 字段说明 / 选项文本超限会截断，字段与选项个数已被归一化函数限制在 50 / 200）。

@@ -20,6 +20,8 @@ import { KeepAliveController } from "./native/keepalive-controller";
 import { BackgroundNotifier } from "./native/local-notifications";
 import { keepaliveStart, keepaliveStop } from "./native/native-plugin";
 import { setBackgroundAttentionHandler, setResolvedAttentionHandler } from "./attention";
+import { installMobileExternalLinks } from "./external-links";
+import { installSafeAreaTop } from "./safe-area";
 import { startAppStateTracking, subscribeAppForeground } from "./native/app-state";
 import "@/styles/global.css";
 
@@ -31,6 +33,10 @@ applyThemeToDOM(DEFAULT_THEME_CONFIG);
 // 持久化只用 localStorage；桌面通知出口关闭（后台提醒走 setBackgroundAttentionHandler → 本地通知，见 bootstrap）
 configureUiStoreBackend("local-storage");
 configureNotifier(null);
+// 外链一律交给系统浏览器（<a> 点击与 window.open 都拦），避免 Android WebView 在本页内导航把 App 界面替换掉
+installMobileExternalLinks();
+// 顶部避开系统状态栏（原生提供高度 → --ad-safe-top）
+installSafeAreaTop();
 
 async function bootstrap() {
   await initUiStore();

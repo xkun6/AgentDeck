@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getBatteryOptimization,
+  getSafeAreaTop,
+  openUrl,
   getNotificationsEnabled,
   keepaliveStart,
   keepaliveStop,
@@ -28,6 +30,8 @@ describe("原生包装在非 Tauri 环境下是 no-op", () => {
     expect(await getBatteryOptimization()).toEqual({ supported: false, ignoring: false });
     expect(await requestIgnoreBatteryOptimization()).toBe(false);
     expect(await openAppSettings()).toBe(false);
+    expect(await openUrl("https://example.com")).toBe(false);
+    expect(await getSafeAreaTop()).toBeNull();
     expect(await showAttentionNotification({ id: 1, title: "t", body: "b", kind: "finished" })).toBe(false);
     expect(await cancelAttentionNotification(1)).toBe(false);
     expect(await getNotificationsEnabled()).toBeNull();
@@ -113,5 +117,37 @@ describe("原生包装转发命令", () => {
     expect(await takeLaunchTarget()).toBeNull();
     expect(await requestNotificationPermission()).toBe("granted");
     expect(await requestNotificationPermission()).toBe("denied");
+  });
+});
+
+describe("openUrl / getSafeAreaTop", () => {
+  it("openUrl 转发 open_url；原生拒绝（非 http(s) / 无浏览器）返回 false", async () => {
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    setNativeBackend({
+      invoke: async (command, args) => {
+        calls.push([command, args]);
+        if (args?.url === "ftp://x") throw new Error("只允许打开 http / https 链接");
+        return null;
+      },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await openUrl("https://example.com/a")).toBe(true);
+    expect(await openUrl("ftp://x")).toBe(false);
+    expect(calls[0]).toEqual(["open_url", { url: "https://example.com/a" }]);
+  });
+
+  it("getSafeAreaTop 读 safe_area_insets 的 top；取不到或非数字返回 null", async () => {
+    let reply: unknown = { top: 28.5 };
+    setNativeBackend({ invoke: async () => reply });
+    expect(await getSafeAreaTop()).toBe(28.5);
+    reply = { top: "x" };
+    expect(await getSafeAreaTop()).toBeNull();
+    setNativeBackend({
+      invoke: async () => {
+        throw new Error("窗口尚未就绪");
+      },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await getSafeAreaTop()).toBeNull();
   });
 });

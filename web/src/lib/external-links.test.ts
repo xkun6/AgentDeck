@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { normalizeExternalUrl, openExternalUrl } from "./external-links";
+import { normalizeExternalUrl, openExternalUrl, setMobileExternalOpener } from "./external-links";
 
 afterEach(() => {
+  setMobileExternalOpener(null);
   delete (globalThis as any).window;
 });
 
@@ -37,5 +38,23 @@ describe("external-links", () => {
 
     expect(desktopOpen).toHaveBeenCalledWith({ url: "https://agentdeck.example/" });
     expect(fallbackOpen).not.toHaveBeenCalled();
+  });
+
+  it("手机端：注册了原生打开器就只走它，失败也不退回 window.open / 桌面 opener", async () => {
+    const mobileOpen = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockRejectedValueOnce(new Error("boom"));
+    const fallbackOpen = vi.fn();
+    const desktopOpen = vi.fn();
+    (globalThis as any).window = { agentdeckDesktop: { openExternalUrl: desktopOpen }, open: fallbackOpen };
+    setMobileExternalOpener(mobileOpen);
+
+    await expect(openExternalUrl("https://agentdeck.example")).resolves.toBe(true);
+    expect(mobileOpen).toHaveBeenCalledWith("https://agentdeck.example/");
+    await expect(openExternalUrl("https://agentdeck.example")).resolves.toBe(false);
+    await expect(openExternalUrl("https://agentdeck.example")).resolves.toBe(false);
+    await expect(openExternalUrl("file:///etc/passwd")).resolves.toBe(false);
+
+    expect(mobileOpen).toHaveBeenCalledTimes(3);
+    expect(fallbackOpen).not.toHaveBeenCalled();
+    expect(desktopOpen).not.toHaveBeenCalled();
   });
 });

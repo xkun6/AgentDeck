@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--ad-safe-top, env(safe-area-inset-top));
   background: var(--h-bg-app);
   color: var(--h-text);
 }
@@ -20,7 +20,7 @@
 /* 不在 .app 壳里的页面（电脑列表 / 配对）自己占满屏幕并处理安全区 */
 :global(#root) > .page {
   height: 100dvh;
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--ad-safe-top, env(safe-area-inset-top));
   padding-bottom: env(safe-area-inset-bottom);
 }
 
@@ -590,6 +590,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 外链打开失败的短暂提示（external-links.ts 动态插入 body） */
+.linkToast {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 30;
+  padding: 8px 12px;
+  border: 1px solid var(--h-line);
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  font-size: 12px;
+  text-align: center;
 }
 
 /* 会话详情 */
