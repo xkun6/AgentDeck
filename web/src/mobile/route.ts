@@ -1,13 +1,22 @@
-// 手机端的 hash 路由（Android 返回键走 history）：#/sessions  #/s/<agentId>  #/new  #/settings  #/hosts  #/pair
+// 手机端的 hash 路由（Android 返回键走 history）：#/sessions  #/s/<agentId>  #/s/<agentId>/sub/<subagentId>  #/new  #/settings  #/hosts  #/pair
 export type MobileRoute =
   | { name: "hosts" }
   | { name: "pair" }
   | { name: "sessions" }
-  | { name: "session"; agentId: string }
+  | { name: "session"; agentId: string; subagentId?: string }
   | { name: "new" }
   | { name: "settings" };
 
 export function parseRoute(hash: string): MobileRoute {
+  // 子代理页是会话页上的一层 history：返回键逐级回退（孙代理继续 push）
+  const sub = /^#\/s\/([^/]+)\/sub\/(.+)$/.exec(hash);
+  if (sub) {
+    try {
+      return { name: "session", agentId: decodeURIComponent(sub[1]!), subagentId: decodeURIComponent(sub[2]!) };
+    } catch {
+      return { name: "sessions" };
+    }
+  }
   const match = /^#\/s\/(.+)$/.exec(hash);
   if (match) {
     try {
@@ -33,7 +42,9 @@ export function parseRoute(hash: string): MobileRoute {
 export function routeHash(route: MobileRoute): string {
   switch (route.name) {
     case "session":
-      return `#/s/${encodeURIComponent(route.agentId)}`;
+      return route.subagentId === undefined
+        ? `#/s/${encodeURIComponent(route.agentId)}`
+        : `#/s/${encodeURIComponent(route.agentId)}/sub/${encodeURIComponent(route.subagentId)}`;
     case "sessions":
       return "#/sessions";
     default:

@@ -270,6 +270,9 @@ function ShellContent({
           key={route.agentId}
           agentId={route.agentId}
           onBack={() => back({ name: "sessions" })}
+          openSubagentId={route.subagentId ?? null}
+          onOpenSubagent={(id) => navigate({ name: "session", agentId: route.agentId, subagentId: id })}
+          onCloseSubagent={() => back({ name: "session", agentId: route.agentId })}
         />
       );
     case "new":

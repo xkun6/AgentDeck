@@ -804,3 +804,28 @@
   display: flex;
   gap: 8px;
 }
+
+/* 子代理只读时间线：盖在会话页上的全屏层（会话页保持挂载，保留时间线窗口与滚动） */
+.subagentOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: var(--ad-safe-top, env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--h-bg-app);
+  color: var(--h-text);
+}
+
+/* 复用桌面面板的头部按钮（24px）在手机上放大到触控尺寸，不影响桌面样式 */
+.subagentOverlay header button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.subagentOverlay header {
+  align-items: center;
+  padding: 4px 12px;
+}
