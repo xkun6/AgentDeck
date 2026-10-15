@@ -1773,6 +1773,8 @@ export class CodexAgentSession implements AgentSession {
         if (usage) {
           turn.usage = usage;
           turn.tokens = updateCodexTurnTokens(turn.tokens, tokenUsage);
+          // 每次采样（一次模型响应）结束发一次：关闭当前生成段
+          turn.speed.markIdle();
           // 本轮输出 token = 最新 total − 起点（与 5.3 的本轮合计同口径）
           const turnOutput = codexTurnCompletedUsage(usage, turn.tokens)?.outputTokens;
           const speed = turnOutput === undefined ? undefined : turn.speed.speed(turnOutput);
@@ -1806,6 +1808,7 @@ export class CodexAgentSession implements AgentSession {
   }
 
   private handleAgentMessageDelta(turn: ActiveTurn, params: JsonRecord | null): void {
+    turn.speed.markOutput();
     const itemId = str(pick(params, "itemId", "item_id")) ?? "agent-message";
     const delta = typeof params?.delta === "string" ? params.delta : "";
     if (!delta) return;
@@ -1818,6 +1821,7 @@ export class CodexAgentSession implements AgentSession {
     params: JsonRecord | null,
     source: "summary" | "raw",
   ): void {
+    turn.speed.markOutput();
     const itemId = str(pick(params, "itemId", "item_id")) ?? "reasoning";
     const delta = typeof params?.delta === "string" ? params.delta : "";
     if (!delta) return;
@@ -1843,6 +1847,11 @@ export class CodexAgentSession implements AgentSession {
     if (!item) return;
     const type = str(item.type);
     const itemId = str(item.id);
+
+    // 推理 / 文字项开始即视为模型开始生成（加密或不显示的推理也会开段）
+    if (phase === "started" && (type === "agentMessage" || type === "reasoning")) {
+      turn.speed.markOutput();
+    }
 
     if (type === "agentMessage") {
       if (phase !== "completed") return;
@@ -1931,6 +1940,7 @@ export class CodexAgentSession implements AgentSession {
       return;
     }
     const baseUsage = codexTurnCompletedUsage(turn.usage, turn.tokens);
+    turn.speed.markIdle();
     const finalSpeed = baseUsage?.outputTokens === undefined ? undefined : turn.speed.speed(baseUsage.outputTokens);
     const usage =
       baseUsage && finalSpeed !== undefined ? { ...baseUsage, outputTokensPerSecond: finalSpeed } : baseUsage;

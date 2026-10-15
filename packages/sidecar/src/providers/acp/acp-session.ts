@@ -670,6 +670,8 @@ export class AcpAgentSession implements AgentSession {
       }
       case "tool_call":
       case "tool_call_update": {
+        // 新工具调用通知到达：模型本次响应的输出已结束，关闭生成段（工具执行不计入速度）
+        if (update.sessionUpdate === "tool_call") turn?.speed.markIdle();
         if (turn) {
           turn.fallbackMessageId = null;
           turn.toolCallIds.add(update.toolCallId);
@@ -770,6 +772,7 @@ export class AcpAgentSession implements AgentSession {
       this.usage;
     const turnUsage: AgentUsage = { ...rest, ...(response.usage ? fromAcpUsage(response.usage) : {}) };
     // 输出速度只在回合结束用本轮应答的输出 token 算最终值（design.md 4.30）
+    turn.speed.markIdle();
     const speed = response.usage && turnUsage.outputTokens !== undefined
       ? turn.speed.speed(turnUsage.outputTokens)
       : undefined;
