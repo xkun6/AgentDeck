@@ -194,13 +194,15 @@ function FieldControl({ field, id, value, error, disabled, onChange }: FieldCont
 
   if (field.type === "multiselect") {
     const selected = Array.isArray(value) ? value : [];
+    // 已选数量达到上限后，未选中的选项禁用（已选的仍可取消）
+    const atMax = field.max !== undefined && selected.length >= field.max;
     return (
       <fieldset className={s.field} aria-describedby={describedBy}>
         <legend className={s.legend}>
           {labelNode}
           {field.min !== undefined || field.max !== undefined ? (
             <span className={s.hint}>
-              {" "}（{field.min !== undefined ? `至少 ${field.min} 项` : ""}{field.min !== undefined && field.max !== undefined ? "，" : ""}{field.max !== undefined ? `最多 ${field.max} 项` : ""}）
+              {" "}（{field.min !== undefined ? `至少 ${field.min} 项` : ""}{field.min !== undefined && field.max !== undefined ? "，" : ""}{field.max !== undefined ? `最多选 ${field.max} 项` : ""}）
             </span>
           ) : null}
         </legend>
@@ -211,7 +213,7 @@ function FieldControl({ field, id, value, error, disabled, onChange }: FieldCont
                 className={s.control}
                 type="checkbox"
                 checked={selected.includes(option.value)}
-                disabled={disabled}
+                disabled={disabled || (atMax && !selected.includes(option.value))}
                 onChange={(event) =>
                   onChange(
                     event.target.checked

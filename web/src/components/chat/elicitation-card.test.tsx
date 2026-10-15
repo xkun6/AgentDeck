@@ -125,6 +125,23 @@ describe("ElicitationCard（form）", () => {
     expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
   });
 
+  it("多选达到上限后禁用未选项并提示「最多选 N 项」，已选项仍可取消", () => {
+    render(<ApprovalDialog approval={approval(formRequest())} onRespond={vi.fn()} />);
+    const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+
+    expect(screen.getByText(/最多选 2 项/)).toBeTruthy();
+    expect(box("标签Z").disabled).toBe(false);
+    fireEvent.click(box("标签X"));
+    expect(box("标签Z").disabled).toBe(false);
+    fireEvent.click(box("标签Y"));
+    expect(box("标签Z").disabled).toBe(true);
+    expect(box("标签X").disabled).toBe(false);
+    expect(box("标签Y").disabled).toBe(false);
+
+    fireEvent.click(box("标签X"));
+    expect(box("标签Z").disabled).toBe(false);
+  });
+
   it("必填 / 长度 / 数值范围 / 多选上限校验：未通过不提交并显示错误，通过后回传 content", async () => {
     const onRespond = vi.fn().mockResolvedValue(undefined);
     render(<ApprovalDialog approval={approval(formRequest())} onRespond={onRespond} />);
@@ -144,9 +161,8 @@ describe("ElicitationCard（form）", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "标签X" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "标签Y" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "标签Z" }));
-    expect(screen.getByText("最多选择 2 项")).toBeTruthy();
-    fireEvent.click(screen.getByRole("checkbox", { name: "标签Z" }));
+    // 已选满 2 项：第三项被禁用，点不上
+    expect((screen.getByRole("checkbox", { name: "标签Z" }) as HTMLInputElement).disabled).toBe(true);
 
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "s3cret" } });
     fireEvent.click(screen.getByRole("radio", { name: "高" }));
