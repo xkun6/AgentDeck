@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { Dot } from "@/components/ui/pill";
-import { AGENT_STATUS_LABELS } from "@/lib/agent-session-display";
+import { agentStatusLabel } from "@/lib/agent-session-display";
 import { sessionTokens, shortId, type PanelSession } from "./panel-session";
 import s from "./recent-table.module.css";
 
@@ -84,7 +84,7 @@ export function RecentTable({ sessions, onOpen }: RecentTableProps) {
                   <td className={s.mono}>{sess.provider}</td>
                   <td className={s.mono}>{agent.model || "—"}</td>
                   <td>
-                    <span className={s.statusCell} title={AGENT_STATUS_LABELS[agent.status]}>
+                    <span className={s.statusCell} title={agentStatusLabel(agent)}>
                       {isError && <Dot tone="err" />}
                       {relativeTime(agent.updatedAt / 1000)}
                     </span>

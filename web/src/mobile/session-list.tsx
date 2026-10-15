@@ -7,7 +7,7 @@ import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { pendingPermissionLabel } from "@/lib/permission-label";
 import {
-  AGENT_STATUS_LABELS,
+  agentStatusLabel,
   agentDisplayTitle,
   agentProviderLabel,
   formatAgentTime,
@@ -109,7 +109,7 @@ export function SessionList({ onOpen }: { onOpen: (agentId: string) => void }) {
                   {needsApproval ? <span className={s.badgeWarn}>{pendingPermissionLabel(approvalKind)}</span> : null}
                 </span>
                 <span className={s.rowMeta}>
-                  <span data-running={running ? "true" : undefined}>{AGENT_STATUS_LABELS[agent.status]}</span>
+                  <span data-running={running ? "true" : undefined}>{agentStatusLabel(agent)}</span>
                   <span>{agentProviderLabel(agent.provider, providers)}</span>
                   {agent.archived ? <span>已归档</span> : null}
                   <span>{formatAgentTime(agent.updatedAt, now)}</span>

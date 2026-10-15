@@ -5,7 +5,7 @@ import { useAtomValue } from "jotai";
 import { useNavigate } from "react-router-dom";
 import { ExternalLink, GitBranch } from "lucide-react";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
-import { AGENT_STATUS_LABELS, agentDisplayTitle, agentProviderLabel } from "@/lib/agent-session-display";
+import { agentDisplayTitle, agentProviderLabel, agentStatusLabel } from "@/lib/agent-session-display";
 import { INTEROP_TOOL_LABELS } from "@/lib/interop-tools";
 import { agentSnapshotsAtom } from "@/stores/agents";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
@@ -49,7 +49,7 @@ export function DelegateCard({ tool }: { tool: ChatToolItem }) {
 
   // 目标会话还在列表里时用实时状态，否则退回工具结果里记录的回合结局
   const statusLabel = target
-    ? AGENT_STATUS_LABELS[target.status]
+    ? agentStatusLabel(target)
     : info.result?.status
       ? (RESULT_STATUS_LABELS[info.result.status] ?? info.result.status)
       : tool.status === "running"

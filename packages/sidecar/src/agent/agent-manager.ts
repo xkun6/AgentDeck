@@ -1165,6 +1165,7 @@ export class AgentManager {
     agent.snapshot.status = finalStatus;
     agent.snapshot.activeTurnId = null;
     agent.snapshot.pendingPermissions = [];
+    delete agent.snapshot.backgroundActive;
     this.touch(agent);
     await this.persistNow(agent);
     this.logger.info("关闭 agent %s", agent.id);
@@ -1402,6 +1403,7 @@ export class AgentManager {
       if (!agent.removed) {
         agent.backgroundTasks = rawEvent.tasks;
         this.emitTasks(agent.id, rawEvent.tasks);
+        this.refreshBackgroundActive(agent);
       }
       return;
     }
@@ -1766,6 +1768,27 @@ export class AgentManager {
       return;
     }
     this.emitSubagentUpdate(this.subagents.apply(agent.id, agent.snapshot.provider, event));
+    this.refreshBackgroundActive(agent);
+  }
+
+  /**
+   * 重算快照的 backgroundActive（design.md 4.11 / 4.15）：有 running 子代理或 running 后台任务。
+   * 值变化时推 agent.state；不 touch、不落盘（该字段不持久化）；缺省 = false。
+   */
+  private refreshBackgroundActive(agent: ManagedAgent): void {
+    const active =
+      !agent.closed &&
+      (this.subagents.list(agent.id).some((subagent) => subagent.status === "running") ||
+        agent.backgroundTasks.some((task) => task.status === "running"));
+    if ((agent.snapshot.backgroundActive === true) === active) {
+      return;
+    }
+    if (active) {
+      agent.snapshot.backgroundActive = true;
+    } else {
+      delete agent.snapshot.backgroundActive;
+    }
+    this.emitState(agent);
   }
 
   /** 会话关闭 / 删除：清空该会话的子代理并逐个广播 remove */
@@ -1898,9 +1921,14 @@ function finiteOrNull(value: number | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** meta.json：快照中除 pendingPermissions / activeTurnId 外的字段，加上分叉相关的待处理状态（不进快照） */
+/** meta.json：快照中除 pendingPermissions / activeTurnId / backgroundActive 外的字段，加上分叉相关的待处理状态（不进快照） */
 function toPersistedMeta(agent: ManagedAgent): PersistedAgentMeta {
-  const { pendingPermissions: _pending, activeTurnId: _active, ...rest } = agent.snapshot;
+  const {
+    pendingPermissions: _pending,
+    activeTurnId: _active,
+    backgroundActive: _background,
+    ...rest
+  } = agent.snapshot;
   return structuredClone({
     ...rest,
     ...(agent.pendingForkContext !== undefined

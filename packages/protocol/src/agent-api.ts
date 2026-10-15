@@ -477,6 +477,11 @@ export interface AgentSnapshot {
   /** 最近收到的账户额度（design.md 4.30）；随 meta 持久化 */
   rateLimits?: AgentRateLimits;
   lastError?: string | null;
+  /**
+   * 本会话有运行中的 provider 子代理或后台任务（design.md 4.11 / 4.15）；由 sidecar 维护，不持久化（缺省 = false）。
+   * 前端显示状态时 `status === "running" || backgroundActive` 视为「进行中」；不影响发送与忙碌判断。
+   */
+  backgroundActive?: boolean;
   persistence?: AgentPersistenceHandle | null;
   /** 首条用户消息前 120 字（首尾空白去掉、换行压成空格） */
   preview?: string;

@@ -19,7 +19,7 @@ import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useRetractMessage } from "@/hooks/use-retract-message";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
-import { AGENT_STATUS_LABELS, agentDisplayTitle } from "@/lib/agent-session-display";
+import { agentDisplayTitle, agentStatusLabel } from "@/lib/agent-session-display";
 import { MobileComposer } from "./composer";
 import { addImages, compressImage, describeImageSendFailure, imagesToAttachments, type DraftImage } from "./image-attachments";
 import s from "./mobile.module.css";
@@ -235,7 +235,7 @@ export function SessionDetail({
           ‹
         </button>
         <h1 className={s.titleSmall}>{title}</h1>
-        {snapshot ? <span className={s.conn}>{AGENT_STATUS_LABELS[snapshot.status]}</span> : null}
+        {snapshot ? <span className={s.conn}>{agentStatusLabel(snapshot)}</span> : null}
       </header>
       {inHistory ? (
         <div className={s.historyBar} role="status">

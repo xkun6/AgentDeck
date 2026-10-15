@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import { Provider, createStore } from "jotai";
 import type { AgentSnapshot } from "@agentdeck/protocol";
+import { AGENT_STATUS_LABELS } from "@/lib/agent-session-display";
 import { stubRadixGlobals } from "@/test-utils/radix";
 import { ConfirmProvider } from "@/lib/use-confirm";
 import { replaceAgentSnapshotsAtom } from "@/stores/agents";
@@ -73,6 +74,14 @@ describe("侧栏会话列表", () => {
     expect(screen.queryByText("会话-gone")).toBeNull();
     const order = screen.getAllByText(/^会话-/).map((node) => node.textContent);
     expect(order).toEqual(["会话-pin-new", "会话-pin-old", "会话-new"]);
+  });
+});
+
+describe("侧栏会话状态（backgroundActive）", () => {
+  it("idle 且 backgroundActive 显示「运行中」文案；普通 idle 显示「空闲」", () => {
+    renderSidebar([agent("bg", { backgroundActive: true }), agent("plain")]);
+    expect(screen.getAllByText(new RegExp(AGENT_STATUS_LABELS.running))).toHaveLength(1);
+    expect(screen.getAllByText(new RegExp(AGENT_STATUS_LABELS.idle))).toHaveLength(1);
   });
 });
 

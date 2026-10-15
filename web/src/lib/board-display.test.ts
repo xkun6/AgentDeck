@@ -58,5 +58,6 @@ describe("board-display", () => {
     expect(sessionBadge(agent({ pendingPermissions: [{ id: "p", kind: "plan" } as never] }))?.label).toBe("等待确认计划");
     expect(sessionBadge(agent({ status: "error" }))?.tone).toBe("error");
     expect(sessionBadge(agent({ status: "idle" }))).toEqual({ label: "空闲", tone: "idle" });
+    expect(sessionBadge(agent({ status: "idle", backgroundActive: true }))).toEqual({ label: "运行中", tone: "running" });
   });
 });

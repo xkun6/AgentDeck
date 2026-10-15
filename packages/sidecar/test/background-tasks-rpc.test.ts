@@ -118,6 +118,29 @@ describe("后台任务 RPC", () => {
     });
   });
 
+  test("backgroundActive：running 后台任务 → true；全部结束 → 缺省；再启动后关闭会话 → 缺省（design.md 4.15）", async () => {
+    await start();
+    const { agent } = await client.call("agent.create", { provider: "mock", cwd: process.cwd() });
+    const stateOf = () => client.states.filter((a) => a.id === agent.id);
+    const snapshot = async () => (await client.call("agent.list", {})).agents.find((a) => a.id === agent.id)!;
+    expect((await snapshot()).backgroundActive).toBeUndefined();
+
+    provider.pushers[0]!([task(), task({ taskId: "bk2" })]);
+    await client.waitFor(() => stateOf().some((a) => a.backgroundActive === true));
+    const active = await snapshot();
+    expect(active.status).toBe("idle");
+    expect(active.backgroundActive).toBe(true);
+
+    provider.pushers[0]!([task({ status: "completed" }), task({ taskId: "bk2", status: "stopped" })]);
+    await client.waitFor(() => stateOf().at(-1)?.backgroundActive === undefined);
+    expect((await snapshot()).backgroundActive).toBeUndefined();
+
+    provider.pushers[0]!([task({ taskId: "bk3" })]);
+    await client.waitFor(() => stateOf().at(-1)?.backgroundActive === true);
+    await client.call("agent.close", { agentId: agent.id });
+    expect((await snapshot()).backgroundActive).toBeUndefined();
+  });
+
   test("stop / output 转发到会话；maxBytes 缺省 64KB、上限 256KB；任务未知 TASK_NOT_FOUND", async () => {
     await start();
     const { agent } = await client.call("agent.create", { provider: "mock", cwd: process.cwd() });
