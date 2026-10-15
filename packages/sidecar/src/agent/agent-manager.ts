@@ -39,6 +39,12 @@ import { searchSources, type SearchResult } from "./timeline-search.js";
 import { pageTimeline } from "./timeline-page.js";
 import { compactToolCallUpdates, toolCallId } from "./timeline-compact.js";
 import { limitTimelineItem } from "./timeline-limits.js";
+import {
+  limitPermissionRequest,
+  limitPermissionResponse,
+  restoreTruncatedInput,
+  type TruncatedInputField,
+} from "./permission-limits.js";
 import type {
   AgentClient,
   AgentSession,
@@ -147,6 +153,8 @@ interface ManagedAgent {
   backgroundTurnId: string | null;
   /** 当前 agent.send 发起的回合（供撤回，design.md 4.16）；回合结束 / 撤回完成后清空 */
   sentTurn: SentTurn | null;
+  /** 被截断过 input 的挂起审批（requestId → 被截断的顶层字段）；应答时还原未被用户改动的字段，见 permission-limits.ts */
+  truncatedPermissions: Map<string, TruncatedInputField[]>;
   /** 没有可用会话（关闭中 / 已关闭 / dormant） */
   closed: boolean;
   /** 进行中的恢复 */
@@ -813,7 +821,14 @@ export class AgentManager {
     if (!pending) {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
-    await this.requireSession(agent).respondToPermission(requestId, response);
+    // 回传给 provider 的 updatedInput：UI 没改过的被截断字段换回原始值
+    const truncated = agent.truncatedPermissions.get(requestId);
+    agent.truncatedPermissions.delete(requestId);
+    const outgoing: AgentPermissionResponse =
+      truncated && response.behavior === "allow" && response.updatedInput
+        ? { ...response, updatedInput: restoreTruncatedInput(response.updatedInput, truncated) }
+        : response;
+    await this.requireSession(agent).respondToPermission(requestId, outgoing);
     // 兜底：session 未发 permission_resolved 时补发（已解决的会在处理时被去重丢弃）
     this.enqueueEvent(agent, { type: "permission_resolved", requestId, response });
     await agent.tail;
@@ -1395,7 +1410,7 @@ export class AgentManager {
       this.applySubagentEvent(agent, rawEvent.event);
       return;
     }
-    const event = this.limitToolCallSize(this.attachTurnId(agent, rawEvent));
+    const event = this.limitPermissionSize(agent, this.limitToolCallSize(this.attachTurnId(agent, rawEvent)));
     const sentTurn = agent.sentTurn;
     if (sentTurn) {
       if (sentTurn.retracted && event.type === "timeline") {
@@ -1420,6 +1435,36 @@ export class AgentManager {
     // 非合并事件：先把缓冲的文本冲出去，保证顺序
     this.coalescer.flushFor(agent.id);
     this.applyAndEmit(agent, event);
+  }
+
+  /**
+   * 审批请求的 input / detail 里过长的字符串截断后再进入快照 / 广播 / 落盘（design.md 4.31），
+   * 保证 permission_requested 不会因超过远程网关的帧上限而发不出去；provider 持有的原始 input 不受影响。
+   */
+  private limitPermissionSize(agent: ManagedAgent, event: AgentStreamEvent): AgentStreamEvent {
+    if (event.type === "permission_resolved") {
+      const response = limitPermissionResponse(event.response);
+      return response === event.response ? event : { ...event, response };
+    }
+    if (event.type !== "permission_requested") {
+      return event;
+    }
+    const { request, truncatedInput } = limitPermissionRequest(event.request);
+    if (request === event.request) {
+      return event;
+    }
+    this.logger.warn("agent %s 的审批请求 %s 内容过大，已截断后下发", agent.id, request.id);
+    if (truncatedInput.length > 0) {
+      // 只保留仍挂起的条目，避免无人应答的请求长期占用内存
+      const pendingIds = new Set(agent.snapshot.pendingPermissions.map((item) => item.id));
+      for (const id of agent.truncatedPermissions.keys()) {
+        if (!pendingIds.has(id)) {
+          agent.truncatedPermissions.delete(id);
+        }
+      }
+      agent.truncatedPermissions.set(request.id, truncatedInput);
+    }
+    return { ...event, request };
   }
 
   /** 工具调用项统一限制大小（文本截断、图片占位），先于合并 / 快照 / 广播 / 落盘（design.md 5.3） */
@@ -1822,6 +1867,7 @@ function newManagedAgent(
     unsubscribe: () => undefined,
     sending: false,
     finishedTurnIds: new Set(),
+    truncatedPermissions: new Map(),
     backgroundTurnId: null,
     sentTurn: null,
     closed: true,

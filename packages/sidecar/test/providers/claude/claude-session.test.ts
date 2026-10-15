@@ -199,12 +199,24 @@ function canUseTool(
   cli: FakeCli,
   toolName: string,
   input: Record<string, unknown>,
-  ctx: { signal?: AbortSignal; toolUseId?: string; title?: string } = {},
+  ctx: {
+    signal?: AbortSignal;
+    toolUseId?: string;
+    title?: string;
+    suggestions?: unknown;
+    suppressAlwaysAllowRule?: boolean;
+    defaultToNo?: boolean;
+    blockedPath?: string;
+  } = {},
 ): Promise<ClaudePermissionResult> {
   return cli.options.canUseTool(toolName, input, {
     signal: ctx.signal ?? new AbortController().signal,
     ...(ctx.toolUseId ? { toolUseId: ctx.toolUseId } : {}),
     ...(ctx.title ? { title: ctx.title } : {}),
+    ...(ctx.suggestions !== undefined ? { suggestions: ctx.suggestions } : {}),
+    ...(ctx.suppressAlwaysAllowRule ? { suppressAlwaysAllowRule: true } : {}),
+    ...(ctx.defaultToNo ? { defaultToNo: true } : {}),
+    ...(ctx.blockedPath ? { blockedPath: ctx.blockedPath } : {}),
   });
 }
 
@@ -1228,7 +1240,404 @@ describe("ClaudeAgentSession", () => {
     await session.respondToPermission(third.id, { behavior: "deny" });
     await expect(denyPromise).resolves.toEqual({ behavior: "deny", message: "用户拒绝了该操作" });
     expect(session.getPendingPermissions()).toHaveLength(0);
-    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toThrow();
+    // 找不到（例如另一端刚处理完）：业务错误码 PERMISSION_NOT_FOUND，前端据此提示「已在其他设备处理」
+    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+    await expect(session.respondToPermission(third.id, { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+  });
+
+  describe("始终允许（permission_suggestions）", () => {
+    const BASH_SUGGESTIONS = [
+      {
+        type: "addRules",
+        rules: [{ toolName: "Bash", ruleContent: "git status" }],
+        behavior: "allow",
+        destination: "localSettings",
+      },
+    ];
+
+    async function openPermission(
+      toolName: string,
+      input: Record<string, unknown>,
+      ctx: Parameters<typeof canUseTool>[3],
+    ) {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("x");
+      const promise = canUseTool(h.clis[0]!, toolName, input, { toolUseId: "toolu_a", ...ctx });
+      const request = session.getPendingPermissions()[0]!;
+      return { h, session, events, promise, request };
+    }
+
+    test("有建议时追加 allow_session / allow_project，原始建议不进协议", async () => {
+      const { request, events } = await openPermission("Bash", { command: "git status" }, { suggestions: BASH_SUGGESTIONS });
+      expect(request.actions).toEqual([
+        { id: "allow", label: "允许一次", behavior: "allow" },
+        { id: "deny", label: "拒绝", behavior: "deny" },
+        {
+          id: "allow_session",
+          label: "本会话始终允许",
+          behavior: "allow",
+          persist: "session",
+          description: "仅本会话有效，不写入文件：Bash(git status)",
+        },
+        {
+          id: "allow_project",
+          label: "永久允许",
+          behavior: "allow",
+          persist: "permanent",
+          description: "写入项目的 .claude/settings.local.json：Bash(git status)",
+        },
+      ]);
+      expect(request.defaultDeny).toBeUndefined();
+      expect(JSON.stringify(events)).not.toContain("permission_suggestions");
+      expect(JSON.stringify(events)).not.toContain("destination");
+    });
+
+    test("allow_session 把建议的 destination 改写成 session 回传", async () => {
+      const { session, promise, request } = await openPermission(
+        "Bash",
+        { command: "git status" },
+        { suggestions: BASH_SUGGESTIONS },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_session" });
+      await expect(promise).resolves.toEqual({
+        behavior: "allow",
+        updatedInput: { command: "git status" },
+        updatedPermissions: [
+          {
+            type: "addRules",
+            rules: [{ toolName: "Bash", ruleContent: "git status" }],
+            behavior: "allow",
+            destination: "session",
+          },
+        ],
+      });
+    });
+
+    test("allow_project 把规则 / 目录改写成 localSettings，setMode 保持 session", async () => {
+      const { session, promise, request } = await openPermission(
+        "Edit",
+        { file_path: "a.txt" },
+        {
+          suggestions: [
+            { type: "addRules", rules: [{ toolName: "Edit" }], behavior: "allow", destination: "session" },
+            { type: "addDirectories", directories: ["C:/work"], destination: "session" },
+            { type: "setMode", mode: "acceptEdits", destination: "session" },
+          ],
+        },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_project" });
+      await expect(promise).resolves.toMatchObject({
+        behavior: "allow",
+        updatedPermissions: [
+          { type: "addRules", rules: [{ toolName: "Edit" }], destination: "localSettings" },
+          { type: "addDirectories", directories: ["C:/work"], destination: "localSettings" },
+          { type: "setMode", mode: "acceptEdits", destination: "session" },
+        ],
+      });
+    });
+
+    test("普通「允许一次」不带 updatedPermissions", async () => {
+      const { session, promise, request } = await openPermission(
+        "Bash",
+        { command: "git status" },
+        { suggestions: BASH_SUGGESTIONS },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow" });
+      await expect(promise).resolves.toEqual({ behavior: "allow", updatedInput: { command: "git status" } });
+    });
+
+    test("suppress_always_allow_rule 为 true 时不显示任何始终允许入口", async () => {
+      const { request } = await openPermission(
+        "Bash",
+        { command: "rm x" },
+        { suggestions: BASH_SUGGESTIONS, suppressAlwaysAllowRule: true },
+      );
+      expect(request.actions?.map((a) => a.id)).toEqual(["allow", "deny"]);
+    });
+
+    test("default_to_no 为 true 时请求带 defaultDeny", async () => {
+      const { request } = await openPermission("Bash", { command: "rm x" }, { defaultToNo: true });
+      expect(request.defaultDeny).toBe(true);
+    });
+
+    test("受限路径补充到说明里", async () => {
+      const { request } = await openPermission(
+        "Read",
+        { file_path: "D:/other/a.txt" },
+        { blockedPath: "D:/other" },
+      );
+      expect(request.description).toBe("受限路径：D:/other");
+    });
+
+    test("仅 setMode 的建议只有本会话档，bypassPermissions 不进永久档，非允许规则被丢弃", async () => {
+      const onlyMode = await openPermission(
+        "Edit",
+        { file_path: "a.txt" },
+        { suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }] },
+      );
+      expect(onlyMode.request.actions?.map((a) => a.id)).toEqual(["allow", "deny", "allow_session"]);
+      expect(onlyMode.request.actions?.[2]?.description).toBe(
+        "仅本会话有效，不写入文件：切换为「自动接受编辑」模式",
+      );
+
+      const bypass = await openPermission(
+        "Bash",
+        { command: "x" },
+        {
+          suggestions: [
+            { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "x" }], behavior: "allow", destination: "session" },
+            { type: "setMode", mode: "bypassPermissions", destination: "session" },
+            { type: "addRules", rules: [{ toolName: "Bash" }], behavior: "deny", destination: "session" },
+            { type: "replaceRules", rules: [{ toolName: "Bash" }], behavior: "allow", destination: "session" },
+          ],
+        },
+      );
+      await bypass.session.respondToPermission(bypass.request.id, {
+        behavior: "allow",
+        selectedActionId: "allow_project",
+      });
+      const result = await bypass.promise;
+      expect(result).toMatchObject({ updatedPermissions: [{ type: "addRules", destination: "localSettings" }] });
+      expect(result.behavior === "allow" ? result.updatedPermissions : []).toHaveLength(1);
+    });
+
+    test("ExitPlanMode / AskUserQuestion 不提供始终允许", async () => {
+      const plan = await openPermission("ExitPlanMode", { plan: "p" }, { suggestions: BASH_SUGGESTIONS });
+      expect(plan.request.actions?.map((a) => a.id)).toEqual(["approve", "keep_planning"]);
+      const ask = await openPermission("AskUserQuestion", { questions: [] }, { suggestions: BASH_SUGGESTIONS });
+      expect(ask.request.actions?.map((a) => a.id)).toEqual(["allow", "deny"]);
+    });
+
+    test("回传 setMode 后同步本地 mode 并发 mode_changed（不重复调用 set_permission_mode）", async () => {
+      const { h, session, events, promise, request } = await openPermission(
+        "Edit",
+        { file_path: "a.txt" },
+        {
+          suggestions: [
+            { type: "addRules", rules: [{ toolName: "Edit" }], behavior: "allow", destination: "session" },
+            { type: "setMode", mode: "acceptEdits", destination: "session" },
+          ],
+        },
+      );
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_session" });
+      await promise;
+      expect(events.at(-1)).toEqual({ type: "mode_changed", modeId: "acceptEdits" });
+      expect(h.clis[0]!.calls.setPermissionMode).toEqual([]);
+    });
+  });
+
+  describe("MCP elicitation", () => {
+    function elicit(cli: FakeCli, ctx: Partial<Parameters<NonNullable<ClaudeCliOptions["onElicitation"]>>[0]> = {}) {
+      return cli.options.onElicitation!({
+        signal: new AbortController().signal,
+        mode: "form",
+        mcpServerName: "forms",
+        message: "请填写表单",
+        ...ctx,
+      });
+    }
+
+    const SCHEMA = {
+      type: "object",
+      properties: {
+        name: { type: "string", title: "姓名" },
+        age: { type: "integer", minimum: 1, maximum: 120 },
+        tags: { type: "array", items: { enum: ["a", "b"] } },
+      },
+      required: ["name"],
+    };
+
+    async function openElicitation(ctx: Parameters<typeof elicit>[1]) {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("x");
+      const promise = elicit(h.clis[0]!, ctx);
+      const request = session.getPendingPermissions()[0]!;
+      return { h, session, events, promise, request };
+    }
+
+    test("form：变成 kind elicitation 的审批，fields 按 property_order 归一化，actions 为 提交 / 拒绝 / 取消", async () => {
+      const { events, request } = await openElicitation({
+        requestedSchema: SCHEMA,
+        propertyOrder: ["age", "name", "tags"],
+        title: "填写资料",
+      });
+      expect(request).toMatchObject({
+        provider: "claude",
+        name: "mcp:forms",
+        kind: "elicitation",
+        title: "填写资料",
+        input: { serverName: "forms", mode: "form", message: "请填写表单" },
+        detail: {
+          type: "elicitation",
+          serverName: "forms",
+          mode: "form",
+          message: "请填写表单",
+          fields: [
+            { key: "age", required: false, type: "integer", min: 1, max: 120 },
+            { key: "name", title: "姓名", required: true, type: "string" },
+            { key: "tags", required: false, type: "multiselect", options: [{ value: "a", label: "a" }, { value: "b", label: "b" }] },
+          ],
+        },
+        actions: [
+          { id: "submit", label: "提交", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      expect(events.find((e) => e.type === "permission_requested")).toMatchObject({
+        turnId: expect.any(String),
+        request: { id: request.id },
+      });
+    });
+
+    test("form：提交 → accept + content；拒绝 → decline；取消 → cancel 并中断回合", async () => {
+      const accept = await openElicitation({ requestedSchema: SCHEMA });
+      await accept.session.respondToPermission(accept.request.id, {
+        behavior: "allow",
+        selectedActionId: "submit",
+        updatedInput: { content: { name: "小明", age: 3 } },
+      });
+      await expect(accept.promise).resolves.toEqual({ action: "accept", content: { name: "小明", age: 3 } });
+      // 表单内容不进 permission_resolved（该事件会广播并落盘）
+      expect(accept.events.at(-1)).toEqual({
+        type: "permission_resolved",
+        requestId: accept.request.id,
+        response: { behavior: "allow", selectedActionId: "submit" },
+      });
+
+      const noContent = await openElicitation({ requestedSchema: SCHEMA });
+      await noContent.session.respondToPermission(noContent.request.id, { behavior: "allow" });
+      await expect(noContent.promise).resolves.toEqual({ action: "accept", content: {} });
+
+      const decline = await openElicitation({ requestedSchema: SCHEMA });
+      await decline.session.respondToPermission(decline.request.id, { behavior: "deny", selectedActionId: "decline" });
+      await expect(decline.promise).resolves.toEqual({ action: "decline" });
+      expect(decline.h.clis[0]!.calls.interrupt).toBe(0);
+
+      const cancel = await openElicitation({ requestedSchema: SCHEMA });
+      await cancel.session.respondToPermission(cancel.request.id, {
+        behavior: "deny",
+        selectedActionId: "cancel",
+        interrupt: true,
+      });
+      await expect(cancel.promise).resolves.toEqual({ action: "cancel" });
+      expect(cancel.h.clis[0]!.calls.interrupt).toBe(1);
+      expect(cancel.events.at(-1)).toMatchObject({ type: "turn_canceled", reason: "interrupted" });
+    });
+
+    test("url：actions 为 已完成 / 拒绝 / 取消，已完成回 accept 且不带 content；detail 带 url 与 elicitationId", async () => {
+      const { session, promise, request } = await openElicitation({
+        mode: "url",
+        mcpServerName: "oauth",
+        message: "请在浏览器里授权",
+        url: "https://example.com/auth",
+        elicitationId: "elic-1",
+      });
+      expect(request).toMatchObject({
+        kind: "elicitation",
+        title: "oauth 需要你在浏览器中完成操作",
+        detail: {
+          type: "elicitation",
+          mode: "url",
+          url: "https://example.com/auth",
+          elicitationId: "elic-1",
+        },
+        actions: [
+          { id: "done", label: "已完成", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      expect((request.detail as { fields?: unknown }).fields).toBeUndefined();
+      await session.respondToPermission(request.id, {
+        behavior: "allow",
+        selectedActionId: "done",
+        updatedInput: { content: { ignored: true } },
+      });
+      await expect(promise).resolves.toEqual({ action: "accept" });
+    });
+
+    test("system elicitation_complete：对应的 url 请求发 permission_resolved 并回 accept，其它 id 不受影响", async () => {
+      const { h, session, events, promise, request } = await openElicitation({
+        mode: "url",
+        mcpServerName: "oauth",
+        message: "授权",
+        url: "https://example.com/auth",
+        elicitationId: "elic-1",
+      });
+      h.clis[0]!.emit({ type: "system", subtype: "elicitation_complete", mcp_server_name: "oauth", elicitation_id: "other" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(session.getPendingPermissions()).toHaveLength(1);
+
+      h.clis[0]!.emit({ type: "system", subtype: "elicitation_complete", mcp_server_name: "oauth", elicitation_id: "elic-1" });
+      await expect(promise).resolves.toEqual({ action: "accept" });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+      expect(events.at(-1)).toEqual({
+        type: "permission_resolved",
+        requestId: request.id,
+        response: { behavior: "allow", selectedActionId: "done" },
+      });
+      await expect(session.respondToPermission(request.id, { behavior: "allow" })).rejects.toMatchObject({
+        code: "PERMISSION_NOT_FOUND",
+      });
+    });
+
+    test("CLI 撤回（abort）→ cancel + permission_resolved；回合取消时挂起的表单也回 cancel", async () => {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("x");
+
+      const controller = new AbortController();
+      const promise = elicit(h.clis[0]!, { signal: controller.signal });
+      expect(session.getPendingPermissions()).toHaveLength(1);
+      controller.abort();
+      await expect(promise).resolves.toEqual({ action: "cancel" });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+      expect(events.at(-1)).toMatchObject({ type: "permission_resolved", response: { behavior: "deny" } });
+
+      const pending = elicit(h.clis[0]!);
+      await session.interrupt();
+      await expect(pending).resolves.toEqual({ action: "cancel" });
+    });
+
+    test("会话已关闭 / 没有进行中的回合时直接回 cancel，不产生审批", async () => {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      await session.startTurn("x");
+      const cli = h.clis[0]!;
+      await session.close();
+      await expect(elicit(cli)).resolves.toEqual({ action: "cancel" });
+      expect(session.getPendingPermissions()).toHaveLength(0);
+    });
+  });
+
+  test("拒绝 / 继续规划附带的理由（message）原样作为 deny.message 回给 Claude", async () => {
+    const h = createHarness();
+    const session = await h.client.createSession({ cwd: "." });
+    await session.startTurn("x");
+    const cli = h.clis[0]!;
+    const toolPromise = canUseTool(cli, "Bash", { command: "rm -rf /" }, { toolUseId: "t-reason" });
+    const tool = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(tool.id, { behavior: "deny", selectedActionId: "deny", message: "别动根目录" });
+    await expect(toolPromise).resolves.toEqual({ behavior: "deny", message: "别动根目录" });
+
+    const planPromise = canUseTool(cli, "ExitPlanMode", { plan: "1. 改代码" }, { toolUseId: "t-plan-reason" });
+    const plan = session.getPendingPermissions()[0]!;
+    await session.respondToPermission(plan.id, {
+      behavior: "deny",
+      selectedActionId: "keep_planning",
+      message: "先补测试",
+    });
+    await expect(planPromise).resolves.toEqual({ behavior: "deny", message: "先补测试" });
   });
 
   test("ExitPlanMode 为 plan 权限；批准后切出 plan 模式", async () => {

@@ -54,6 +54,8 @@ describe("board-display", () => {
       label: "等待审批",
       tone: "attention",
     });
+    expect(sessionBadge(agent({ pendingPermissions: [{ id: "p", kind: "question" } as never] }))?.label).toBe("等待回答");
+    expect(sessionBadge(agent({ pendingPermissions: [{ id: "p", kind: "plan" } as never] }))?.label).toBe("等待确认计划");
     expect(sessionBadge(agent({ status: "error" }))?.tone).toBe("error");
     expect(sessionBadge(agent({ status: "idle" }))).toEqual({ label: "空闲", tone: "idle" });
   });

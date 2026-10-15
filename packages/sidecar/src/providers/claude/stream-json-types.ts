@@ -265,6 +265,38 @@ export interface ClaudeCanUseToolRequest {
   display_name?: string;
   description?: string;
   decision_reason?: string;
+  /** CLI 建议的权限更新（「始终允许」的来源）；形状见 ClaudePermissionUpdate，解析时宽松处理 */
+  permission_suggestions?: unknown;
+  /** 为 true 时宿主不得提供任何持久化 / 不再询问入口 */
+  suppress_always_allow_rule?: boolean;
+  /** 为 true 时宿主不得预选「允许」 */
+  default_to_no?: boolean;
+  blocked_path?: string;
+}
+
+/**
+ * CLI 发来的 MCP elicitation 请求（control_request 的 request，subtype 为 elicitation）：
+ * form 模式带 requested_schema 与 property_order，url 模式带 url 与 elicitation_id（证据：claude.exe 2.1.299 的 zod schema）。
+ */
+export interface ClaudeElicitationRequest {
+  subtype: "elicitation";
+  mcp_server_name: string;
+  message: string;
+  /** 缺省按 form 处理 */
+  mode?: "form" | "url";
+  url?: string;
+  elicitation_id?: string;
+  requested_schema?: Record<string, unknown>;
+  property_order?: string[];
+  title?: string;
+  display_name?: string;
+  description?: string;
+}
+
+/** `system` `elicitation_complete`：url 模式的流程在浏览器里完成了 */
+export interface ClaudeElicitationCompleteMessage extends ClaudeSystemMessage {
+  mcp_server_name?: string;
+  elicitation_id?: string;
 }
 
 /** initialize 应答里用到的部分 */
@@ -292,8 +324,41 @@ export interface ClaudeInitializeResponse {
 // 权限回调
 // ---------------------------------------------------------------------------
 
+/** 权限更新的落点：session 只在内存生效；localSettings 写 `<cwd>/.claude/settings.local.json` */
+export type ClaudePermissionDestination =
+  | "userSettings"
+  | "projectSettings"
+  | "localSettings"
+  | "session"
+  | "cliArg";
+
+export interface ClaudePermissionRule {
+  toolName: string;
+  ruleContent?: string;
+}
+
+/** CLI 的 PermissionUpdate（canUseTool 的 permission_suggestions / updatedPermissions，按 type 区分） */
+export type ClaudePermissionUpdate =
+  | {
+      type: "addRules" | "replaceRules" | "removeRules";
+      rules: ClaudePermissionRule[];
+      behavior: "allow" | "deny" | "ask";
+      destination: ClaudePermissionDestination;
+    }
+  | { type: "setMode"; mode: string; destination: ClaudePermissionDestination }
+  | {
+      type: "addDirectories" | "removeDirectories";
+      directories: string[];
+      destination: ClaudePermissionDestination;
+    };
+
 export type ClaudePermissionResult =
-  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | {
+      behavior: "allow";
+      updatedInput: Record<string, unknown>;
+      /** 「始终允许」：回传改写过 destination 的 permission_suggestions */
+      updatedPermissions?: ClaudePermissionUpdate[];
+    }
   | { behavior: "deny"; message: string; interrupt?: boolean };
 
 export interface ClaudeCanUseToolContext {
@@ -304,7 +369,35 @@ export interface ClaudeCanUseToolContext {
   displayName?: string;
   description?: string;
   decisionReason?: string;
+  /** CLI 原始 permission_suggestions（未经解析，provider 内部处理） */
+  suggestions?: unknown;
+  suppressAlwaysAllowRule?: boolean;
+  defaultToNo?: boolean;
+  blockedPath?: string;
 }
+
+/** elicitation 的应答（control_response.response）：decline / cancel 不带 content，不拼 toolUseID */
+export type ClaudeElicitationResult =
+  | { action: "accept"; content?: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+export interface ClaudeElicitationContext {
+  /** CLI 发来 control_cancel_request 或进程退出时触发 */
+  signal: AbortSignal;
+  mode: "form" | "url";
+  mcpServerName: string;
+  message: string;
+  url?: string;
+  elicitationId?: string;
+  requestedSchema?: Record<string, unknown>;
+  propertyOrder?: string[];
+  title?: string;
+  displayName?: string;
+  description?: string;
+}
+
+export type ClaudeOnElicitation = (context: ClaudeElicitationContext) => Promise<ClaudeElicitationResult>;
 
 export type ClaudeCanUseTool = (
   toolName: string,

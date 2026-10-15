@@ -262,9 +262,12 @@ describe("CodexAgentSession（假 app-server）", () => {
       name: "shell",
       description: "需要运行命令",
       detail: { type: "shell", command: "echo hi", cwd: "C:\\work" },
+      // 没有 availableDecisions 的旧行为：accept / acceptForSession / decline / cancel
       actions: [
-        { id: "accept", label: "允许", behavior: "allow" },
+        { id: "accept", label: "允许一次", behavior: "allow" },
         { id: "decline", label: "拒绝", behavior: "deny" },
+        { id: "allow_session", label: "本会话始终允许", behavior: "allow", persist: "session" },
+        { id: "cancel", label: "拒绝并中断本轮", behavior: "deny" },
       ],
     });
     expect(session.getPendingPermissions()).toHaveLength(1);
@@ -297,6 +300,21 @@ describe("CodexAgentSession（假 app-server）", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn_completed", turnId });
   });
 
+  test("respond 找不到待处理请求（含已处理过的）抛 PERMISSION_NOT_FOUND", async () => {
+    const session = await newSession();
+    const events = collect(session);
+    await session.startTurn("shell");
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    await session.respondToPermission(request!.id, { behavior: "allow" });
+    await expect(session.respondToPermission(request!.id, { behavior: "allow" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+    await expect(session.respondToPermission("nope", { behavior: "deny" })).rejects.toMatchObject({
+      code: "PERMISSION_NOT_FOUND",
+    });
+  });
+
   test("commandExecution 审批 decline：tool_call 失败，回合正常完成", async () => {
     const session = await newSession();
     const events = collect(session);
@@ -321,6 +339,380 @@ describe("CodexAgentSession（假 app-server）", () => {
     await waitUntil(() => events.some(isTerminal));
     expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "cancel" });
     expect(events.at(-1)).toMatchObject({ type: "turn_canceled", reason: "interrupted" });
+  });
+
+  /** 触发一个审批剧本并返回挂起的请求 */
+  async function openApproval(scenario: string) {
+    const session = await newSession();
+    const events = collect(session);
+    await session.startTurn(scenario);
+    await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+    const [request] = session.getPendingPermissions();
+    return { session, events, request: request! };
+  }
+
+  test("availableDecisions：只呈现列出的决定；allow_project 回 acceptWithExecpolicyAmendment", async () => {
+    const { session, events, request } = await openApproval("shellavail");
+    expect(request.actions).toEqual([
+      { id: "accept", label: "允许一次", behavior: "allow" },
+      {
+        id: "allow_session",
+        label: "本会话始终允许",
+        behavior: "allow",
+        persist: "session",
+        description: "本会话内同类命令不再询问",
+      },
+      {
+        id: "allow_project",
+        label: "永久允许",
+        behavior: "allow",
+        persist: "permanent",
+        description: "以后允许以 `git status` 开头的命令（写入 Codex 执行策略）",
+      },
+      {
+        id: "network_allow:example.com",
+        label: "始终允许访问 example.com",
+        behavior: "allow",
+        persist: "permanent",
+        description: "写入 Codex 网络策略：以后允许访问 example.com",
+      },
+      {
+        id: "network_deny:evil.test",
+        label: "始终禁止访问 evil.test",
+        behavior: "deny",
+        description: "写入 Codex 网络策略：以后禁止访问 evil.test",
+      },
+      { id: "cancel", label: "拒绝并中断本轮", behavior: "deny" },
+    ]);
+    await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_project" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({
+      decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } },
+    });
+  });
+
+  test("availableDecisions：allow_session 回 acceptForSession，网络策略回 applyNetworkPolicyAmendment，cancel 回 cancel", async () => {
+    for (const [actionId, behavior, expected] of [
+      ["allow_session", "allow", "acceptForSession"],
+      [
+        "network_allow:example.com",
+        "allow",
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "example.com", action: "allow" } } },
+      ],
+      [
+        "network_deny:evil.test",
+        "deny",
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "evil.test", action: "deny" } } },
+      ],
+      ["cancel", "deny", "cancel"],
+    ] as const) {
+      const { session, events, request } = await openApproval("shellavail");
+      await session.respondToPermission(request.id, { behavior, selectedActionId: actionId });
+      await waitUntil(() => events.some(isTerminal));
+      const replies = received().filter((m) => m.method === undefined && m.result?.decision !== undefined);
+      expect(replies.at(-1)?.result).toEqual({ decision: expected });
+      await session.close();
+    }
+  }, 30_000);
+
+  test("只有 proposedExecpolicyAmendment 时补一项 allow_project", async () => {
+    const { session, events, request } = await openApproval("shellpolicy");
+    expect(request.actions?.map((a) => a.id)).toEqual(["accept", "decline", "allow_session", "allow_project", "cancel"]);
+    expect(request.actions?.find((a) => a.id === "allow_project")).toMatchObject({
+      label: "永久允许",
+      description: "以后允许以 `npm test` 开头的命令（写入 Codex 执行策略）",
+    });
+    await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_project" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({
+      decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["npm", "test"] } },
+    });
+  });
+
+  test("没有 selectedActionId 时按 behavior 回 accept / decline，不受 availableDecisions 影响", async () => {
+    const { session, events, request } = await openApproval("shellavail");
+    await session.respondToPermission(request.id, { behavior: "allow" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "accept" });
+  });
+
+  test("fileChange 审批：accept / acceptForSession / decline / cancel，allow_session 回 acceptForSession", async () => {
+    const { session, events, request } = await openApproval("patch");
+    expect(request.actions).toEqual([
+      { id: "accept", label: "允许一次", behavior: "allow" },
+      { id: "decline", label: "拒绝", behavior: "deny" },
+      {
+        id: "allow_session",
+        label: "本会话始终允许",
+        behavior: "allow",
+        persist: "session",
+        description: "本会话内对这些文件的修改不再询问",
+      },
+      { id: "cancel", label: "拒绝并中断本轮", behavior: "deny" },
+    ]);
+    await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "allow_session" });
+    await waitUntil(() => events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "acceptForSession" });
+  });
+
+  test("旧版 execCommandApproval：allow_session 回 approved_for_session，拒绝带理由回 denied", async () => {
+    const first = await openApproval("legacyexec");
+    expect(first.request.actions?.map((a) => a.id)).toEqual(["accept", "decline", "allow_session", "cancel"]);
+    await first.session.respondToPermission(first.request.id, {
+      behavior: "allow",
+      selectedActionId: "allow_session",
+    });
+    await waitUntil(() => first.events.some(isTerminal));
+    expect(received().find((m) => m.id === 1000)?.result).toEqual({ decision: "approved_for_session" });
+    await first.session.close();
+
+    const second = await openApproval("legacyexec");
+    await second.session.respondToPermission(second.request.id, {
+      behavior: "deny",
+      selectedActionId: "decline",
+      message: "不行",
+    });
+    await waitUntil(() => second.events.some(isTerminal));
+    const replies = received().filter((m) => m.method === undefined && m.result?.decision !== undefined);
+    expect(replies.at(-1)?.result).toEqual({ decision: { denied: { rejection: "不行" } } });
+  }, 20_000);
+
+  describe("mcpServer/elicitation/request", () => {
+    test("form：requestedSchema 归一化为 fields，actions 为 提交 / 拒绝 / 取消；提交回 accept + 真实 content + _meta", async () => {
+      const { session, events, request } = await openApproval("elicitform");
+      expect(request).toMatchObject({
+        provider: "codex",
+        kind: "elicitation",
+        name: "mcp:forms",
+        title: "forms 需要你填写表单",
+        detail: {
+          type: "elicitation",
+          serverName: "forms",
+          mode: "form",
+          message: "请填写表单",
+          fields: [
+            { key: "name", title: "姓名", required: true, type: "string", minLength: 1 },
+            {
+              key: "level",
+              required: false,
+              type: "select",
+              options: [
+                { value: "lo", label: "低" },
+                { value: "hi", label: "高" },
+              ],
+            },
+            { key: "agree", required: false, type: "boolean", default: true },
+            { key: "score", required: false, type: "number", min: 0, max: 10 },
+            { key: "tags", required: false, type: "multiselect", max: 2 },
+          ],
+        },
+        actions: [
+          { id: "submit", label: "提交", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      const content = { name: "小明", level: "hi", agree: false, score: 7.5, tags: ["a"] };
+      await session.respondToPermission(request.id, {
+        behavior: "allow",
+        selectedActionId: "submit",
+        updatedInput: { content },
+      });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "accept", content, _meta: null });
+      // 表单内容不进 permission_resolved（该事件会广播并落盘）
+      expect(events.find((e) => e.type === "permission_resolved")).toEqual({
+        type: "permission_resolved",
+        requestId: request.id,
+        response: { behavior: "allow", selectedActionId: "submit" },
+      });
+      expect(events.find((e) => e.type === "timeline" && e.item.type === "assistant_message")).toMatchObject({
+        item: { text: `answer:${JSON.stringify({ action: "accept", content, _meta: null })}` },
+      });
+    });
+
+    test("form：拒绝回 decline（content / _meta 为 null）；取消回 cancel 并中断回合", async () => {
+      const declined = await openApproval("elicitform");
+      await declined.session.respondToPermission(declined.request.id, {
+        behavior: "deny",
+        selectedActionId: "decline",
+      });
+      await waitUntil(() => declined.events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({
+        action: "decline",
+        content: null,
+        _meta: null,
+      });
+      expect(declined.events.at(-1)?.type).toBe("turn_completed");
+      await declined.session.close();
+
+      const canceled = await openApproval("elicitform");
+      await canceled.session.respondToPermission(canceled.request.id, {
+        behavior: "deny",
+        selectedActionId: "cancel",
+        interrupt: true,
+      });
+      await waitUntil(() => canceled.events.some(isTerminal));
+      const replies = received().filter((m) => m.method === undefined && m.result?.action !== undefined);
+      expect(replies.at(-1)?.result).toEqual({ action: "cancel", content: null, _meta: null });
+      expect(received().some((m) => m.method === "turn/interrupt")).toBe(true);
+      expect(canceled.events.at(-1)).toMatchObject({ type: "turn_canceled", reason: "interrupted" });
+    }, 20_000);
+
+    test("url：detail 带 url / elicitationId，已完成回 accept（content 为 null）", async () => {
+      const { session, events, request } = await openApproval("eliciturl");
+      expect(request).toMatchObject({
+        kind: "elicitation",
+        title: "forms 需要你在浏览器中完成操作",
+        detail: {
+          type: "elicitation",
+          mode: "url",
+          message: "请在浏览器里授权",
+          url: "https://example.com/auth",
+          elicitationId: "elic-9",
+        },
+        actions: [
+          { id: "done", label: "已完成", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+          { id: "cancel", label: "取消", behavior: "deny" },
+        ],
+      });
+      expect((request.detail as { fields?: unknown }).fields).toBeUndefined();
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "done" });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "accept", content: null, _meta: null });
+    });
+
+    test("没有字段的 form（MCP 工具审批式确认）仍是 tool 审批：允许回 accept + content {}", async () => {
+      const { session, events, request } = await openApproval("elicitempty");
+      expect(request).toMatchObject({
+        kind: "tool",
+        name: "mcp:forms",
+        actions: [
+          { id: "accept", label: "允许", behavior: "allow" },
+          { id: "decline", label: "拒绝", behavior: "deny" },
+        ],
+      });
+      await session.respondToPermission(request.id, { behavior: "allow", selectedActionId: "accept" });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "accept", content: {}, _meta: null });
+    });
+
+    test("未声明的 openai/* 模式直接 decline，不产生审批", async () => {
+      const session = await newSession();
+      const events = collect(session);
+      await session.startTurn("elicitopenai");
+      await waitUntil(() => events.some(isTerminal));
+      expect(events.some((e) => e.type === "permission_requested")).toBe(false);
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ action: "decline", content: null, _meta: null });
+    });
+
+    test("回合被中断时挂起的表单被清理并发 permission_resolved", async () => {
+      const session = await newSession();
+      const events = collect(session);
+      await session.startTurn("elicitform");
+      await waitUntil(() => events.some((e) => e.type === "permission_requested"));
+      const [request] = session.getPendingPermissions();
+      // 假 server 的 elicitform 剧本不会主动撤销；直接结束回合同样会清理挂起的表单
+      await session.interrupt();
+      await waitUntil(() => events.some(isTerminal));
+      expect(session.getPendingPermissions()).toEqual([]);
+      expect(events.some((e) => e.type === "permission_resolved" && e.requestId === request!.id)).toBe(true);
+    });
+  });
+
+  describe("item/tool/requestUserInput", () => {
+    test("映射成 kind question：header / question / options / isOther / isSecret / 纯文本题；重复的题目文本加序号区分", async () => {
+      const { request } = await openApproval("userinput");
+      expect(request).toMatchObject({
+        provider: "codex",
+        kind: "question",
+        name: "request_user_input",
+        title: "Codex 有问题需要你回答",
+        actions: [
+          { id: "submit", label: "提交回答", behavior: "allow" },
+          { id: "skip", label: "跳过", behavior: "deny" },
+        ],
+      });
+      expect(request.detail).toEqual({
+        type: "question",
+        questions: [
+          {
+            question: "用哪个数据库？",
+            header: "数据库",
+            multiSelect: false,
+            options: [
+              { label: "SQLite", description: "嵌入式" },
+              { label: "Postgres", description: "服务端" },
+            ],
+            isOther: true,
+          },
+          {
+            question: "用哪个数据库？ (2)",
+            header: "模式",
+            multiSelect: false,
+            options: [{ label: "读写", description: "可写" }],
+            isOther: false,
+          },
+          { question: "项目叫什么？", header: "名称", multiSelect: false, options: [], isOther: false, freeText: true },
+          { question: "API Key？", header: "密钥", multiSelect: false, options: [], isOther: false, isSecret: true, freeText: true },
+        ],
+      });
+    });
+
+    test("提交：answers 按题目 id 组织，未作答的题不出现", async () => {
+      const { session, events, request } = await openApproval("userinput");
+      await session.respondToPermission(request.id, {
+        behavior: "allow",
+        selectedActionId: "submit",
+        updatedInput: {
+          answers: { "用哪个数据库？": "SQLite", "用哪个数据库？ (2)": "读写", "API Key？": "sk-123" },
+        },
+      });
+      await waitUntil(() => events.some(isTerminal));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({
+        answers: {
+          q_db: { answers: ["SQLite"] },
+          q_mode: { answers: ["读写"] },
+          q_key: { answers: ["sk-123"] },
+        },
+      });
+      // 回答内容（可能含密钥）不进 permission_resolved
+      expect(events.find((e) => e.type === "permission_resolved")).toEqual({
+        type: "permission_resolved",
+        requestId: request.id,
+        response: { behavior: "allow", selectedActionId: "submit" },
+      });
+    });
+
+    test("跳过：协议没有拒绝语义，回空的 answers（不回 JSON-RPC 错误）", async () => {
+      const { session, events, request } = await openApproval("userinput");
+      await session.respondToPermission(request.id, { behavior: "deny", selectedActionId: "skip", message: "用户跳过了这些问题" });
+      await waitUntil(() => events.some(isTerminal));
+      const reply = received().find((m) => m.id === 1000);
+      expect(reply?.result).toEqual({ answers: {} });
+      expect(reply?.error).toBeUndefined();
+      expect(events.at(-1)?.type).toBe("turn_completed");
+    });
+
+    test("没有可解析的题目时不产生审批，直接回空 answers", async () => {
+      const session = await newSession();
+      const events = collect(session);
+      await session.startTurn("userinputempty");
+      await waitUntil(() => events.some(isTerminal));
+      expect(events.some((e) => e.type === "permission_requested")).toBe(false);
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ answers: {} });
+    });
+
+    test("回合被中断时挂起的提问被清理并回空 answers", async () => {
+      const { session, events, request } = await openApproval("userinput");
+      await session.interrupt();
+      await waitUntil(() => events.some(isTerminal));
+      expect(session.getPendingPermissions()).toEqual([]);
+      expect(events.some((e) => e.type === "permission_resolved" && e.requestId === request.id)).toBe(true);
+      await waitUntil(() => received().some((m) => m.id === 1000 && m.result !== undefined));
+      expect(received().find((m) => m.id === 1000)?.result).toEqual({ answers: {} });
+    });
   });
 
   test("fileChange 审批：edit 详情带 unifiedDiff 与相对路径；新增文件映射为 write", async () => {

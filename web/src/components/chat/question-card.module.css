@@ -138,3 +138,11 @@
 .otherInput:focus-visible {
   outline: var(--h-focus-outline);
 }
+
+/* 手机 / 触屏：选项行与输入框触控区 >= 44px */
+@media (max-width: 640px), (pointer: coarse) {
+  .option,
+  .otherInput {
+    min-height: 44px;
+  }
+}

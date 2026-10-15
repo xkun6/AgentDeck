@@ -252,6 +252,145 @@ describe("ClaudeCliSession（假 claude 脚本）", () => {
     });
   });
 
+  test("can_use_tool 的 permission_suggestions 等字段交给回调，updatedPermissions 原样回传给 CLI", async () => {
+    const seen: unknown[] = [];
+    const session = start({
+      canUseTool: async (_tool, input, ctx) => {
+        seen.push({
+          suggestions: ctx.suggestions,
+          suppressAlwaysAllowRule: ctx.suppressAlwaysAllowRule,
+          defaultToNo: ctx.defaultToNo,
+          blockedPath: ctx.blockedPath,
+        });
+        return {
+          behavior: "allow",
+          updatedInput: input,
+          updatedPermissions: [
+            { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "git status" }], behavior: "allow", destination: "session" },
+          ],
+        };
+      },
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    session.sendUserMessage(userMessage("perm-sugg"));
+    const decision = JSON.parse(assistantText(await readTurn(iterator)).replace(/^decision:/, ""));
+    expect(seen).toEqual([
+      {
+        suggestions: [
+          { type: "addRules", rules: [{ toolName: "Bash", ruleContent: "git status" }], behavior: "allow", destination: "localSettings" },
+        ],
+        suppressAlwaysAllowRule: true,
+        defaultToNo: true,
+        blockedPath: "/outside",
+      },
+    ]);
+    expect(decision.response).toMatchObject({
+      behavior: "allow",
+      toolUseID: "toolu_1",
+      updatedPermissions: [{ type: "addRules", destination: "session" }],
+    });
+  });
+
+  test("MCP elicitation（form）：回调拿到 schema / 顺序 / 标题，accept 回 {action, content} 且不带 toolUseID", async () => {
+    const seen: unknown[] = [];
+    const session = start({
+      onElicitation: async (ctx) => {
+        seen.push({
+          mode: ctx.mode,
+          server: ctx.mcpServerName,
+          message: ctx.message,
+          schema: ctx.requestedSchema,
+          order: ctx.propertyOrder,
+          title: ctx.title,
+        });
+        return { action: "accept", content: { a: 3, b: "x" } };
+      },
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    session.sendUserMessage(userMessage("elicit:form"));
+    const decision = JSON.parse(assistantText(await readTurn(iterator)).replace(/^decision:/, ""));
+    expect(seen).toEqual([
+      {
+        mode: "form",
+        server: "forms",
+        message: "请填写表单",
+        schema: {
+          type: "object",
+          properties: { b: { type: "string" }, a: { type: "integer", minimum: 1 } },
+          required: ["a"],
+        },
+        order: ["a", "b"],
+        title: "表单标题",
+      },
+    ]);
+    expect(decision).toEqual({
+      subtype: "success",
+      request_id: expect.any(String),
+      response: { action: "accept", content: { a: 3, b: "x" } },
+    });
+  });
+
+  test("MCP elicitation：decline 不带 content；没有 onElicitation 回调时应答 cancel；回调抛错按 cancel", async () => {
+    const declined = start({ onElicitation: async () => ({ action: "decline" }) });
+    const declinedIterator = declined[Symbol.asyncIterator]();
+    declined.sendUserMessage(userMessage("elicit:form"));
+    const declineDecision = JSON.parse(assistantText(await readTurn(declinedIterator)).replace(/^decision:/, ""));
+    expect(declineDecision.response).toEqual({ action: "decline" });
+
+    const absent = start();
+    const absentIterator = absent[Symbol.asyncIterator]();
+    absent.sendUserMessage(userMessage("elicit:form"));
+    const absentDecision = JSON.parse(assistantText(await readTurn(absentIterator)).replace(/^decision:/, ""));
+    expect(absentDecision.response).toEqual({ action: "cancel" });
+
+    const broken = start({
+      onElicitation: async () => {
+        throw new Error("boom");
+      },
+    });
+    const brokenIterator = broken[Symbol.asyncIterator]();
+    broken.sendUserMessage(userMessage("elicit:form"));
+    const brokenDecision = JSON.parse(assistantText(await readTurn(brokenIterator)).replace(/^decision:/, ""));
+    expect(brokenDecision.response).toEqual({ action: "cancel" });
+  });
+
+  test("MCP elicitation（url）：回调拿到 url / elicitation_id；system elicitation_complete 不被过滤", async () => {
+    const seen: unknown[] = [];
+    const session = start({
+      onElicitation: async (ctx) => {
+        seen.push({ mode: ctx.mode, url: ctx.url, elicitationId: ctx.elicitationId, schema: ctx.requestedSchema });
+        return { action: "accept" };
+      },
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    session.sendUserMessage(userMessage("elicit:url"));
+    const messages = await readTurn(iterator);
+    expect(seen).toEqual([
+      { mode: "url", url: "https://example.com/auth", elicitationId: "elic-1", schema: undefined },
+    ]);
+    expect(
+      messages.find((message) => message.type === "system" && (message as { subtype?: string }).subtype === "elicitation_complete"),
+    ).toMatchObject({ mcp_server_name: "oauth", elicitation_id: "elic-1" });
+  });
+
+  test("control_cancel_request 触发 onElicitation 的 AbortSignal", async () => {
+    let aborted = false;
+    const session = start({
+      onElicitation: (ctx) =>
+        new Promise((resolve) => {
+          ctx.signal.addEventListener("abort", () => {
+            aborted = true;
+            resolve({ action: "cancel" });
+          });
+        }),
+    });
+    const iterator = session[Symbol.asyncIterator]();
+    session.sendUserMessage(userMessage("elicit:cancel"));
+    const decision = JSON.parse(assistantText(await readTurn(iterator)).replace(/^decision:/, ""));
+    expect(aborted).toBe(true);
+    expect(decision.response).toEqual({ action: "cancel" });
+  });
+
   test("权限 deny：应答带 message", async () => {
     const session = start({
       canUseTool: async () => ({ behavior: "deny", message: "用户拒绝了该操作" }),

@@ -1,6 +1,7 @@
 import { atom } from "jotai";
 import type {
   AgentPermissionRequest,
+  AgentSnapshot,
   AgentStreamEnvelope,
   AgentTimelineItem,
   AgentUsage,
@@ -61,6 +62,8 @@ export interface ChatSessionRuntime {
   messages: AgentUIMessage[];
   streamStatus: StreamStatus;
   pendingApprovals: PendingApproval[];
+  /** 已处理（resolved / 本地已回应）的审批 id，最近 50 条；快照补齐时据此避免把过期快照里的旧审批补回来 */
+  resolvedApprovalIds?: string[];
   statusMessage: string;
   statusKind?: string;
   statusUpdatedAt?: number;
@@ -285,15 +288,75 @@ export const removeApprovalAtom = atom(
   null,
   (_get, set, params: { sessionId: string; requestId: string }) => {
     set(chatRuntimeBySessionAtom, (state) =>
-      updateSessionRuntime(state, params.sessionId, (runtime) => ({
-        ...runtime,
-        pendingApprovals: runtime.pendingApprovals.filter(
-          (item) => item.requestId !== params.requestId,
-        ),
-      })),
+      updateSessionRuntime(state, params.sessionId, (runtime) =>
+        withoutApproval(runtime, params.requestId),
+      ),
     );
   },
 );
+
+const RESOLVED_APPROVAL_LIMIT = 50;
+
+/** 移除一条待审批并记入「已处理」名单 */
+function withoutApproval(runtime: ChatSessionRuntime, requestId: string): ChatSessionRuntime {
+  const resolved = runtime.resolvedApprovalIds ?? [];
+  return {
+    ...runtime,
+    pendingApprovals: runtime.pendingApprovals.filter((item) => item.requestId !== requestId),
+    resolvedApprovalIds: resolved.includes(requestId)
+      ? resolved
+      : [...resolved, requestId].slice(-RESOLVED_APPROVAL_LIMIT),
+  };
+}
+
+function approvalFromRequest(agentId: string, request: AgentPermissionRequest): PendingApproval {
+  return {
+    requestId: request.id,
+    sessionId: agentId,
+    command: describePermissionCommand(request),
+    reason: request.description,
+    permission: request,
+  };
+}
+
+/**
+ * 用快照的 `pendingPermissions` 校准待审批（design.md 4.31）：手机首屏只拉最近一页时间线，
+ * 审批卡片原本只来自时间线里的 `permission_requested`，被分页截断后会话列表显示待审批、进去却没有卡片。
+ * - 快照有、运行时没有、且不在「已处理」名单里的，按 `permission_requested` 的格式补进去；
+ * - 快照已不存在的审批（快照至少和已归约事件一样新时）移除；快照更旧时只补不删，避免误删刚到的事件。
+ * dormant / closed 会话不处理（打开后由 settleInactiveAgentRuntimeAtom 收尾）。
+ */
+export function syncPendingApprovals(
+  runtime: ChatSessionRuntime,
+  snapshot: Pick<AgentSnapshot, "id" | "status" | "pendingPermissions" | "lastSeq">,
+): ChatSessionRuntime {
+  if (snapshot.status === "dormant" || snapshot.status === "closed") return runtime;
+  const pending = snapshot.pendingPermissions ?? [];
+  const snapshotIds = new Set(pending.map((request) => request.id));
+  const resolved = new Set(runtime.resolvedApprovalIds ?? []);
+  const snapshotIsFresh = snapshot.lastSeq >= (runtime.agentLastSeq ?? 0);
+  const kept = snapshotIsFresh
+    ? runtime.pendingApprovals.filter((item) => snapshotIds.has(item.requestId))
+    : runtime.pendingApprovals;
+  const known = new Set(kept.map((item) => item.requestId));
+  const added = pending
+    .filter((request) => !known.has(request.id) && !resolved.has(request.id))
+    .map((request) => approvalFromRequest(snapshot.id, request));
+  if (kept.length === runtime.pendingApprovals.length && added.length === 0) return runtime;
+  return { ...runtime, pendingApprovals: [...kept, ...added] };
+}
+
+/** 按 agentId 取 store 里的快照校准该会话的待审批；没有对应运行时（会话未打开）则不处理 */
+export const syncPendingApprovalsAtom = atom(null, (get, set, agentId: string) => {
+  const snapshot = get(agentSnapshotsAtom)[agentId];
+  if (!snapshot) return;
+  set(chatRuntimeBySessionAtom, (state) => {
+    const runtime = state[agentId];
+    if (!runtime) return state;
+    const next = syncPendingApprovals(runtime, snapshot);
+    return next === runtime ? state : { ...state, [agentId]: next };
+  });
+});
 
 // ── AgentDeck：sidecar 事件 → ChatSessionRuntime ─────────────────────────────
 //
@@ -891,13 +954,7 @@ function reduceAgentEventInner(
 
     case "permission_requested": {
       const request = event.request;
-      const approval: PendingApproval = {
-        requestId: request.id,
-        sessionId: agentId,
-        command: describePermissionCommand(request),
-        reason: request.description,
-        permission: request,
-      };
+      const approval = approvalFromRequest(agentId, request);
       return {
         ...runtime,
         pendingApprovals: [
@@ -908,10 +965,7 @@ function reduceAgentEventInner(
     }
 
     case "permission_resolved":
-      return {
-        ...runtime,
-        pendingApprovals: runtime.pendingApprovals.filter((item) => item.requestId !== event.requestId),
-      };
+      return withoutApproval(runtime, event.requestId);
 
     case "usage_updated":
       // 浅合并：回合中只带上下文字段的更新不抹掉 token / 费用字段（design.md 4.3）

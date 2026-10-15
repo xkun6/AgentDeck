@@ -3,6 +3,12 @@ type NativeWindowOpen = typeof window.open;
 const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "obsidian:"]);
 let nativeWindowOpen: NativeWindowOpen | null = null;
 let installed = false;
+/** 手机端注册的原生打开器（web/src/mobile/external-links.ts）；已注册时 openExternalUrl 只走它，绝不退回 window.open */
+let mobileOpener: ((url: string) => Promise<boolean>) | null = null;
+
+export function setMobileExternalOpener(opener: ((url: string) => Promise<boolean>) | null): void {
+  mobileOpener = opener;
+}
 
 function getNativeWindowOpen(): NativeWindowOpen | null {
   if (typeof window === "undefined") return null;
@@ -32,6 +38,16 @@ export async function openExternalUrl(
 ): Promise<boolean> {
   const url = normalizeExternalUrl(raw);
   if (!url) return false;
+
+  // 手机端：Android WebView 的 window.open 会在本 WebView 内导航，把 App 页面替换掉，所以失败也不能退回去
+  if (mobileOpener) {
+    try {
+      return await mobileOpener(url);
+    } catch (error) {
+      console.warn("mobile openExternalUrl failed", error);
+      return false;
+    }
+  }
 
   const desktopOpen = typeof window !== "undefined" ? window.agentdeckDesktop?.openExternalUrl : undefined;
   if (desktopOpen) {

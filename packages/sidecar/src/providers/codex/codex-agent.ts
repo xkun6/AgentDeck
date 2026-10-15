@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type {
+  AgentQuestion,
   AgentMcpServer,
   AgentMcpServerStatus,
   AgentMcpStatusResult,
@@ -44,6 +45,7 @@ import type {
 import { redactInteropTokens } from "../../utils/redact-interop.js";
 import { codexInteropConfig } from "../shared/interop.js";
 import { OutputSpeedTracker } from "../shared/output-speed.js";
+import { AgentRpcError } from "../../agent/errors.js";
 import { buildMcpSection, buildRows, formatResetsIn, formatWindowLabel } from "../../agent/status-sections.js";
 import type { Logger } from "../../logger.js";
 import { execCommand, spawnProcess } from "../../utils/spawn.js";
@@ -52,6 +54,17 @@ import {
   CodexAppServerRpcError,
   type JsonRpcId,
 } from "./app-server-transport.js";
+import {
+  commandApprovalActions,
+  fileChangeApprovalActions,
+  legacyApprovalActions,
+  type CodexApprovalActions,
+} from "./approval-actions.js";
+import {
+  ELICITATION_FORM_ACTIONS,
+  ELICITATION_URL_ACTIONS,
+  normalizeElicitationSchema,
+} from "../shared/elicitation-schema.js";
 import { describeCodexLaunch, resolveCodexLaunch, type CodexLaunch } from "./launch.js";
 import { CodexSubagentRouter } from "./subagent-router.js";
 import {
@@ -257,6 +270,12 @@ const MODE_PRESETS: Record<string, { approvalPolicy: CodexApprovalPolicy; sandbo
   auto: { approvalPolicy: "on-request", sandbox: "workspace-write" },
   "full-access": { approvalPolicy: "never", sandbox: "danger-full-access" },
 };
+
+/** 提问卡片的应答动作（与 Claude AskUserQuestion 一致） */
+const QUESTION_ACTIONS: AgentPermissionAction[] = [
+  { id: "submit", label: "提交回答", behavior: "allow" },
+  { id: "skip", label: "跳过", behavior: "deny" },
+];
 
 const PERMISSION_ACTIONS: AgentPermissionAction[] = [
   { id: "accept", label: "允许", behavior: "allow" },
@@ -831,12 +850,29 @@ interface ActiveTurn {
   sawCompaction?: boolean;
 }
 
-type PermissionKind = "command" | "file" | "legacy-exec" | "legacy-patch" | "elicitation";
+/**
+ * elicitation：没有字段的确认（如 MCP 工具审批），沿用允许 / 拒绝；
+ * elicitation-form / elicitation-url：真正的表单 / 浏览器流程（design.md 4.32）。
+ */
+type PermissionKind =
+  | "command"
+  | "file"
+  | "legacy-exec"
+  | "legacy-patch"
+  | "elicitation"
+  | "elicitation-form"
+  | "elicitation-url"
+  /** item/tool/requestUserInput（design.md 4.33）：映射成提问卡片 */
+  | "user-input";
 
 interface PendingPermission {
   request: AgentPermissionRequest;
   kind: PermissionKind;
   rpcId: JsonRpcId;
+  /** actionId → decision 值（命令 / 文件 / 旧版审批）；应答时按 selectedActionId 取回 */
+  decisions?: ReadonlyMap<string, unknown>;
+  /** user-input：协议里的题目文本（answers 的键）→ Codex 的题目 id */
+  questionIds?: ReadonlyMap<string, string>;
   resolve: (result: unknown) => void;
 }
 
@@ -861,19 +897,27 @@ interface CodexSessionDeps {
   onClosed?: (session: CodexAgentSession) => void;
 }
 
-/** 把 AgentPermissionResponse 转成 codex 期望的应答体 */
+/**
+ * 把 AgentPermissionResponse 转成 codex 期望的应答体。
+ * decisions：审批请求生成 actions 时记下的 actionId → decision 值（含 acceptForSession、execpolicy / 网络策略修订等），
+ * 带 selectedActionId 且命中时直接用；否则按 behavior / interrupt 回 accept / decline / cancel。
+ */
 export function buildPermissionDecision(
   kind: PermissionKind,
   response: AgentPermissionResponse,
+  decisions?: ReadonlyMap<string, unknown>,
 ): unknown {
   const allow = response.behavior === "allow";
   const cancel = response.behavior === "deny" && response.interrupt === true;
+  const chosen =
+    response.selectedActionId !== undefined ? decisions?.get(response.selectedActionId) : undefined;
   switch (kind) {
     case "command":
     case "file":
-      return { decision: allow ? "accept" : cancel ? "cancel" : "decline" };
+      return { decision: chosen ?? (allow ? "accept" : cancel ? "cancel" : "decline") };
     case "legacy-exec":
     case "legacy-patch":
+      if (chosen !== undefined) return { decision: chosen };
       if (allow) return { decision: "approved" };
       if (cancel) return { decision: "abort" };
       return {
@@ -885,7 +929,45 @@ export function buildPermissionDecision(
       return allow
         ? { action: "accept", content: {}, _meta: null }
         : { action: cancel ? "cancel" : "decline", content: null, _meta: null };
+    case "elicitation-form": {
+      if (!allow) return { action: cancel ? "cancel" : "decline", content: null, _meta: null };
+      const content = response.updatedInput?.content;
+      return {
+        action: "accept",
+        content: content !== null && typeof content === "object" && !Array.isArray(content) ? content : {},
+        _meta: null,
+      };
+    }
+    case "elicitation-url":
+      return allow
+        ? { action: "accept", content: null, _meta: null }
+        : { action: cancel ? "cancel" : "decline", content: null, _meta: null };
+    case "user-input":
+      // 需要题目 id 映射，见 buildUserInputResult；这里只给「没有回答」的兜底
+      return { answers: {} };
   }
+}
+
+/**
+ * item/tool/requestUserInput 的应答：`{ answers: { [questionId]: { answers: string[] } } }`。
+ * allow 时取 updatedInput.answers（键为题目文本，值为字符串）按 id 回填；没有任何回答 / 拒绝时回空的 answers——
+ * 协议没有「拒绝」语义，空答案比 JSON-RPC 错误对 Codex 更友好（工具得到空结果，不会记错误）。
+ */
+export function buildUserInputResult(
+  questionIds: ReadonlyMap<string, string>,
+  response: AgentPermissionResponse,
+): { answers: Record<string, { answers: string[] }> } {
+  const result: Record<string, { answers: string[] }> = {};
+  if (response.behavior === "allow") {
+    const given = asRecord(response.updatedInput?.answers);
+    for (const [text, id] of questionIds) {
+      const value = given?.[text];
+      if (typeof value === "string" && value.length > 0) {
+        result[id] = { answers: [value] };
+      }
+    }
+  }
+  return { answers: result };
 }
 
 const CANCEL_RESPONSE: AgentPermissionResponse = {
@@ -1108,11 +1190,29 @@ export class CodexAgentSession implements AgentSession {
   async respondToPermission(requestId: string, response: AgentPermissionResponse): Promise<void> {
     const pending = this.pending.get(requestId);
     if (!pending) {
-      throw new Error(`找不到待处理的权限请求：${requestId}`);
+      throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
     this.pending.delete(requestId);
-    this.emit({ type: "permission_resolved", requestId, response });
-    pending.resolve(buildPermissionDecision(pending.kind, response));
+    // 表单 / 回答内容（可能含密码等）不写进 permission_resolved：该事件会广播并落盘
+    this.emit({
+      type: "permission_resolved",
+      requestId,
+      response:
+        (pending.kind === "elicitation-form" || pending.kind === "user-input") && response.behavior === "allow"
+          ? { behavior: "allow", ...(response.selectedActionId ? { selectedActionId: response.selectedActionId } : {}) }
+          : response,
+    });
+    pending.resolve(this.decisionFor(pending, response));
+    // 表单 / 浏览器流程的「取消」（deny + interrupt）：MCP 的 cancel 只让该次调用失败，这里额外中断本回合
+    if (
+      (pending.kind === "elicitation-form" || pending.kind === "elicitation-url") &&
+      response.behavior === "deny" &&
+      response.interrupt === true
+    ) {
+      // 让 cancel 应答先写给 app-server，再发 turn/interrupt
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await this.interrupt();
+    }
   }
 
   async interrupt(): Promise<void> {
@@ -1247,10 +1347,10 @@ export class CodexAgentSession implements AgentSession {
       {
         title: "会话",
         rows: buildRows([
-          ["线程 ID", this.threadId],
-          ["工作目录", this.deps.cwd],
-          ["模型", this.model ?? "默认（跟随设置）"],
-          ["模式", modeLabel ? `${modeLabel}（${this.modeId}）` : this.modeId],
+        ["线程 ID", this.threadId],
+        ["工作目录", this.deps.cwd],
+        ["模型", this.model ?? "默认（跟随设置）"],
+        ["模式", modeLabel ? `${modeLabel}（${this.modeId}）` : this.modeId],
         ]),
       },
     ];
@@ -1384,6 +1484,9 @@ export class CodexAgentSession implements AgentSession {
     );
     client.setRequestHandler("mcpServer/elicitation/request", (params, rpcId) =>
       this.handleElicitation(params, rpcId),
+    );
+    client.setRequestHandler("item/tool/requestUserInput", (params, rpcId) =>
+      this.handleUserInput(params, rpcId),
     );
   }
 
@@ -1569,12 +1672,19 @@ export class CodexAgentSession implements AgentSession {
     );
   }
 
+  /** 把应答转成该挂起请求对应的 JSON-RPC 结果 */
+  private decisionFor(pending: PendingPermission, response: AgentPermissionResponse): unknown {
+    return pending.kind === "user-input"
+      ? buildUserInputResult(pending.questionIds ?? new Map(), response)
+      : buildPermissionDecision(pending.kind, response, pending.decisions);
+  }
+
   private cancelAllPermissions(response: AgentPermissionResponse): void {
     for (const [requestId, pending] of Array.from(this.pending)) {
       this.pending.delete(requestId);
       this.emit({ type: "permission_resolved", requestId, response });
       pending.resolve(
-        buildPermissionDecision(pending.kind, {
+        this.decisionFor(pending, {
           behavior: "deny",
           interrupt: true,
           ...(response.behavior === "deny" && response.message ? { message: response.message } : {}),
@@ -1857,7 +1967,7 @@ export class CodexAgentSession implements AgentSession {
       this.pending.delete(requestId);
       const response: AgentPermissionResponse = { behavior: "deny", message: "Codex 已撤销该请求" };
       this.emit({ type: "permission_resolved", requestId, response });
-      pending.resolve(buildPermissionDecision(pending.kind, { ...response, interrupt: true }));
+      pending.resolve(this.decisionFor(pending, { ...response, interrupt: true }));
       return;
     }
   }
@@ -1870,6 +1980,11 @@ export class CodexAgentSession implements AgentSession {
     kind: PermissionKind,
     rpcId: JsonRpcId,
     request: Omit<AgentPermissionRequest, "id" | "provider" | "kind" | "actions">,
+    approval?: Pick<CodexApprovalActions, "actions"> & {
+      decisions?: ReadonlyMap<string, unknown>;
+      questionIds?: ReadonlyMap<string, string>;
+      requestKind?: AgentPermissionRequest["kind"];
+    },
   ): Promise<unknown> {
     if (this.closed) {
       return Promise.resolve(
@@ -1879,12 +1994,19 @@ export class CodexAgentSession implements AgentSession {
     const full: AgentPermissionRequest = {
       id: randomUUID(),
       provider: this.provider,
-      kind: "tool",
-      actions: PERMISSION_ACTIONS.map((a) => ({ ...a })),
+      kind: approval?.requestKind ?? "tool",
+      actions: (approval?.actions ?? PERMISSION_ACTIONS).map((a) => ({ ...a })),
       ...request,
     };
     return new Promise((resolve) => {
-      this.pending.set(full.id, { request: full, kind, rpcId, resolve });
+      this.pending.set(full.id, {
+        request: full,
+        kind,
+        rpcId,
+        ...(approval?.decisions ? { decisions: approval.decisions } : {}),
+        ...(approval?.questionIds ? { questionIds: approval.questionIds } : {}),
+        resolve,
+      });
       const turn = this.active;
       this.emit({
         type: "permission_requested",
@@ -1905,13 +2027,18 @@ export class CodexAgentSession implements AgentSession {
     const cwd = str(params?.cwd) ?? this.deps.cwd;
     const reason = str(params?.reason);
     const writeStdin = params?.kind === "writeStdin";
-    return this.requestPermission("command", rpcId, {
-      name: "shell",
-      title: writeStdin ? "向终端写入输入" : command ? `运行命令：${command}` : "运行命令",
-      ...(reason ? { description: reason } : {}),
-      input: { command, cwd, ...(itemId ? { itemId } : {}) },
-      detail: { type: "shell", command, cwd },
-    });
+    return this.requestPermission(
+      "command",
+      rpcId,
+      {
+        name: "shell",
+        title: writeStdin ? "向终端写入输入" : command ? `运行命令：${command}` : "运行命令",
+        ...(reason ? { description: reason } : {}),
+        input: { command, cwd, ...(itemId ? { itemId } : {}) },
+        detail: { type: "shell", command, cwd },
+      },
+      commandApprovalActions(params),
+    );
   }
 
   private handleFileChangeApproval(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
@@ -1925,13 +2052,18 @@ export class CodexAgentSession implements AgentSession {
         ? cached.detail
         : { type: "unknown", input: { reason: reason ?? null, grantRoot: grantRoot ?? null }, output: null };
     const filePath = detail.type === "edit" || detail.type === "write" ? detail.filePath : undefined;
-    return this.requestPermission("file", rpcId, {
-      name: "apply_patch",
-      title: filePath ? `修改文件：${filePath}` : "修改文件",
-      ...(reason ? { description: reason } : {}),
-      input: { ...(itemId ? { itemId } : {}), ...(grantRoot ? { grantRoot } : {}) },
-      detail,
-    });
+    return this.requestPermission(
+      "file",
+      rpcId,
+      {
+        name: "apply_patch",
+        title: filePath ? `修改文件：${filePath}` : "修改文件",
+        ...(reason ? { description: reason } : {}),
+        input: { ...(itemId ? { itemId } : {}), ...(grantRoot ? { grantRoot } : {}) },
+        detail,
+      },
+      fileChangeApprovalActions(params),
+    );
   }
 
   private handleLegacyExecApproval(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
@@ -1939,13 +2071,18 @@ export class CodexAgentSession implements AgentSession {
     const command = normalizeCommandExecutionCommand(params?.command) ?? "";
     const cwd = str(params?.cwd) ?? this.deps.cwd;
     const reason = str(params?.reason);
-    return this.requestPermission("legacy-exec", rpcId, {
-      name: "shell",
-      title: command ? `运行命令：${command}` : "运行命令",
-      ...(reason ? { description: reason } : {}),
-      input: { command, cwd },
-      detail: { type: "shell", command, cwd },
-    });
+    return this.requestPermission(
+      "legacy-exec",
+      rpcId,
+      {
+        name: "shell",
+        title: command ? `运行命令：${command}` : "运行命令",
+        ...(reason ? { description: reason } : {}),
+        input: { command, cwd },
+        detail: { type: "shell", command, cwd },
+      },
+      legacyApprovalActions("命令"),
+    );
   }
 
   private handleLegacyPatchApproval(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
@@ -1958,20 +2095,122 @@ export class CodexAgentSession implements AgentSession {
     const reason = str(params?.reason);
     const detail: ToolCallDetail = mapped?.detail ?? { type: "unknown", input: params, output: null };
     const filePath = detail.type === "edit" || detail.type === "write" ? detail.filePath : undefined;
-    return this.requestPermission("legacy-patch", rpcId, {
-      name: "apply_patch",
-      title: filePath ? `修改文件：${filePath}` : "修改文件",
-      ...(reason ? { description: reason } : {}),
-      input: { callId },
-      detail,
-    });
+    return this.requestPermission(
+      "legacy-patch",
+      rpcId,
+      {
+        name: "apply_patch",
+        title: filePath ? `修改文件：${filePath}` : "修改文件",
+        ...(reason ? { description: reason } : {}),
+        input: { callId },
+        detail,
+      },
+      legacyApprovalActions("文件改动"),
+    );
   }
 
+  /**
+   * item/tool/requestUserInput（design.md 4.33）：Codex 的 request_user_input 工具向用户提问，映射成 kind "question"，
+   * 复用提问卡片。questions: [{ id, header, question, isOther, isSecret, options: [{label, description}] | null }]；
+   * options 为 null = 纯文本题，isSecret = 输入遮罩。应答按题目 id 组织，见 buildUserInputResult。
+   */
+  private handleUserInput(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
+    const params = asRecord(rawParams);
+    const itemId = str(pick(params, "itemId", "item_id"));
+    const rawQuestions = Array.isArray(params?.questions) ? params.questions : [];
+    const questions: AgentQuestion[] = [];
+    // 答案以题目文本为键（与 Claude 的 AskUserQuestion 一致）；文本重复时加序号区分，保证能映射回 id
+    const questionIds = new Map<string, string>();
+    for (const raw of rawQuestions) {
+      const q = asRecord(raw);
+      const id = str(q?.id);
+      const text = str(q?.question);
+      if (!q || !id || !text) continue;
+      let key = text;
+      for (let n = 2; questionIds.has(key); n += 1) key = `${text} (${n})`;
+      questionIds.set(key, id);
+      const options = Array.isArray(q.options) ? q.options : null;
+      const header = str(q.header);
+      questions.push({
+        question: key,
+        ...(header ? { header } : {}),
+        multiSelect: false,
+        options: (options ?? []).flatMap((option) => {
+          const o = asRecord(option);
+          const label = str(o?.label);
+          const description = str(o?.description);
+          return label ? [{ label, ...(description ? { description } : {}) }] : [];
+        }),
+        isOther: q.isOther === true,
+        ...(q.isSecret === true ? { isSecret: true } : {}),
+        ...(options === null ? { freeText: true } : {}),
+      });
+    }
+    if (questions.length === 0) {
+      return Promise.resolve({ answers: {} });
+    }
+    return this.requestPermission(
+      "user-input",
+      rpcId,
+      {
+        name: "request_user_input",
+        title: "Codex 有问题需要你回答",
+        input: { ...(itemId ? { itemId } : {}) },
+        detail: { type: "question", questions },
+      },
+      { actions: QUESTION_ACTIONS, questionIds, requestKind: "question" },
+    );
+  }
+
+  /**
+   * mcpServer/elicitation/request（design.md 4.32）：form 模式按 requestedSchema 归一化出表单字段，url 模式带链接；
+   * 没有任何字段的 form（如 MCP 工具审批）按确认处理（允许 / 拒绝）；openai/* 等未声明的模式直接 decline。
+   */
   private handleElicitation(rawParams: unknown, rpcId: JsonRpcId): Promise<unknown> {
     const params = asRecord(rawParams);
     const serverName = str(pick(params, "serverName", "server_name")) ?? "mcp";
     const message = str(params?.message) ?? "";
     const url = str(params?.url);
+    const mode = str(params?.mode);
+    if (mode !== undefined && mode !== "form" && mode !== "url") {
+      this.deps.logger.warn("[codex] 不支持的 elicitation 模式 %s，已拒绝", mode);
+      return Promise.resolve({ action: "decline", content: null, _meta: null });
+    }
+    const isUrl = mode === "url" || (mode === undefined && url !== undefined);
+    const fields = isUrl
+      ? []
+      : normalizeElicitationSchema(pick(params, "requestedSchema", "requested_schema"));
+    if (isUrl || fields.length > 0) {
+      const elicitationId = str(pick(params, "elicitationId", "elicitation_id"));
+      return this.requestPermission(
+        isUrl ? "elicitation-url" : "elicitation-form",
+        rpcId,
+        {
+          name: `mcp:${serverName}`,
+          title: isUrl ? `${serverName} 需要你在浏览器中完成操作` : `${serverName} 需要你填写表单`,
+          input: {
+            serverName,
+            mode: isUrl ? "url" : "form",
+            message,
+            ...(url ? { url } : {}),
+            ...(elicitationId ? { elicitationId } : {}),
+          },
+          detail: {
+            type: "elicitation",
+            serverName,
+            mode: isUrl ? "url" : "form",
+            message,
+            ...(url ? { url } : {}),
+            ...(elicitationId ? { elicitationId } : {}),
+            ...(isUrl ? {} : { fields }),
+          },
+        },
+        {
+          actions: [...(isUrl ? ELICITATION_URL_ACTIONS : ELICITATION_FORM_ACTIONS)],
+          requestKind: "elicitation",
+        },
+      );
+    }
     return this.requestPermission("elicitation", rpcId, {
       name: `mcp:${serverName}`,
       title: `MCP 服务 ${serverName} 请求确认`,

@@ -675,6 +675,7 @@ export function DetailRoute() {
                 <ApprovalDialog
                   key={pendingApproval.requestId}
                   approval={pendingApproval}
+                  remaining={runtime.pendingApprovals.length - 1}
                   onRespond={onRespondPermission}
                 />
               ) : undefined

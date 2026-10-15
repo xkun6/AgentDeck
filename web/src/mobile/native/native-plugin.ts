@@ -98,6 +98,19 @@ export async function openAppNotificationSettings(): Promise<boolean> {
   return (await call("open_app_notification_settings")).ok;
 }
 
+/** 用系统浏览器打开 http / https 链接（Intent.ACTION_VIEW）；非 http(s)、没有浏览器、非 Tauri 环境都返回 false */
+export async function openUrl(url: string): Promise<boolean> {
+  return (await call("open_url", { url })).ok;
+}
+
+/** 系统栏（状态栏 / 刘海）顶部高度，单位 CSS px；原生取不到（窗口未就绪 / 非 Tauri 环境）返回 null */
+export async function getSafeAreaTop(): Promise<number | null> {
+  const result = await call("safe_area_insets");
+  if (!result.ok) return null;
+  const top = (result.value as { top?: unknown } | null)?.top;
+  return typeof top === "number" && Number.isFinite(top) ? top : null;
+}
+
 // ── 后台提醒通知 ──────────────────────────────────────────────────────────────
 
 export interface AttentionNotification {
@@ -112,6 +125,11 @@ export interface AttentionNotification {
 
 export async function showAttentionNotification(notification: AttentionNotification): Promise<boolean> {
   return (await call("show_attention", { ...notification })).ok;
+}
+
+/** 取消一条已发出的 attention 通知（别处已处理审批时撤回）；通知不存在也算成功 */
+export async function cancelAttentionNotification(id: number): Promise<boolean> {
+  return (await call("cancel_attention", { id })).ok;
 }
 
 /** 系统层面的通知开关是否开着；null = 当前环境无法查询（浏览器 / 测试） */

@@ -35,6 +35,14 @@ function permissionBody(request: AgentPermissionRequest): string {
       return "Agent 提交了计划，等待你确认";
     case "mode":
       return "Agent 请求切换模式，等待你确认";
+    case "elicitation": {
+      // 只引用服务名，不带表单标题 / 说明 / 字段内容
+      const detail = request.detail?.type === "elicitation" ? request.detail : undefined;
+      const server = detail?.serverName || request.name;
+      return detail?.mode === "url"
+        ? `Agent 需要你在浏览器中完成操作：${server}`
+        : `Agent 需要你填写表单：${server}`;
+    }
     default:
       // 只引用请求标题 / 工具名，不带输入与命令原文
       return `Agent 请求审批：${request.title?.trim() || request.name}`;
@@ -51,7 +59,8 @@ export interface AttentionServiceOptions {
 
 /**
  * client.attention 判定（design.md 4.31）：主时间线 `turn_completed` / `turn_failed`
- * （CLI 自发轮次与 judge 会话除外）、`permission_requested`、`schedule.notice`。
+ * （CLI 自发轮次与 judge 会话除外）、`permission_requested`、`schedule.notice`；
+ * 另在 `permission_resolved` 时发撤回信号（kind "resolved"）。
  * 一律发给所有已认证的远程连接，不判断用户是否在电脑前；是否提醒由手机端设置决定。
  */
 export class AttentionService {
@@ -136,8 +145,25 @@ export class AttentionService {
         this.notify({
           kind: "permission",
           agentId: envelope.agentId,
+          requestId: event.request.id,
+          permissionKind: event.request.kind,
           title: agentTitle(snapshot),
           body: clip(permissionBody(event.request), ATTENTION_BODY_MAX_CHARS),
+        });
+        return;
+      }
+      case "permission_resolved": {
+        // 审批在别处（桌面 / 另一台手机 / 超时取消）处理后撤回手机上已发的通知；judge 会话当初没发过，这里同样不发
+        const snapshot = this.snapshotOf(envelope.agentId);
+        if (!snapshot || snapshot.origin === "judge") {
+          return;
+        }
+        this.notify({
+          kind: "resolved",
+          agentId: envelope.agentId,
+          requestId: event.requestId,
+          title: agentTitle(snapshot),
+          body: "审批已处理",
         });
         return;
       }

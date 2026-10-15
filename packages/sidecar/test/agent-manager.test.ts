@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AgentManager } from "../src/agent/agent-manager.js";
 import { AgentRpcError } from "../src/agent/errors.js";
+import { PERMISSION_FIELD_MAX_BYTES } from "../src/agent/permission-limits.js";
 import type { AgentClient, AgentSession } from "../src/agent/types.js";
 
 /** 由测试手动驱动事件的假会话 */
@@ -315,6 +316,67 @@ describe("AgentManager", () => {
       (e) => e.event.type === "permission_resolved",
     );
     expect(resolved).toHaveLength(1);
+  });
+
+  test("超大审批内容：快照 / 广播 / 时间线里的 input 与 detail 被截断，provider 收到的 updatedInput 仍是原始值", async () => {
+    const { manager, agent, session, streams } = await setup();
+    await manager.sendPrompt(agent.id, "hi");
+    const bigCommand = "x".repeat(PERMISSION_FIELD_MAX_BYTES * 3);
+    const bigQuestion = "问".repeat(PERMISSION_FIELD_MAX_BYTES); // 3 倍字节
+    const request: AgentPermissionRequest = {
+      id: "perm-big",
+      provider: "fake",
+      name: "AskUserQuestion",
+      kind: "question",
+      input: { command: bigCommand, note: "短字段", questions: [{ question: "Q?", preview: bigQuestion }] },
+      detail: { type: "shell", command: bigCommand },
+    };
+    session.emit({ type: "permission_requested", request });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(1));
+
+    const sent = manager.getAgent(agent.id).pendingPermissions[0]!;
+    const sentCommand = sent.input!.command as string;
+    expect(Buffer.byteLength(sentCommand)).toBeLessThan(PERMISSION_FIELD_MAX_BYTES + 100);
+    expect(sentCommand).toMatch(/…已截断 \d+ 字节$/);
+    expect(sent.input!.note).toBe("短字段");
+    expect((sent.detail as { command: string }).command).toMatch(/…已截断 \d+ 字节$/);
+    // 广播与时间线里的也是截断后的；整条事件远小于网关的 16 MiB 帧上限
+    const streamed = streams.find((e) => e.event.type === "permission_requested")!;
+    expect(JSON.stringify(streamed).length).toBeLessThan(2 * 1024 * 1024);
+    expect(JSON.stringify((await manager.timeline(agent.id)).entries)).not.toContain(bigCommand);
+
+    // UI 回传的 updatedInput（提问卡会 `{...request.input, answers}`）里没改过的被截断字段，换回原始值再交给 provider
+    await manager.respondToPermission(agent.id, "perm-big", {
+      behavior: "allow",
+      updatedInput: { ...sent.input, answers: { "Q?": "A" } },
+    });
+    const received = session.responses[0]!.response;
+    expect(received).toMatchObject({ behavior: "allow" });
+    const updated = (received as { updatedInput: Record<string, unknown> }).updatedInput;
+    expect(updated.command).toBe(bigCommand);
+    expect((updated.questions as Array<{ preview: string }>)[0]!.preview).toBe(bigQuestion);
+    expect(updated.answers).toEqual({ "Q?": "A" });
+    // 广播 / 落盘的 permission_resolved 里也不带超大原文
+    expect(JSON.stringify((await manager.timeline(agent.id)).entries)).not.toContain(bigCommand);
+  });
+
+  test("超大审批：用户改过的字段保持用户的值；不带 updatedInput 时原样透传", async () => {
+    const { manager, agent, session } = await setup();
+    await manager.sendPrompt(agent.id, "hi");
+    const bigCommand = "y".repeat(PERMISSION_FIELD_MAX_BYTES * 2);
+    session.emit({
+      type: "permission_requested",
+      request: { id: "p-a", provider: "fake", name: "shell", kind: "tool", input: { command: bigCommand } },
+    });
+    session.emit({
+      type: "permission_requested",
+      request: { id: "p-b", provider: "fake", name: "shell", kind: "tool", input: { command: bigCommand } },
+    });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(2));
+    await manager.respondToPermission(agent.id, "p-a", { behavior: "allow", updatedInput: { command: "echo 改过" } });
+    expect(session.responses[0]!.response).toEqual({ behavior: "allow", updatedInput: { command: "echo 改过" } });
+    await manager.respondToPermission(agent.id, "p-b", { behavior: "allow" });
+    expect(session.responses[1]!.response).toEqual({ behavior: "allow" });
   });
 
   test("respond 未知请求抛 PERMISSION_NOT_FOUND", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   buildPermissionDecision,
+  buildUserInputResult,
   codexTurnCompletedUsage,
   type CodexTurnTokens,
   planToTodoItems,
@@ -388,5 +389,76 @@ describe("codex 协议小工具", () => {
       content: {},
       _meta: null,
     });
+  });
+
+  test("buildUserInputResult：按题目 id 回填 answers，空串 / 缺失 / 拒绝不回答", () => {
+    const ids = new Map([
+      ["问题一", "q1"],
+      ["问题二", "q2"],
+    ]);
+    expect(
+      buildUserInputResult(ids, {
+        behavior: "allow",
+        updatedInput: { answers: { 问题一: "是", 问题二: "", 无关: "x" } },
+      }),
+    ).toEqual({ answers: { q1: { answers: ["是"] } } });
+    expect(buildUserInputResult(ids, { behavior: "allow" })).toEqual({ answers: {} });
+    expect(buildUserInputResult(ids, { behavior: "deny", message: "跳过" })).toEqual({ answers: {} });
+  });
+
+  test("buildPermissionDecision：elicitation-form / elicitation-url 带齐 action / content / _meta", () => {
+    expect(
+      buildPermissionDecision("elicitation-form", { behavior: "allow", updatedInput: { content: { a: 1 } } }),
+    ).toEqual({ action: "accept", content: { a: 1 }, _meta: null });
+    expect(buildPermissionDecision("elicitation-form", { behavior: "allow", updatedInput: { content: [1] } })).toEqual({
+      action: "accept",
+      content: {},
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-form", { behavior: "deny" })).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-form", { behavior: "deny", interrupt: true })).toEqual({
+      action: "cancel",
+      content: null,
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-url", { behavior: "allow" })).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(buildPermissionDecision("elicitation-url", { behavior: "deny" })).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+  });
+
+  test("buildPermissionDecision：selectedActionId 命中 decisions 表时直接用表里的决定", () => {
+    const decisions = new Map<string, unknown>([
+      ["allow_session", "acceptForSession"],
+      ["allow_project", { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } }],
+    ]);
+    expect(
+      buildPermissionDecision("command", { behavior: "allow", selectedActionId: "allow_session" }, decisions),
+    ).toEqual({ decision: "acceptForSession" });
+    expect(
+      buildPermissionDecision("command", { behavior: "allow", selectedActionId: "allow_project" }, decisions),
+    ).toEqual({ decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } } });
+    // 表里没有的 id（如 accept / decline）回退到按 behavior 构造
+    expect(buildPermissionDecision("command", { behavior: "deny", selectedActionId: "decline" }, decisions)).toEqual({
+      decision: "decline",
+    });
+    // 旧版 decline 的表项为 undefined：按 denied + 理由构造
+    expect(
+      buildPermissionDecision(
+        "legacy-exec",
+        { behavior: "deny", selectedActionId: "decline", message: "不行" },
+        new Map([["decline", undefined]]),
+      ),
+    ).toEqual({ decision: { denied: { rejection: "不行" } } });
   });
 });

@@ -5,6 +5,7 @@ import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/sto
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
+import { pendingPermissionLabel } from "@/lib/permission-label";
 import {
   AGENT_STATUS_LABELS,
   agentDisplayTitle,
@@ -98,13 +99,14 @@ export function SessionList({ onOpen }: { onOpen: (agentId: string) => void }) {
           const runtime = runtimeBySession[agent.id];
           const running = isAgentRunning(agent, runtime);
           const needsApproval = agent.pendingPermissions.length > 0 || (runtime?.pendingApprovals.length ?? 0) > 0;
+          const approvalKind = agent.pendingPermissions[0]?.kind ?? runtime?.pendingApprovals[0]?.permission?.kind;
           return (
             <li key={agent.id}>
               <button type="button" className={s.row} onClick={() => onOpen(agent.id)}>
                 <span className={s.rowTitleLine}>
                   {agent.pinned ? <span className={s.pin} aria-label="已置顶" title="已置顶">置顶</span> : null}
                   <span className={s.rowTitle}>{agentDisplayTitle(agent, runtime, providers)}</span>
-                  {needsApproval ? <span className={s.badgeWarn}>待审批</span> : null}
+                  {needsApproval ? <span className={s.badgeWarn}>{pendingPermissionLabel(approvalKind)}</span> : null}
                 </span>
                 <span className={s.rowMeta}>
                   <span data-running={running ? "true" : undefined}>{AGENT_STATUS_LABELS[agent.status]}</span>

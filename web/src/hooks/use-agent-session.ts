@@ -58,6 +58,7 @@ import {
   reconcileAgentRuntimesAtom,
   removeAgentAtom,
   removeApprovalAtom,
+  syncPendingApprovalsAtom,
   resetAgentRuntimesForEpochAtom,
   settleInactiveAgentRuntimeAtom,
   prependAgentHistoryAtom,
@@ -240,7 +241,10 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
       }
     }),
     client.onStream((envelope, meta) => store.set(applyAgentEventAtom, envelope, meta.replay)),
-    client.onAgentState((agent) => store.set(upsertAgentSnapshotAtom, agent)),
+    client.onAgentState((agent) => {
+      store.set(upsertAgentSnapshotAtom, agent);
+      store.set(syncPendingApprovalsAtom, agent.id);
+    }),
     client.onAgentRemoved((agentId) => {
       store.set(removeAgentAtom, agentId);
       store.set(removeAgentSubagentsAtom, agentId);
@@ -251,6 +255,7 @@ export function bindSidecarToStore(client: SidecarClient, store: JotaiStore): ()
     client.onAgents((agents) => {
       store.set(replaceAgentSnapshotsAtom, agents);
       store.set(reconcileAgentRuntimesAtom, agents);
+      for (const agent of agents) store.set(syncPendingApprovalsAtom, agent.id);
     }),
     client.onEpochChange(() => store.set(resetAgentRuntimesForEpochAtom)),
   ];
@@ -526,6 +531,8 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       store.set(ensureChatSessionAtom, agentId);
       await client.syncAgent(agentId);
       store.set(settleInactiveAgentRuntimeAtom, agentId);
+      // 手机首屏只拉最近一页时间线，审批卡片可能被分页截断：用快照的 pendingPermissions 补齐
+      store.set(syncPendingApprovalsAtom, agentId);
     },
 
     /**

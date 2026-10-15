@@ -1,6 +1,7 @@
 import { useAtomValue } from "jotai";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { formatTokens, relativeTime } from "@/lib/format";
+import { pendingPermissionLabel } from "@/lib/permission-label";
 import { Dot, Pill } from "@/components/ui/pill";
 import { sessionTokens, shortId, type PanelSession } from "./panel-session";
 import s from "./task-card.module.css";
@@ -15,6 +16,7 @@ export function TaskCard({ session, onClick }: TaskCardProps) {
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const runtime = runtimeBySession[agent.id];
   const pendingCount = runtime?.pendingApprovals.length ?? agent.pendingPermissions.length;
+  const pendingKind = runtime?.pendingApprovals[0]?.permission?.kind ?? agent.pendingPermissions[0]?.kind;
   const toolCount = runtime?.messages.reduce(
     (count, message) => count + message.parts.filter((part) => part.type === "tool").length,
     0,
@@ -52,7 +54,7 @@ export function TaskCard({ session, onClick }: TaskCardProps) {
           {pendingCount > 0 && (
             <>
               {" · "}
-              <span className={s.footAttn}>{pendingCount} 待审批</span>
+              <span className={s.footAttn}>{pendingCount} {pendingPermissionLabel(pendingKind)}</span>
             </>
           )}
         </span>

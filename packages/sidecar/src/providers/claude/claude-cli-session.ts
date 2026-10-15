@@ -3,7 +3,8 @@
 // - stdin 每行写一个 JSON（用户消息 / 控制请求 / 对 CLI 控制请求的应答）；stdout 逐行解析；
 // - 我们发出的控制请求（initialize / interrupt / set_model / set_permission_mode / mcp_status / mcp_reconnect / stop_task）
 //   按 request_id 关联应答，带超时；
-// - CLI 发来的 can_use_tool 交给 canUseTool 回调，应答回写 stdin；control_cancel_request 触发对应 AbortSignal；
+// - CLI 发来的 can_use_tool 交给 canUseTool 回调、elicitation（MCP 表单 / url）交给 onElicitation 回调，应答回写 stdin；
+//   control_cancel_request 触发对应 AbortSignal；
 // - close 时结束 stdin 并 tree-kill 整棵进程树；进程意外退出时消息迭代以错误结束，绝不抛到 sidecar 进程级。
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -18,9 +19,11 @@ import type {
   ClaudeCanUseTool,
   ClaudeCanUseToolRequest,
   ClaudeControlResponseOut,
+  ClaudeElicitationRequest,
   ClaudeInitializeResponse,
   ClaudeContextUsageResponse,
   ClaudeMcpStatusResponse,
+  ClaudeOnElicitation,
   ClaudeOutgoingControl,
   ClaudeOutputMessage,
   ClaudePermissionMode,
@@ -58,6 +61,8 @@ export interface ClaudeCliOptions {
   /** 配合 forkSession：只保留到该 assistant 消息 uuid（隐藏参数 --resume-session-at，2.1.296 实测可用） */
   resumeSessionAt?: string;
   canUseTool: ClaudeCanUseTool;
+  /** MCP elicitation（表单 / url）；缺省时一律应答 cancel（与以前回 error 的效果相同：CLI 视为取消） */
+  onElicitation?: ClaudeOnElicitation;
   logger: Logger;
   onStderr?: (text: string) => void;
   terminateProcess?: ProcessTerminator;
@@ -147,6 +152,7 @@ export class ClaudeCliSession implements ClaudeCliHandle {
 
   private readonly logger: Logger;
   private readonly canUseTool: ClaudeCanUseTool;
+  private readonly onElicitation: ClaudeOnElicitation | undefined;
   private readonly onStderr: ((text: string) => void) | undefined;
   private readonly terminateProcess: ProcessTerminator;
   private readonly controlTimeoutMs: number;
@@ -171,6 +177,7 @@ export class ClaudeCliSession implements ClaudeCliHandle {
   constructor(options: ClaudeCliOptions) {
     this.logger = options.logger;
     this.canUseTool = options.canUseTool;
+    this.onElicitation = options.onElicitation;
     this.onStderr = options.onStderr;
     this.terminateProcess = options.terminateProcess ?? terminateWithTreeKill;
     this.controlTimeoutMs = options.controlTimeoutMs ?? DEFAULT_CONTROL_TIMEOUT_MS;
@@ -397,6 +404,10 @@ export class ClaudeCliSession implements ClaudeCliHandle {
     if (typeof requestId !== "string") {
       return;
     }
+    if (isRecord(request) && request.subtype === "elicitation") {
+      await this.handleElicitationRequest(requestId, request as unknown as ClaudeElicitationRequest);
+      return;
+    }
     if (!isRecord(request) || request.subtype !== "can_use_tool") {
       const subtype = isRecord(request) ? String(request.subtype) : "unknown";
       this.respond({
@@ -419,6 +430,12 @@ export class ClaudeCliSession implements ClaudeCliHandle {
           ...optionalString("displayName", permission.display_name),
           ...optionalString("description", permission.description),
           ...optionalString("decisionReason", permission.decision_reason),
+          ...optionalString("blockedPath", permission.blocked_path),
+          ...(permission.permission_suggestions !== undefined
+            ? { suggestions: permission.permission_suggestions }
+            : {}),
+          ...(permission.suppress_always_allow_rule === true ? { suppressAlwaysAllowRule: true } : {}),
+          ...(permission.default_to_no === true ? { defaultToNo: true } : {}),
         },
       );
       this.respond({
@@ -436,6 +453,43 @@ export class ClaudeCliSession implements ClaudeCliHandle {
       this.respond({
         type: "control_response",
         response: { subtype: "error", request_id: requestId, error: errorMessage(error) },
+      });
+    } finally {
+      this.permissionAborts.delete(requestId);
+    }
+  }
+
+  /** MCP elicitation：交给 onElicitation，应答 {action, content?}（不拼 toolUseID）；异常 / 无回调按 cancel */
+  private async handleElicitationRequest(requestId: string, request: ClaudeElicitationRequest): Promise<void> {
+    const controller = new AbortController();
+    this.permissionAborts.set(requestId, controller);
+    try {
+      const result = this.onElicitation
+        ? await this.onElicitation({
+            signal: controller.signal,
+            mode: request.mode === "url" ? "url" : "form",
+            mcpServerName: typeof request.mcp_server_name === "string" ? request.mcp_server_name : "",
+            message: typeof request.message === "string" ? request.message : "",
+            ...optionalString("url", request.url),
+            ...optionalString("elicitationId", request.elicitation_id),
+            ...optionalString("title", request.title),
+            ...optionalString("displayName", request.display_name),
+            ...optionalString("description", request.description),
+            ...(isRecord(request.requested_schema) ? { requestedSchema: request.requested_schema } : {}),
+            ...(Array.isArray(request.property_order)
+              ? { propertyOrder: request.property_order.filter((key): key is string => typeof key === "string") }
+              : {}),
+          })
+        : { action: "cancel" as const };
+      this.respond({
+        type: "control_response",
+        response: { subtype: "success", request_id: requestId, response: { ...result } },
+      });
+    } catch (error) {
+      this.logger.debug("处理 MCP elicitation 失败，按取消应答：%s", errorMessage(error));
+      this.respond({
+        type: "control_response",
+        response: { subtype: "success", request_id: requestId, response: { action: "cancel" } },
       });
     } finally {
       this.permissionAborts.delete(requestId);

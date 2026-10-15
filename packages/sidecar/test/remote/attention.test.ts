@@ -126,11 +126,62 @@ describe("AttentionService 判定", () => {
     expect(t.sent[1]!.title).toBe("定时任务");
   });
 
+  test("permission 带 requestId 与 permissionKind；permission_resolved 发 resolved 撤回信号（带 agentId + requestId）", () => {
+    const t = setupUnit();
+    t.emit("a1", { type: "permission_requested", request: { id: "r1", provider: "mock", name: "AskUserQuestion", kind: "question" } });
+    t.emit("a1", {
+      type: "permission_resolved",
+      requestId: "r1",
+      response: { behavior: "allow" },
+    });
+    expect(t.sent).toHaveLength(2);
+    expect(t.sent[0]).toMatchObject({ kind: "permission", agentId: "a1", requestId: "r1", permissionKind: "question" });
+    expect(t.sent[1]).toMatchObject({ kind: "resolved", agentId: "a1", requestId: "r1", title: "修复登录", body: "审批已处理" });
+    expect(t.sent[1]!.id).not.toBe(t.sent[0]!.id);
+  });
+
+  test("judge 会话与已删除会话的 permission_resolved 不发撤回", () => {
+    const t = setupUnit({ j1: { title: "评判", origin: "judge" } });
+    t.emit("j1", { type: "permission_resolved", requestId: "r", response: { behavior: "deny" } });
+    t.emit("gone", { type: "permission_resolved", requestId: "r", response: { behavior: "deny" } });
+    expect(t.sent).toHaveLength(0);
+  });
+
   test("question / plan 类审批使用固定中文摘要", () => {
     const t = setupUnit();
     t.emit("a1", { type: "permission_requested", request: { id: "q", provider: "mock", name: "AskUserQuestion", kind: "question", input: { q: "机密" } } });
     t.emit("a1", { type: "permission_requested", request: { id: "p", provider: "mock", name: "ExitPlanMode", kind: "plan" } });
     expect(t.sent.map((n) => n.body)).toEqual(["Agent 提出了问题，等待你的回答", "Agent 提交了计划，等待你确认"]);
+  });
+
+  test("elicitation 类审批只引用服务名：表单「需要你填写表单」，url「需要你在浏览器中完成操作」", () => {
+    const t = setupUnit();
+    t.emit("a1", {
+      type: "permission_requested",
+      request: {
+        id: "e1",
+        provider: "claude",
+        name: "mcp:forms",
+        kind: "elicitation",
+        title: "含机密的标题",
+        detail: { type: "elicitation", serverName: "forms", mode: "form", message: "密码是 123456", fields: [] },
+      },
+    });
+    t.emit("a1", {
+      type: "permission_requested",
+      request: {
+        id: "e2",
+        provider: "codex",
+        name: "mcp:oauth",
+        kind: "elicitation",
+        detail: { type: "elicitation", serverName: "oauth", mode: "url", message: "授权", url: "https://example.com/?token=abc" },
+      },
+    });
+    expect(t.sent.map((n) => n.body)).toEqual([
+      "Agent 需要你填写表单：forms",
+      "Agent 需要你在浏览器中完成操作：oauth",
+    ]);
+    expect(t.sent[0]).toMatchObject({ kind: "permission", permissionKind: "elicitation" });
   });
 });
 
@@ -183,6 +234,10 @@ describe("client.attention 端到端", () => {
       response: { behavior: "allow" },
     });
     await phone.waitFor(() => attentions(phone).filter((n) => n.kind === "finished").length > 0);
+    // 别处处理后手机收到撤回：同一个 agentId + requestId
+    const resolved = attentions(phone).find((n) => n.kind === "resolved")!;
+    expect(resolved).toMatchObject({ agentId: agent.id, requestId: request.id });
+    expect(permission).toMatchObject({ requestId: request.id, permissionKind: "tool" });
     phone.close();
   });
 });

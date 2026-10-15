@@ -245,7 +245,12 @@ export function SessionDetail({
           pendingApproval={
             pendingApproval ? (
               <div className={s.approvalWrap}>
-                <ApprovalDialog key={pendingApproval.requestId} approval={pendingApproval} onRespond={onRespond} />
+                <ApprovalDialog
+                  key={pendingApproval.requestId}
+                  approval={pendingApproval}
+                  remaining={runtime.pendingApprovals.length - 1}
+                  onRespond={onRespond}
+                />
               </div>
             ) : undefined
           }

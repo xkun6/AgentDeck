@@ -1,0 +1,179 @@
+/* MCP 表单 / 浏览器流程卡片；卡片外框、按钮样式沿用 approval-dialog.module.css */
+.message {
+  margin-bottom: 12px;
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.field {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.label,
+.legend {
+  display: block;
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.labelText {
+  word-break: break-word;
+}
+
+.required {
+  color: var(--h-warn);
+}
+
+.hint {
+  color: var(--h-text-3);
+  font-size: var(--h-font-size-xs);
+  font-weight: 400;
+}
+
+.description {
+  margin-top: 4px;
+  color: var(--h-text-2);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fieldError {
+  margin-top: 4px;
+  color: var(--h-color-danger-fg);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.5;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--h-line);
+  border-radius: 0;
+  background: var(--h-bg-input);
+  color: var(--h-text);
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  padding: 8px 12px;
+}
+
+.input:focus-visible {
+  outline: var(--h-focus-outline);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--h-color-danger-fg);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--h-line-soft);
+  border-radius: 0;
+  background: var(--h-bg-pane);
+  color: var(--h-text);
+  cursor: pointer;
+  font-family: var(--h-font-cn);
+  font-size: var(--h-font-size-sm);
+  line-height: 1.5;
+  padding: 8px 12px;
+  word-break: break-word;
+}
+
+.checkRow[data-checked="true"] {
+  border-color: var(--h-ok);
+  background: var(--h-ok-soft);
+}
+
+.checkRow:focus-within {
+  outline: var(--h-focus-outline);
+}
+
+.control {
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--h-ok);
+}
+
+.control:focus-visible {
+  outline: none;
+}
+
+.link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.openLink {
+  border: 1px solid var(--h-ok);
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text);
+  cursor: pointer;
+  font-family: var(--h-font-cn);
+  font-size: var(--h-button-font-size-sm);
+  padding: 8px 16px;
+}
+
+.openLink:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.openLink:focus-visible {
+  outline: var(--h-focus-outline);
+}
+
+.url {
+  max-width: 100%;
+  color: var(--h-text-2);
+  font-family: var(--h-font-mono);
+  font-size: var(--h-button-font-size-sm);
+  line-height: 1.5;
+  user-select: all;
+  word-break: break-all;
+}
+
+/* 手机 / 触屏：输入控件与选项行触控区 >= 44px，按钮换行铺开 */
+@media (max-width: 640px), (pointer: coarse) {
+  .input,
+  .checkRow,
+  .openLink {
+    min-height: 44px;
+  }
+
+  .actions {
+    gap: 8px;
+  }
+}

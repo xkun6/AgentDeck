@@ -15,7 +15,12 @@ import {
   SESSION_RESUME_BUSY_MESSAGE,
   SESSION_UNRECOVERABLE_MESSAGE,
 } from "./use-agent-session";
-import { AGENT_RESUMING_PROGRESS, agentPendingAssistantId, chatRuntimeBySessionAtom } from "@/stores/chat";
+import {
+  AGENT_RESUMING_PROGRESS,
+  agentPendingAssistantId,
+  chatRuntimeBySessionAtom,
+  createEmptyChatRuntime,
+} from "@/stores/chat";
 import { agentSnapshotsAtom, lastRemovedAgentAtom, upsertAgentSnapshotAtom } from "@/stores/agents";
 import { backgroundTasksByAgentAtom } from "@/stores/background-tasks";
 import { schedulesStateAtom } from "@/stores/schedules";
@@ -320,6 +325,44 @@ describe("agent.update（design.md 4.17）", () => {
     bindSidecarToStore(client, store);
     onState(snapshot({ archived: true, title: "新名字" }));
     expect(store.get(agentSnapshotsAtom)[AGENT]).toMatchObject({ archived: true, title: "新名字" });
+  });
+
+  it("loadTimeline：时间线被分页截断后，用快照的 pendingPermissions 补齐审批卡片", async () => {
+    const store = createStore();
+    const pending = { id: "perm-1", provider: "mock", name: "Bash", kind: "tool", title: "执行命令" } as const;
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "running", pendingPermissions: [pending], lastSeq: 9 }));
+    const client = {
+      syncAgent: vi.fn(async () => {}),
+    } as unknown as SidecarClient;
+    await createAgentSessionActions(client, store).loadTimeline(AGENT);
+    expect(store.get(chatRuntimeBySessionAtom)[AGENT]?.pendingApprovals.map((a) => a.requestId)).toEqual(["perm-1"]);
+  });
+
+  it("bindSidecarToStore：agent.state 的 pendingPermissions 同步到已打开会话的待审批", () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "running" }));
+    store.set(chatRuntimeBySessionAtom, { [AGENT]: createEmptyChatRuntime(0) });
+    let onState: (agent: AgentSnapshot) => void = () => {};
+    const noop = () => () => {};
+    const client = {
+      onState: noop,
+      onStream: noop,
+      onAgentState: (listener: (agent: AgentSnapshot) => void) => {
+        onState = listener;
+        return () => {};
+      },
+      onAgentRemoved: noop,
+      onSubagentUpdate: noop,
+      onTasksUpdate: noop,
+      onAgents: noop,
+      onEpochChange: noop,
+    } as unknown as SidecarClient;
+    bindSidecarToStore(client, store);
+    const pending = { id: "perm-2", provider: "mock", name: "Bash", kind: "tool" } as const;
+    onState(snapshot({ status: "running", updatedAt: 3, pendingPermissions: [pending] }));
+    expect(store.get(chatRuntimeBySessionAtom)[AGENT]?.pendingApprovals.map((a) => a.requestId)).toEqual(["perm-2"]);
+    onState(snapshot({ status: "running", updatedAt: 4, pendingPermissions: [] }));
+    expect(store.get(chatRuntimeBySessionAtom)[AGENT]?.pendingApprovals).toEqual([]);
   });
 
   it("forkSession 调 agent.fork（可选 throughSeq / title），结果写入快照并预建聊天运行时", async () => {

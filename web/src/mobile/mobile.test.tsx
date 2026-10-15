@@ -219,6 +219,8 @@ describe("SessionList 会话列表", () => {
       agent("a", { title: "普通会话", updatedAt: 5 }),
       agent("p", { title: "置顶会话", pinned: true, updatedAt: 1 }),
       agent("w", { title: "等审批", updatedAt: 4, pendingPermissions: [{ id: "r1" } as never] }),
+      agent("q", { title: "等回答", updatedAt: 2, pendingPermissions: [{ id: "r2", kind: "question" } as never] }),
+      agent("l", { title: "等计划", updatedAt: 2, pendingPermissions: [{ id: "r3", kind: "plan" } as never] }),
       agent("x", { title: "已归档会话", archived: true, updatedAt: 3 }),
       agent("j", { title: "评判会话", origin: "judge", updatedAt: 6 }),
     ]);
@@ -239,6 +241,9 @@ describe("SessionList 会话列表", () => {
     expect(rows[0]!.textContent).toContain("置顶会话");
     expect(rows[0]!.textContent).toContain("置顶");
     expect(rows.map((r) => r.textContent).join("|")).toContain("等审批待审批");
+    // 提问 / 计划按快照 pendingPermissions[0].kind 区分
+    expect(rows.map((r) => r.textContent).join("|")).toContain("等回答待回答");
+    expect(rows.map((r) => r.textContent).join("|")).toContain("等计划待确认计划");
 
     // 进入页面会刷新一次 agent.list
     expect(client.refreshAgents).toHaveBeenCalled();

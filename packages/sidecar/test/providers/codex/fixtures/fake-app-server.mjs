@@ -1,7 +1,7 @@
 // 假的 `codex app-server`：按行读 JSON-RPC，按剧本回放通知与审批请求（字段形状取自 codex-cli 0.162.1）。
 // 用法：node fake-app-server.mjs app-server
 // 环境变量：FAKE_CODEX_LOG=<jsonl 路径> 记录收到的每条消息；FAKE_CODEX_INIT_FAIL=1 让 initialize 失败。
-// 剧本由 turn/start 输入文本的第一个单词决定：hello / shell / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
+// 剧本由 turn/start 输入文本的第一个单词决定：hello / userinput / userinputempty / elicitform / eliciturl / elicitempty / elicitopenai / shell / shellavail / shellpolicy / legacyexec / patch / fail / error / hang / crash / plan / compact / compactlegacy / unknownreq / resolved。
 // thread/compact/start 按 compact 剧本开一个回合；mcpServerStatus/list 分两页返回三个服务器；config/mcpServer/reload 回 {}。
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
@@ -66,6 +66,26 @@ function tokenUsage(turnId) {
   notify("thread/tokenUsage/updated", { ...base(turnId), tokenUsage: { total: last, last, modelContextWindow: 200000 } });
 }
 
+async function commandApprovalVariant(turnId, extra) {
+  const answer = await serverRequest("item/commandExecution/requestApproval", {
+    kind: "command", ...base(turnId), itemId: "exec_v", startedAtMs: Date.now(), environmentId: null,
+    reason: "需要运行命令", command: "git status", cwd: "C:/work", ...extra,
+  });
+  await agentMessage(turnId, "msg_v", [`decision:${JSON.stringify(answer?.result?.decision)}`]);
+  completeTurn(turnId, answer?.result?.decision === "cancel" ? "interrupted" : "completed");
+}
+
+async function elicitation(turnId, extra) {
+  const answer = await serverRequest("mcpServer/elicitation/request", { threadId: THREAD_ID, turnId, serverName: "forms", ...extra });
+  if (answer?.result?.action === "cancel") {
+    // cancel 之后等客户端的 turn/interrupt
+    activeTurn.onInterrupt = () => completeTurn(turnId, "interrupted");
+    return;
+  }
+  await agentMessage(turnId, "msg_e", [`answer:${JSON.stringify(answer?.result)}`]);
+  completeTurn(turnId, "completed");
+}
+
 const scenarios = {
   async hello(turnId) {
     notify("item/started", { ...base(turnId), item: { type: "reasoning", id: "rs_1", summary: [], content: [] } });
@@ -121,6 +141,87 @@ const scenarios = {
       return;
     }
     await agentMessage(turnId, "msg_shell", [accepted ? "done" : "skipped"]);
+    completeTurn(turnId, "completed");
+  },
+
+  // 命令审批的变体：availableDecisions（含全部五种决定）/ 只有 proposedExecpolicyAmendment / 无任何附加字段的旧行为
+  async shellavail(turnId) {
+    await commandApprovalVariant(turnId, {
+      proposedExecpolicyAmendment: ["git", "status"],
+      availableDecisions: [
+        "accept",
+        "acceptForSession",
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } },
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "example.com", action: "allow" } } },
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "evil.test", action: "deny" } } },
+        "cancel",
+      ],
+    });
+  },
+
+  async shellpolicy(turnId) {
+    await commandApprovalVariant(turnId, { proposedExecpolicyAmendment: ["npm", "test"] });
+  },
+
+  // 旧版 execCommandApproval / applyPatchApproval（ReviewDecision）
+  async legacyexec(turnId) {
+    const answer = await serverRequest("execCommandApproval", {
+      conversationId: THREAD_ID, callId: "legacy_1", command: ["ls", "-la"], cwd: "C:/work", reason: "旧版审批", parsedCmd: [],
+    });
+    await agentMessage(turnId, "msg_legacy", [`decision:${JSON.stringify(answer?.result?.decision)}`]);
+    completeTurn(turnId, "completed");
+  },
+
+  // MCP elicitation：form（含全部原始类型）/ url / 空表单（MCP 工具审批式确认）/ 未声明的 openai 模式
+  async elicitform(turnId) {
+    await elicitation(turnId, {
+      mode: "form", message: "请填写表单", _meta: null,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", title: "姓名", minLength: 1 },
+          level: { type: "string", oneOf: [{ const: "lo", title: "低" }, { const: "hi", title: "高" }] },
+          agree: { type: "boolean", default: true },
+          score: { type: "number", minimum: 0, maximum: 10 },
+          tags: { type: "array", items: { type: "string", enum: ["a", "b"] }, maxItems: 2 },
+        },
+        required: ["name"],
+      },
+    });
+  },
+
+  async eliciturl(turnId) {
+    await elicitation(turnId, { mode: "url", message: "请在浏览器里授权", url: "https://example.com/auth", elicitationId: "elic-9", _meta: null });
+  },
+
+  async elicitempty(turnId) {
+    await elicitation(turnId, { mode: "form", message: "Allow the agentdeck MCP server to run tool delegate?", requestedSchema: { type: "object", properties: {} }, _meta: null });
+  },
+
+  async elicitopenai(turnId) {
+    await elicitation(turnId, { mode: "openai/form", message: "x", requestedSchema: {}, _meta: null });
+  },
+
+  // request_user_input：单选（带 isOther）/ 单选（不允许其他）/ 纯文本 / 遮罩纯文本；应答原样回显到 assistant 文本
+  async userinput(turnId) {
+    const answer = await serverRequest("item/tool/requestUserInput", {
+      ...base(turnId), itemId: "ui_1", isBlocking: true, autoResolutionMs: null,
+      questions: [
+        { id: "q_db", header: "数据库", question: "用哪个数据库？", isOther: true, isSecret: false,
+          options: [{ label: "SQLite", description: "嵌入式" }, { label: "Postgres", description: "服务端" }] },
+        { id: "q_mode", header: "模式", question: "用哪个数据库？", isOther: false, isSecret: false,
+          options: [{ label: "读写", description: "可写" }] },
+        { id: "q_name", header: "名称", question: "项目叫什么？", isOther: false, isSecret: false, options: null },
+        { id: "q_key", header: "密钥", question: "API Key？", isOther: false, isSecret: true, options: null },
+      ],
+    });
+    await agentMessage(turnId, "msg_ui", [`answers:${JSON.stringify(answer?.result)}`]);
+    completeTurn(turnId, "completed");
+  },
+
+  async userinputempty(turnId) {
+    const answer = await serverRequest("item/tool/requestUserInput", { ...base(turnId), itemId: "ui_2", isBlocking: true, autoResolutionMs: null, questions: [] });
+    await agentMessage(turnId, "msg_ui2", [`answers:${JSON.stringify(answer?.result)}`]);
     completeTurn(turnId, "completed");
   },
 
@@ -184,7 +285,8 @@ const scenarios = {
   },
 
   async unknownreq(turnId) {
-    const answer = await serverRequest("item/tool/requestUserInput", { ...base(turnId), itemId: "q1", questions: [] });
+    // 未注册的 server→client 请求（item/permissions/requestApproval）：客户端应回 -32601
+    const answer = await serverRequest("item/permissions/requestApproval", { ...base(turnId), itemId: "q1" });
     notify("item/completed", {
       ...base(turnId),
       item: { type: "agentMessage", id: "msg_u", text: answer?.error ? `error:${answer.error.code}` : "ok" },

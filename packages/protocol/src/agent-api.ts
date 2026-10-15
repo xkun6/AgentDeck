@@ -246,7 +246,47 @@ export type ToolCallDetail =
       questions: AgentQuestion[];
       answers?: Record<string, string>;
     }
+  /**
+   * MCP elicitation（design.md 4.32）：MCP 服务通过 Claude / Codex 向用户索取表单输入或要求在浏览器里完成一步操作。
+   * form 模式带 fields（已由 JSON Schema 归一化）；url 模式带 url 与 elicitationId。
+   */
+  | {
+      type: "elicitation";
+      serverName: string;
+      mode: "form" | "url";
+      message: string;
+      url?: string;
+      elicitationId?: string;
+      fields?: ElicitationField[];
+    }
   | { type: "unknown"; input: unknown; output: unknown };
+
+export type ElicitationFieldType = "string" | "number" | "integer" | "boolean" | "select" | "multiselect";
+export interface ElicitationFieldOption {
+  value: string;
+  label: string;
+}
+/** elicitation 表单的一个字段（由 requestedSchema 的 properties 归一化而来，见 sidecar providers/shared/elicitation-schema.ts） */
+export interface ElicitationField {
+  key: string;
+  title?: string;
+  description?: string;
+  required: boolean;
+  type: ElicitationFieldType;
+  /** select / multiselect 的选项 */
+  options?: ElicitationFieldOption[];
+  /** string 的 format：email / uri / date / date-time 等 */
+  format?: string;
+  /** number / integer 的 minimum / maximum；multiselect 的 minItems / maxItems */
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number;
+  /** string / number / boolean 的默认值；select 为选项 value，multiselect 为 value 数组 */
+  default?: string | number | boolean | string[];
+  /** 输入需要遮罩（format: "password" / writeOnly / 键名像密码） */
+  secret?: boolean;
+}
 
 export interface AgentQuestionOption {
   label: string;
@@ -258,6 +298,15 @@ export interface AgentQuestion {
   header?: string;
   multiSelect: boolean;
   options: AgentQuestionOption[];
+  /**
+   * 是否允许「其他」自由输入。缺省 = 允许（Claude AskUserQuestion 的题目一律带「其他」）；
+   * Codex request_user_input 按 `isOther` 显式给出 true / false。
+   */
+  isOther?: boolean;
+  /** 输入框需要遮罩（Codex `isSecret`），作用于「其他」输入与纯文本题 */
+  isSecret?: boolean;
+  /** 纯文本题：没有选项，只有一个输入框（Codex `options: null`）；options 为空数组时也按纯文本题处理 */
+  freeText?: boolean;
 }
 
 export type ToolCallStatus = "running" | "completed" | "failed" | "canceled";
@@ -298,20 +347,30 @@ export type AgentTimelineItem =
   | { type: "notice"; text: string };
 
 export interface AgentPermissionAction {
+  /**
+   * 约定 id（design.md 5.3）：`allow_session` = 本会话始终允许，`allow_project` = 永久允许（写入项目 / 执行策略）；
+   * 其余 id 由 provider 自定（Claude allow/deny、Codex accept/decline/cancel、ACP optionId 等）。
+   */
   id: string;
   label: string;
   behavior: "allow" | "deny";
+  /** 「始终允许」类动作的持久化范围；前端据此用次要样式，避免误点（ACP 的 optionId 不固定，不能只靠 id 判断） */
+  persist?: "session" | "permanent";
+  /** 动作的补充说明（如永久规则内容与写入位置），前端放在 tooltip 与按钮下方的说明行 */
+  description?: string;
 }
 export interface AgentPermissionRequest {
   id: string;
   provider: AgentProviderId;
   name: string;
-  kind: "tool" | "plan" | "question" | "mode" | "other";
+  kind: "tool" | "plan" | "question" | "mode" | "elicitation" | "other";
   title?: string;
   description?: string;
   input?: Record<string, unknown>;
   detail?: ToolCallDetail;
   actions?: AgentPermissionAction[];
+  /** 为 true 时前端不得把「允许」类按钮作为默认 / 主按钮（Claude `default_to_no`，高风险请求） */
+  defaultDeny?: boolean;
 }
 export type AgentPermissionResponse =
   | { behavior: "allow"; selectedActionId?: string; updatedInput?: Record<string, unknown> }
@@ -797,12 +856,19 @@ export interface RemoteStatus {
   devices: Array<RemoteDevice & { connected: boolean }>;
 }
 
-/** `client.attention`：只发给远程客户端，手机据此弹本地通知 */
+/**
+ * `client.attention`：只发给远程客户端，手机据此弹本地通知。
+ * `kind: "resolved"` 是撤回信号（permission_resolved 时发出）：手机据 `agentId` + `requestId` 取消对应的系统通知并关掉应用内提示条，不弹新通知。
+ */
 export interface AttentionNotice {
   /** 去重用 */
   id: string;
-  kind: "finished" | "failed" | "permission" | "schedule";
+  kind: "finished" | "failed" | "permission" | "schedule" | "resolved";
   agentId?: string;
+  /** kind 为 "permission" / "resolved" 时的审批请求 id；手机据 agentId + requestId 算出同一个系统通知 id */
+  requestId?: string;
+  /** kind 为 "permission" 时的审批类型（与 AgentPermissionRequest.kind 一致），手机据此区分「待审批 / 待回答 / 待确认计划」 */
+  permissionKind?: AgentPermissionRequest["kind"];
   /** 会话标题或调度名 */
   title: string;
   /** 中文摘要，≤ 120 字（不含工具输出原文） */
