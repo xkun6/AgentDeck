@@ -46,8 +46,18 @@ export const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
   dormant: "未加载",
 };
 
+/** 显示用「进行中」：主回合在跑，或仍有运行中的子代理 / 后台任务（backgroundActive，design.md 4.4）。不用于发送 / 忙碌判断 */
+export function isAgentActive(agent: Pick<AgentSnapshot, "status" | "backgroundActive">): boolean {
+  return agent.status === "running" || agent.backgroundActive === true;
+}
+
+/** 显示用状态文案：进行中（含 backgroundActive）统一显示「运行中」文案 */
+export function agentStatusLabel(agent: Pick<AgentSnapshot, "status" | "backgroundActive">): string {
+  return isAgentActive(agent) ? AGENT_STATUS_LABELS.running : AGENT_STATUS_LABELS[agent.status];
+}
+
 export function isAgentRunning(agent: AgentSnapshot, runtime: ChatSessionRuntime | undefined): boolean {
-  return agent.status === "running" || agent.status === "starting" || (runtime ? isRuntimeRunning(runtime) : false);
+  return isAgentActive(agent) || agent.status === "starting" || (runtime ? isRuntimeRunning(runtime) : false);
 }
 
 export function formatAgentTime(ms: number, now: Date): string {

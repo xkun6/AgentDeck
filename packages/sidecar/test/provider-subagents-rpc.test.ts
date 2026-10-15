@@ -1,8 +1,13 @@
 // agent.subagents.list / agent.subagents.timeline / agent.subagents.update 与会话关闭时的清理（design.md 4.11）
 import type { ProviderSubagentUpdate } from "@agentdeck/protocol";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { AgentManager } from "../src/agent/agent-manager.js";
+import { AgentStore } from "../src/agent/agent-store.js";
 import type {
   AgentSession,
   AgentSessionConfig,
@@ -130,5 +135,70 @@ describe("provider 子代理 RPC", () => {
         .sort(),
     ).toEqual(["sub-1", "sub-2"]);
     expect(manager.listSubagents(agent.id)).toEqual([]);
+  });
+});
+
+describe("子代理运行中 → 快照 backgroundActive（design.md 4.11）", () => {
+  async function snapshotOf(agentId: string) {
+    const { agents } = await client.call("agent.list", {});
+    return agents.find((a) => a.id === agentId)!;
+  }
+  function stateOf(agentId: string) {
+    return client.states.filter((a) => a.id === agentId);
+  }
+
+  test("主回合已结束（idle）仍有 running 子代理 → true 并推 agent.state；全部结束 → 缺省；关闭会话后缺省", async () => {
+    const { agent } = await client.call("agent.create", { provider: "mock", cwd: process.cwd() });
+    expect((await snapshotOf(agent.id)).backgroundActive).toBeUndefined();
+    const push = provider.pushers[0]!;
+
+    push({ type: "upsert", id: "sub-1" });
+    push({ type: "upsert", id: "sub-2" });
+    await client.waitFor(() => stateOf(agent.id).some((a) => a.backgroundActive === true));
+    const active = await snapshotOf(agent.id);
+    expect(active.status).toBe("idle");
+    expect(active.backgroundActive).toBe(true);
+
+    // 仍有一个在跑：保持 true
+    push({ type: "upsert", id: "sub-1", status: "completed" });
+    await client.waitFor(() => subagentUpdates().length === 3);
+    expect((await snapshotOf(agent.id)).backgroundActive).toBe(true);
+
+    push({ type: "upsert", id: "sub-2", status: "failed" });
+    await client.waitFor(() => stateOf(agent.id).at(-1)?.backgroundActive === undefined);
+    expect((await snapshotOf(agent.id)).backgroundActive).toBeUndefined();
+
+    push({ type: "upsert", id: "sub-3" });
+    await client.waitFor(() => stateOf(agent.id).at(-1)?.backgroundActive === true);
+    await client.call("agent.close", { agentId: agent.id });
+    expect((await snapshotOf(agent.id)).backgroundActive).toBeUndefined();
+    expect(stateOf(agent.id).at(-1)?.backgroundActive).toBeUndefined();
+  });
+
+  test("不写入 meta.json", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "agentdeck-bgactive-"));
+    try {
+      const registry = new ProviderRegistry([provider]);
+      const persistedManager = new AgentManager({ registry, store: new AgentStore({ dataDir }) });
+      const persistedServer = new RpcServer({ token: TOKEN, version: "9.9.9-test", manager: persistedManager, registry });
+      const port = await persistedServer.listen(0);
+      const persistedClient = await TestRpcClient.connect(`ws://127.0.0.1:${port}/rpc?token=${TOKEN}`);
+      try {
+        const { agent } = await persistedClient.call("agent.create", { provider: "mock", cwd: process.cwd() });
+        provider.pushers.at(-1)!({ type: "upsert", id: "sub-1" });
+        await persistedClient.waitFor(() => persistedClient.states.some((a) => a.backgroundActive === true));
+        // agent.update 会立即落盘 meta
+        await persistedClient.call("agent.update", { agentId: agent.id, pinned: true });
+        const meta = JSON.parse(readFileSync(path.join(dataDir, "agents", agent.id, "meta.json"), "utf8"));
+        expect(meta.pinned).toBe(true);
+        expect("backgroundActive" in meta).toBe(false);
+      } finally {
+        await persistedClient.close();
+        await persistedManager.shutdown();
+        await persistedServer.close();
+      }
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 });

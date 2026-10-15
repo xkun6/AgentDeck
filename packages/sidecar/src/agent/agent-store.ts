@@ -15,8 +15,11 @@ import type {
 import { createSilentLogger, type Logger } from "../logger.js";
 import { compactToolCallUpdates } from "./timeline-compact.js";
 
-/** meta.json 的内容：快照中除 pendingPermissions / activeTurnId 外的全部字段（design.md 4.5） */
-export type PersistedAgentMeta = Omit<AgentSnapshot, "pendingPermissions" | "activeTurnId"> & {
+/** meta.json 的内容：快照中除 pendingPermissions / activeTurnId / backgroundActive 外的全部字段（design.md 4.5） */
+export type PersistedAgentMeta = Omit<
+  AgentSnapshot,
+  "pendingPermissions" | "activeTurnId" | "backgroundActive"
+> & {
   /** summary 方式分叉：首次 agent.send 时前置的历史对话文本（design.md 4.23），不属于快照 */
   pendingForkContext?: string;
   /** native 方式分叉且新会话尚未拿到自己的原生 id（design.md 4.23），不属于快照 */
@@ -503,6 +506,8 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   const lastSeq = value.lastSeq;
   meta.lastSeq = typeof lastSeq === "number" && Number.isInteger(lastSeq) && lastSeq > 0 ? lastSeq : 0;
   meta.resumable = false;
+  // backgroundActive 不持久化：即使文件里有也丢弃
+  delete (meta as { backgroundActive?: boolean }).backgroundActive;
   if (typeof value.pinned !== "boolean") {
     delete meta.pinned;
   }

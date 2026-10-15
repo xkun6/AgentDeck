@@ -285,6 +285,7 @@ export interface AgentSnapshot {
   pendingPermissions: AgentPermissionRequest[];
   lastUsage?: AgentUsage; lastError?: string | null;
   totalUsage?: { inputTokens: number; outputTokens: number };   // 会话累计（见 4.4）；只累加 turn_completed.usage，usage_updated 不计入
+  backgroundActive?: boolean;   // 有运行中的 provider 子代理 / 后台任务（见 4.4；不持久化）
   persistence?: AgentPersistenceHandle | null;
   createdAt: number; updatedAt: number;
 }
@@ -300,6 +301,7 @@ export interface AgentSnapshot {
 - `agent.close` 后 agent 保留在注册表中（status `closed`），仍可查询 `agent.timeline`；再 `agent.send` 时若可恢复则自动恢复（见 4.5），否则返回 `AGENT_CLOSED`。
 - `agent.create` 未传 model / modeId 时快照中为 `null`，表示使用 provider 默认值；`availableModes` 取自 `fetchCatalog`。
 - turn 结束时清空 pendingPermissions；`turn_failed` 记录 `lastError`，下一轮开始时清空。
+- `AgentSnapshot.backgroundActive?: boolean`：本会话有运行中的 provider 子代理（4.11，`status === "running"`）或后台任务（4.15，`status === "running"`）；由 sidecar 在子代理 / 后台任务表每次变化后重算，值变化时随 `agent.state` 下发；**不持久化**（会话关闭 / 休眠 / sidecar 重启后为 false 或缺省，读取 meta.json 时忽略）。它**不改变 `status` 的语义**：发送排队 / steer、调度、委派等忙碌判断仍只看 `status === "running"`，输入框保持可正常发送；前端显示会话状态时 `status === "running" || backgroundActive` 视为「进行中」。
 
 ### 4.5 协议补充与会话持久化（P5/P6）
 
@@ -474,7 +476,7 @@ interface ProviderProfile {
 
 ### 4.11 provider 子代理（Claude / Codex；ACP 不支持）
 
-参照 paseo 的 provider subagents（`packages/server/src/server/agent/provider-subagents/store.ts`、`providers/claude/subagents/*`、`providers/claude/sidechain-tracker.ts`、`providers/codex-app-server-agent.ts`，以及 `packages/protocol/src/messages.ts` 的 `agent.provider_subagents.*`）。子代理**只存在于 sidecar 内存**，不落盘、不随会话恢复；父时间线里的 `sub_agent` 工具卡片照常持久化。
+参照 paseo 的 provider subagents（`packages/server/src/server/agent/provider-subagents/store.ts`、`providers/claude/subagents/*`、`providers/claude/sidechain-tracker.ts`、`providers/codex-app-server-agent.ts`，以及 `packages/protocol/src/messages.ts` 的 `agent.provider_subagents.*`）。子代理**只存在于 sidecar 内存**，不落盘、不随会话恢复；父时间线里的 `sub_agent` 工具卡片照常持久化。存在 `running` 子代理时快照 `backgroundActive` 为 true（见 4.4）。
 
 **类型**（`agent-api.ts`）：
 - `ToolCallDetail` 增加 `sub_agent`（见 4.3）：父会话时间线中「派出子代理」的工具卡片。`log` 每行一个动作，形如 `[Read] src/a.ts`（`[工具显示名] 摘要`，无摘要时只有 `[工具显示名]`）；Codex 还会出现 `[Assistant] …` / `[Thought] …` / `[User] …` 行。前端显示名取 `subAgentType ?? "Task"`、摘要取 `description`。
@@ -607,7 +609,7 @@ export interface AgentMcpStatusResult { servers: AgentMcpServer[]; reconnect: Ag
 
 ### 4.15 后台任务（仅 Claude；Codex / ACP 不支持）
 
-Claude 用 `run_in_background` 跑的后台 Shell 命令（Bash / PowerShell 工具）在 CLI 里是 `local_bash` task。AgentDeck 只把**后台 Shell**登记成「后台任务」，供界面按会话列出、在右侧面板看命令与实时输出、单独停止；子代理 / workflow（`local_agent` / `local_workflow`）由 4.11 的子代理列表负责，不进后台任务。任务表只存在 sidecar 内存，不落盘、不随会话恢复（sidecar 重启后为空）。
+Claude 用 `run_in_background` 跑的后台 Shell 命令（Bash / PowerShell 工具）在 CLI 里是 `local_bash` task。AgentDeck 只把**后台 Shell**登记成「后台任务」，供界面按会话列出、在右侧面板看命令与实时输出、单独停止；子代理 / workflow（`local_agent` / `local_workflow`）由 4.11 的子代理列表负责，不进后台任务。任务表只存在 sidecar 内存，不落盘、不随会话恢复（sidecar 重启后为空）。存在 `running` 后台任务时快照 `backgroundActive` 为 true（见 4.4）。
 
 **类型**（`agent-api.ts`）：
 ```ts

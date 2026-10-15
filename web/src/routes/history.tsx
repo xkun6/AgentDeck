@@ -12,6 +12,7 @@ import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import {
   AGENT_STATUS_LABELS,
+  agentStatusLabel,
   agentDisplayTitle,
   agentProviderLabel,
   isAgentRunning,
@@ -407,7 +408,7 @@ export function HistoryRoute() {
                     data-selected={isSelected ? "true" : undefined}
                     role="button"
                     tabIndex={0}
-                    title={`${title}\n${AGENT_STATUS_LABELS[agent.status]}`}
+                    title={`${title}\n${agentStatusLabel(agent)}`}
                     onClick={() => (selectMode ? toggleSelected(agent.id) : goSession(agent))}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {

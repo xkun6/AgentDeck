@@ -89,6 +89,15 @@ describe("AgentStore", () => {
     });
   });
 
+  test("backgroundActive 不持久化：即使 meta.json 里有也在读取时丢弃", async () => {
+    const dataDir = makeDataDir();
+    const store = new AgentStore({ dataDir });
+    await store.flushMeta("a1", () => meta("a1", { backgroundActive: true } as Partial<PersistedAgentMeta>));
+    const metas = await new AgentStore({ dataDir }).loadAll();
+    expect(metas).toHaveLength(1);
+    expect("backgroundActive" in metas[0]!).toBe(false);
+  });
+
   test("meta 原子写：目标已存在时覆盖，且不残留临时文件", async () => {
     const dataDir = makeDataDir();
     const file = path.join(dataDir, "meta.json");
