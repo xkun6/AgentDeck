@@ -13,6 +13,30 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// release 签名配置在仓库外（密码不入库）：优先读环境变量 AGENTDECK_ANDROID_KEYSTORE_PROPERTIES 指定的文件，
+// 否则读 ~/.agentdeck/android/keystore.properties。需要 storeFile / storePassword / keyAlias / keyPassword 四项。
+// 文件不存在时 debug 构建不受影响，只有 release 的 assemble / bundle / package 任务会报错。
+val keystorePropertiesFile = File(
+    System.getenv("AGENTDECK_ANDROID_KEYSTORE_PROPERTIES")
+        ?: (System.getProperty("user.home") + "/.agentdeck/android/keystore.properties")
+)
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    val buildsRelease = allTasks.any { it.name.matches(Regex("(assemble|bundle|package).*Release")) }
+    if (buildsRelease && !keystorePropertiesFile.exists()) {
+        throw GradleException(
+            "找不到 release 签名配置：${keystorePropertiesFile.absolutePath}。" +
+                "请把 keystore.properties（storeFile / storePassword / keyAlias / keyPassword）放到 " +
+                "~/.agentdeck/android/，或用环境变量 AGENTDECK_ANDROID_KEYSTORE_PROPERTIES 指定路径。"
+        )
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "local.agentdeck.mobile"
@@ -23,6 +47,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -37,6 +71,10 @@ android {
             }
         }
         getByName("release") {
+            // 手机经局域网 / Tailscale 以 ws://<电脑IP> 直连电脑网关（内容已 E2EE），release 也必须放行明文；
+            // 实际放行由 AndroidManifest 的 networkSecurityConfig（res/xml/network_security_config.xml）决定。
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

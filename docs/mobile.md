@@ -93,3 +93,31 @@ mobile/                      新增：Tauri Android 工程（独立 crate，不�
 **后台运行引导**：设置页「后台运行」小节显示通知开关与电池优化状态（回前台自动刷新）、「请求忽略电池优化」「打开应用设置」按钮、华为 / 荣耀、小米、OPPO / vivo 的自启动 / 后台活动 / 锁定最近任务指引，以及「被系统冻结时回到 App 自动补齐，不会丢消息」的说明；首次开启「后台保持连接」后连上电脑时弹一次引导对话框。
 
 **真机验证清单（M3）**：锁屏 10 分钟内收到完成 / 审批通知；点通知（App 在后台 / 被杀后）跳转到对应会话；Wi-Fi ↔ 移动网络（Tailscale）切换后会话不丢且无重复消息；切后台被冻结后回到前台能在数秒内重连并补齐，「正在同步…」出现后消失；拍照 / 相册选图并发送；放行自启动 / 电池优化后后台存活是否改善。
+
+## 8. 构建 release APK（签名、明文 ws、混淆）
+
+**签名密钥在仓库外**：默认 `~/.agentdeck/android/`（Windows 上即 `C:/Users/<用户>/.agentdeck/android/`），含 `agentdeck-release.jks`（别名 `agentdeck`，RSA 4096，有效期 10000 天，DN `CN=AgentDeck, O=AgentDeck`）、`keystore.properties`（`storePassword` / `keyPassword` / `keyAlias` / `storeFile`）与 `README.txt`。**务必备份**：密钥丢失后新版本无法覆盖安装已装的版本，只能卸载重装，配对数据随之丢失。仓库里不放任何密码，`.gitignore` 已忽略 `keystore.properties`、`*.jks`、`*.keystore`。首次生成：
+
+```bash
+keytool -genkeypair -v -keystore agentdeck-release.jks -alias agentdeck -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=AgentDeck, O=AgentDeck" -storetype PKCS12
+```
+
+`mobile/gen/android/app/build.gradle.kts` 读取签名配置：优先环境变量 `AGENTDECK_ANDROID_KEYSTORE_PROPERTIES` 指向的文件，否则 `<user.home>/.agentdeck/android/keystore.properties`。文件不存在时，release 的 `assemble` / `bundle` / `package` 任务会直接报错并提示放置位置；debug 构建不受影响。
+
+**构建步骤**（环境同 debug：NDK `29.0.14206865`、`ANDROID_HOME=C:/Users/<用户>/AppData/Local/Android/Sdk`、JDK 用 `C:/Program Files/Zulu/zulu-17`）。Windows 没开开发者模式时，`tauri android build` 在「把 .so 符号链接到 jniLibs」一步会失败，所以让它只负责编 Rust，再手动复制 `.so` 并直接跑 gradle：
+
+```bash
+cd web && pnpm build:mobile                                   # 必须先构建手机前端
+cd ../mobile
+../node_modules/.bin/tauri android build --target aarch64 --apk || true   # 编 Rust 并刷新 tauri.properties 的版本号，symlink 失败可忽略
+mkdir -p gen/android/app/src/main/jniLibs/arm64-v8a
+cp target/aarch64-linux-android/release/libagentdeck_mobile_lib.so gen/android/app/src/main/jniLibs/arm64-v8a/
+cd gen/android && ./gradlew assembleArm64Release -x rustBuildArm64Release
+# 产物：mobile/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk
+```
+
+整套脚本见（gitignore 的）`tmp/build-apk-release.sh`。验证：`apksigner verify --verbose --print-certs <apk>`（build-tools 里）看证书 DN 为 `CN=AgentDeck, O=AgentDeck`；`aapt2 dump badging <apk>` 看 `versionName` / `versionCode`（0.3.0 → 3000，由 `tauri.conf.json` 的 version 经 `tauri.properties` 生成）。注意：APK 只带 v2 签名（minSdk 24，AGP 默认不加 v1），Android 7.0+ 均可安装；与 debug 版签名不同，**已装 debug 版的手机必须先卸载才能装 release 版**，配对数据会丢失。
+
+**release 放行明文 ws 的原因**：手机经局域网 / Tailscale 以 `ws://<电脑IP>:47631` 直连电脑网关，IP 段无法用 `domain-config` 限定；传输内容已是 tweetnacl 端到端加密，明文通道本身不泄露内容。放行依靠 `AndroidManifest.xml` 的 `android:networkSecurityConfig="@xml/network_security_config"`（`base-config cleartextTrafficPermitted="true"`，debug / release 共用）。该属性在 API 24+ 优先于 `usesCleartextTraffic`；Tauri 生成的 `manifestPlaceholders["usesCleartextTraffic"]` 默认 release 为 `false`，当前清单并未引用该占位符，为避免日后有人引用而误关，release 里也显式设为 `"true"`。
+
+**混淆与压缩**：release 开启 `isMinifyEnabled`（R8）。`tauri-android` 自带的 consumer rules 已按注解保留 `@TauriPlugin` 的 `@Command` 方法与 `@InvokeArg` 类（`CancelAttentionArgs` 等经 `parseArgs` 反射），`generated/proguard-wry.pro` 保留 wry 的 JNI 入口；仍在 `proguard-rules.pro` 为 `local.agentdeck.mobile` 的 `NativePlugin`、`*Args`、`MainActivity`、`KeepAliveService` 补了显式 keep，并保留行号信息。核对方法：构建后看 `app/build/outputs/mapping/arm64Release/mapping.txt`，插件类、Args 类与全部 `@Command` 方法名应原样保留（如 `keepaliveStart`、`cancelAttention`）。
