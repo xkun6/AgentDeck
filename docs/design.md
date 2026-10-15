@@ -1062,11 +1062,10 @@ interface AgentRateLimits {
 - 快照没有 `rateLimits` 时隐藏。额度为账户级：每个会话显示自己快照中最近收到的值。
 
 **输出速度（tok/s）**：
-- `AgentUsage` 增加 `outputTokensPerSecond?: number`：本回合输出 token 数 ÷（当前或结束时刻 − 本回合首个输出到达时刻 − 审批等待时长）秒；首个输出不足 1 秒（扣除后不足 1 秒同样）时不计算。**审批等待时长** = 首个输出之后，每段 `permission_requested` → `permission_resolved` 之间的时间（同一时刻有多个请求挂起时取并集；首个输出之前的等待本来就不在分母里，不重复扣除；等待尚未结束时扣到当前时刻）。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker.observe`，在各自的事件出口（`emit`）喂入会话事件。随 `usage_updated`（回合中）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
-- Claude：主线程（不含子代理 sidechain）每条 assistant 消息的 `stream_event` `message_delta.usage.output_tokens`（该消息内累计）累加为本回合已输出 token，回合中最多每秒发一次只带 `outputTokensPerSecond` 的 `usage_updated`；result 时用最终输出 token 计算最终值。
-- Codex：本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径）到达时计算并下发；只在回合结束才有用量时只给最终值。
-- ACP：只在回合结束用 `PromptResponse.usage` 的输出 token 计算最终值（没有 usage 则不给）。
-- 首个输出时刻：本回合第一个 `assistant_message` 或 `reasoning` 事件。
+- `AgentUsage` 增加 `outputTokensPerSecond?: number`：**纯生成速度** = 本回合输出 token 数 ÷ 模型实际在流式输出的累计时长（秒）。**生成段** = 一次模型响应从首个输出（任意类型：思考块、文字、工具参数）到达，到该响应结束；累计时长 = 本回合所有已结束生成段之和（加上进行中的那一段）。首 token 等待、工具执行、审批等待都在生成段之外，不计入分母；累计生成时长不足 1 秒时不计算。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker`：`markOutput()` 开段（段内重复调用无效）、`markIdle()` 闭段，`observe(event)` 在各自的事件出口（`emit`）收到 `permission_requested` 时自动闭段。开段 / 闭段事件各 provider 不同，见下。随 `usage_updated`（回合中，最多每秒一次）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
+- Claude：主线程（不含子代理 sidechain）的流式事件驱动计时：`content_block_start` 与任何 `content_block_delta`（文字 / 思考 / 签名 / 工具参数等全部类型）开段，`message_stop` 闭段并下发一次只带 `outputTokensPerSecond` 的 `usage_updated`（节流每秒最多一次）；因此新版 Claude Code 不下发思考文字时，思考块的 `content_block_start` 同样开段。分子取流式 `message_delta.usage.output_tokens`（该消息内累计）跨消息累加的本回合已输出 token（含隐藏思考与工具参数，与分母的生成段同口径）；result 时先闭段，再用同一累计值算最终速度，不使用 result 自带的 `usage.outputTokens`。依赖 CLI 始终带 `--include-partial-messages`。
+- Codex：assistant_message / reasoning 时间线项、`item/started` 的 reasoning / agentMessage 项以及各类输出 delta 通知（agentMessage / reasoning 摘要 / 正文 delta）开段；`thread/tokenUsage/updated`（每次采样结束发一次）与回合结束闭段；分子为本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径），只在回合结束才有用量时只给最终值。
+- ACP：agent_message_chunk / agent_thought_chunk 开段；新的 `tool_call` 通知到达与回合结束闭段；速度只在回合结束用 `PromptResponse.usage` 的输出 token 算最终值（没有 usage 则不给）。
 
 ### 4.31 远程网关（安卓 App 接入）
 

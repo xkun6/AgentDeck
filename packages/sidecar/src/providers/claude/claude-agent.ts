@@ -632,7 +632,7 @@ export class ClaudeAgentSession implements AgentSession {
   private currentStreamMessageId: string | null = null;
   private contextInputTokens = 0;
   private contextOutputTokens = 0;
-  /** 本回合输出速度（design.md 4.30）：已结束消息的输出 token 累计 + 当前消息的累计 */
+  /** 本回合输出速度（design.md 4.30）：分子 = 已结束消息的输出 token 累计 + 当前消息的累计；分母 = 流式生成段累计时长 */
   private readonly outputSpeed = new OutputSpeedTracker();
   private speedBaseTokens = 0;
   private speedMessageTokens = 0;
@@ -1384,13 +1384,25 @@ export class ClaudeAgentSession implements AgentSession {
         if (event.usage?.output_tokens !== undefined) {
           this.contextOutputTokens = toCount(event.usage.output_tokens);
           this.speedMessageTokens = this.contextOutputTokens;
-          this.emitOutputSpeed();
         }
+        return;
+      case "message_stop":
+        // 一次模型响应结束：关闭当前生成段（design.md 4.30）
+        this.outputSpeed.markIdle();
+        this.emitOutputSpeed();
+        return;
+      case "content_block_start":
+        // 任何类型的块（含不下发文字的思考块、工具参数）开始都说明模型在流式输出
+        if (this.activeTurn) this.outputSpeed.markOutput();
         return;
       case "content_block_delta": {
         const turn = this.activeTurn;
         const delta = event.delta;
-        if (!turn || !delta) {
+        if (!turn) {
+          return;
+        }
+        this.outputSpeed.markOutput();
+        if (!delta) {
           return;
         }
         const messageId = this.currentStreamMessageId;
@@ -1585,7 +1597,9 @@ export class ClaudeAgentSession implements AgentSession {
     this.captureSession(message.session_id);
 
     const usage = this.convertUsage(message);
-    const finalSpeed = this.outputSpeed.speed(usage.outputTokens ?? this.speedBaseTokens + this.speedMessageTokens);
+    // 分子取流里累计的 message_delta token，与分母的生成段同口径（不用 result 的 usage.outputTokens）
+    this.outputSpeed.markIdle();
+    const finalSpeed = this.outputSpeed.speed(this.speedBaseTokens + this.speedMessageTokens);
     if (finalSpeed !== undefined) {
       usage.outputTokensPerSecond = finalSpeed;
     }
@@ -2027,9 +2041,6 @@ export class ClaudeAgentSession implements AgentSession {
   }
 
   private emitTimeline(turn: ActiveTurn | null, item: AgentTimelineItem): void {
-    if (turn && (item.type === "assistant_message" || item.type === "reasoning")) {
-      this.outputSpeed.markOutput();
-    }
     const merged = item.type === "tool_call" ? this.mergeSubAgentCard(item) : item;
     this.emit({ type: "timeline", ...(turn ? { turnId: turn.turnId } : {}), item: merged });
   }

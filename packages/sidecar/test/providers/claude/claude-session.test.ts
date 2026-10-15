@@ -2887,7 +2887,21 @@ describe("额度事件与输出速度（design.md 4.30）", () => {
     expect(rateLimits(events)[0]!.windows[0]).toMatchObject({ id: "five_hour", usedPercent: 10 });
   });
 
-  test("输出速度：首个输出 1 秒后才计算、每秒最多一次只带 outputTokensPerSecond，sidechain 不计，result 给最终值", async () => {
+  const streamEvent = (event: Record<string, unknown>) => ({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    uuid: "se",
+    event,
+  });
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const messageStop = () => streamEvent({ type: "message_stop" });
+  const blockStart = (blockType: string) =>
+    streamEvent({ type: "content_block_start", index: 0, content_block: { type: blockType } });
+  const inputJsonDelta = () =>
+    streamEvent({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } });
+
+  test("输出速度：只累计流式生成段，message_stop 才下发（每秒最多一次），sidechain 不计，result 用流里累计的 token 给最终值", async () => {
     let now = 1_000_000;
     const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
@@ -2897,44 +2911,101 @@ describe("额度事件与输出速度（design.md 4.30）", () => {
       await session.startTurn("hi");
       const cli = h.clis[0]!;
       const user = cli.received[0]!;
+      // 每次发完等一下，保证消息在时钟推进之前已被处理
+      const feed = async (...messages: Parameters<typeof cli.emit>) => {
+        cli.emit(...messages);
+        await settle();
+      };
       const speeds = () =>
         events.flatMap((e) =>
           e.type === "usage_updated" && e.usage.outputTokensPerSecond !== undefined
             ? [e.usage]
             : [],
         );
-      cli.emit(msg.init(), msg.streamStart("m1"), msg.textDelta("你好"));
+      // m1：生成 0.5 秒（累计不足 1 秒）后 message_stop：不计算
+      await feed(msg.init(), msg.streamStart("m1"), msg.textDelta("你好"));
       await waitUntil(() => events.some((e) => e.type === "timeline"));
-      // 首个输出不足 1 秒：不计算
       now += 500;
-      cli.emit(messageDelta(50));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await feed(messageDelta(50), messageStop());
       expect(speeds()).toHaveLength(0);
-      // 满 2 秒：100 token / 2 秒 = 50
+      // 间隔 1 秒（首 token 等待）不计入；m2 生成 1.5 秒，累计 2 秒，token 50 + 100 = 150 → 75
+      now += 1000;
+      await feed(msg.streamStart("m2"), msg.textDelta("再来"));
       now += 1500;
-      cli.emit(messageDelta(100));
+      await feed(messageDelta(100), messageStop());
       await waitUntil(() => speeds().length === 1);
-      expect(speeds()[0]).toEqual({ outputTokensPerSecond: 50 });
-      // 子代理 sidechain 的 message_delta 不计入
-      cli.emit(messageDelta(9999, "toolu_sub"));
-      // 距上次下发不足 1 秒：节流
+      expect(speeds()[0]).toEqual({ outputTokensPerSecond: 75 });
+      // 子代理 sidechain 的 message_delta / message_stop 不计入
+      await feed(messageDelta(9999, "toolu_sub"));
+      // m3：距上次下发不足 1 秒：节流
       now += 500;
-      cli.emit(messageDelta(120));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await feed(msg.streamStart("m3"), blockStart("thinking"), messageDelta(30));
+      now += 200;
+      await feed(messageStop());
       expect(speeds()).toHaveLength(1);
-      // 第二条消息的 token 累加到已输出里：120 + 80 = 200，距首个输出 3 秒 → 66.7
+      // m4（只有工具参数）：累计生成 2 + 0.2 + 0.5 = 2.7 秒，token 150 + 30 + 20 = 200 → 74.1
+      now += 300;
+      await feed(msg.streamStart("m4"), blockStart("tool_use"), messageDelta(20));
       now += 500;
-      cli.emit(msg.streamStart("m2"), messageDelta(80));
+      await feed(messageStop());
       await waitUntil(() => speeds().length === 2);
-      expect(speeds()[1]).toEqual({ outputTokensPerSecond: 66.7 });
-      // result：用最终输出 token（result.usage.output_tokens）与结束时刻计算最终值
-      now += 5000; // 距首个输出共 8 秒
+      expect(speeds()[1]).toEqual({ outputTokensPerSecond: 74.1 });
+      // result：工具执行很久，不计入分母；分子取流里累计的 200，而不是 result.usage.output_tokens
+      now += 60_000;
       const result = msg.result(user.uuid);
       result.usage.output_tokens = 400;
-      cli.emit(result);
+      await feed(result);
       await waitUntil(() => terminalEvents(events).length === 1);
       const done = terminalEvents(events)[0]!;
-      expect(done).toMatchObject({ type: "turn_completed", usage: { outputTokens: 400, outputTokensPerSecond: 50 } });
+      expect(done).toMatchObject({ type: "turn_completed", usage: { outputTokens: 400, outputTokensPerSecond: 74.1 } });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("输出速度：先只有思考块（无 thinking_delta 文字）→ tool_use → 之后才有文字，按生成段计算而不是从首段文字算", async () => {
+    let now = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const h = createHarness();
+      const session = await h.client.createSession({ cwd: "." });
+      const events = collect(session);
+      await session.startTurn("hi");
+      const cli = h.clis[0]!;
+      const user = cli.received[0]!;
+      // 每次发完等一下，保证消息在时钟推进之前已被处理
+      const feed = async (...messages: Parameters<typeof cli.emit>) => {
+        cli.emit(...messages);
+        await settle();
+      };
+      const speeds = () =>
+        events.flatMap((e) =>
+          e.type === "usage_updated" && e.usage.outputTokensPerSecond !== undefined
+            ? [e.usage.outputTokensPerSecond]
+            : [],
+        );
+      // m1：思考块 20 秒没有任何文字，随后 tool_use 参数 2 秒，共 600 token
+      await feed(msg.init(), msg.streamStart("m1"), blockStart("thinking"));
+      now += 20_000;
+      await feed(blockStart("tool_use"), inputJsonDelta());
+      now += 2_000;
+      await feed(messageDelta(600), messageStop());
+      await waitUntil(() => speeds().length === 1);
+      expect(speeds()[0]).toBe(27.3); // 600 ÷ 22 秒
+      // 工具执行 30 秒，不计入
+      now += 30_000;
+      // m2：整回合第 52 秒才出现第一段可见文字，生成 2 秒，共 200 token；累计 24 秒、800 token
+      await feed(msg.streamStart("m2"), blockStart("text"), msg.textDelta("完成"));
+      now += 2_000;
+      await feed(messageDelta(200), messageStop());
+      await waitUntil(() => speeds().length === 2);
+      expect(speeds()[1]).toBe(33.3); // 800 ÷ 24 秒；旧口径从首段文字算会得到 400
+      await feed(msg.result(user.uuid));
+      await waitUntil(() => terminalEvents(events).length === 1);
+      expect(terminalEvents(events)[0]).toMatchObject({
+        type: "turn_completed",
+        usage: { outputTokensPerSecond: 33.3 },
+      });
     } finally {
       spy.mockRestore();
     }

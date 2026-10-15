@@ -1,68 +1,63 @@
-// 输出速度（tok/s）计算（design.md 4.30）：本回合输出 token ÷（当前或结束时刻 − 首个输出到达时刻 − 其间审批等待时长）。AgentDeck 原创。
+// 输出速度（tok/s）计算（design.md 4.30）：纯生成速度 = 本回合输出 token ÷ 模型实际在流式输出的累计时长。AgentDeck 原创。
 
-/** 首个输出不足该时长时不计算（避免刚开始时的速度尖峰） */
+/** 累计生成时长不足该值时不计算（避免刚开始时的速度尖峰） */
 const MIN_ELAPSED_MS = 1000;
 /** 回合中最多每秒下发一次 */
 const EMIT_INTERVAL_MS = 1000;
 
+/**
+ * 「生成段」= 一次模型响应从首个输出（思考块 / 文字 / 工具参数等任意类型）到达，到该响应结束。
+ * 首 token 等待、工具执行、审批等待都在生成段之外，不计入分母。
+ */
 export class OutputSpeedTracker {
-  private firstOutputAt: number | null = null;
+  /** 当前生成段起点；null = 当前不在生成 */
+  private activeSince: number | null = null;
+  /** 已结束生成段的累计时长 */
+  private activeTotal = 0;
   private lastEmitAt: number | null = null;
-  /** 正在等待审批的请求（同一时刻可能有多个）；非空 = 暂停计时 */
-  private readonly waiting = new Set<string>();
-  private pausedSince: number | null = null;
-  /** 首个输出之后、已结束的审批等待累计时长 */
-  private pausedTotal = 0;
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** 新回合开始 */
+  /** 新回合开始：全部清零 */
   reset(): void {
-    this.firstOutputAt = null;
+    this.activeSince = null;
+    this.activeTotal = 0;
     this.lastEmitAt = null;
-    this.waiting.clear();
-    this.pausedSince = null;
-    this.pausedTotal = 0;
   }
 
-  /**
-   * 把会话事件喂进来：`permission_requested` 到 `permission_resolved` 之间是在等用户审批，不是模型在输出，
-   * 这段时间从耗时里扣除（只扣首个输出之后的部分；首个输出之前的等待本来就不在分母里）。
-   */
-  observe(event: { type: string; request?: { id: string }; requestId?: string }): void {
-    if (event.type === "permission_requested" && event.request) {
-      if (this.waiting.size === 0) this.pausedSince = this.now();
-      this.waiting.add(event.request.id);
-    } else if (event.type === "permission_resolved" && event.requestId !== undefined) {
-      if (!this.waiting.delete(event.requestId) || this.waiting.size > 0) return;
-      if (this.pausedSince !== null) this.pausedTotal += this.pausedOverlap(this.pausedSince);
-      this.pausedSince = null;
-    }
-  }
-
-  private pausedOverlap(since: number): number {
-    if (this.firstOutputAt === null) return 0;
-    return Math.max(0, this.now() - Math.max(since, this.firstOutputAt));
-  }
-
-  /** 本回合第一个 assistant_message / reasoning 到达时调用（重复调用无效） */
+  /** 模型有输出到达时调用：不在生成段内则开一段（段内重复调用无效） */
   markOutput(): void {
-    if (this.firstOutputAt === null) {
-      this.firstOutputAt = this.now();
+    if (this.activeSince === null) {
+      this.activeSince = this.now();
     }
   }
 
-  /** 当前速度；没有首个输出、不足 1 秒或没有 token 时返回 undefined */
+  /** 一次模型响应结束 / 开始调工具 / 等审批 / 回合结束时调用：关闭当前生成段，时长计入累计 */
+  markIdle(): void {
+    if (this.activeSince === null) {
+      return;
+    }
+    this.activeTotal += Math.max(0, this.now() - this.activeSince);
+    this.activeSince = null;
+  }
+
+  /** 把会话事件喂进来：`permission_requested` 表示开始等用户审批，不是模型在输出，关闭当前生成段 */
+  observe(event: { type: string }): void {
+    if (event.type === "permission_requested") {
+      this.markIdle();
+    }
+  }
+
+  /** 当前速度；没有 token 或累计生成时长不足 1 秒时返回 undefined */
   speed(outputTokens: number): number | undefined {
-    if (this.firstOutputAt === null || !(outputTokens > 0)) {
+    if (!(outputTokens > 0)) {
       return undefined;
     }
-    const paused = this.pausedTotal + (this.pausedSince !== null ? this.pausedOverlap(this.pausedSince) : 0);
-    const elapsed = this.now() - this.firstOutputAt - paused;
-    if (elapsed < MIN_ELAPSED_MS) {
+    const active = this.activeTotal + (this.activeSince !== null ? Math.max(0, this.now() - this.activeSince) : 0);
+    if (active < MIN_ELAPSED_MS) {
       return undefined;
     }
-    return Math.round((outputTokens / (elapsed / 1000)) * 10) / 10;
+    return Math.round((outputTokens / (active / 1000)) * 10) / 10;
   }
 
   /** 回合中的节流版本：距上次下发不足 1 秒返回 undefined；返回值时记为已下发 */

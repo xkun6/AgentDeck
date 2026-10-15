@@ -591,6 +591,8 @@ export class MockAgentSession implements AgentSession {
         this.outputSpeed.markOutput();
         this.emit({ type: "timeline", turnId, item: { type: "reasoning", text: chunk } });
       }
+      // 思考结束，后面是工具 / 审批 / 回复：关闭当前生成段（回复的 chunk 会重新开段）
+      this.outputSpeed.markIdle();
 
       if (text.includes("/fail")) {
         await this.pause(turn);
@@ -691,6 +693,7 @@ export class MockAgentSession implements AgentSession {
     }
 
     const outputTokens = Array.from(reply).length;
+    this.outputSpeed.markIdle();
     const finalSpeed = this.outputSpeed.speed(outputTokens);
     const usage = {
       inputTokens: Array.from(text).length,

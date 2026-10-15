@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 
 import { OutputSpeedTracker } from "../src/providers/shared/output-speed.js";
 
-describe("OutputSpeedTracker（design.md 4.30）", () => {
-  test("没有首个输出、不足 1 秒或没有 token 时不计算；之后按 token ÷ 秒并保留 1 位小数", () => {
+describe("OutputSpeedTracker（纯生成速度，design.md 4.30）", () => {
+  test("没有 token 或累计生成时长不足 1 秒时不计算；之后按 token ÷ 秒并保留 1 位小数", () => {
     let now = 10_000;
     const tracker = new OutputSpeedTracker(() => now);
     expect(tracker.speed(100)).toBeUndefined();
@@ -15,12 +15,75 @@ describe("OutputSpeedTracker（design.md 4.30）", () => {
     expect(tracker.speed(0)).toBeUndefined();
     now += 2000;
     expect(tracker.speed(100)).toBe(33.3);
-    // 重复 markOutput 不移动起点
-    tracker.markOutput();
-    expect(tracker.speed(100)).toBe(33.3);
   });
 
-  test("throttledSpeed 每秒最多下发一次；reset 清掉起点", () => {
+  test("段内重复 markOutput 无效，不移动起点；没有开段时 markIdle 无效", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.markIdle(); // 未开段：无事发生
+    expect(tracker.speed(10)).toBeUndefined();
+    tracker.markOutput();
+    now = 1000;
+    tracker.markOutput();
+    now = 2000;
+    tracker.markOutput();
+    expect(tracker.speed(100)).toBe(50);
+    tracker.markIdle();
+    tracker.markIdle(); // 重复关闭不会重复累计
+    now = 5000;
+    expect(tracker.speed(100)).toBe(50);
+  });
+
+  test("多个生成段累计，段间空隙（首 token 等待 / 工具执行）不计入", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    // 第一段：0–2 秒
+    tracker.markOutput();
+    now = 2000;
+    tracker.markIdle();
+    // 空隙 30 秒（工具执行）
+    now = 32_000;
+    expect(tracker.speed(40)).toBe(20); // 仍是 40 ÷ 2 秒
+    // 第二段：32–35 秒
+    tracker.markOutput();
+    now = 35_000;
+    expect(tracker.speed(100)).toBe(20); // 段内：2 + 3 = 5 秒
+    tracker.markIdle();
+    now = 100_000;
+    expect(tracker.speed(100)).toBe(20);
+  });
+
+  test("permission_requested 关闭当前生成段；其它事件不影响", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.markOutput();
+    now = 2000;
+    tracker.observe({ type: "timeline" });
+    tracker.observe({ type: "permission_resolved" });
+    expect(tracker.speed(40)).toBe(20); // 段仍在继续
+    tracker.observe({ type: "permission_requested" });
+    now = 62_000; // 审批等了 60 秒
+    expect(tracker.speed(40)).toBe(20);
+    // 审批通过后模型继续输出，开新段
+    tracker.markOutput();
+    now = 64_000;
+    expect(tracker.speed(80)).toBe(20); // 80 token ÷ (2 + 2) 秒
+  });
+
+  test("累计生成时长不足 1 秒（含已关闭的短段）返回 undefined", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.markOutput();
+    now = 500;
+    tracker.markIdle();
+    now = 60_000;
+    expect(tracker.speed(10)).toBeUndefined();
+    tracker.markOutput();
+    now = 60_500;
+    expect(tracker.speed(10)).toBe(10); // 0.5 + 0.5 = 1 秒
+  });
+
+  test("throttledSpeed 每秒最多下发一次", () => {
     let now = 0;
     const tracker = new OutputSpeedTracker(() => now);
     tracker.markOutput();
@@ -30,71 +93,32 @@ describe("OutputSpeedTracker（design.md 4.30）", () => {
     expect(tracker.throttledSpeed(15)).toBeUndefined();
     now = 2000;
     expect(tracker.throttledSpeed(20)).toBe(10);
+  });
+
+  test("不足 1 秒的 throttledSpeed 不占用节流额度", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.markOutput();
+    now = 500;
+    expect(tracker.throttledSpeed(10)).toBeUndefined();
+    now = 1000;
+    expect(tracker.throttledSpeed(10)).toBe(10);
+  });
+
+  test("reset 清零生成段、累计时长与节流状态", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    tracker.markOutput();
+    now = 1000;
+    expect(tracker.throttledSpeed(10)).toBe(10);
+    tracker.markIdle();
+    tracker.markOutput();
     tracker.reset();
     now = 9000;
     expect(tracker.speed(20)).toBeUndefined();
-  });
-
-  describe("审批等待不计入耗时", () => {
-    const requested = (id: string) => ({ type: "permission_requested", request: { id } });
-    const resolved = (id: string) => ({ type: "permission_resolved", requestId: id });
-
-    test("permission_requested → permission_resolved 之间的时间从分母里扣除", () => {
-      let now = 0;
-      const tracker = new OutputSpeedTracker(() => now);
-      tracker.markOutput();
-      now = 2_000;
-      tracker.observe(requested("p1"));
-      now = 62_000; // 等了 60 秒
-      // 等待期间：只算审批前的 2 秒
-      expect(tracker.speed(40)).toBe(20);
-      tracker.observe(resolved("p1"));
-      now = 64_000; // 之后又输出了 2 秒
-      expect(tracker.speed(80)).toBe(20); // 80 token ÷ 4 秒，而不是 ÷ 64 秒
-    });
-
-    test("首个输出之前的等待本来就不在分母里，不会被重复扣除", () => {
-      let now = 0;
-      const tracker = new OutputSpeedTracker(() => now);
-      tracker.observe(requested("p1"));
-      now = 30_000;
-      tracker.observe(resolved("p1"));
-      tracker.markOutput();
-      now = 32_000;
-      expect(tracker.speed(40)).toBe(20);
-    });
-
-    test("多个请求同时挂起按并集扣除；未知 / 重复的 resolved 被忽略；reset 清空", () => {
-      let now = 0;
-      const tracker = new OutputSpeedTracker(() => now);
-      tracker.markOutput();
-      now = 1_000;
-      tracker.observe(requested("a"));
-      now = 11_000;
-      tracker.observe(requested("b"));
-      now = 21_000;
-      tracker.observe(resolved("a"));
-      now = 31_000;
-      tracker.observe(resolved("b"));
-      tracker.observe(resolved("b"));
-      tracker.observe(resolved("zzz"));
-      now = 32_000;
-      // 总共 32 秒，其中 1–31 秒（30 秒）在等审批
-      expect(tracker.speed(4)).toBe(2);
-      tracker.reset();
-      tracker.markOutput();
-      now = 34_000;
-      expect(tracker.speed(4)).toBe(2);
-    });
-
-    test("等待中扣到不足 1 秒时不计算", () => {
-      let now = 0;
-      const tracker = new OutputSpeedTracker(() => now);
-      tracker.markOutput();
-      now = 500;
-      tracker.observe(requested("p1"));
-      now = 60_000;
-      expect(tracker.speed(10)).toBeUndefined();
-    });
+    // 节流状态也清了：reset 之后立刻允许下发
+    tracker.markOutput();
+    now = 10_000;
+    expect(tracker.throttledSpeed(20)).toBe(20);
   });
 });
