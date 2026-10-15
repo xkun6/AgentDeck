@@ -10,6 +10,7 @@ import { stubRadixGlobals } from "@/test-utils/radix";
 import { __setSidecarClientForTests, type SidecarClient } from "@/lib/sidecar-client";
 import { replaceAgentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { applyAgentEventAtom, ensureChatSessionAtom } from "@/stores/chat";
+import { replaceSubagentsAtom } from "@/stores/subagents";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { PairingError } from "@/lib/remote/pairing";
 import { AttentionBanner, useAttentionNotice } from "./attention-banner";
@@ -567,6 +568,90 @@ describe("SessionDetail 时间线向前分页", () => {
     await screen.findByText("问题3");
     expect(screen.getByRole("button", { name: "发送" })).toBeTruthy();
     expect(screen.queryByTestId("composer-status-row")).toBeNull();
+  });
+});
+
+describe("SessionDetail 子代理", () => {
+  function sub(id: string, parentSubagentId: string | null = null) {
+    return {
+      id,
+      parentAgentId: "a1",
+      parentSubagentId,
+      provider: "claude" as const,
+      title: "Explore",
+      description: `任务-${id}`,
+      status: "running" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      toolCallId: id,
+      cwd: null,
+      subtitle: null,
+    };
+  }
+
+  function setup(openSubagentId: string | null) {
+    const client = makeClient((method) => {
+      if (method === "provider.list") return [];
+      if (method === "agent.subagents.list") return { subagents: [sub("s1"), sub("s2", "s1")] };
+      if (method === "agent.subagents.timeline") {
+        return { rows: [{ seq: 1, timestamp: 1, item: { type: "assistant_message", text: "子代理的发现" } }], hasOlder: false };
+      }
+      return {};
+    });
+    __setSidecarClientForTests(client as unknown as SidecarClient);
+    const store = createStore();
+    store.set(sidecarConnectionAtom, "open");
+    store.set(replaceAgentSnapshotsAtom, [agent("a1", { title: "带子代理" })]);
+    store.set(ensureChatSessionAtom, "a1");
+    store.set(replaceSubagentsAtom, { agentId: "a1", subagents: [sub("s1"), sub("s2", "s1")] });
+    const onOpenSubagent = vi.fn();
+    const onCloseSubagent = vi.fn();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (open: string | null) => (
+      <QueryClientProvider client={queryClient}>
+        <JotaiProvider store={store}>
+          <SessionDetail
+            agentId="a1"
+            onBack={() => {}}
+            openSubagentId={open}
+            onOpenSubagent={onOpenSubagent}
+            onCloseSubagent={onCloseSubagent}
+          />
+        </JotaiProvider>
+      </QueryClientProvider>
+    );
+    const view = render(tree(openSubagentId));
+    return { client, store, onOpenSubagent, onCloseSubagent, rerender: (open: string | null) => view.rerender(tree(open)) };
+  }
+
+  it("状态行出现子代理药丸，点开列表选一行触发 onOpenSubagent，此时没有覆盖层", async () => {
+    const { onOpenSubagent } = setup(null);
+    const pill = await screen.findByRole("button", { name: /子代理/ });
+    fireEvent.click(pill);
+    expect(screen.queryByRole("dialog", { name: "子代理" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("list", { name: "子代理列表" })).getByRole("button"));
+    expect(onOpenSubagent).toHaveBeenCalledWith("s1");
+  });
+
+  it("openSubagentId 非空：渲染全屏子代理时间线，会话页保持挂载；X 触发 onCloseSubagent；孙代理走 onOpenSubagent", async () => {
+    const { client, onOpenSubagent, onCloseSubagent, rerender } = setup(null);
+    await screen.findByRole("button", { name: /子代理/ });
+    expect(screen.getByRole("heading", { name: "带子代理" })).toBeTruthy();
+    rerender("s1");
+    const overlay = await screen.findByRole("dialog", { name: "子代理" });
+    expect(await within(overlay).findByText("子代理的发现")).toBeTruthy();
+    expect(within(overlay).getByTestId("subagent-panel-timeline")).toBeTruthy();
+    expect(client.request).toHaveBeenCalledWith("agent.subagents.timeline", expect.objectContaining({ agentId: "a1", subagentId: "s1" }));
+    // 会话页仍在
+    expect(screen.getByRole("heading", { name: "带子代理" })).toBeTruthy();
+    // 孙代理
+    fireEvent.click(within(overlay).getByRole("button", { name: /^子代理/ }));
+    fireEvent.click(within(within(overlay).getByRole("list", { name: "子代理列表" })).getByRole("button"));
+    expect(onOpenSubagent).toHaveBeenCalledWith("s2");
+    fireEvent.click(within(overlay).getByRole("button", { name: "关闭子代理面板" }));
+    expect(onCloseSubagent).toHaveBeenCalledTimes(1);
+    rerender(null);
+    expect(screen.queryByRole("dialog", { name: "子代理" })).toBeNull();
   });
 });
 

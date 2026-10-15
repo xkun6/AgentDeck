@@ -6,6 +6,7 @@ import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { MessageTimeline } from "@/components/chat/message-timeline";
 import { agentUIMessagesToChatMessages } from "@/components/chat/message-adapter";
 import { ComposerStatusRow } from "@/components/chat/status-row/composer-status-row";
+import { SubagentPanelBody } from "@/components/chat/subagents/subagent-panel";
 import { agentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
 import {
   chatRuntimeBySessionAtom,
@@ -13,7 +14,7 @@ import {
   retractableUserMessageId,
   type PendingApproval,
 } from "@/stores/chat";
-import { humanizeSidecarError, isInactiveAgent, useAgentSession } from "@/hooks/use-agent-session";
+import { humanizeSidecarError, isInactiveAgent, useAgentSession, useProviderSubagents } from "@/hooks/use-agent-session";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { useRetractMessage } from "@/hooks/use-retract-message";
 import { isRuntimeRunning } from "@/lib/session-activity";
@@ -38,10 +39,17 @@ export const CHUNK_OVERLAP = 20;
 export function SessionDetail({
   agentId,
   onBack,
+  openSubagentId = null,
+  onOpenSubagent = () => {},
+  onCloseSubagent = () => {},
   compress = compressImage,
 }: {
   agentId: string;
   onBack: () => void;
+  /** 当前打开的子代理（由 hash 路由驱动）；非空时在页面上盖一层全屏只读子代理时间线 */
+  openSubagentId?: string | null;
+  onOpenSubagent?: (subagentId: string) => void;
+  onCloseSubagent?: () => void;
   /** 图片压缩实现，测试注入 */
   compress?: (file: File) => Promise<DraftImage>;
 }) {
@@ -49,6 +57,7 @@ export function SessionDetail({
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const snapshot = useAtomValue(agentSnapshotsAtom)[agentId];
+  const subagents = useProviderSubagents(agentId);
   const providers = useAgentProviders().data ?? null;
   const runtime = useMemo(() => runtimeBySession[agentId] ?? createEmptyChatRuntime(), [runtimeBySession, agentId]);
   const allMessages = useMemo(() => agentUIMessagesToChatMessages(runtime.messages), [runtime.messages]);
@@ -281,9 +290,9 @@ export function SessionDetail({
       ) : null}
       <ComposerStatusRow
         agentId={undefined}
-        subagents={[]}
-        openSubagentId={null}
-        onOpenSubagent={() => {}}
+        subagents={subagents}
+        openSubagentId={openSubagentId}
+        onOpenSubagent={onOpenSubagent}
         backgroundTasks={[]}
         openTaskId={null}
         onOpenTask={() => {}}
@@ -310,6 +319,20 @@ export function SessionDetail({
         onSteer={() => void steer()}
         onCancel={cancel}
       />
+      {openSubagentId !== null ? (
+        <div className={s.subagentOverlay} role="dialog" aria-label="子代理">
+          <SubagentPanelBody
+            key={openSubagentId}
+            agentId={agentId}
+            subagents={subagents}
+            subagentId={openSubagentId}
+            canGoBack={false}
+            onBack={() => {}}
+            onOpenChild={onOpenSubagent}
+            onClose={onCloseSubagent}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -21,6 +21,18 @@ describe("route", () => {
 
   it("坏的百分号编码不抛错", () => {
     expect(parseRoute("#/s/%E0%A4%A")).toEqual({ name: "sessions" });
+    expect(parseRoute("#/s/a1/sub/%E0%A4%A")).toEqual({ name: "sessions" });
+    expect(parseRoute("#/s/%E0%A4%A/sub/s1")).toEqual({ name: "sessions" });
+  });
+
+  it("子代理路由：带 subagentId 的往返，特殊字符与不带 subagentId 的会话路由互不干扰", () => {
+    const route = { name: "session", agentId: "a/b c#1", subagentId: "toolu_01/x y" } as const;
+    expect(routeHash(route)).toBe("#/s/a%2Fb%20c%231/sub/toolu_01%2Fx%20y");
+    expect(parseRoute(routeHash(route))).toEqual(route);
+    expect(parseRoute("#/s/a1/sub/s1")).toEqual({ name: "session", agentId: "a1", subagentId: "s1" });
+    expect(parseRoute("#/s/a1")).toEqual({ name: "session", agentId: "a1" });
+    expect(routeHash({ name: "session", agentId: "a1" })).toBe("#/s/a1");
+    expect(navTabOf(route)).toBeNull();
   });
 
   it("底部导航只在三个主页面显示", () => {

@@ -76,7 +76,7 @@ export function SubagentPanel({ agentId, subagents, rootSubagentId, onClose }: S
   );
 }
 
-interface SubagentPanelBodyProps {
+export interface SubagentPanelBodyProps {
   agentId: string;
   subagents: readonly ProviderSubagentDescriptor[];
   subagentId: string;
@@ -86,7 +86,7 @@ interface SubagentPanelBodyProps {
   onClose: () => void;
 }
 
-function SubagentPanelBody({
+export function SubagentPanelBody({
   agentId,
   subagents,
   subagentId,
