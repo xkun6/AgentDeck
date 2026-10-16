@@ -74,6 +74,16 @@ export interface ProviderProfile {
    * 合并顺序：settings → 推导 env → env，结果作为一份 JSON 经 `--settings` 传入。
    */
   settings?: Record<string, unknown>;
+  /**
+   * 仅 codex（其它 extends 填写时校验失败）：config.toml 原文（保留注释与格式），明文保存在 providers.json。
+   * 只做会话级覆盖，不写用户 ~/.codex。
+   */
+  codexConfig?: string;
+  /**
+   * 仅 codex（其它 extends 填写时校验失败）：auth.json 内容（JSON 对象），明文保存在 providers.json。
+   * 只读取其中的 OPENAI_API_KEY。
+   */
+  codexAuth?: Record<string, unknown>;
 }
 
 /** `<AGENTDECK_DATA_DIR>/providers.json` */

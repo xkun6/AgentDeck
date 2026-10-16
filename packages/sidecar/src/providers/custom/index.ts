@@ -24,6 +24,7 @@ export {
   mergeClaudeSettings,
   normalizeOpenAiBaseUrl,
   RELAY_NO_KEY_PLACEHOLDER,
+  resolveCodexRelay,
   resolveDisallowedTools,
 } from "./launch.js";
 export { collectSecrets, createRedactingLogger, redactText } from "./redact.js";

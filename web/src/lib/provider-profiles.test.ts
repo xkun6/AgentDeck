@@ -393,3 +393,61 @@ describe("Claude 设置（settings.json）", () => {
     expect(profileHasClaudeSettings({ id: "a", extends: "codex", label: "A", settings: {} })).toBe(false);
   });
 });
+
+describe("Codex config.toml / auth.json", () => {
+  const TOML = '# 注释保留\nmodel_provider = "p"\n\n[model_providers.p]\nbase_url = "https://x.example.com/v1"\n';
+
+  it("formToProfile：config.toml 原文提交（含注释），空白不提交；auth.json 解析为对象；非 codex 不提交", () => {
+    const profile = formToProfile(
+      form({ extends: "codex", codexConfigText: TOML, codexAuthText: '{ "OPENAI_API_KEY": "sk-a" }' }),
+    );
+    expect(profile.codexConfig).toBe(TOML);
+    expect(profile.codexAuth).toEqual({ OPENAI_API_KEY: "sk-a" });
+    const blank = formToProfile(form({ extends: "codex", codexConfigText: " \n ", codexAuthText: "  " }));
+    expect(blank).not.toHaveProperty("codexConfig");
+    expect(blank).not.toHaveProperty("codexAuth");
+    // 非法 auth.json 不写入（保存前由 validateProviderForm 拦下）
+    expect(formToProfile(form({ extends: "codex", codexAuthText: "{ bad" }))).not.toHaveProperty("codexAuth");
+    for (const extendsValue of ["claude", "acp"] as const) {
+      const other = formToProfile(form({ extends: extendsValue, codexConfigText: TOML, codexAuthText: "{}" }));
+      expect(other).not.toHaveProperty("codexConfig");
+      expect(other).not.toHaveProperty("codexAuth");
+    }
+  });
+
+  it("profileToForm → formToProfile 往返：auth.json 格式化为多行文本", () => {
+    const profile: ProviderProfile = {
+      id: "c",
+      extends: "codex",
+      label: "C",
+      codexConfig: TOML,
+      codexAuth: { OPENAI_API_KEY: "sk-a", tokens: { access_token: "t" } },
+    };
+    const state = profileToForm(profile);
+    expect(state.codexConfigText).toBe(TOML);
+    expect(state.codexAuthText).toBe(JSON.stringify(profile.codexAuth, null, 2));
+    expect(formToProfile(state)).toEqual(profile);
+    expect(profileToForm({ id: "d", extends: "codex", label: "D" })).toMatchObject({
+      codexConfigText: "",
+      codexAuthText: "",
+    });
+  });
+
+  it("validateProviderForm：codex 的 auth.json 须为 JSON 对象；非 codex 不校验；config.toml 不在前端校验", () => {
+    expect(validateProviderForm(form({ extends: "codex", codexAuthText: "[]" })).codexAuth).toContain("JSON 对象");
+    expect(validateProviderForm(form({ extends: "codex", codexAuthText: "{ bad" })).codexAuth).toMatch(
+      /^不是合法的 JSON/,
+    );
+    expect(validateProviderForm(form({ extends: "codex", codexAuthText: "{}", codexConfigText: "model = " })).codexAuth).toBeUndefined();
+    expect(validateProviderForm(form({ extends: "claude", codexAuthText: "{" })).codexAuth).toBeUndefined();
+  });
+
+  it("codexConfig / codexAuth 的 issues 路径映射到表单字段", () => {
+    expect(issuePathToField("providers.0.codexConfig", 0)).toBe("codexConfig");
+    expect(issuePathToField("providers.1.codexAuth", 1)).toBe("codexAuth");
+    expect(issuePathToField("providers.1.codexConfig", 0)).toBeNull();
+    expect(
+      mapIssuesToForm([{ path: "providers.0.codexConfig", message: "config.toml 解析失败：x" }], 0).fields,
+    ).toEqual({ codexConfig: "config.toml 解析失败：x" });
+  });
+});

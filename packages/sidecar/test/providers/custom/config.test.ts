@@ -131,6 +131,79 @@ describe("profile 校验", () => {
     ]);
     expect(JSON.stringify(issues)).not.toContain("sk-should-not-leak");
   });
+
+  describe("codexConfig / codexAuth", () => {
+    const TOML = `model_provider = "p"
+[model_providers.p]
+base_url = "https://x.example.com/v1"
+`;
+    const codex = (extra: Record<string, unknown>) => [{ id: "a", extends: "codex", label: "x", ...extra }];
+
+    test("合法：保留 config.toml 原文与 auth.json，toProviderProfile 深拷贝 codexAuth", () => {
+      const auth = { OPENAI_API_KEY: "sk-a", tokens: { access_token: "t" } };
+      expect(issuesOf(codex({ codexConfig: TOML, codexAuth: auth }))).toEqual([]);
+      const profile = toProviderProfile(providerProfileSchema.parse(codex({ codexConfig: TOML, codexAuth: auth })[0]));
+      expect(profile.codexConfig).toBe(TOML);
+      expect(profile.codexAuth).toEqual(auth);
+      expect(profile.codexAuth).not.toBe(auth);
+    });
+
+    test("空白 codexConfig 视为未填写", () => {
+      const profile = toProviderProfile(providerProfileSchema.parse(codex({ codexConfig: "   " })[0]));
+      expect(profile).not.toHaveProperty("codexConfig");
+    });
+
+    test.each(["claude", "acp"])("extends=%s 填写任一字段都报错", (extendsValue) => {
+      const base = { id: "a", extends: extendsValue, label: "x", command: ["x"] };
+      const message = "只有基于 Codex 的中转可以使用 config.toml / auth.json";
+      expect(issuesOf([{ ...base, codexConfig: "model = 'x'" }])).toEqual([
+        { path: "providers.0.codexConfig", message },
+      ]);
+      expect(issuesOf([{ ...base, codexAuth: {} }])).toEqual([{ path: "providers.0.codexAuth", message }]);
+    });
+
+    test("TOML 语法错误：路径 codexConfig，中文前缀", () => {
+      const issues = issuesOf(codex({ codexConfig: "model = " }));
+      expect(issues).toHaveLength(1);
+      expect(issues[0]!.path).toBe("providers.0.codexConfig");
+      expect(issues[0]!.message).toMatch(/^config\.toml 解析失败：/);
+    });
+
+    test("model_provider 未定义对应条目 / 条目不是对象", () => {
+      expect(issuesOf(codex({ codexConfig: 'model_provider = "x"' }))).toEqual([
+        {
+          path: "providers.0.codexConfig",
+          message: "config.toml 的 model_provider「x」没有对应的 [model_providers.x]",
+        },
+      ]);
+      expect(
+        issuesOf(codex({ codexConfig: `model_provider = "x"
+[model_providers]
+x = "str"` })),
+      ).toHaveLength(1);
+      expect(issuesOf(codex({ codexConfig: `model_provider = "openai"
+[model_providers.other]
+name = "o"` }))).toHaveLength(1);
+    });
+
+    test("codexAuth 非对象 / OPENAI_API_KEY 非字符串", () => {
+      expect(issuesOf(codex({ codexAuth: ["x"] }))).toEqual([
+        { path: "providers.0.codexAuth", message: "auth.json 必须是 JSON 对象" },
+      ]);
+      expect(issuesOf(codex({ codexAuth: "sk" }))).toHaveLength(1);
+      expect(issuesOf(codex({ codexAuth: { OPENAI_API_KEY: 123 } }))).toEqual([
+        { path: "providers.0.codexAuth", message: "auth.json 的 OPENAI_API_KEY 必须是字符串" },
+      ]);
+      expect(issuesOf(codex({ codexAuth: { OPENAI_API_KEY: null } }))).toHaveLength(1);
+      expect(issuesOf(codex({ codexAuth: { OPENAI_API_KEY: "sk-ok" } }))).toEqual([]);
+    });
+
+    test("校验信息不回显 config.toml 与 auth.json 的内容", () => {
+      const issues = issuesOf(codex({ codexConfig: "secret = sk-leak-toml", codexAuth: { OPENAI_API_KEY: 1, x: "sk-leak-auth" } }));
+      expect(issues.length).toBeGreaterThan(0);
+      expect(JSON.stringify(issues)).not.toContain("sk-leak-auth");
+    });
+  });
 });
 
 describe("providers.json 读写", () => {

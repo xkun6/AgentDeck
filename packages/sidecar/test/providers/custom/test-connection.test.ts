@@ -99,6 +99,40 @@ describe("provider.test 请求", () => {
     expect(seen[0]!.headers["anthropic-version"]).toBeUndefined();
   });
 
+  test("codex：config.toml 的 base_url 与 auth.json 的密钥；表单 baseUrl / 密钥优先", async () => {
+    const codexConfig = `model_provider = "p"
+[model_providers.p]
+base_url = "${base}/toml/v1"
+`;
+    const profile: ProviderProfile = {
+      id: "x",
+      extends: "codex",
+      label: "x",
+      codexConfig,
+      codexAuth: { OPENAI_API_KEY: "sk-auth-secret" },
+    };
+    expect((await testProviderProfile(profile)).ok).toBe(true);
+    expect(seen[0]!.url).toBe("/toml/v1/models");
+    expect(seen[0]!.headers.authorization).toBe("Bearer sk-auth-secret");
+
+    await testProviderProfile({ ...profile, baseUrl: `${base}/form`, apiKey: "sk-form-secret" });
+    expect(seen[1]!.url).toBe("/form/v1/models");
+    expect(seen[1]!.headers.authorization).toBe("Bearer sk-form-secret");
+  });
+
+  test("codex：auth.json 的密钥被脱敏（错误信息回显时）", async () => {
+    reply = { status: 401, body: JSON.stringify({ error: { message: "bad key sk-auth-secret" } }) };
+    const result = await testProviderProfile({
+      id: "x",
+      extends: "codex",
+      label: "x",
+      baseUrl: base,
+      codexAuth: { OPENAI_API_KEY: "sk-auth-secret" },
+    });
+    expect(result.error).not.toContain("sk-auth-secret");
+    expect(result.error).toContain("***");
+  });
+
   test("非 2xx：ok=false，带状态码与中文错误；服务端回显的密钥被脱敏", async () => {
     reply = {
       status: 401,
@@ -160,6 +194,15 @@ describe("脱敏", () => {
     expect(
       collectSecrets({ apiKey: "sk-abc", env: { A: "1", B: "true", C: "longer-secret-value" } }),
     ).toEqual(["longer-secret-value", "sk-abc"]);
+  });
+
+  test("collectSecrets：auth.json 的 OPENAI_API_KEY 与 apiKey 同等收集（非字符串 / 空串忽略）", () => {
+    expect(collectSecrets({ apiKey: "sk-abc", codexAuth: { OPENAI_API_KEY: "sk-auth-longer" } })).toEqual([
+      "sk-auth-longer",
+      "sk-abc",
+    ]);
+    expect(collectSecrets({ codexAuth: { OPENAI_API_KEY: "" } })).toEqual([]);
+    expect(collectSecrets({ codexAuth: { OPENAI_API_KEY: 12345678 } })).toEqual([]);
   });
 
   test("redactText / redactEvent", () => {

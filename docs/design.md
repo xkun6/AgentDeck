@@ -402,6 +402,18 @@ interface ProviderProfile {
 - 合并后的整份设置（含其中密钥）会出现在 claude 的命令行中。
 - 脱敏：`settings.env` 的值与 `profile.env` 同样规则脱敏；日志中不打印 settings 全文。
 
+**Codex 中转的 config.toml / auth.json**（仅 `extends: "codex"`，对标 cc-switch 的 Codex 配置；**不写入用户 `~/.codex` 下任何文件**，只做会话级覆盖）：
+- `ProviderProfile` 增加 `codexConfig?: string`（config.toml 原文，保留注释与格式）与 `codexAuth?: Record<string, unknown>`（auth.json 的 JSON 对象），明文保存在 `providers.json`；其它 extends 填写时校验失败（「只有基于 Codex 的中转可以使用 config.toml / auth.json」）。空白字符串视为未填写。前端在 Codex 中转表单里提供「config.toml」「auth.json」两个输入框（位置同 Claude 的「设置 JSON」）；auth.json 实时校验须为 JSON 对象，config.toml 由 sidecar 校验（错误路径 `providers.<i>.codexConfig` 就地显示）。
+- 校验（zod，加载 `providers.json` 与 `provider.config.set` 共用）：`codexConfig` 必须能被 TOML 解析（「config.toml 解析失败：…」）；设置了顶层 `model_provider` 时，必须在同一份 TOML 的 `[model_providers.<名>]` 中定义（「config.toml 的 model_provider「x」没有对应的 [model_providers.x]」，防止落到内置 provider 而带出用户登录）；`codexAuth` 必须是 JSON 对象，`OPENAI_API_KEY` 存在时必须是字符串。
+- 合成 thread `config` 覆盖（`launch.ts` 的 `buildCodexLaunchOverride`，启动与 `provider.test` 共用同一解析）：
+  1. 以解析后的 TOML 对象为底，删除其中的 `model_providers`（只保留下面的 `agentdeck-<id>` 一项，避免其它条目与用户同名 provider 合并）。
+  2. 生效 provider 条目：TOML 中 `model_provider` 指向的条目（原名丢弃）作为底；表单填了 baseUrl 时 `base_url` 以表单为准（补 `/v1`）。存在 TOML 条目或表单 baseUrl 即为中转：条目键名统一为 `agentdeck-<id>`，`model_provider` 指向它，缺省补 `name: label`、`wire_api: "responses"`。都没有时不生成 provider（非中转，只覆盖模型等其它配置，沿用用户登录）。
+  3. 密钥：`profile.env.OPENAI_API_KEY` > 表单 apiKey > `codexAuth.OPENAI_API_KEY`（空白视为没有），结果写入子进程环境 `OPENAI_API_KEY`。auth.json 的其它字段（如 ChatGPT 登录 `tokens`）不使用。
+  4. **中转凭据隔离**：中转时条目一律 `requires_openai_auth = false`（不读用户 `~/.codex/auth.json` 的密钥与 ChatGPT 令牌）；有密钥且条目未自带 `env_key` 时写 `env_key = "OPENAI_API_KEY"`；条目自带的 `env_key` / `experimental_bearer_token` / `http_headers` 等保留。无密钥时不带鉴权头。
+  - 合成结果再与会话互通的 `mcp_servers` 合并（同 4.26）；`approval_policy` / `sandbox_mode` / `model` 等以 thread 参数为准（显式传入的优先于 config 覆盖）。
+- `provider.test`（codex）：地址 = 表单 baseUrl > 生效 TOML 条目的 `base_url` > `profile.env.OPENAI_BASE_URL` > 默认；密钥按上面第 3 步。
+- 脱敏：`codexAuth` 中的 `OPENAI_API_KEY` 与 apiKey 同样一律脱敏；日志中不打印 config.toml 与 auth.json 全文。
+
 ### 4.8 编程 Agent 可执行文件路径（Rust 命令 + sidecar 共用）
 
 「编程 Agent」设置页可为 Claude Code / Codex 手动指定可执行文件，Rust 检测与 sidecar 启动共用同一份配置。
