@@ -139,6 +139,20 @@ describe("reduceAgentEvent", () => {
     expect(message!.metadata?.timing?.durationMs).toBe(2);
   });
 
+  it("turn_completed.usage 的输出速度写入消息元数据；取消的回合不沿用上一回合的速度", () => {
+    const runtime = replay([
+      { type: "turn_started", turnId: "t1" },
+      { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "完成" } },
+      { type: "turn_completed", turnId: "t1", usage: { outputTokens: 500, outputTokensPerSecond: 82.4 } },
+      { type: "turn_started", turnId: "t2" },
+      { type: "timeline", turnId: "t2", item: { type: "assistant_message", text: "取消前" } },
+      { type: "turn_canceled", turnId: "t2", reason: "user" },
+    ]);
+    const [first, second] = assistant(runtime);
+    expect(first!.metadata?.usage?.outputTokensPerSecond).toBe(82.4);
+    expect(second!.metadata?.usage?.outputTokensPerSecond).toBeUndefined();
+  });
+
   it("turn_failed 收尾为 error 并提示；进程退出时提示新建会话", () => {
     const runtime = replay([
       { type: "turn_started", turnId: "t1" },

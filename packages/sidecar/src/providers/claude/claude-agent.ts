@@ -1602,10 +1602,7 @@ export class ClaudeAgentSession implements AgentSession {
     // 中断时把未结束的响应收尾，已 message_stop 结束过的响应 token 已清零、不会重复计入
     this.outputSpeed.endResponse(this.speedMessageTokens);
     this.speedMessageTokens = 0;
-    const finalSpeed = this.outputSpeed.speed();
-    if (finalSpeed !== undefined) {
-      usage.outputTokensPerSecond = finalSpeed;
-    }
+    Object.assign(usage, this.outputSpeed.finalUsage());
     this.emit({ type: "usage_updated", usage });
     this.cancelRunningTools(turn.turnId);
     this.emitSubagentEvents(

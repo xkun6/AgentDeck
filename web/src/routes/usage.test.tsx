@@ -36,7 +36,7 @@ function summary(patch: Partial<UsageSummary> = {}): UsageSummary {
       { agentId: "alive", title: "活着的会话", provider: "claude", inputTokens: 5_000, outputTokens: 500, costUsd: 0.2, turns: 3, deleted: false },
       { agentId: "gone", title: null, provider: "codex", inputTokens: 4_000, outputTokens: 400, costUsd: 0.1, turns: 2, deleted: true },
     ],
-    perf: { ttftP50Ms: 800, ttftP95Ms: 2500, durationP50Ms: 12_000, durationP95Ms: 90_000, outputTokensPerSecP50: 42.5 },
+    perf: { ttftP50Ms: 800, ttftP95Ms: 2500, durationP50Ms: 12_000, durationP95Ms: 90_000, outputTokensPerSec: 42.5 },
     ...patch,
   };
 }
@@ -71,7 +71,7 @@ describe("UsageRoute", () => {
     expect(screen.getByText("Claude Code")).toBeTruthy();
     expect(screen.getByText("默认模型 · claude")).toBeTruthy();
     expect(screen.getByText("800ms")).toBeTruthy();
-    expect(screen.getByText("42.5 tok/s")).toBeTruthy();
+    expect(screen.getByText("43 tok/s")).toBeTruthy();
 
     expect(screen.getByText("（已删除的会话）").closest("button")).toBeNull();
     fireEvent.click(screen.getByText("活着的会话"));

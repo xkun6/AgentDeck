@@ -694,11 +694,10 @@ export class MockAgentSession implements AgentSession {
 
     const outputTokens = Array.from(reply).length;
     this.outputSpeed.endResponse(outputTokens);
-    const finalSpeed = this.outputSpeed.speed();
     const usage = {
       inputTokens: Array.from(text).length,
       outputTokens,
-      ...(finalSpeed !== undefined ? { outputTokensPerSecond: finalSpeed } : {}),
+      ...this.outputSpeed.finalUsage(),
     };
     this.emit({ type: "usage_updated", usage });
     this.finish(turn, { type: "turn_completed", turnId, usage });

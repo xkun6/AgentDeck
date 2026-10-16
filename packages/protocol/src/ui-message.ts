@@ -37,6 +37,8 @@ export interface AgentMessageUsage {
   contextUsed?: number;
   contextMax?: number;
   contextPercent?: number;
+  /** 本回合最终输出速度 tok/s（取自 turn_completed.usage，design.md 4.30） */
+  outputTokensPerSecond?: number;
   [key: string]: unknown;
 }
 

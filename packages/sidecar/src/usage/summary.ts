@@ -69,7 +69,9 @@ export function summarizeUsage(
   const agents = new Map<string, Tally & { provider: AgentProviderId }>();
   const ttfts: number[] = [];
   const durations: number[] = [];
-  const speeds: number[] = [];
+  // 输出速度按 Σ合格输出 token ÷ Σ合格生成时长 汇总（design.md 4.20 / 4.30），旧记录没有这两个字段则不参与
+  let speedTokens = 0;
+  let speedMs = 0;
 
   for (const record of records) {
     if (record.ts < since || record.ts > until) {
@@ -112,9 +114,10 @@ export function summarizeUsage(
     }
     if (record.durationMs !== undefined) {
       durations.push(record.durationMs);
-      if (record.durationMs > 0 && (record.outputTokens ?? 0) > 0) {
-        speeds.push(record.outputTokens! / (record.durationMs / 1000));
-      }
+    }
+    if (isPositiveFinite(record.speedOutputTokens) && isPositiveFinite(record.speedGenerationMs)) {
+      speedTokens += record.speedOutputTokens;
+      speedMs += record.speedGenerationMs;
     }
   }
 
@@ -126,7 +129,7 @@ export function summarizeUsage(
   assignDefined(perf, "ttftP95Ms", percentile(ttfts, 0.95));
   assignDefined(perf, "durationP50Ms", percentile(durations, 0.5));
   assignDefined(perf, "durationP95Ms", percentile(durations, 0.95));
-  assignDefined(perf, "outputTokensPerSecP50", percentile(speeds, 0.5));
+  assignDefined(perf, "outputTokensPerSec", speedMs > 0 ? Math.round((speedTokens / (speedMs / 1000)) * 10) / 10 : undefined);
 
   return {
     backfilling: ctx.backfilling,
@@ -160,6 +163,10 @@ function getOrCreate<K, V>(map: Map<K, V>, key: K, create: () => V): V {
     map.set(key, value);
   }
   return value;
+}
+
+function isPositiveFinite(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function assignDefined<K extends keyof UsageSummary["perf"]>(

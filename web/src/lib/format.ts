@@ -22,7 +22,8 @@ export function formatDurationMs(ms: number | undefined | null): string {
 
 export function formatTokPerSec(value: number | undefined | null): string {
   if (value == null || !Number.isFinite(value) || value < 0) return "—";
-  return value >= 100 ? `${Math.round(value)}` : value.toFixed(1);
+  // 与 cc-switch 一致：≥1 取整，不足 1 保留 1 位小数
+  return value >= 1 ? `${Math.round(value)}` : value.toFixed(1);
 }
 
 export function formatElapsedTimer(ms: number): string {

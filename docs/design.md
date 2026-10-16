@@ -756,6 +756,7 @@ interface UsageTurnRecord {
   inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number;
   durationMs?: number;        // turn_started → 结束
   ttftMs?: number;            // turn_started → 本回合第一个 assistant_message
+  speedOutputTokens?: number; speedGenerationMs?: number; // 本回合合格响应的输出 token 与生成时长之和（4.30），取自 turn_completed.usage
 }
 ```
 - 账本与会话独立：删除会话不删除账本记录（统计是历史数据）。
@@ -771,11 +772,11 @@ interface UsageSummary {
   byProvider: Array<{ provider: AgentProviderId; label: string; inputTokens: number; outputTokens: number; costUsd: number; turns: number }>;
   byModel: Array<{ provider: AgentProviderId; model: string | null; inputTokens: number; outputTokens: number; costUsd: number; turns: number }>;
   topAgents: Array<{ agentId: string; title: string | null; provider: AgentProviderId; inputTokens: number; outputTokens: number; costUsd: number; turns: number; deleted: boolean }>; // 前 10
-  perf: { ttftP50Ms?: number; ttftP95Ms?: number; durationP50Ms?: number; durationP95Ms?: number; outputTokensPerSecP50?: number };
+  perf: { ttftP50Ms?: number; ttftP95Ms?: number; durationP50Ms?: number; durationP95Ms?: number; outputTokensPerSec?: number /* Σ speedOutputTokens ÷ Σ speedGenerationMs，口径同 4.30；没有数据时缺省 */ };
 }
 ```
 - 时间范围缺省为最近 30 天；按天分桶用 sidecar 进程本地时区。
-- 前端新增「用量统计」页（侧栏入口 + 命令面板）：时间范围切换（7 天 / 30 天 / 90 天 / 全部）、总量卡片、按天堆叠柱状图（输入 / 缓存 / 输出）、按 Agent 与按模型的占比、高用量会话前 10（点击跳转，已删除的会话不可点）、性能指标（TTFT 与耗时 P50 / P95、输出速度）。`backfilling` 时顶部提示「正在统计历史会话…」。
+- 前端新增「用量统计」页（侧栏入口 + 命令面板）：时间范围切换（7 天 / 30 天 / 90 天 / 全部）、总量卡片、按天堆叠柱状图（输入 / 缓存 / 输出）、按 Agent 与按模型的占比、高用量会话前 10（点击跳转，已删除的会话不可点）、性能指标（TTFT 与耗时 P50 / P95、输出速度——按 `perf.outputTokensPerSec` 显示，不再用回合总耗时估算；升级前的账本记录没有速度字段，不参与计算）。`backfilling` 时顶部提示「正在统计历史会话…」。
 - ui_store 的 `turn_stats` / `ui_events` 表与相关命令删除（统计改以 sidecar 账本为准）。
 
 **实现补充（4.19 / 4.20 落地时确定）**：
@@ -1064,7 +1065,7 @@ interface AgentRateLimits {
 - 快照没有 `rateLimits` 时隐藏。额度为账户级：每个会话显示自己快照中最近收到的值。
 
 **输出速度（tok/s）**：
-- `AgentUsage` 增加 `outputTokensPerSecond?: number`：**纯生成速度**，口径对齐 cc-switch（`src/components/usage/format.ts` 的 `isSpeedEligible` / `getAggregateTokensPerSecond`）。按**单次模型响应**记账：一次响应的生成时长 = 从首个输出（任意类型：思考块、文字、工具参数）到达，到该响应结束；首 token 等待、工具执行、审批等待都不计入。只有**输出 ≥ 100 token 且生成时长 ≥ 100 ms** 的响应才算「合格」（排除工具调用这类短响应与中转站缓冲后一次性吐出的突发）；本回合速度 = Σ合格响应的输出 token ÷ Σ合格响应的生成时长（不是逐条平均），没有合格响应时不给值。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker`：`markOutput()` 开段（段内重复调用无效）、`markIdle()` 闭段（同一响应可被审批等切成多段，时长累加），`endResponse(outputTokens)` 结束一次响应并按门槛决定是否计入合格累计；`observe(event)` 在各自的事件出口（`emit`）收到 `permission_requested` 时自动闭段。回合中的实时值 = 合格累计 + 进行中的响应（它已达门槛时才计入）。开段 / 闭段 / 结束响应的事件各 provider 不同，见下。随 `usage_updated`（回合中，最多每秒一次）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。与 cc-switch 的剩余差异：测量点是 CLI 输出管道而非网络层 SSE；只统计主线程，不含子代理与 CLI 旁路请求。
+- `AgentUsage` 增加 `outputTokensPerSecond?: number`：**纯生成速度**，口径对齐 cc-switch（`src/components/usage/format.ts` 的 `isSpeedEligible` / `getAggregateTokensPerSecond`）。按**单次模型响应**记账：一次响应的生成时长 = 从首个输出（任意类型：思考块、文字、工具参数）到达，到该响应结束；首 token 等待、工具执行、审批等待都不计入。只有**输出 ≥ 100 token 且生成时长 ≥ 100 ms** 的响应才算「合格」（排除工具调用这类短响应与中转站缓冲后一次性吐出的突发）；本回合速度 = Σ合格响应的输出 token ÷ Σ合格响应的生成时长（不是逐条平均），没有合格响应时不给值。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker`：`markOutput()` 开段（段内重复调用无效）、`markIdle()` 闭段（同一响应可被审批等切成多段，时长累加），`endResponse(outputTokens)` 结束一次响应并按门槛决定是否计入合格累计；`observe(event)` 在各自的事件出口（`emit`）收到 `permission_requested` 时自动闭段。回合中的实时值 = 合格累计 + 进行中的响应（它已达门槛时才计入）。开段 / 闭段 / 结束响应的事件各 provider 不同，见下。随 `usage_updated`（回合中，最多每秒一次）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。`turn_completed.usage` 另带 `speedOutputTokens` / `speedGenerationMs`（本回合合格响应的输出 token 与生成时长之和，毫秒取整；没有合格响应时缺省），由 `OutputSpeedTracker.finalUsage()` 与最终速度一并给出，供 4.20 账本记录与用量页 Σ/Σ 汇总；同样不计入 `totalUsage`。前端时间线每个回合的统计行直接显示该回合 `turn_completed.usage.outputTokensPerSecond`（写入消息元数据 `metadata.usage.outputTokensPerSecond`），没有则不显示速度，不再用回合总耗时估算。所有 tok/s 显示（速度芯片、时间线、用量页）统一 ≥1 取整、不足 1 保留 1 位小数。与 cc-switch 的剩余差异：测量点是 CLI 输出管道而非网络层 SSE；只统计主线程，不含子代理与 CLI 旁路请求。
 - Claude：主线程（不含子代理 sidechain）的流式事件驱动计时：`message_start`、`content_block_start` 与任何 `content_block_delta`（文字 / 思考 / 签名 / 工具参数等全部类型）开段（以 `message_start` 为起点，与 cc-switch 的首个非元数据 SSE 事件一致），`message_stop` 以该消息的 `message_delta.usage.output_tokens`（消息内累计，含隐藏思考与工具参数）结束响应，并下发一次只带 `outputTokensPerSecond` 的 `usage_updated`（节流每秒最多一次）。result 时若仍有未结束的响应（如中断）先以当前累计结束它，再给最终速度，不使用 result 自带的 `usage.outputTokens`。依赖 CLI 始终带 `--include-partial-messages`。
 - Codex：assistant_message / reasoning 时间线项、`item/started` 的 reasoning / agentMessage 项以及各类输出 delta 通知（agentMessage / reasoning 摘要 / 正文 delta）开段；`thread/tokenUsage/updated`（每次采样结束发一次）结束一次响应，该响应的输出 token = 本回合输出 token（与 5.3 的本轮合计同口径）相对上次结束时的增量；回合结束时把剩余增量作为最后一次响应结束。只在回合结束才有用量时整回合按一次响应算。
 - ACP：agent_message_chunk / agent_thought_chunk 开段；新的 `tool_call` 通知到达闭段；协议只有回合级用量，整回合按一次响应算：回合结束时以 `PromptResponse.usage` 的输出 token 结束响应并给最终值（没有 usage 则不给）。

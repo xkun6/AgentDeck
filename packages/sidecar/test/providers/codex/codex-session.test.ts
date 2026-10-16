@@ -165,6 +165,10 @@ describe("CodexAgentSession（假 app-server）", () => {
     const speed = updated.find((u) => u.outputTokensPerSecond !== undefined)?.outputTokensPerSecond;
     expect(speed).toBeGreaterThan(100);
     expect(speed).toBeLessThanOrEqual(200);
+    // 合计字段只在 turn_completed 给出，回合中的 usage_updated 不带
+    expect(
+      updated.some((u) => u.speedOutputTokens !== undefined || u.speedGenerationMs !== undefined),
+    ).toBe(false);
     // 第二次响应 0.6 秒内到达 300 个 token（累计 500，增量 300，同样合格）：
     // 最终 usage 为 Σ token ÷ Σ 时长 = (200 + 300) ÷ (1.2 + 0.6) = 277.8（考虑调度抖动给出区间）
     const done = events.find((e) => e.type === "turn_completed");
@@ -172,6 +176,11 @@ describe("CodexAgentSession（假 app-server）", () => {
     const finalSpeed = done?.type === "turn_completed" ? done.usage?.outputTokensPerSecond : undefined;
     expect(finalSpeed).toBeGreaterThan(150);
     expect(finalSpeed).toBeLessThanOrEqual(290);
+    // 合格累计：200 + 300 = 500 token；速度 = speedOutputTokens ÷ speedGenerationMs
+    const finalUsage = done?.type === "turn_completed" ? done.usage : undefined;
+    expect(finalUsage?.speedOutputTokens).toBe(500);
+    expect(finalUsage?.speedGenerationMs).toBeGreaterThan(0);
+    expect(finalUsage!.speedOutputTokens! / (finalUsage!.speedGenerationMs! / 1000)).toBeCloseTo(finalSpeed!, 0);
   });
 
   test("握手 + thread/start + 增量文本 + reasoning + usage + turn_completed", async () => {

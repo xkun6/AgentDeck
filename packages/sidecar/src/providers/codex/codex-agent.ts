@@ -1954,9 +1954,7 @@ export class CodexAgentSession implements AgentSession {
     } else {
       turn.speed.markIdle();
     }
-    const finalSpeed = turn.speed.speed();
-    const usage =
-      baseUsage && finalSpeed !== undefined ? { ...baseUsage, outputTokensPerSecond: finalSpeed } : baseUsage;
+    const usage = baseUsage ? { ...baseUsage, ...turn.speed.finalUsage() } : baseUsage;
     this.finishTurn(turn, {
       type: "turn_completed",
       turnId: turn.turnId,

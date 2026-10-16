@@ -66,6 +66,32 @@ describe("OutputSpeedTracker（按单次响应记账，对齐 cc-switch，design
     expect(tracker.speed(1000)).toBe(Math.round((1100 / 1.1) * 10) / 10); // 1000
   });
 
+  test("finalUsage 给出最终速度与合格累计，毫秒取整；没有合格响应返回空对象", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    expect(tracker.finalUsage()).toEqual({});
+    respond(tracker, (t) => (now = t), 0, 99, 500); // 不足 100ms：不合格
+    respond(tracker, (t) => (now = t), 1000, 1500, 99); // 不足 100 token：不合格
+    expect(tracker.finalUsage()).toEqual({});
+    respond(tracker, (t) => (now = t), 2000, 3000, 100); // 合格：100 token / 1000ms
+    respond(tracker, (t) => (now = t), 5000, 5000.4 + 1999.6, 1000); // 合格：1000 token / 2000ms（含浮点毫秒）
+    // Σ = 1100 token ÷ 3 秒 = 366.7
+    expect(tracker.finalUsage()).toEqual({
+      outputTokensPerSecond: 366.7,
+      speedOutputTokens: 1100,
+      speedGenerationMs: 3000,
+    });
+    tracker.reset();
+    expect(tracker.finalUsage()).toEqual({});
+  });
+
+  test("finalUsage 的 speedGenerationMs 四舍五入取整", () => {
+    let now = 0;
+    const tracker = new OutputSpeedTracker(() => now);
+    respond(tracker, (t) => (now = t), 0, 1000.6, 200);
+    expect(tracker.finalUsage().speedGenerationMs).toBe(1001);
+  });
+
   test("endResponse 重复调用不重复计入", () => {
     let now = 0;
     const tracker = new OutputSpeedTracker(() => now);

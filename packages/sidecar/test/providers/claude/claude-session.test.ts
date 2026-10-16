@@ -2962,6 +2962,8 @@ describe("额度事件与输出速度（design.md 4.30）", () => {
       await waitUntil(() => terminalEvents(events).length === 1);
       const done = terminalEvents(events)[0]!;
       expect(done).toMatchObject({ type: "turn_completed", usage: { outputTokens: 400, outputTokensPerSecond: 162.2 } });
+      // 合格累计：token 100 + 200 + 300 = 600，时长 1500 + 200 + 2000 = 3700ms；600 ÷ 3.7 秒 = 162.2
+      expect(done).toMatchObject({ usage: { speedOutputTokens: 600, speedGenerationMs: 3700 } });
     } finally {
       spy.mockRestore();
     }

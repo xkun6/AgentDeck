@@ -120,6 +120,7 @@ describe("assistant stats derivation", () => {
             cacheRead: 736,
             cacheWrite: 12,
             apiCalls: 3,
+            outputTokensPerSecond: 74.3,
           },
           model: "gpt-5.4",
           costUsd: 0.018,
@@ -142,7 +143,8 @@ describe("assistant stats derivation", () => {
       costUsd: 0.018,
       finishReason: "stop",
     });
-    expect(stats?.tokPerSec).toBeCloseTo(312 / 4.2, 2);
+    // 取自 metadata.usage.outputTokensPerSecond，不再用 输出 token ÷ durationMs 估算（312 / 4.2 ≈ 74.3 只是巧合不参与）
+    expect(stats?.tokPerSec).toBe(74.3);
   });
 
   it("keeps metadata costUsd for displayable statuses", () => {
@@ -183,6 +185,19 @@ describe("assistant stats derivation", () => {
     expect(stats?.costUsd).toBeUndefined();
   });
 
+  it("没有 outputTokensPerSecond 时不给 tokPerSec，即使有输出 token 与 durationMs", () => {
+    const stats = deriveAssistantStats(
+      uiMessage({
+        metadata: {
+          timing: { startedAt: 1_000, completedAt: 5_200 },
+          usage: { tokensOutput: 312 },
+        },
+      }),
+    );
+    expect(stats?.durationMs).toBe(4_200);
+    expect(stats?.tokPerSec).toBeUndefined();
+  });
+
   it("falls back gracefully when first token never recorded", () => {
     const stats = deriveAssistantStats(
       uiMessage({
@@ -194,7 +209,7 @@ describe("assistant stats derivation", () => {
     );
     expect(stats?.ttftMs).toBeUndefined();
     expect(stats?.durationMs).toBe(2_500);
-    expect(stats?.tokPerSec).toBeCloseTo(200 / 2.5, 2);
+    expect(stats?.tokPerSec).toBeUndefined();
   });
 
   it("returns undefined for non-assistant roles", () => {

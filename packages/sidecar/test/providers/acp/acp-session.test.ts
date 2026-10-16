@@ -152,14 +152,19 @@ describe("AcpAgentSession 回合", () => {
     // 200 token ÷ 1.2 秒 = 166.7（合格：≥100 token 且 ≥100ms）
     expect(usage?.outputTokensPerSecond).toBeGreaterThan(100);
     expect(usage?.outputTokensPerSecond).toBeLessThanOrEqual(200);
+    expect(usage?.speedOutputTokens).toBe(200);
+    expect(usage!.speedOutputTokens! / (usage!.speedGenerationMs! / 1000)).toBeCloseTo(usage!.outputTokensPerSecond!, 0);
     // 回合中的 usage_updated 不带速度
     expect(events.some((e) => e.type === "usage_updated" && e.usage.outputTokensPerSecond !== undefined)).toBe(false);
+    expect(events.some((e) => e.type === "usage_updated" && e.usage.speedOutputTokens !== undefined)).toBe(false);
 
     // 瞬间结束的回合（echo，20 token、生成不足 100ms）不合格：没有速度
     await session.startTurn("你好");
     await waitForTerminal(events, 2);
     const second = terminalEvents(events).at(-1);
     expect(second?.type === "turn_completed" ? second.usage : undefined).not.toHaveProperty("outputTokensPerSecond");
+    expect(second?.type === "turn_completed" ? second.usage : undefined).not.toHaveProperty("speedOutputTokens");
+    expect(second?.type === "turn_completed" ? second.usage : undefined).not.toHaveProperty("speedGenerationMs");
   });
 
   test("agent_thought_chunk → reasoning，带 messageId 的消息沿用原 id", async () => {

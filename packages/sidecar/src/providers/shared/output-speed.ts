@@ -84,6 +84,19 @@ export class OutputSpeedTracker {
     return Math.round((tokens / (ms / 1000)) * 10) / 10;
   }
 
+  /** 回合结束时的速度相关用量：最终速度与合格累计（design.md 4.30）；没有合格响应时返回空对象 */
+  finalUsage(): { outputTokensPerSecond?: number; speedOutputTokens?: number; speedGenerationMs?: number } {
+    const outputTokensPerSecond = this.speed();
+    if (outputTokensPerSecond === undefined || this.eligibleMs <= 0) {
+      return {};
+    }
+    return {
+      outputTokensPerSecond,
+      speedOutputTokens: this.eligibleTokens,
+      speedGenerationMs: Math.round(this.eligibleMs),
+    };
+  }
+
   /** 回合中的节流版本：距上次下发不足 1 秒返回 undefined；返回值时记为已下发 */
   throttledSpeed(currentResponseTokens = 0): number | undefined {
     const at = this.now();

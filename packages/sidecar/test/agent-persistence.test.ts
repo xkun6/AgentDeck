@@ -340,13 +340,22 @@ describe("额度与输出速度（design.md 4.30）", () => {
     sessions.at(-1)!.emit({
       type: "turn_completed",
       turnId: turn,
-      usage: { inputTokens: 100, outputTokens: 10, outputTokensPerSecond: 38.2 },
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        outputTokensPerSecond: 38.2,
+        speedOutputTokens: 10,
+        speedGenerationMs: 262,
+      },
     });
     await vi.waitFor(() => expect(manager.getAgent(agent.id).status).toBe("idle"));
     const snapshot = manager.getAgent(agent.id);
     expect(snapshot.lastUsage?.outputTokensPerSecond).toBe(38.2);
     expect(snapshot.totalUsage).toEqual({ inputTokens: 100, outputTokens: 10 });
+    expect(snapshot.lastUsage).toMatchObject({ speedOutputTokens: 10, speedGenerationMs: 262 });
     expect(snapshot.totalUsage).not.toHaveProperty("outputTokensPerSecond");
+    expect(snapshot.totalUsage).not.toHaveProperty("speedOutputTokens");
+    expect(snapshot.totalUsage).not.toHaveProperty("speedGenerationMs");
     await manager.shutdown();
   });
 });

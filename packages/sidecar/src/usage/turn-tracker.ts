@@ -59,7 +59,14 @@ export class UsageTurnTracker {
     turnId: string,
     outcome: UsageTurnRecord["outcome"],
     model: string | null,
-    usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalCostUsd?: number },
+    usage?: {
+      inputTokens?: number;
+      cachedInputTokens?: number;
+      outputTokens?: number;
+      totalCostUsd?: number;
+      speedOutputTokens?: number;
+      speedGenerationMs?: number;
+    },
   ): UsageTurnRecord {
     const turn = this.open.get(turnId);
     this.open.delete(turnId);
@@ -80,6 +87,8 @@ export class UsageTurnTracker {
       ...finiteField("cachedInputTokens", usage?.cachedInputTokens),
       ...finiteField("outputTokens", usage?.outputTokens),
       ...finiteField("costUsd", usage?.totalCostUsd),
+      ...finiteField("speedOutputTokens", usage?.speedOutputTokens),
+      ...finiteField("speedGenerationMs", usage?.speedGenerationMs),
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(ttftMs !== undefined ? { ttftMs } : {}),
     };

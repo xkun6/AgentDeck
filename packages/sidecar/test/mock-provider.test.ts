@@ -371,6 +371,8 @@ describe("MockAgentSession 输出速度（design.md 4.30）", () => {
     expect(outputTokens).toBeGreaterThan(0);
     // 总耗时 63 秒，扣除 60 秒审批等待后只剩 3 秒
     expect(done.usage?.outputTokensPerSecond).toBe(Math.round((outputTokens / 3) * 10) / 10);
+    // 合格累计与速度一致：整回合一次响应，token = 输出，生成时长 3000ms
+    expect(done.usage).toMatchObject({ speedOutputTokens: outputTokens, speedGenerationMs: 3000 });
   });
 
   test("输出不足 100 token 或生成不足 100ms 不带速度", async () => {
@@ -387,6 +389,8 @@ describe("MockAgentSession 输出速度（design.md 4.30）", () => {
     const done = events.find((e) => e.type === "turn_completed");
     if (done?.type !== "turn_completed") throw new Error("缺少 turn_completed");
     expect(done.usage?.outputTokensPerSecond).toBeUndefined();
+    expect(done.usage).not.toHaveProperty("speedOutputTokens");
+    expect(done.usage).not.toHaveProperty("speedGenerationMs");
 
     // 回复 ≥100 token 但时钟不动（生成 0ms，不足 100ms）：不合格
     const frozen = new MockAgentSession({ cwd: "." }, null, () => 0);
@@ -397,5 +401,6 @@ describe("MockAgentSession 输出速度（design.md 4.30）", () => {
     if (frozenDone?.type !== "turn_completed") throw new Error("缺少 turn_completed");
     expect(frozenDone.usage?.outputTokens).toBeGreaterThanOrEqual(100);
     expect(frozenDone.usage?.outputTokensPerSecond).toBeUndefined();
+    expect(frozenDone.usage).not.toHaveProperty("speedGenerationMs");
   });
 });
