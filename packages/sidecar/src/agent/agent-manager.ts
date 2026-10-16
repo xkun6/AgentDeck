@@ -55,6 +55,9 @@ import type {
 } from "./types.js";
 
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+/** 空闲回收扫描间隔（design.md 4.34） */
+const IDLE_RECLAIM_SWEEP_MS = 60_000;
+export const RECLAIM_NOT_SUPPORTED_MESSAGE = "该会话不支持恢复，回收后将无法继续对话";
 const PREVIEW_MAX_CHARS = 120;
 /** agent.tasks.output 的 maxBytes 缺省 / 上限 */
 export const TASK_OUTPUT_DEFAULT_BYTES = 64 * 1024;
@@ -96,6 +99,8 @@ export interface AgentManagerOptions {
   snapshots?: SnapshotService;
   /** 会话互通（design.md 4.26）：返回该会话当前应注入的 MCP 端点，互通关闭时返回 undefined */
   interop?: { endpointFor(agentId: string): InteropEndpoint | undefined };
+  /** 空闲回收设置（design.md 4.34）：每次扫描时读取；不传则不自动回收 */
+  idleReclaim?: () => { enabled: boolean; idleMinutes: number };
 }
 
 export interface CreateAgentParams {
@@ -165,6 +170,8 @@ interface ManagedAgent {
   removed: boolean;
   /** 最近一次推送的后台任务表（内存缓存，design.md 4.15） */
   backgroundTasks: AgentBackgroundTask[];
+  /** 最近一次活动时间（design.md 4.34，只在内存）：创建 / 恢复完成 / agent.send 受理 / 发出 stream 事件 */
+  lastActivityAt: number;
   /** 建会话时取到的模型目录（切换模型后校验思考强度用）；null 表示尚未取到 */
   models: AgentModelDefinition[] | null;
   /** summary 方式分叉：首次 agent.send 时前置的历史对话文本（design.md 4.23），随 meta 持久化，不进快照 */
@@ -190,6 +197,8 @@ export class AgentManager {
   private readonly usage: UsageLedger | undefined;
   private readonly snapshots: SnapshotService | undefined;
   private readonly interop: AgentManagerOptions["interop"];
+  private readonly idleReclaim: AgentManagerOptions["idleReclaim"];
+  private idleReclaimTimer: NodeJS.Timeout | null = null;
   /** 每个会话的回合账本折叠器（只在内存） */
   private readonly usageTrackers = new Map<string, UsageTurnTracker>();
   /** provider 子代理（只在内存，会话关闭 / 删除时清空） */
@@ -201,10 +210,15 @@ export class AgentManager {
     this.usage = options.usage;
     this.snapshots = options.snapshots;
     this.interop = options.interop;
+    this.idleReclaim = options.idleReclaim;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
     this.subagents = new ProviderSubagentStore(this.now);
+    if (this.idleReclaim) {
+      this.idleReclaimTimer = setInterval(() => void this.reclaimIdleAgents(), IDLE_RECLAIM_SWEEP_MS);
+      this.idleReclaimTimer.unref();
+    }
     this.coalescer = new AgentStreamCoalescer({
       windowMs: options.coalesceWindowMs ?? AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS,
       timers: { setTimeout, clearTimeout },
@@ -295,7 +309,7 @@ export class AgentManager {
       updatedAt: now,
     };
     const agent: ManagedAgent = {
-      ...newManagedAgent(id, client, snapshot),
+      ...newManagedAgent(id, client, snapshot, this.now()),
       session,
       entries: [],
       toolCallIndex: new Map(),
@@ -332,7 +346,7 @@ export class AgentManager {
         activeTurnId: null,
         pendingPermissions: [],
       };
-      const agent = newManagedAgent(meta.id, this.registry.get(meta.provider), snapshot);
+      const agent = newManagedAgent(meta.id, this.registry.get(meta.provider), snapshot, this.now());
       if (pendingForkContext !== undefined) {
         agent.pendingForkContext = pendingForkContext;
       }
@@ -379,6 +393,7 @@ export class AgentManager {
       this.emitUserAction(agentId, "send");
     }
     agent.sending = true;
+    agent.lastActivityAt = this.now();
     try {
       // 向已归档会话发消息自动取消归档（design.md 4.17），随后续的 agent.state 一并推送
       if (agent.snapshot.archived) {
@@ -774,7 +789,7 @@ export class AgentManager {
       updatedAt: now,
     };
     const agent: ManagedAgent = {
-      ...newManagedAgent(id, client, snapshot),
+      ...newManagedAgent(id, client, snapshot, this.now()),
       session,
       entries: copied,
       toolCallIndex: buildToolCallIndex(copied),
@@ -882,6 +897,54 @@ export class AgentManager {
   async close(agentId: string): Promise<void> {
     const agent = this.requireAgent(agentId);
     await this.closeAgent(agent, "closed");
+  }
+
+  /** design.md 4.34：手动回收——结束 provider 进程，会话转为 dormant；未加载时原样返回 */
+  async reclaim(agentId: string): Promise<AgentSnapshot> {
+    const agent = this.requireAgent(agentId);
+    if (agent.session === null && !agent.resuming) {
+      return cloneSnapshot(agent.snapshot);
+    }
+    const snapshot = agent.snapshot;
+    if (
+      agent.sending ||
+      agent.resuming ||
+      snapshot.status === "running" ||
+      snapshot.status === "starting" ||
+      snapshot.activeTurnId
+    ) {
+      throw new AgentRpcError("TURN_IN_PROGRESS", "该 agent 正在执行中，请等待当前回合结束或先取消");
+    }
+    if (!snapshot.resumable) {
+      throw new AgentRpcError("NOT_SUPPORTED", RECLAIM_NOT_SUPPORTED_MESSAGE);
+    }
+    this.logger.info("回收空闲 agent %s（手动）", agent.id);
+    await this.closeAgent(agent, "dormant");
+    return cloneSnapshot(agent.snapshot);
+  }
+
+  /** design.md 4.34：自动回收扫描一轮，返回被回收的 agentId */
+  async reclaimIdleAgents(): Promise<string[]> {
+    const settings = this.idleReclaim?.();
+    if (!settings?.enabled) {
+      return [];
+    }
+    const now = this.now();
+    const thresholdMs = settings.idleMinutes * 60_000;
+    const targets = Array.from(this.agents.values()).filter(
+      (agent) => isIdleReclaimable(agent) && now - agent.lastActivityAt >= thresholdMs,
+    );
+    await Promise.allSettled(
+      targets.map((agent) => {
+        this.logger.info(
+          "回收空闲 agent %s（空闲 %d 分钟）",
+          agent.id,
+          Math.floor((now - agent.lastActivityAt) / 60_000),
+        );
+        return this.closeAgent(agent, "dormant");
+      }),
+    );
+    return targets.map((agent) => agent.id);
   }
 
   /**
@@ -1059,6 +1122,10 @@ export class AgentManager {
    * 先落盘一次，防止关闭会话超时、进程被强制退出时丢数据；启用持久化时关闭后的状态记为 dormant。
    */
   async shutdown(): Promise<void> {
+    if (this.idleReclaimTimer) {
+      clearInterval(this.idleReclaimTimer);
+      this.idleReclaimTimer = null;
+    }
     await this.flush();
     const live = Array.from(this.agents.values()).filter(
       (agent) => agent.session !== null || agent.resuming !== null,
@@ -1215,6 +1282,13 @@ export class AgentManager {
    * （agent.resuming）；不可恢复按 assertResumable 报错，关闭中返回 AGENT_CLOSED。
    */
   private async ensureSession(agent: ManagedAgent): Promise<AgentSession> {
+    if (agent.closing) {
+      // 关闭 / 回收进行中：等它结束后按 dormant / closed 恢复（design.md 4.34）
+      await agent.closing;
+      if (agent.removed) {
+        throw new AgentRpcError("AGENT_NOT_FOUND", `找不到 agent：${agent.id}`);
+      }
+    }
     if (agent.session === null && !agent.resuming) {
       this.refreshClient(agent);
       this.assertResumable(agent);
@@ -1325,6 +1399,7 @@ export class AgentManager {
     agent.snapshot.persistence = session.describePersistence() ?? persistence;
     this.refreshResumable(agent);
     agent.snapshot.status = "idle";
+    agent.lastActivityAt = this.now();
     this.touch(agent);
     this.logger.info("恢复 agent %s（provider=%s）", agent.id, agent.snapshot.provider);
     this.emitState(agent);
@@ -1676,6 +1751,7 @@ export class AgentManager {
   }
 
   private emitEnvelope(agent: ManagedAgent, event: AgentStreamEvent): void {
+    agent.lastActivityAt = this.now();
     agent.snapshot.lastSeq += 1;
     const envelope: AgentStreamEnvelope = {
       agentId: agent.id,
@@ -1877,6 +1953,7 @@ function newManagedAgent(
   id: string,
   client: AgentClient | undefined,
   snapshot: AgentSnapshot,
+  now: number,
 ): ManagedAgent {
   return {
     id,
@@ -1898,8 +1975,28 @@ function newManagedAgent(
     closing: null,
     removed: false,
     backgroundTasks: [],
+    lastActivityAt: now,
     models: null,
   };
+}
+
+/** 自动回收候选（design.md 4.34）：已加载、空闲、无挂起审批与后台活动、可恢复、未置顶 */
+function isIdleReclaimable(agent: ManagedAgent): boolean {
+  const snapshot = agent.snapshot;
+  return (
+    agent.session !== null &&
+    !agent.closed &&
+    agent.closing === null &&
+    agent.resuming === null &&
+    !agent.sending &&
+    !agent.removed &&
+    (snapshot.status === "idle" || snapshot.status === "error") &&
+    !snapshot.activeTurnId &&
+    snapshot.pendingPermissions.length === 0 &&
+    snapshot.backgroundActive !== true &&
+    snapshot.resumable === true &&
+    snapshot.pinned !== true
+  );
 }
 
 /** 把本轮 token 累加进 totalUsage（缺失的一项按 0）；两项都不是有限数字时不动，返回是否累加 */

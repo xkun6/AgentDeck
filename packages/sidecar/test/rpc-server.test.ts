@@ -380,6 +380,21 @@ describe("mock 会话", () => {
     expect(error.error.data?.code).toBe("AGENT_CLOSED");
   });
 
+  test("agent.reclaim 返回 dormant 快照，之后 send 自动恢复；agentId 为空是参数错误", async () => {
+    const agent = await createAgent();
+    await client.call("agent.send", { agentId: agent.id, prompt: "一" });
+    await client.waitForTurnEnd(agent.id, 1);
+    const { agent: reclaimed } = await client.call("agent.reclaim", { agentId: agent.id });
+    expect(reclaimed.status).toBe("dormant");
+    await client.call("agent.send", { agentId: agent.id, prompt: "二" });
+    await expect(client.waitForTurnEnd(agent.id, 2)).resolves.toMatchObject({ type: "turn_completed" });
+
+    const bad = await client.request("agent.reclaim", { agentId: "" });
+    expect(bad.error?.code).toBe(-32602);
+    const missing = await expectRpcError(client.call("agent.reclaim", { agentId: "nope" }));
+    expect(missing.error.data?.code).toBe("AGENT_NOT_FOUND");
+  });
+
   test("close 后再 send：mock 可恢复时自动恢复并完成一轮", async () => {
     const agent = await createAgent();
     await client.call("agent.send", { agentId: agent.id, prompt: "一" });

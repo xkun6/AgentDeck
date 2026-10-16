@@ -19,6 +19,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Power,
   Repeat,
   Timer,
   Plug,
@@ -26,7 +27,7 @@ import {
 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import type { ContextMenuEntry } from "@/components/context-menu/entity-context-menu";
-import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
+import { humanizeSidecarError, isInactiveAgent, useAgentSession } from "@/hooks/use-agent-session";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import { useExportSession } from "@/hooks/use-export-session";
 import { activeSessionIdAtom, rightRailVisibleAtom } from "@/stores/ui";
@@ -198,6 +199,32 @@ export function useSessionActions() {
     [actions, confirm],
   );
 
+  /** 回收后台进程（design.md 4.34）：有子代理 / 后台任务时先确认；失败用应用内提示框反馈。 */
+  const reclaimSession = useCallback(
+    async (agent: AgentSnapshot): Promise<void> => {
+      if (agent.backgroundActive) {
+        const confirmed = await confirm({
+          title: "回收后台进程",
+          body: "该会话有运行中的子代理或后台任务，回收会将其结束。确认回收？",
+          confirmLabel: "回收",
+          danger: true,
+        });
+        if (!confirmed) return;
+      }
+      try {
+        await actions.reclaimSession(agent.id);
+      } catch (error) {
+        await confirm({
+          title: "回收失败",
+          body: humanizeSidecarError(error),
+          confirmLabel: "知道了",
+          cancelLabel: "关闭",
+        });
+      }
+    },
+    [actions, confirm],
+  );
+
   /** 重命名：弹窗输入新标题；「恢复自动标题」或保存空串 = 清除自定义标题（design.md 4.17）。 */
   const renameSession = useCallback(
     async (agent: AgentSnapshot, title: string): Promise<void> => {
@@ -280,6 +307,16 @@ export function useSessionActions() {
           disabled: running,
           onSelect: () => void forkSession(agent.id),
         },
+        // 仅已加载的会话可回收；回合进行中或不可恢复时禁用（design.md 4.34）
+        ...(isInactiveAgent(agent)
+          ? []
+          : [{
+              key: "reclaim",
+              label: "回收后台进程",
+              icon: <Power size={ICON} />,
+              disabled: running || agent.resumable === false,
+              onSelect: () => void reclaimSession(agent),
+            }]),
         {
           // 会话互通（design.md 4.26）：开启后其它会话可经 send_to_agent 向它发消息；勾选表示已开启
           key: "interop-target",
@@ -332,7 +369,7 @@ export function useSessionActions() {
         },
       ];
     },
-    [deleteSession, exportSession, forkSession, navigate, openScheduleDialog, openSession, openSnapshotHistory, renameSession, updateSession],
+    [deleteSession, exportSession, forkSession, navigate, openScheduleDialog, openSession, openSnapshotHistory, reclaimSession, renameSession, updateSession],
   );
 
   return { openSession, buildMenu };

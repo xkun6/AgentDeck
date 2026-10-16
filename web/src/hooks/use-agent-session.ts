@@ -487,6 +487,13 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
       await client.request("agent.close", { agentId });
     },
 
+    /** agent.reclaim：结束 provider 进程、会话转为 dormant，下次发送自动恢复（design.md 4.34）。 */
+    async reclaimSession(agentId: string): Promise<AgentSnapshot> {
+      const { agent } = await client.request("agent.reclaim", { agentId });
+      store.set(upsertAgentSnapshotAtom, agent);
+      return agent;
+    },
+
     async respondPermission(
       agentId: string,
       requestId: string,

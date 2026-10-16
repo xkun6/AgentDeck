@@ -93,6 +93,25 @@ describe("SettingsStore", () => {
     expect(existsSync(path.join(root, "sidecar-settings.json"))).toBe(true);
   });
 
+  test("idleReclaim：默认开启 15 分钟；patch 合并并落盘，文件中非法值回退默认", async () => {
+    expect(DEFAULT_SIDECAR_SETTINGS.idleReclaim).toEqual({ enabled: true, idleMinutes: 15 });
+    const store = new SettingsStore({ dataDir: root });
+    await store.load();
+    const next = await store.set({ idleReclaim: { idleMinutes: 30 } });
+    expect(next.idleReclaim).toEqual({ enabled: true, idleMinutes: 30 });
+    const reloaded = new SettingsStore({ dataDir: root });
+    await reloaded.load();
+    expect(reloaded.get().idleReclaim).toEqual({ enabled: true, idleMinutes: 30 });
+
+    writeFileSync(
+      path.join(root, "sidecar-settings.json"),
+      JSON.stringify({ idleReclaim: { enabled: false, idleMinutes: 5000 } }),
+    );
+    const invalid = new SettingsStore({ dataDir: root });
+    await invalid.load();
+    expect(invalid.get().idleReclaim).toEqual({ enabled: false, idleMinutes: 15 });
+  });
+
   test("文件中非法字段回退默认值，未设 dataDir 只在内存", async () => {
     writeFileSync(
       path.join(root, "sidecar-settings.json"),
@@ -417,6 +436,10 @@ describe.skipIf(!hasGit)("RPC 与 AgentManager 集成", () => {
     expect(badSettings.error?.code).toBe(-32602);
     const unknown = await client.request("settings.set", { patch: { foo: 1 } });
     expect(unknown.error?.code).toBe(-32602);
+    for (const idleMinutes of [0, 1441, 1.5]) {
+      const bad = await client.request("settings.set", { patch: { idleReclaim: { idleMinutes } } });
+      expect(bad.error?.code).toBe(-32602);
+    }
   });
 
   test("settings.get / set 与 settings.changed 广播", async () => {

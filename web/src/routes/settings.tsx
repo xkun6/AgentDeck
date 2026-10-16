@@ -22,6 +22,7 @@ import { playChime, shouldPlayFallbackSound } from "@/lib/notifications";
 import { detectHostOS } from "@/lib/runtime";
 import { BUILD_COMMIT, BUILD_DATE, DESKTOP_VERSION, versionLabel } from "@/lib/build-info";
 import type { ComposerSubmitShortcut } from "@/lib/composer-submit-shortcut";
+import { IdleReclaimSettingsSection } from "./idle-reclaim-settings";
 import noticeText from "../../../NOTICE.md?raw";
 import s from "./settings.module.css";
 
@@ -131,6 +132,7 @@ export function GeneralSection({ showHeading = true }: SettingsSectionProps) {
       } />
       {assistantProfileError ? <p className={s.assistantProfileError}>{assistantProfileError}</p> : null}
       <p className={s.assistantProfileStorageHint}>名称和头像只改变桌面端显示，不影响模型本身。清空名称、移除头像后即可恢复默认样式。</p>
+      <IdleReclaimSettingsSection />
     </div>
   );
 }

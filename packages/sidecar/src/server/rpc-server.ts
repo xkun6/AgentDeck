@@ -545,6 +545,9 @@ export class RpcServer {
         await manager.close(params.agentId);
         return {};
       }),
+      defineMethod(AGENT_RPC_METHODS.agentReclaim, agentIdParams, async (params) => ({
+        agent: await manager.reclaim(params.agentId),
+      })),
       defineMethod(
         AGENT_RPC_METHODS.agentTimeline,
         z

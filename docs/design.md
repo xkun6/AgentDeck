@@ -121,6 +121,7 @@ sidecar 入口：
 | `agent.setMode` | `{ agentId, modeId }` | `{ agent: AgentSnapshot }` |
 | `agent.setThinking` | `{ agentId, thinkingOptionId: string \| null }` | `{ agent: AgentSnapshot, notice?: string }`（见 4.10） |
 | `agent.close` | `{ agentId }` | `{}` |
+| `agent.reclaim` | `{ agentId }` | `{ agent: AgentSnapshot }`（结束 provider 进程、转为 dormant，见 4.34） |
 | `agent.timeline` | `{ agentId, sinceSeq?, beforeSeq?, limit? }` | `{ epoch, entries: AgentStreamEnvelope[], hasOlder?: boolean }`（`beforeSeq` / `limit` 为向前分页，见 4.31） |
 | `agent.subagents.list` | `{ agentId }` | `{ subagents: ProviderSubagentDescriptor[] }`（见 4.11） |
 | `agent.subagents.timeline` | `{ agentId, subagentId, direction?, cursorSeq?, limit? }` | `{ rows, hasOlder, hasNewer }`（见 4.11） |
@@ -838,6 +839,7 @@ interface SidecarSettings {
   snapshots: { enabled: boolean /* 默认 true */; maxFiles: number /* 默认 20000 */; maxFileBytes: number /* 默认 5 MB */ };
   interop: { enabled: boolean /* 默认 true，见 4.26 */ };
   remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535，见 4.31 */ };
+  idleReclaim: { enabled: boolean /* 默认 true */; idleMinutes: number /* 默认 15，整数 1–1440，见 4.34 */ };
 }
 ```
 
@@ -1246,6 +1248,27 @@ Codex 的 `request_user_input` 工具向用户提问时，app-server 发 server�
 - **隐私**：provider 发出的 `permission_resolved` 不带 `updatedInput`（回答可能含密钥，该事件会广播并落盘）。
 - 清理：`serverRequest/resolved` 通知已映射成 `permission_resolved`（所有 server→client 审批共用，包括 elicitation 与本请求）。
 - Mock 场景 `/textq`（纯文本题 + secret 题，见 4.31「Mock 审批场景」）可在没有 Codex 的情况下验证界面。
+
+### 4.34 空闲会话回收（结束 CLI / app-server 进程）
+
+已加载的会话各自常驻一个 provider 进程（Claude Code CLI、每会话一个 Codex app-server、ACP 子进程）。回收 = 走 `closeAgent(agent, "dormant")`：provider `session.close()` tree-kill 进程树，快照转为 `dormant`（界面「未加载」），时间线、persistence 句柄保留；下次 `agent.send` 按 4.5 自动恢复（`--resume` / `thread/resume` / ACP `session/load`）。与 `agent.close` 的区别只在最终状态（`dormant` 而非 `closed`）。
+
+**手动**：RPC `agent.reclaim { agentId }` → `{ agent: AgentSnapshot }`。
+- 会话未加载（`session === null` 且不在恢复中，即已是 dormant / closed）→ 不做事，直接返回当前快照。
+- 有进行中的回合（`status` 为 `running` / `starting`、`activeTurnId` 非空、发送 / 恢复进行中）→ `TURN_IN_PROGRESS`。
+- `resumable === false` → `NOT_SUPPORTED`（message「该会话不支持恢复，回收后将无法继续对话」）。
+- 有运行中的子代理 / 后台任务（`backgroundActive`）允许回收（它们随进程结束），由前端先确认。
+- 会话右键菜单「回收后台进程」：仅已加载的会话（status 为 `idle` / `error` / `running` / `starting`）显示；`running` / `starting` 或 `resumable === false` 时禁用；`backgroundActive` 时先弹确认（「该会话有运行中的子代理或后台任务，回收会将其结束」）；失败用应用内提示框反馈。
+
+**自动**：`SidecarSettings.idleReclaim = { enabled: boolean /* 默认 true */; idleMinutes: number /* 默认 15，整数 1–1440 */ }`（4.24 的设置文件，`settings.set` 校验同其它字段）。AgentManager 每 60 秒扫一次（定时器 `unref`，`shutdown` 时清除；设置变化在下一次扫描生效），满足以下**全部**条件的会话回收：
+- 已加载：`session !== null`，且不在关闭 / 恢复 / 发送中，未被删除；
+- `status` 为 `idle` 或 `error`，`activeTurnId` 为空，`pendingPermissions` 为空，`backgroundActive` 不为 true；
+- `resumable === true`；未置顶（`pinned !== true`，置顶会话只能手动回收）；
+- 距最近一次活动 ≥ `idleMinutes`。「活动」= 会话创建 / 恢复完成、`agent.send` 受理、任一 `agent.stream` 事件发出（只在内存记录，不持久化；sidecar 重启后会话本就是 dormant）。
+
+**并发**：关闭进行中再 `agent.send`，先等关闭完成再按 dormant 恢复（`ensureSession` 等待 `agent.closing`），不返回 `AGENT_CLOSED`。回收写日志「回收空闲 agent <id>（手动 / 空闲 N 分钟）」。
+
+**前端设置**：「常规」页增加两行：「空闲自动回收」开关，「空闲时长（分钟）」数字输入（1–1440，失焦 / 回车保存）。未连接 sidecar 时显示与其它 sidecar 设置一致的提示。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 
