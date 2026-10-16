@@ -105,6 +105,25 @@ describe("UsageTurnTracker", () => {
     expect(JSON.stringify(record)).not.toContain("PerSecond");
   });
 
+  test("turn_completed.usage 的 speedOutputTokens / speedGenerationMs 写入账本记录", () => {
+    const tracker = new UsageTurnTracker("a1", "claude");
+    tracker.observe(env(1000, { type: "turn_started", turnId: "t1" }), "opus");
+    const record = tracker.observe(
+      env(3000, {
+        type: "turn_completed",
+        turnId: "t1",
+        usage: { outputTokens: 500, outputTokensPerSecond: 250, speedOutputTokens: 500, speedGenerationMs: 2000 },
+      }),
+      "opus",
+    );
+    expect(record).toMatchObject({ outputTokens: 500, speedOutputTokens: 500, speedGenerationMs: 2000 });
+    expect(JSON.stringify(record)).not.toContain("PerSecond");
+    tracker.observe(env(4000, { type: "turn_started", turnId: "t2" }), "opus");
+    const bare = tracker.observe(env(5000, { type: "turn_completed", turnId: "t2", usage: { outputTokens: 5 } }), "opus");
+    expect(bare).not.toHaveProperty("speedOutputTokens");
+    expect(bare).not.toHaveProperty("speedGenerationMs");
+  });
+
   test("失败 / 中断 / background 回合", () => {
     const tracker = new UsageTurnTracker("a1", "mock");
     tracker.observe(env(100, { type: "turn_started", turnId: "b1", origin: "background" }), null);
@@ -324,17 +343,30 @@ describe("summarizeUsage", () => {
     expect(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.95)).toBe(10);
 
     const records = [
-      rec({ ts: day(20), ttftMs: 100, durationMs: 1000, outputTokens: 100 }), // 100 tok/s
-      rec({ ts: day(21), ttftMs: 300, durationMs: 2000, outputTokens: 100 }), // 50 tok/s
-      rec({ ts: day(22), ttftMs: 200, durationMs: 4000, outputTokens: 100 }), // 25 tok/s
-      rec({ ts: day(23), durationMs: 500 }), // 无 outputTokens：不参与速度
+      rec({ ts: day(20), ttftMs: 100, durationMs: 1000, outputTokens: 100 }),
+      rec({ ts: day(21), ttftMs: 300, durationMs: 2000, outputTokens: 100 }),
+      rec({ ts: day(22), ttftMs: 200, durationMs: 4000, outputTokens: 100 }),
+      rec({ ts: day(23), durationMs: 500 }),
     ];
     const { perf } = summarizeUsage(records, {}, ctx);
     expect(perf.ttftP50Ms).toBe(200);
     expect(perf.ttftP95Ms).toBe(300);
     expect(perf.durationP50Ms).toBe(1000);
     expect(perf.durationP95Ms).toBe(4000);
-    expect(perf.outputTokensPerSecP50).toBe(50);
+    // 旧记录没有 speed 字段：不参与输出速度，不再用 outputTokens ÷ durationMs 估算
+    expect(perf.outputTokensPerSec).toBeUndefined();
     expect(summarizeUsage([], {}, ctx).perf).toEqual({});
+  });
+
+  test("输出速度按 Σ speedOutputTokens ÷ Σ speedGenerationMs 汇总（合计而非平均），缺字段的记录不参与", () => {
+    const records = [
+      rec({ ts: day(20), outputTokens: 100, durationMs: 9000, speedOutputTokens: 100, speedGenerationMs: 1000 }), // 100 tok/s
+      rec({ ts: day(21), outputTokens: 1000, durationMs: 9000, speedOutputTokens: 1000, speedGenerationMs: 2000 }), // 500 tok/s
+      rec({ ts: day(22), outputTokens: 5000, durationMs: 1000 }), // 旧记录：不参与
+      rec({ ts: day(23), speedOutputTokens: 300 }), // 缺 speedGenerationMs：不参与
+    ];
+    // Σ = 1100 token ÷ 3 秒 = 366.7（逐条平均会是 300）
+    expect(summarizeUsage(records, {}, ctx).perf.outputTokensPerSec).toBe(366.7);
+    expect(summarizeUsage([records[2]!, records[3]!], {}, ctx).perf.outputTokensPerSec).toBeUndefined();
   });
 });

@@ -271,6 +271,13 @@ export function deriveAssistantStats(msg: AgentUIMessage): AssistantMessageStats
     if (typeof usage.cacheRead === "number") stats.cacheRead = usage.cacheRead;
     if (typeof usage.cacheWrite === "number") stats.cacheWrite = usage.cacheWrite;
     if (typeof usage.apiCalls === "number") stats.apiCalls = usage.apiCalls;
+    if (
+      typeof usage.outputTokensPerSecond === "number" &&
+      Number.isFinite(usage.outputTokensPerSecond) &&
+      usage.outputTokensPerSecond > 0
+    ) {
+      stats.tokPerSec = usage.outputTokensPerSecond;
+    }
   }
 
   if (typeof msg.metadata?.model === "string" && msg.metadata.model) {
@@ -292,22 +299,13 @@ export function deriveAssistantStats(msg: AgentUIMessage): AssistantMessageStats
     stats.costUsd = msg.metadata.costUsd;
   }
 
-  const outputForRate = stats.tokensOutput ?? stats.tokensCompletion ?? undefined;
-  if (
-    typeof outputForRate === "number" &&
-    outputForRate > 0 &&
-    typeof stats.durationMs === "number" &&
-    stats.durationMs > 0
-  ) {
-    stats.tokPerSec = outputForRate / (stats.durationMs / 1000);
-  }
-
   const hasAny =
     stats.ttftMs !== undefined ||
     stats.durationMs !== undefined ||
     stats.tokensTotal !== undefined ||
     stats.tokensInput !== undefined ||
     stats.tokensOutput !== undefined ||
+    stats.tokPerSec !== undefined ||
     stats.cacheRead !== undefined ||
     stats.apiCalls !== undefined ||
     stats.model !== undefined ||

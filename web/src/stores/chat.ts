@@ -551,6 +551,9 @@ function agentUsageMetadata(usage: AgentUsage | undefined): AgentMessageMetadata
   if (typeof usage.cachedInputTokens === "number") next.cacheRead = usage.cachedInputTokens;
   if (typeof usage.contextWindowUsedTokens === "number") next.contextUsed = usage.contextWindowUsedTokens;
   if (typeof usage.contextWindowMaxTokens === "number") next.contextMax = usage.contextWindowMaxTokens;
+  if (typeof usage.outputTokensPerSecond === "number" && Number.isFinite(usage.outputTokensPerSecond) && usage.outputTokensPerSecond > 0) {
+    next.outputTokensPerSecond = usage.outputTokensPerSecond;
+  }
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -585,6 +588,12 @@ function finishAgentTurn(
 ): ChatSessionRuntime {
   const id = runtime.activeAssistantId;
   const metadata = agentTurnMetadata(runtime, completedAt, usage ?? runtime.agentUsage);
+  // 最终速度只取自 turn_completed.usage；失败 / 取消回退到 runtime.agentUsage 时可能是上一回合的残值，不写入
+  if (!usage && metadata.usage) {
+    const { outputTokensPerSecond: _speed, ...rest } = metadata.usage;
+    if (Object.keys(rest).length > 0) metadata.usage = rest;
+    else delete metadata.usage;
+  }
   const next = id
     ? updateMessage(runtime, id, (message) => {
         let parts = withoutProgressParts(message.parts);

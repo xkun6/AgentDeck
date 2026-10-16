@@ -61,9 +61,10 @@ async function agentMessage(turnId, itemId, chunks) {
   notify("item/completed", { ...base(turnId), item: { type: "agentMessage", id: itemId, text: chunks.join(""), phase: "final_answer" }, completedAtMs: Date.now() });
 }
 
-function tokenUsage(turnId) {
-  const last = { totalTokens: 120, inputTokens: 100, cachedInputTokens: 40, cacheWriteInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 5 };
-  notify("thread/tokenUsage/updated", { ...base(turnId), tokenUsage: { total: last, last, modelContextWindow: 200000 } });
+// totalOutput / lastOutput：本回合累计 / 本次采样的输出 token（默认都是 20）
+function tokenUsage(turnId, totalOutput = 20, lastOutput = 20) {
+  const usage = (outputTokens) => ({ totalTokens: 100 + outputTokens, inputTokens: 100, cachedInputTokens: 40, cacheWriteInputTokens: 0, outputTokens, reasoningOutputTokens: 5 });
+  notify("thread/tokenUsage/updated", { ...base(turnId), tokenUsage: { total: usage(totalOutput), last: usage(lastOutput), modelContextWindow: 200000 } });
 }
 
 async function commandApprovalVariant(turnId, extra) {
@@ -102,7 +103,7 @@ const scenarios = {
     completeTurn(turnId, "completed");
   },
 
-  // 输出速度与稀疏的额度滚动更新：首个输出后过 1.2 秒才给 token 用量
+  // 输出速度与稀疏的额度滚动更新：两次采样（响应），首个输出后过 1.2 秒给 200 token，再过 0.6 秒给 300 token（累计 500）
   async speed(turnId) {
     notify("item/agentMessage/delta", { ...base(turnId), itemId: "msg_s", delta: "x" });
     notify("account/rateLimits/updated", {
@@ -113,7 +114,10 @@ const scenarios = {
       },
     });
     await sleep(1200);
-    tokenUsage(turnId);
+    tokenUsage(turnId, 200, 200);
+    notify("item/agentMessage/delta", { ...base(turnId), itemId: "msg_s", delta: "y" });
+    await sleep(600);
+    tokenUsage(turnId, 500, 300);
     completeTurn(turnId, "completed");
   },
 

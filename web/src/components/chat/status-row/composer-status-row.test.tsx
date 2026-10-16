@@ -79,7 +79,7 @@ describe("ComposerStatusRow 同一行布局与隐藏规则", () => {
     const bg = screen.getByRole("button", { name: /后台任务/ });
     const todo = screen.getByRole("button", { name: /步骤/ });
     const quota = screen.getByRole("button", { name: /额度/ });
-    const speed = screen.getByText("42.5 tok/s");
+    const speed = screen.getByText("43 tok/s");
     for (const node of [sub, bg, todo, quota, speed]) expect(row.contains(node)).toBe(true);
     const order = [sub, bg, todo, quota, speed].map((node) => {
       let rootChild: HTMLElement = node;
@@ -194,7 +194,7 @@ describe("速度芯片", () => {
     expect(live.getAttribute("data-idle")).toBeNull();
     expect(live.getAttribute("title")).toBe("当前输出速度");
     rerender(<OutputSpeedChip usage={{ outputTokensPerSecond: 42.46 }} busy={false} />);
-    const idle = screen.getByText("42.5 tok/s").closest("span[title]")!;
+    const idle = screen.getByText("42 tok/s").closest("span[title]")!;
     expect(idle.getAttribute("data-idle")).toBe("true");
     expect(idle.getAttribute("title")).toBe("上一回合平均输出速度");
   });

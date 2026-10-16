@@ -249,7 +249,7 @@ function Perf({ summary }: { summary: UsageSummary }) {
         <Card label="首字延迟 P95" value={formatDurationMs(perf.ttftP95Ms)} />
         <Card label="回合耗时 P50" value={formatDurationMs(perf.durationP50Ms)} />
         <Card label="回合耗时 P95" value={formatDurationMs(perf.durationP95Ms)} />
-        <Card label="输出速度 P50" value={perf.outputTokensPerSecP50 === undefined ? "—" : `${formatTokPerSec(perf.outputTokensPerSecP50)} tok/s`} />
+        <Card label="输出速度" value={perf.outputTokensPerSec === undefined ? "—" : `${formatTokPerSec(perf.outputTokensPerSec)} tok/s`} />
       </div>
     </section>
   );

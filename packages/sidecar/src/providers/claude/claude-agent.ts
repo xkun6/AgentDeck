@@ -632,9 +632,8 @@ export class ClaudeAgentSession implements AgentSession {
   private currentStreamMessageId: string | null = null;
   private contextInputTokens = 0;
   private contextOutputTokens = 0;
-  /** 本回合输出速度（design.md 4.30）：分子 = 已结束消息的输出 token 累计 + 当前消息的累计；分母 = 流式生成段累计时长 */
+  /** 本回合输出速度（design.md 4.30）：按单次模型响应（message）记账，speedMessageTokens = 当前消息 `message_delta.usage.output_tokens` 的累计 */
   private readonly outputSpeed = new OutputSpeedTracker();
-  private speedBaseTokens = 0;
   private speedMessageTokens = 0;
   /** 最近一次已知的上下文窗口上限（result 的 modelUsage / get_context_usage 应答）；切换模型后清掉 */
   private contextWindowMax: number | null = null;
@@ -1367,8 +1366,9 @@ export class ClaudeAgentSession implements AgentSession {
     switch (event.type) {
       case "message_start": {
         this.currentStreamMessageId = event.message?.id ?? null;
-        this.speedBaseTokens += this.speedMessageTokens;
         this.speedMessageTokens = 0;
+        // 以 message_start 为生成起点，与 cc-switch 的首个非元数据 SSE 事件一致
+        if (this.activeTurn) this.outputSpeed.markOutput();
         const usage = event.message?.usage;
         if (usage) {
           this.contextInputTokens =
@@ -1387,8 +1387,9 @@ export class ClaudeAgentSession implements AgentSession {
         }
         return;
       case "message_stop":
-        // 一次模型响应结束：关闭当前生成段（design.md 4.30）
-        this.outputSpeed.markIdle();
+        // 一次模型响应结束：以该消息的输出 token 结算，达门槛才计入合格累计（design.md 4.30）
+        this.outputSpeed.endResponse(this.speedMessageTokens);
+        this.speedMessageTokens = 0;
         this.emitOutputSpeed();
         return;
       case "content_block_start":
@@ -1597,12 +1598,11 @@ export class ClaudeAgentSession implements AgentSession {
     this.captureSession(message.session_id);
 
     const usage = this.convertUsage(message);
-    // 分子取流里累计的 message_delta token，与分母的生成段同口径（不用 result 的 usage.outputTokens）
-    this.outputSpeed.markIdle();
-    const finalSpeed = this.outputSpeed.speed(this.speedBaseTokens + this.speedMessageTokens);
-    if (finalSpeed !== undefined) {
-      usage.outputTokensPerSecond = finalSpeed;
-    }
+    // 分子取流里累计的 message_delta token，与分母的生成段同口径（不用 result 的 usage.outputTokens）；
+    // 中断时把未结束的响应收尾，已 message_stop 结束过的响应 token 已清零、不会重复计入
+    this.outputSpeed.endResponse(this.speedMessageTokens);
+    this.speedMessageTokens = 0;
+    Object.assign(usage, this.outputSpeed.finalUsage());
     this.emit({ type: "usage_updated", usage });
     this.cancelRunningTools(turn.turnId);
     this.emitSubagentEvents(
@@ -2025,7 +2025,6 @@ export class ClaudeAgentSession implements AgentSession {
 
   private resetOutputSpeed(): void {
     this.outputSpeed.reset();
-    this.speedBaseTokens = 0;
     this.speedMessageTokens = 0;
   }
 
@@ -2034,7 +2033,7 @@ export class ClaudeAgentSession implements AgentSession {
     if (!this.activeTurn) {
       return;
     }
-    const value = this.outputSpeed.throttledSpeed(this.speedBaseTokens + this.speedMessageTokens);
+    const value = this.outputSpeed.throttledSpeed();
     if (value !== undefined) {
       this.emit({ type: "usage_updated", usage: { outputTokensPerSecond: value } });
     }

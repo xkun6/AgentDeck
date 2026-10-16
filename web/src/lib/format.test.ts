@@ -80,12 +80,15 @@ describe("formatDurationMs", () => {
 });
 
 describe("formatTokPerSec", () => {
-  it("uses one decimal below 100", () => {
-    expect(formatTokPerSec(82.4)).toBe("82.4");
-  });
-  it("rounds to integer at and above 100", () => {
+  it("与 cc-switch 一致：≥1 取整", () => {
+    expect(formatTokPerSec(82.4)).toBe("82");
+    expect(formatTokPerSec(1)).toBe("1");
     expect(formatTokPerSec(100)).toBe("100");
     expect(formatTokPerSec(456.7)).toBe("457");
+  });
+  it("不足 1 保留 1 位小数", () => {
+    expect(formatTokPerSec(0.54)).toBe("0.5");
+    expect(formatTokPerSec(0)).toBe("0.0");
   });
 });
 

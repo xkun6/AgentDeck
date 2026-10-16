@@ -192,6 +192,10 @@ export interface AgentUsage {
   contextWindowUsedTokens?: number;
   /** 本回合输出速度 tok/s（design.md 4.30）；回合中实时、结束时为最终值，不计入 totalUsage */
   outputTokensPerSecond?: number;
+  /** 本回合合格响应的输出 token 之和；只在 turn_completed 给出（design.md 4.30），不计入 totalUsage */
+  speedOutputTokens?: number;
+  /** 本回合合格响应的生成时长之和（ms）；只在 turn_completed 给出（design.md 4.30），不计入 totalUsage */
+  speedGenerationMs?: number;
 }
 
 /** 额度窗口（design.md 4.30） */
@@ -757,6 +761,10 @@ export interface UsageTurnRecord {
   durationMs?: number;
   /** turn_started → 本回合第一个 assistant_message */
   ttftMs?: number;
+  /** 本回合合格响应的输出 token 之和（取自 turn_completed.usage，design.md 4.30） */
+  speedOutputTokens?: number;
+  /** 本回合合格响应的生成时长之和（ms，取自 turn_completed.usage，design.md 4.30） */
+  speedGenerationMs?: number;
 }
 
 export interface UsageSummary {
@@ -811,7 +819,8 @@ export interface UsageSummary {
     ttftP95Ms?: number;
     durationP50Ms?: number;
     durationP95Ms?: number;
-    outputTokensPerSecP50?: number;
+    /** Σ speedOutputTokens ÷ Σ speedGenerationMs（design.md 4.20 / 4.30）；没有数据时缺省 */
+    outputTokensPerSec?: number;
   };
 }
 

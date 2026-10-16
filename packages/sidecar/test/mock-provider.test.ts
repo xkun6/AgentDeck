@@ -356,7 +356,8 @@ describe("MockAgentSession 输出速度（design.md 4.30）", () => {
       // 每个 reasoning 块推进 1 秒（模拟模型输出耗时），共 3 秒
       if (e.type === "timeline" && e.item.type === "reasoning") now += 1000;
     });
-    await session.startTurn("/approve go");
+    // 回复为「Mock 回复：」加原文，原文补长到回复 ≥100 token，响应才合格
+    await session.startTurn(`/approve ${"字".repeat(100)}`);
     await waitUntil(() => events.some((e) => e.type === "permission_requested"));
     const request = events.find((e) => e.type === "permission_requested");
     if (request?.type !== "permission_requested") throw new Error("缺少审批请求");
@@ -370,16 +371,36 @@ describe("MockAgentSession 输出速度（design.md 4.30）", () => {
     expect(outputTokens).toBeGreaterThan(0);
     // 总耗时 63 秒，扣除 60 秒审批等待后只剩 3 秒
     expect(done.usage?.outputTokensPerSecond).toBe(Math.round((outputTokens / 3) * 10) / 10);
+    // 合格累计与速度一致：整回合一次响应，token = 输出，生成时长 3000ms
+    expect(done.usage).toMatchObject({ speedOutputTokens: outputTokens, speedGenerationMs: 3000 });
   });
 
-  test("耗时不足 1 秒不带速度", async () => {
+  test("输出不足 100 token 或生成不足 100ms 不带速度", async () => {
     let now = 0;
     const session = new MockAgentSession({ cwd: "." }, null, () => now);
     const events = collect(session);
+    session.subscribe((e) => {
+      // 每个 reasoning 块推进 1 秒，共 3 秒生成时长
+      if (e.type === "timeline" && e.item.type === "reasoning") now += 1000;
+    });
+    // 3 秒但回复不足 100 token：不合格
     await session.startTurn("hello");
     await waitUntil(() => events.some((e) => e.type === "turn_completed"));
     const done = events.find((e) => e.type === "turn_completed");
     if (done?.type !== "turn_completed") throw new Error("缺少 turn_completed");
     expect(done.usage?.outputTokensPerSecond).toBeUndefined();
+    expect(done.usage).not.toHaveProperty("speedOutputTokens");
+    expect(done.usage).not.toHaveProperty("speedGenerationMs");
+
+    // 回复 ≥100 token 但时钟不动（生成 0ms，不足 100ms）：不合格
+    const frozen = new MockAgentSession({ cwd: "." }, null, () => 0);
+    const frozenEvents = collect(frozen);
+    await frozen.startTurn("字".repeat(100));
+    await waitUntil(() => frozenEvents.some((e) => e.type === "turn_completed"));
+    const frozenDone = frozenEvents.find((e) => e.type === "turn_completed");
+    if (frozenDone?.type !== "turn_completed") throw new Error("缺少 turn_completed");
+    expect(frozenDone.usage?.outputTokens).toBeGreaterThanOrEqual(100);
+    expect(frozenDone.usage?.outputTokensPerSecond).toBeUndefined();
+    expect(frozenDone.usage).not.toHaveProperty("speedGenerationMs");
   });
 });
