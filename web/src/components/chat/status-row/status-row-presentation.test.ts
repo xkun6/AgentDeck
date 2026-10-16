@@ -87,22 +87,24 @@ describe("重置时间格式", () => {
 });
 
 describe("输出速度格式与空闲弱化", () => {
-  it("保留 1 位小数，≥ 100 取整", () => {
-    expect(formatTokensPerSecond(42.46)).toBe("42.5 tok/s");
-    expect(formatTokensPerSecond(8)).toBe("8.0 tok/s");
-    expect(formatTokensPerSecond(99.94)).toBe("99.9 tok/s");
-    expect(formatTokensPerSecond(100.4)).toBe("100 tok/s");
+  it("≥ 1 取整，不足 1 保留 1 位小数", () => {
+    expect(formatTokensPerSecond(42.46)).toBe("42 tok/s");
+    expect(formatTokensPerSecond(8)).toBe("8 tok/s");
+    expect(formatTokensPerSecond(99.94)).toBe("100 tok/s");
+    expect(formatTokensPerSecond(1)).toBe("1 tok/s");
+    expect(formatTokensPerSecond(0.96)).toBe("1.0 tok/s");
+    expect(formatTokensPerSecond(0.54)).toBe("0.5 tok/s");
     expect(formatTokensPerSecond(1234.6)).toBe("1235 tok/s");
   });
 
   it("回合中实时值不弱化；空闲为上一回合最终值（弱化 + 悬停提示）；没有值时为 null", () => {
     expect(speedChipState({ outputTokensPerSecond: 50 }, true)).toEqual({
-      text: "50.0 tok/s",
+      text: "50 tok/s",
       idle: false,
       title: "当前输出速度",
     });
     expect(speedChipState({ outputTokensPerSecond: 50 }, false)).toEqual({
-      text: "50.0 tok/s",
+      text: "50 tok/s",
       idle: true,
       title: "上一回合平均输出速度",
     });

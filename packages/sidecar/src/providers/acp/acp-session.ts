@@ -771,11 +771,9 @@ export class AcpAgentSession implements AgentSession {
     const { inputTokens: _input, outputTokens: _output, cachedInputTokens: _cached, ...rest } =
       this.usage;
     const turnUsage: AgentUsage = { ...rest, ...(response.usage ? fromAcpUsage(response.usage) : {}) };
-    // 输出速度只在回合结束用本轮应答的输出 token 算最终值（design.md 4.30）
-    turn.speed.markIdle();
-    const speed = response.usage && turnUsage.outputTokens !== undefined
-      ? turn.speed.speed(turnUsage.outputTokens)
-      : undefined;
+    // 输出速度只在回合结束算最终值：协议只有回合级用量，整回合按一次响应结算；没有 usage 不给值（design.md 4.30）
+    turn.speed.endResponse(response.usage ? (turnUsage.outputTokens ?? 0) : 0);
+    const speed = response.usage && turnUsage.outputTokens !== undefined ? turn.speed.speed() : undefined;
     if (speed !== undefined) turnUsage.outputTokensPerSecond = speed;
     const usage = Object.keys(turnUsage).length > 0 ? turnUsage : undefined;
     this.finishTurn(turn, { type: "turn_completed", turnId, ...(usage ? { usage } : {}) });

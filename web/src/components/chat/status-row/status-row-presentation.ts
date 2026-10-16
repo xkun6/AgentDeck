@@ -103,9 +103,9 @@ export function formatResetTime(resetsAt: number, now: number): string {
 // 输出速度
 // ---------------------------------------------------------------------------
 
-/** 保留 1 位小数，≥ 100 取整 */
+/** ≥ 1 取整，不足 1 保留 1 位小数（与 cc-switch 一致） */
 export function formatTokensPerSecond(value: number): string {
-  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} tok/s`;
+  return `${value >= 1 ? Math.round(value) : value.toFixed(1)} tok/s`;
 }
 
 export interface SpeedChipState {

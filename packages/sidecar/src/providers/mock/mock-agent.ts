@@ -693,8 +693,8 @@ export class MockAgentSession implements AgentSession {
     }
 
     const outputTokens = Array.from(reply).length;
-    this.outputSpeed.markIdle();
-    const finalSpeed = this.outputSpeed.speed(outputTokens);
+    this.outputSpeed.endResponse(outputTokens);
+    const finalSpeed = this.outputSpeed.speed();
     const usage = {
       inputTokens: Array.from(text).length,
       outputTokens,

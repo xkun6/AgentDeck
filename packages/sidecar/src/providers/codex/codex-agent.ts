@@ -840,6 +840,8 @@ interface ActiveTurn {
   tokens?: CodexTurnTokens;
   /** 输出速度（design.md 4.30） */
   speed: OutputSpeedTracker;
+  /** 已作为响应结束计入速度的本回合输出 token */
+  speedCommittedOutput: number;
   /** itemId → 已流式发出的 assistant 文本 */
   agentText: Map<string, string>;
   /** itemId → 已流式发出的 reasoning 文本与来源（summary / raw，先到者为准） */
@@ -1076,6 +1078,7 @@ export class CodexAgentSession implements AgentSession {
       nativeTurnIdWaiters: [],
       finished: false,
       speed: new OutputSpeedTracker(),
+      speedCommittedOutput: 0,
       agentText: new Map(),
       reasoning: new Map(),
       lastError: null,
@@ -1773,11 +1776,16 @@ export class CodexAgentSession implements AgentSession {
         if (usage) {
           turn.usage = usage;
           turn.tokens = updateCodexTurnTokens(turn.tokens, tokenUsage);
-          // 每次采样（一次模型响应）结束发一次：关闭当前生成段
-          turn.speed.markIdle();
           // 本轮输出 token = 最新 total − 起点（与 5.3 的本轮合计同口径）
           const turnOutput = codexTurnCompletedUsage(usage, turn.tokens)?.outputTokens;
-          const speed = turnOutput === undefined ? undefined : turn.speed.speed(turnOutput);
+          if (turnOutput !== undefined) {
+            // 每次采样（一次模型响应）结束发一次：该响应的输出 = 本轮输出相对上次的增量
+            turn.speed.endResponse(turnOutput - turn.speedCommittedOutput);
+            turn.speedCommittedOutput = turnOutput;
+          } else {
+            turn.speed.markIdle();
+          }
+          const speed = turn.speed.speed();
           this.emit({
             type: "usage_updated",
             usage: speed !== undefined ? { ...usage, outputTokensPerSecond: speed } : usage,
@@ -1940,8 +1948,13 @@ export class CodexAgentSession implements AgentSession {
       return;
     }
     const baseUsage = codexTurnCompletedUsage(turn.usage, turn.tokens);
-    turn.speed.markIdle();
-    const finalSpeed = baseUsage?.outputTokens === undefined ? undefined : turn.speed.speed(baseUsage.outputTokens);
+    // 回合结束：把尚未结算的剩余增量作为最后一次响应；已结算过的响应不会重复计入
+    if (baseUsage?.outputTokens !== undefined) {
+      turn.speed.endResponse(baseUsage.outputTokens - turn.speedCommittedOutput);
+    } else {
+      turn.speed.markIdle();
+    }
+    const finalSpeed = turn.speed.speed();
     const usage =
       baseUsage && finalSpeed !== undefined ? { ...baseUsage, outputTokensPerSecond: finalSpeed } : baseUsage;
     this.finishTurn(turn, {

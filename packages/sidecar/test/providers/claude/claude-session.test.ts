@@ -2901,7 +2901,7 @@ describe("额度事件与输出速度（design.md 4.30）", () => {
   const inputJsonDelta = () =>
     streamEvent({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } });
 
-  test("输出速度：只累计流式生成段，message_stop 才下发（每秒最多一次），sidechain 不计，result 用流里累计的 token 给最终值", async () => {
+  test("输出速度：按单次响应记账，≥100 token 且 ≥100ms 才合格，message_stop 才下发（每秒最多一次），短响应不拉低，sidechain 不计，result 把未结束的响应收尾", async () => {
     let now = 1_000_000;
     const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
@@ -2922,42 +2922,46 @@ describe("额度事件与输出速度（design.md 4.30）", () => {
             ? [e.usage]
             : [],
         );
-      // m1：生成 0.5 秒（累计不足 1 秒）后 message_stop：不计算
+      // m1：生成 0.5 秒、50 token（<100 token，不合格）后 message_stop：没有合格响应，不下发
       await feed(msg.init(), msg.streamStart("m1"), msg.textDelta("你好"));
       await waitUntil(() => events.some((e) => e.type === "timeline"));
       now += 500;
       await feed(messageDelta(50), messageStop());
       expect(speeds()).toHaveLength(0);
-      // 间隔 1 秒（首 token 等待）不计入；m2 生成 1.5 秒，累计 2 秒，token 50 + 100 = 150 → 75
+      // 间隔 1 秒（首 token 等待）不计入；m2 生成 1.5 秒、100 token（合格）：100 ÷ 1.5 = 66.7
       now += 1000;
       await feed(msg.streamStart("m2"), msg.textDelta("再来"));
       now += 1500;
       await feed(messageDelta(100), messageStop());
       await waitUntil(() => speeds().length === 1);
-      expect(speeds()[0]).toEqual({ outputTokensPerSecond: 75 });
+      expect(speeds()[0]).toEqual({ outputTokensPerSecond: 66.7 });
       // 子代理 sidechain 的 message_delta / message_stop 不计入
       await feed(messageDelta(9999, "toolu_sub"));
-      // m3：距上次下发不足 1 秒：节流
+      // m3：生成 0.2 秒、200 token（合格）；距上次下发不足 1 秒：节流，不下发
       now += 500;
-      await feed(msg.streamStart("m3"), blockStart("thinking"), messageDelta(30));
+      await feed(msg.streamStart("m3"), blockStart("thinking"), messageDelta(200));
       now += 200;
       await feed(messageStop());
       expect(speeds()).toHaveLength(1);
-      // m4（只有工具参数）：累计生成 2 + 0.2 + 0.5 = 2.7 秒，token 150 + 30 + 20 = 200 → 74.1
+      // m4（只有工具参数、20 token）不合格，不进入 Σ，也不拉低速度：
+      // Σ token ÷ Σ 时长 = (100 + 200) ÷ (1.5 + 0.2) = 176.5（若 m4 的 0.5 秒也计入会是 300 ÷ 2.2 = 136.4）
       now += 300;
       await feed(msg.streamStart("m4"), blockStart("tool_use"), messageDelta(20));
       now += 500;
       await feed(messageStop());
       await waitUntil(() => speeds().length === 2);
-      expect(speeds()[1]).toEqual({ outputTokensPerSecond: 74.1 });
-      // result：工具执行很久，不计入分母；分子取流里累计的 200，而不是 result.usage.output_tokens
-      now += 60_000;
+      expect(speeds()[1]).toEqual({ outputTokensPerSecond: 176.5 });
+      // m5 被中断，没有 message_stop：生成 2 秒、300 token（合格）。result 把它收尾，
+      // 最终 (100 + 200 + 300) ÷ (1.5 + 0.2 + 2) = 162.2；分子取流里累计的 token，而不是 result.usage.output_tokens
+      now += 1000;
+      await feed(msg.streamStart("m5"), msg.textDelta("中断"), messageDelta(300));
+      now += 2000;
       const result = msg.result(user.uuid);
       result.usage.output_tokens = 400;
       await feed(result);
       await waitUntil(() => terminalEvents(events).length === 1);
       const done = terminalEvents(events)[0]!;
-      expect(done).toMatchObject({ type: "turn_completed", usage: { outputTokens: 400, outputTokensPerSecond: 74.1 } });
+      expect(done).toMatchObject({ type: "turn_completed", usage: { outputTokens: 400, outputTokensPerSecond: 162.2 } });
     } finally {
       spy.mockRestore();
     }

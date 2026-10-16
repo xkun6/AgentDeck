@@ -159,16 +159,19 @@ describe("CodexAgentSession（假 app-server）", () => {
       { id: "secondary", label: "每周", usedPercent: 60 },
     ]);
 
-    // 首个输出之后 1.2 秒到达 20 个输出 token：速度 ≈ 16.7，既出现在回合中的 usage_updated，也出现在最终 usage
+    // 两次响应：首个输出之后 1.2 秒到达 200 个输出 token（合格，≥100 token 且 ≥100ms），速度 ≈ 200 ÷ 1.2 = 166.7，
+    // 出现在回合中的 usage_updated
     const updated = events.flatMap((e) => (e.type === "usage_updated" ? [e.usage] : []));
     const speed = updated.find((u) => u.outputTokensPerSecond !== undefined)?.outputTokensPerSecond;
-    expect(speed).toBeGreaterThan(5);
-    expect(speed).toBeLessThanOrEqual(20);
+    expect(speed).toBeGreaterThan(100);
+    expect(speed).toBeLessThanOrEqual(200);
+    // 第二次响应 0.6 秒内到达 300 个 token（累计 500，增量 300，同样合格）：
+    // 最终 usage 为 Σ token ÷ Σ 时长 = (200 + 300) ÷ (1.2 + 0.6) = 277.8（考虑调度抖动给出区间）
     const done = events.find((e) => e.type === "turn_completed");
-    expect(done?.type === "turn_completed" ? done.usage : undefined).toMatchObject({ outputTokens: 20 });
+    expect(done?.type === "turn_completed" ? done.usage : undefined).toMatchObject({ outputTokens: 500 });
     const finalSpeed = done?.type === "turn_completed" ? done.usage?.outputTokensPerSecond : undefined;
-    expect(finalSpeed).toBeGreaterThan(5);
-    expect(finalSpeed).toBeLessThanOrEqual(20);
+    expect(finalSpeed).toBeGreaterThan(150);
+    expect(finalSpeed).toBeLessThanOrEqual(290);
   });
 
   test("握手 + thread/start + 增量文本 + reasoning + usage + turn_completed", async () => {

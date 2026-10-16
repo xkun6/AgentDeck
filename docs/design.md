@@ -1035,7 +1035,7 @@ interface BoardTask {
   - 点击展开弹层（与子代理 / 后台任务弹层同一套样式与开合行为）：按顺序列出每一步，状态图标区分已完成 / 进行中 / 未开始，已完成项文字弱化；列表过长时弹层内滚动。
   - 没有任何 `todo` 项时不显示；新会话或分叉（4.23）后以新会话自身时间线为准。
 - 「步骤」纯前端实现，不改协议。
-- 「速度」芯片显示输出速度「N tok/s」（取快照 `lastUsage.outputTokensPerSecond`，保留 1 位小数、≥100 取整）：回合进行中显示实时值，空闲时显示上一回合的最终值（文字弱化，悬停提示「上一回合平均输出速度」）；没有值时隐藏。
+- 「速度」芯片显示输出速度「N tok/s」（取快照 `lastUsage.outputTokensPerSecond`，≥1 取整、不足 1 保留 1 位小数，与 cc-switch 一致）：回合进行中显示实时值，空闲时显示上一回合的最终值（文字弱化，悬停提示「上一回合平均输出速度」）；没有值时隐藏。
 
 ### 4.30 额度（用量限制）显示
 
@@ -1064,10 +1064,10 @@ interface AgentRateLimits {
 - 快照没有 `rateLimits` 时隐藏。额度为账户级：每个会话显示自己快照中最近收到的值。
 
 **输出速度（tok/s）**：
-- `AgentUsage` 增加 `outputTokensPerSecond?: number`：**纯生成速度** = 本回合输出 token 数 ÷ 模型实际在流式输出的累计时长（秒）。**生成段** = 一次模型响应从首个输出（任意类型：思考块、文字、工具参数）到达，到该响应结束；累计时长 = 本回合所有已结束生成段之和（加上进行中的那一段）。首 token 等待、工具执行、审批等待都在生成段之外，不计入分母；累计生成时长不足 1 秒时不计算。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker`：`markOutput()` 开段（段内重复调用无效）、`markIdle()` 闭段，`observe(event)` 在各自的事件出口（`emit`）收到 `permission_requested` 时自动闭段。开段 / 闭段事件各 provider 不同，见下。随 `usage_updated`（回合中，最多每秒一次）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。
-- Claude：主线程（不含子代理 sidechain）的流式事件驱动计时：`content_block_start` 与任何 `content_block_delta`（文字 / 思考 / 签名 / 工具参数等全部类型）开段，`message_stop` 闭段并下发一次只带 `outputTokensPerSecond` 的 `usage_updated`（节流每秒最多一次）；因此新版 Claude Code 不下发思考文字时，思考块的 `content_block_start` 同样开段。分子取流式 `message_delta.usage.output_tokens`（该消息内累计）跨消息累加的本回合已输出 token（含隐藏思考与工具参数，与分母的生成段同口径）；result 时先闭段，再用同一累计值算最终速度，不使用 result 自带的 `usage.outputTokens`。依赖 CLI 始终带 `--include-partial-messages`。
-- Codex：assistant_message / reasoning 时间线项、`item/started` 的 reasoning / agentMessage 项以及各类输出 delta 通知（agentMessage / reasoning 摘要 / 正文 delta）开段；`thread/tokenUsage/updated`（每次采样结束发一次）与回合结束闭段；分子为本回合 `thread/tokenUsage/updated` 中输出 token 的增量（与 5.3 的本轮合计同口径），只在回合结束才有用量时只给最终值。
-- ACP：agent_message_chunk / agent_thought_chunk 开段；新的 `tool_call` 通知到达与回合结束闭段；速度只在回合结束用 `PromptResponse.usage` 的输出 token 算最终值（没有 usage 则不给）。
+- `AgentUsage` 增加 `outputTokensPerSecond?: number`：**纯生成速度**，口径对齐 cc-switch（`src/components/usage/format.ts` 的 `isSpeedEligible` / `getAggregateTokensPerSecond`）。按**单次模型响应**记账：一次响应的生成时长 = 从首个输出（任意类型：思考块、文字、工具参数）到达，到该响应结束；首 token 等待、工具执行、审批等待都不计入。只有**输出 ≥ 100 token 且生成时长 ≥ 100 ms** 的响应才算「合格」（排除工具调用这类短响应与中转站缓冲后一次性吐出的突发）；本回合速度 = Σ合格响应的输出 token ÷ Σ合格响应的生成时长（不是逐条平均），没有合格响应时不给值。三个 provider 共用 `providers/shared/output-speed.ts` 的 `OutputSpeedTracker`：`markOutput()` 开段（段内重复调用无效）、`markIdle()` 闭段（同一响应可被审批等切成多段，时长累加），`endResponse(outputTokens)` 结束一次响应并按门槛决定是否计入合格累计；`observe(event)` 在各自的事件出口（`emit`）收到 `permission_requested` 时自动闭段。回合中的实时值 = 合格累计 + 进行中的响应（它已达门槛时才计入）。开段 / 闭段 / 结束响应的事件各 provider 不同，见下。随 `usage_updated`（回合中，最多每秒一次）与 `turn_completed.usage`（最终值）下发，快照 `lastUsage` 浅合并后保留到下一回合更新为止；不计入 `totalUsage`。与 cc-switch 的剩余差异：测量点是 CLI 输出管道而非网络层 SSE；只统计主线程，不含子代理与 CLI 旁路请求。
+- Claude：主线程（不含子代理 sidechain）的流式事件驱动计时：`message_start`、`content_block_start` 与任何 `content_block_delta`（文字 / 思考 / 签名 / 工具参数等全部类型）开段（以 `message_start` 为起点，与 cc-switch 的首个非元数据 SSE 事件一致），`message_stop` 以该消息的 `message_delta.usage.output_tokens`（消息内累计，含隐藏思考与工具参数）结束响应，并下发一次只带 `outputTokensPerSecond` 的 `usage_updated`（节流每秒最多一次）。result 时若仍有未结束的响应（如中断）先以当前累计结束它，再给最终速度，不使用 result 自带的 `usage.outputTokens`。依赖 CLI 始终带 `--include-partial-messages`。
+- Codex：assistant_message / reasoning 时间线项、`item/started` 的 reasoning / agentMessage 项以及各类输出 delta 通知（agentMessage / reasoning 摘要 / 正文 delta）开段；`thread/tokenUsage/updated`（每次采样结束发一次）结束一次响应，该响应的输出 token = 本回合输出 token（与 5.3 的本轮合计同口径）相对上次结束时的增量；回合结束时把剩余增量作为最后一次响应结束。只在回合结束才有用量时整回合按一次响应算。
+- ACP：agent_message_chunk / agent_thought_chunk 开段；新的 `tool_call` 通知到达闭段；协议只有回合级用量，整回合按一次响应算：回合结束时以 `PromptResponse.usage` 的输出 token 结束响应并给最终值（没有 usage 则不给）。
 
 ### 4.31 远程网关（安卓 App 接入）
 

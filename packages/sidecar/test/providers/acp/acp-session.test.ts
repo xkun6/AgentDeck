@@ -142,19 +142,20 @@ describe("AcpAgentSession 回合", () => {
     });
   });
 
-  test("输出速度只在回合结束用 PromptResponse.usage 的输出 token 算最终值；首个输出不足 1 秒不给（design.md 4.30）", async () => {
+  test("输出速度只在回合结束用 PromptResponse.usage 的输出 token 整回合算一次；不足 100 token 或 100ms 不给（design.md 4.30）", async () => {
     const { session, events } = await open();
     await session.startTurn("scenario:slowecho");
     await waitForTerminal(events);
     const done = terminalEvents(events).at(-1);
     const usage = done?.type === "turn_completed" ? done.usage : undefined;
-    expect(usage?.outputTokens).toBe(20);
-    expect(usage?.outputTokensPerSecond).toBeGreaterThan(5);
-    expect(usage?.outputTokensPerSecond).toBeLessThanOrEqual(20);
+    expect(usage?.outputTokens).toBe(200);
+    // 200 token ÷ 1.2 秒 = 166.7（合格：≥100 token 且 ≥100ms）
+    expect(usage?.outputTokensPerSecond).toBeGreaterThan(100);
+    expect(usage?.outputTokensPerSecond).toBeLessThanOrEqual(200);
     // 回合中的 usage_updated 不带速度
     expect(events.some((e) => e.type === "usage_updated" && e.usage.outputTokensPerSecond !== undefined)).toBe(false);
 
-    // 瞬间结束的回合（echo）首个输出不足 1 秒：没有速度
+    // 瞬间结束的回合（echo，20 token、生成不足 100ms）不合格：没有速度
     await session.startTurn("你好");
     await waitForTerminal(events, 2);
     const second = terminalEvents(events).at(-1);
