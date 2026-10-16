@@ -21,6 +21,8 @@ vi.mock("@/hooks/use-agent-session", () => ({
     deleteSession: vi.fn(),
   }),
   humanizeSidecarError: (error: unknown) => String(error),
+  isInactiveAgent: (agent: { status?: string } | null | undefined) =>
+    agent?.status === "dormant" || agent?.status === "closed",
 }));
 vi.mock("@/hooks/use-agent-catalog", () => ({ useAgentProviders: () => ({ data: undefined }) }));
 

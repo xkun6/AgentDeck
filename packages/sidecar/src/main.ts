@@ -235,6 +235,7 @@ async function main(): Promise<void> {
     usage,
     snapshots,
     interop,
+    idleReclaim: () => settings.get().idleReclaim,
     ...(store ? { store } : {}),
   });
   manager.subscribe({ onRemoved: (agentId) => interop.forget(agentId) });

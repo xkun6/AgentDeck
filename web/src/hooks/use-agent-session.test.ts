@@ -291,6 +291,18 @@ describe("思考强度（design.md 4.10）", () => {
   });
 });
 
+describe("agent.reclaim（design.md 4.34）", () => {
+  it("reclaimSession 调 agent.reclaim 并把 dormant 快照写入 store", async () => {
+    const store = createStore();
+    store.set(upsertAgentSnapshotAtom, snapshot({ status: "idle" }));
+    const client = fakeClient(async () => ({ agent: snapshot({ status: "dormant" }) }));
+    const agent = await createAgentSessionActions(client, store).reclaimSession(AGENT);
+    expect(client.request).toHaveBeenCalledWith("agent.reclaim", { agentId: AGENT });
+    expect(agent.status).toBe("dormant");
+    expect(store.get(agentSnapshotsAtom)[AGENT]?.status).toBe("dormant");
+  });
+});
+
 describe("agent.update（design.md 4.17）", () => {
   it("updateSession 调 agent.update 并把结果写入快照；title 为 null 时清除自定义标题", async () => {
     const store = createStore();

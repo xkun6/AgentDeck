@@ -834,12 +834,15 @@ export interface SidecarSettings {
   interop: { enabled: boolean };
   /** 4.31 远程网关（手机接入）；默认关闭，端口 1024–65535 */
   remote: { enabled: boolean; port: number };
+  /** 4.34 空闲会话回收：enabled 默认 true；idleMinutes 默认 15，整数 1–1440 */
+  idleReclaim: { enabled: boolean; idleMinutes: number };
 }
 
 export interface SidecarSettingsPatch {
   snapshots?: Partial<SidecarSettings["snapshots"]>;
   interop?: Partial<SidecarSettings["interop"]>;
   remote?: Partial<SidecarSettings["remote"]>;
+  idleReclaim?: Partial<SidecarSettings["idleReclaim"]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -972,6 +975,7 @@ export const AGENT_RPC_METHODS = {
   agentSetMode: "agent.setMode",
   agentSetThinking: "agent.setThinking",
   agentClose: "agent.close",
+  agentReclaim: "agent.reclaim",
   agentTimeline: "agent.timeline",
   agentDelete: "agent.delete",
   agentUpdate: "agent.update",
@@ -1180,6 +1184,8 @@ export interface AgentRpcMethods {
     result: { agent: AgentSnapshot; notice?: string };
   };
   "agent.close": { params: { agentId: string }; result: Record<string, never> };
+  /** 结束 provider 进程、会话转为 dormant，下次发送自动恢复（design.md 4.34） */
+  "agent.reclaim": { params: { agentId: string }; result: { agent: AgentSnapshot } };
   /**
    * 时间线读取。只给 `sinceSeq` 或不带参数：返回其后全部条目（不带 hasOlder）。
    * 给 `limit`（1–2000）为向前分页（design.md 4.31）：从 `beforeSeq`（缺省 = 末尾之后）往前取至少 limit 条，

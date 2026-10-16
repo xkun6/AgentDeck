@@ -16,9 +16,12 @@ stubRadixGlobals();
 const updateSession = vi.fn(async (_id: string, _patch: unknown) => ({}));
 const fetchAllTimelineEntries = vi.fn(async (_id: string) => [] as unknown[]);
 const forkSession = vi.fn(async (id: string, _options?: unknown) => ({ id: `${id}-fork` }));
+const reclaimSession = vi.fn(async (id: string) => ({ id }));
 vi.mock("@/hooks/use-agent-session", () => ({
-  useAgentSession: () => ({ updateSession, fetchAllTimelineEntries, forkSession, deleteSession: vi.fn() }),
+  useAgentSession: () => ({ updateSession, fetchAllTimelineEntries, forkSession, reclaimSession, deleteSession: vi.fn() }),
   humanizeSidecarError: (error: unknown) => String(error),
+  isInactiveAgent: (agent: { status?: string } | null | undefined) =>
+    agent?.status === "dormant" || agent?.status === "closed",
 }));
 vi.mock("@/hooks/use-agent-catalog", () => ({ useAgentProviders: () => ({ data: undefined }) }));
 
@@ -111,6 +114,45 @@ describe("会话右键菜单（4.17）", () => {
     fireEvent.contextMenu(screen.getByText("会话-b"));
     const item = await screen.findByRole("menuitem", { name: "分叉会话" });
     expect(item.getAttribute("aria-disabled") === "true" || item.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("回收后台进程（4.34）：已加载会话可回收；有后台活动先确认；运行中 / 不可恢复禁用；未加载不显示", async () => {
+    renderSidebar([agent("a", { resumable: true })]);
+    fireEvent.contextMenu(screen.getByText("会话-a"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "回收后台进程" }));
+    await waitFor(() => expect(reclaimSession).toHaveBeenCalledWith("a"));
+    cleanup();
+
+    reclaimSession.mockClear();
+    renderSidebar([agent("b", { resumable: true, backgroundActive: true })]);
+    fireEvent.contextMenu(screen.getByText("会话-b"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "回收后台进程" }));
+    expect(await screen.findByText(/回收会将其结束/)).toBeTruthy();
+    expect(reclaimSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "回收" }));
+    await waitFor(() => expect(reclaimSession).toHaveBeenCalledWith("b"));
+    cleanup();
+
+    for (const patch of [{ status: "running" as const, resumable: true }, { resumable: false }]) {
+      renderSidebar([agent("c", patch)]);
+      fireEvent.contextMenu(screen.getByText("会话-c"));
+      const item = await screen.findByRole("menuitem", { name: "回收后台进程" });
+      expect(item.getAttribute("aria-disabled") === "true" || item.hasAttribute("data-disabled")).toBe(true);
+      cleanup();
+    }
+
+    renderSidebar([agent("d", { status: "dormant", resumable: true })]);
+    fireEvent.contextMenu(screen.getByText("会话-d"));
+    await screen.findByRole("menuitem", { name: "分叉会话" });
+    expect(screen.queryByRole("menuitem", { name: "回收后台进程" })).toBeNull();
+  });
+
+  it("回收失败时用提示框反馈", async () => {
+    reclaimSession.mockRejectedValueOnce(new Error("该会话不支持恢复"));
+    renderSidebar([agent("a", { resumable: true })]);
+    fireEvent.contextMenu(screen.getByText("会话-a"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "回收后台进程" }));
+    expect(await screen.findByText(/该会话不支持恢复/)).toBeTruthy();
   });
 
   it("分叉失败时用提示框反馈", async () => {

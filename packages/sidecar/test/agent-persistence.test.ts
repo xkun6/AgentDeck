@@ -13,7 +13,13 @@ import type {
 } from "@agentdeck/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AgentManager, RESUME_NOT_SUPPORTED_MESSAGE, toPreview } from "../src/agent/agent-manager.js";
+import {
+  AgentManager,
+  RECLAIM_NOT_SUPPORTED_MESSAGE,
+  RESUME_NOT_SUPPORTED_MESSAGE,
+  toPreview,
+  type AgentManagerOptions,
+} from "../src/agent/agent-manager.js";
 import { AgentStore } from "../src/agent/agent-store.js";
 import type { AgentClient, AgentSession } from "../src/agent/types.js";
 import { CLAUDE_MODES } from "../src/providers/claude/claude-agent.js";
@@ -135,12 +141,18 @@ function fakeClient(options: FakeClientOptions = {}) {
   return { client, sessions, resumeCalls, catalogCalls };
 }
 
-function createManager(client: AgentClient, dataDir?: string, now?: () => number) {
+function createManager(
+  client: AgentClient,
+  dataDir?: string,
+  now?: () => number,
+  idleReclaim?: AgentManagerOptions["idleReclaim"],
+) {
   const store = dataDir ? new AgentStore({ dataDir }) : undefined;
   const manager = new AgentManager({
     registry: { get: (id) => (id === client.provider ? client : undefined) },
     ...(store ? { store } : {}),
     ...(now ? { now } : {}),
+    ...(idleReclaim ? { idleReclaim } : {}),
   });
   managers.push(manager);
   const streams: AgentStreamEnvelope[] = [];
@@ -841,5 +853,127 @@ describe("agent.update：重命名 / 置顶 / 归档（design.md 4.17）", () =>
     await expect(manager.updateAgent("nope", { pinned: true })).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
     });
+  });
+});
+
+describe("空闲会话回收（design.md 4.34）", () => {
+  /** 建一个已跑过一轮（resumable）的 idle 会话，时钟可手动拨动 */
+  async function idleAgent(
+    options: FakeClientOptions = {},
+    reclaimSettings: { enabled: boolean; idleMinutes: number } = { enabled: true, idleMinutes: 15 },
+  ) {
+    const fake = fakeClient(options);
+    const clock = { value: 1_000_000 };
+    const created = createManager(fake.client, undefined, () => clock.value, () => reclaimSettings);
+    const agent = await created.manager.createAgent({ provider: "fake", cwd: "/w" });
+    await runTurn(created.manager, fake.sessions, agent.id, "hi");
+    return { ...fake, ...created, clock, agentId: agent.id };
+  }
+
+  /** 直接改内部快照字段（后台任务 / 挂起审批很难经事件低成本构造） */
+  function internalAgent(manager: AgentManager, agentId: string) {
+    return (manager as unknown as { agents: Map<string, { snapshot: AgentSnapshot }> }).agents.get(agentId)!;
+  }
+
+  test("手动回收：结束 provider 会话、转为 dormant，下次发送自动恢复", async () => {
+    const { manager, sessions, resumeCalls, agentId } = await idleAgent();
+    const reclaimed = await manager.reclaim(agentId);
+    expect(reclaimed.status).toBe("dormant");
+    expect(manager.getAgent(agentId).status).toBe("dormant");
+    expect(sessions[0]!.closed).toBe(true);
+
+    const { turnId } = await manager.sendPrompt(agentId, "回来");
+    expect(resumeCalls).toHaveLength(1);
+    sessions.at(-1)!.emit({ type: "turn_completed", turnId });
+    await vi.waitFor(() => expect(manager.getAgent(agentId).status).toBe("idle"));
+  });
+
+  test("回合进行中 TURN_IN_PROGRESS；不可恢复 NOT_SUPPORTED；已 dormant 原样返回", async () => {
+    const running = await idleAgent();
+    await running.manager.sendPrompt(running.agentId, "go");
+    await expect(running.manager.reclaim(running.agentId)).rejects.toMatchObject({
+      code: "TURN_IN_PROGRESS",
+    });
+
+    const fixed = await idleAgent({ resumable: false });
+    await expect(fixed.manager.reclaim(fixed.agentId)).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      message: RECLAIM_NOT_SUPPORTED_MESSAGE,
+    });
+    expect(fixed.sessions[0]!.closed).toBe(false);
+
+    const dormant = await seedDormant();
+    const snapshot = await dormant.manager.reclaim(dormant.agentId);
+    expect(snapshot.status).toBe("dormant");
+    await expect(dormant.manager.reclaim("nope")).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+  });
+
+  test("自动回收：未达阈值不回收，达到阈值回收，已 dormant 不重复回收", async () => {
+    const { manager, sessions, clock, agentId } = await idleAgent();
+    clock.value += 14 * 60_000;
+    expect(await manager.reclaimIdleAgents()).toEqual([]);
+    expect(manager.getAgent(agentId).status).toBe("idle");
+
+    clock.value += 60_000;
+    expect(await manager.reclaimIdleAgents()).toEqual([agentId]);
+    expect(manager.getAgent(agentId).status).toBe("dormant");
+    expect(sessions[0]!.closed).toBe(true);
+    expect(await manager.reclaimIdleAgents()).toEqual([]);
+  });
+
+  test("自动回收：置顶、关闭开关、挂起审批、后台活动、不可恢复、运行中都跳过", async () => {
+    const pinned = await idleAgent();
+    await pinned.manager.updateAgent(pinned.agentId, { pinned: true });
+    pinned.clock.value += 60 * 60_000;
+    expect(await pinned.manager.reclaimIdleAgents()).toEqual([]);
+    // 置顶只挡自动回收，手动仍可回收
+    expect((await pinned.manager.reclaim(pinned.agentId)).status).toBe("dormant");
+
+    const disabled = await idleAgent({}, { enabled: false, idleMinutes: 15 });
+    disabled.clock.value += 60 * 60_000;
+    expect(await disabled.manager.reclaimIdleAgents()).toEqual([]);
+
+    const background = await idleAgent();
+    internalAgent(background.manager, background.agentId).snapshot.backgroundActive = true;
+    background.clock.value += 60 * 60_000;
+    expect(await background.manager.reclaimIdleAgents()).toEqual([]);
+
+    const approval = await idleAgent();
+    internalAgent(approval.manager, approval.agentId).snapshot.pendingPermissions = [
+      { requestId: "r1", kind: "tool", name: "Bash", title: "Bash" } as unknown as AgentPermissionRequest,
+    ];
+    approval.clock.value += 60 * 60_000;
+    expect(await approval.manager.reclaimIdleAgents()).toEqual([]);
+
+    const fixed = await idleAgent({ resumable: false });
+    fixed.clock.value += 60 * 60_000;
+    expect(await fixed.manager.reclaimIdleAgents()).toEqual([]);
+
+    const busy = await idleAgent();
+    await busy.manager.sendPrompt(busy.agentId, "go");
+    busy.clock.value += 60 * 60_000;
+    expect(await busy.manager.reclaimIdleAgents()).toEqual([]);
+  });
+
+  test("回收进行中并发 send：等关闭完成后恢复，不返回 AGENT_CLOSED", async () => {
+    const { manager, sessions, resumeCalls, agentId } = await idleAgent();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const first = sessions[0]!;
+    first.close = async () => {
+      await gate;
+      first.closed = true;
+    };
+
+    const reclaiming = manager.reclaim(agentId);
+    const sending = manager.sendPrompt(agentId, "并发");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resumeCalls).toHaveLength(0);
+    release();
+    await reclaiming;
+    const { turnId } = await sending;
+    expect(resumeCalls).toHaveLength(1);
+    sessions.at(-1)!.emit({ type: "turn_completed", turnId });
+    await vi.waitFor(() => expect(manager.getAgent(agentId).status).toBe("idle"));
   });
 });
