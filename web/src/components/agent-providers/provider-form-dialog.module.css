@@ -305,7 +305,7 @@
   align-items: center;
 }
 
-/* ── Claude 设置 ──────────────────────────────────────────────────────── */
+/* ── Claude 设置 / Codex 配置（共用） ────────────────────────────────── */
 .settingsText {
   min-height: 128px;
   max-height: 320px;

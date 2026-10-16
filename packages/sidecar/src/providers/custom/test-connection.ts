@@ -3,10 +3,10 @@ import type { ProviderProfile, ProviderTestResult } from "@agentdeck/protocol";
 
 import { findExecutable } from "../../utils/executable-resolution/executable-resolution.js";
 import {
-  deriveCodexEnv,
   mergeClaudeSettings,
   normalizeOpenAiBaseUrl,
   RELAY_NO_KEY_PLACEHOLDER,
+  resolveCodexRelay,
   settingsEnvOf,
 } from "./launch.js";
 import { collectSecrets, redactText } from "./redact.js";
@@ -48,11 +48,14 @@ export function buildProviderTestRequest(profile: ProviderProfile): ProviderTest
     return { url: `${base}/v1/models`, headers };
   }
   if (profile.extends === "codex") {
-    const env = deriveCodexEnv(profile);
-    const base = normalizeOpenAiBaseUrl(profile.baseUrl || env.OPENAI_BASE_URL || OPENAI_DEFAULT_BASE_URL);
+    // 地址：表单 baseUrl > config.toml 生效条目的 base_url（与 Codex 实际请求一致，原样使用）> env.OPENAI_BASE_URL > 默认
+    const relay = resolveCodexRelay(profile);
+    const base = (
+      relay.baseUrl ?? normalizeOpenAiBaseUrl(profile.env?.OPENAI_BASE_URL || OPENAI_DEFAULT_BASE_URL)
+    ).replace(/\/+$/, "");
     const headers: Record<string, string> = {};
-    if (env.OPENAI_API_KEY) {
-      headers.authorization = `Bearer ${env.OPENAI_API_KEY}`;
+    if (relay.apiKey) {
+      headers.authorization = `Bearer ${relay.apiKey}`;
     }
     return { url: `${base}/models`, headers };
   }

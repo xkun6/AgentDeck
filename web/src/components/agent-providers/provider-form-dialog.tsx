@@ -244,6 +244,10 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
   const settingsParse = parseSettingsText(form.settingsText);
   const settingsInvalid = isClaude && settingsParse.kind === "error";
   const hasClaudeSettings = isClaude && settingsParse.kind === "ok";
+  // auth.json 同样实时校验（config.toml 由 sidecar 校验，错误经 issues 就地显示）
+  const isCodex = form.extends === "codex";
+  const codexAuthParse = parseSettingsText(form.codexAuthText);
+  const codexAuthInvalid = isCodex && codexAuthParse.kind === "error";
   const filledModels = form.models.filter((model) => model.id.trim() || model.label.trim());
   const idChanged = Boolean(original && original.id !== form.id.trim());
 
@@ -268,8 +272,8 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
   };
 
   const runTest = async (mode: "test" | "fetch") => {
-    if (settingsInvalid) {
-      setGeneralError("设置 JSON 不是合法的 JSON 对象，请先修正。");
+    if (settingsInvalid || codexAuthInvalid) {
+      setGeneralError(`${settingsInvalid ? "设置 JSON" : "auth.json"} 不是合法的 JSON 对象，请先修正。`);
       return;
     }
     const compacted = compactForm(form);
@@ -718,6 +722,58 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
               </FormSection>
             ) : null}
 
+            {isCodex ? (
+              <FormSection title="Codex 配置（config.toml / auth.json）">
+                <Field
+                  label="config.toml"
+                  htmlFor={fieldId("codexConfig")}
+                  error={errors.codexConfig}
+                  hint="粘贴 TOML 原文（可含注释）；留空表示不使用"
+                >
+                  <Textarea
+                    id={fieldId("codexConfig")}
+                    className={s.settingsText}
+                    value={form.codexConfigText}
+                    mono
+                    rows={8}
+                    placeholder={'model_provider = "custom"\nmodel = "gpt-5-codex"\n\n[model_providers.custom]\nbase_url = "https://relay.example.com/v1"\nwire_api = "responses"'}
+                    invalid={Boolean(errors.codexConfig)}
+                    spellCheck={false}
+                    onChange={(event) => update({ codexConfigText: event.target.value }, "codexConfig")}
+                  />
+                </Field>
+                <Field
+                  label="auth.json"
+                  htmlFor={fieldId("codexAuth")}
+                  error={errors.codexAuth ?? (codexAuthParse.kind === "error" ? codexAuthParse.message : undefined)}
+                  hint="一个 JSON 对象，只读取其中的 OPENAI_API_KEY；留空表示不使用"
+                >
+                  <Textarea
+                    id={fieldId("codexAuth")}
+                    className={s.settingsText}
+                    value={form.codexAuthText}
+                    mono
+                    rows={4}
+                    placeholder={'{\n  "OPENAI_API_KEY": "sk-..."\n}'}
+                    invalid={Boolean(errors.codexAuth) || codexAuthParse.kind === "error"}
+                    spellCheck={false}
+                    onChange={(event) => update({ codexAuthText: event.target.value }, "codexAuth")}
+                  />
+                </Field>
+                <ul className={s.noteList}>
+                  <li>只做会话级覆盖，不会读取或改动你本机的 ~/.codex。</li>
+                  <li>
+                    config.toml 中 model_provider 指向的条目会改名为 agentdeck-&lt;id&gt;，并强制
+                    requires_openai_auth = false，避免带出你本机 Codex 的登录凭据；其它顶层配置原样保留。
+                  </li>
+                  <li>auth.json 只读取 OPENAI_API_KEY，其它字段（如 ChatGPT 登录令牌）不会使用。</li>
+                  <li>密钥优先级：环境变量 &gt; 表单 API Key &gt; auth.json。</li>
+                  <li>接口地址优先级：表单 Base URL &gt; config.toml 中的 base_url。</li>
+                  <li>明文保存在 AgentDeck 数据目录的 providers.json。</li>
+                </ul>
+              </FormSection>
+            ) : null}
+
             <section className={s.section}>
               <button
                 type="button"
@@ -850,8 +906,14 @@ export function ProviderFormDialog({ target, profiles, providers, configPath, on
                 variant="solid"
                 tone="accent"
                 loading={saving}
-                disabled={!configPath || settingsInvalid}
-                title={settingsInvalid ? "设置 JSON 有误，修正后才能保存" : undefined}
+                disabled={!configPath || settingsInvalid || codexAuthInvalid}
+                title={
+                  settingsInvalid
+                    ? "设置 JSON 有误，修正后才能保存"
+                    : codexAuthInvalid
+                      ? "auth.json 有误，修正后才能保存"
+                      : undefined
+                }
                 onClick={() => void onSave()}
               >
                 保存

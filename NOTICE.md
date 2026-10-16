@@ -52,6 +52,7 @@ sidecar 由 esbuild 打成单文件，以下 npm 包的代码被打进其中（�
 |---|---|---|
 | @agentclientprotocol/sdk | 0.17.1 | Apache-2.0 |
 | isexe | 3.1.5 | BlueOak-1.0.0 |
+| smol-toml | 1.9.1 | BSD-3-Clause |
 | tree-kill | 1.2.2 | MIT |
 | tweetnacl | 1.0.3 | Unlicense |
 | which | 5.0.0 | ISC |

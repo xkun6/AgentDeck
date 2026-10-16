@@ -20,7 +20,9 @@ import {
   buildClaudeLaunchOverride,
   buildCodexLaunchOverride,
   deriveClaudeEnv,
+  deriveCodexEnv,
   normalizeOpenAiBaseUrl,
+  resolveCodexRelay,
   resolveDisallowedTools,
 } from "../../../src/providers/custom/index.js";
 
@@ -268,12 +270,17 @@ describe("Codex 中转：配置注入", () => {
     });
   });
 
-  test("无 apiKey 时不写 env_key；无 baseUrl 时不注入 config；env.OPENAI_API_KEY 同样视为有密钥", () => {
+  test("无 apiKey 时不写 env_key（仍强制 requires_openai_auth=false）；无 baseUrl 时不注入 config；env.OPENAI_API_KEY 同样视为有密钥", () => {
     const noKey = buildCodexLaunchOverride(relay({ extends: "codex", apiKey: undefined }));
     expect(noKey.threadConfig).toEqual({
       model_provider: "agentdeck-relay",
       model_providers: {
-        "agentdeck-relay": { name: "中转", base_url: "https://relay.example.com/v1", wire_api: "responses" },
+        "agentdeck-relay": {
+          name: "中转",
+          base_url: "https://relay.example.com/v1",
+          wire_api: "responses",
+          requires_openai_auth: false,
+        },
       },
     });
     expect(buildCodexLaunchOverride(relay({ extends: "codex", baseUrl: undefined })).threadConfig).toBeUndefined();
@@ -292,6 +299,164 @@ describe("Codex 中转：配置注入", () => {
     expect(env.OPENAI_BASE_URL).toBeUndefined();
     expect(env.ANTHROPIC_BASE_URL).toBe("https://inherited.example.com");
     expect(applyCodexEnvOverride(INHERITED, undefined)).toBe(INHERITED);
+  });
+
+  describe("config.toml / auth.json（会话级覆盖，design.md 4.7）", () => {
+    // 典型 cc-switch 配置
+    const CC_SWITCH_TOML = `model_provider = "custom"
+model = "gpt-5-codex"
+model_reasoning_effort = "high"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://toml.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = true
+`;
+    const codexRelay = (overrides: Partial<ProviderProfile> = {}): ProviderProfile => ({
+      id: "relay",
+      extends: "codex",
+      label: "中转",
+      ...overrides,
+    });
+    const entryOf = (threadConfig: Record<string, unknown> | undefined) =>
+      (threadConfig?.model_providers as Record<string, Record<string, unknown>>)["agentdeck-relay"];
+
+    test("典型 cc-switch 配置 + auth.json：条目改名、强制 requires_openai_auth=false、写 env_key，其余顶层键保留", () => {
+      const override = buildCodexLaunchOverride(
+        codexRelay({ codexConfig: CC_SWITCH_TOML, codexAuth: { OPENAI_API_KEY: "sk-xxx" } }),
+      );
+      expect(override.envOverlay).toEqual({ OPENAI_API_KEY: "sk-xxx" });
+      expect(override.threadConfig).toEqual({
+        model_provider: "agentdeck-relay",
+        model: "gpt-5-codex",
+        model_reasoning_effort: "high",
+        model_providers: {
+          "agentdeck-relay": {
+            name: "custom",
+            base_url: "https://toml.example.com/v1",
+            wire_api: "responses",
+            requires_openai_auth: false,
+            env_key: "OPENAI_API_KEY",
+          },
+        },
+      });
+      expect(Object.keys(override.threadConfig?.model_providers as object)).toEqual(["agentdeck-relay"]);
+    });
+
+    test("表单 baseUrl 覆盖 TOML 的 base_url（补 /v1）；TOML 的 base_url 原样保留", () => {
+      const viaForm = resolveCodexRelay(
+        codexRelay({ codexConfig: CC_SWITCH_TOML, baseUrl: "https://form.example.com" }),
+      );
+      expect(entryOf(viaForm.threadConfig)?.base_url).toBe("https://form.example.com/v1");
+      expect(viaForm.baseUrl).toBe("https://form.example.com/v1");
+      const viaToml = resolveCodexRelay(
+        codexRelay({ codexConfig: CC_SWITCH_TOML.replace("/v1", "/api") }),
+      );
+      expect(entryOf(viaToml.threadConfig)?.base_url).toBe("https://toml.example.com/api");
+      expect(viaToml.baseUrl).toBe("https://toml.example.com/api");
+    });
+
+    test("密钥优先级：env > 表单 apiKey > auth.json；空白视为没有", () => {
+      const all = codexRelay({
+        codexConfig: CC_SWITCH_TOML,
+        codexAuth: { OPENAI_API_KEY: "sk-auth" },
+        apiKey: "sk-form",
+        env: { OPENAI_API_KEY: "sk-env", OTHER: "1" },
+      });
+      expect(resolveCodexRelay(all).apiKey).toBe("sk-env");
+      expect(buildCodexLaunchOverride(all).envOverlay).toEqual({ OPENAI_API_KEY: "sk-env", OTHER: "1" });
+      expect(resolveCodexRelay({ ...all, env: undefined }).apiKey).toBe("sk-form");
+      expect(resolveCodexRelay({ ...all, env: { OPENAI_API_KEY: "  " }, apiKey: "  " }).apiKey).toBe("sk-auth");
+      const none = resolveCodexRelay({ ...all, env: undefined, apiKey: undefined, codexAuth: { OPENAI_API_KEY: " " } });
+      expect(none.apiKey).toBeUndefined();
+      expect(entryOf(none.threadConfig)).not.toHaveProperty("env_key");
+      expect(deriveCodexEnv({ ...all, env: undefined })).toEqual({ OPENAI_API_KEY: "sk-form" });
+    });
+
+    test("auth.json 的其它字段（如 ChatGPT tokens）不使用", () => {
+      const resolved = resolveCodexRelay(
+        codexRelay({ codexConfig: CC_SWITCH_TOML, codexAuth: { tokens: { access_token: "x" }, auth_mode: "chatgpt" } }),
+      );
+      expect(resolved.apiKey).toBeUndefined();
+      expect(JSON.stringify(resolved)).not.toContain("access_token");
+    });
+
+    test("TOML 无 model_provider 且无 baseUrl：非中转，只透传其它键（含 mcp_servers），不生成 provider", () => {
+      const resolved = resolveCodexRelay(
+        codexRelay({
+          codexConfig: `model = "gpt-5"
+model_reasoning_effort = "low"
+[mcp_servers.x]
+command = "x"
+[model_providers.unused]
+name = "u"
+`,
+          codexAuth: { OPENAI_API_KEY: "sk-auth" },
+        }),
+      );
+      expect(resolved.threadConfig).toEqual({
+        model: "gpt-5",
+        model_reasoning_effort: "low",
+        mcp_servers: { x: { command: "x" } },
+      });
+      expect(resolved.baseUrl).toBeUndefined();
+    });
+
+    test("TOML 无 model_provider 但有表单 baseUrl：按表单中转，其它键保留", () => {
+      const resolved = resolveCodexRelay(
+        codexRelay({ codexConfig: 'model = "gpt-5"', baseUrl: "https://form.example.com", apiKey: "sk-form" }),
+      );
+      expect(resolved.threadConfig).toEqual({
+        model: "gpt-5",
+        model_provider: "agentdeck-relay",
+        model_providers: {
+          "agentdeck-relay": {
+            name: "中转",
+            wire_api: "responses",
+            base_url: "https://form.example.com/v1",
+            requires_openai_auth: false,
+            env_key: "OPENAI_API_KEY",
+          },
+        },
+      });
+    });
+
+    test("条目自带 env_key / http_headers 时保留，不覆盖 env_key", () => {
+      const resolved = resolveCodexRelay(
+        codexRelay({
+          codexConfig: `model_provider = "p"
+[model_providers.p]
+base_url = "https://x.example.com/v1"
+env_key = "MY_KEY"
+http_headers = { "X-A" = "1" }
+`,
+          apiKey: "sk-form",
+        }),
+      );
+      expect(entryOf(resolved.threadConfig)).toEqual({
+        name: "中转",
+        wire_api: "responses",
+        base_url: "https://x.example.com/v1",
+        env_key: "MY_KEY",
+        http_headers: { "X-A": "1" },
+        requires_openai_auth: false,
+      });
+    });
+
+    test("没有 config.toml / baseUrl / 密钥：不设 threadConfig；日期类值转字符串", () => {
+      expect(buildCodexLaunchOverride(codexRelay()).threadConfig).toBeUndefined();
+      expect(resolveCodexRelay(codexRelay({ codexConfig: "when = 2024-01-02T03:04:05Z" })).threadConfig).toEqual({
+        when: "2024-01-02T03:04:05.000Z",
+      });
+    });
+
+    test("不修改入参 profile", () => {
+      const profile = codexRelay({ codexConfig: CC_SWITCH_TOML, codexAuth: { OPENAI_API_KEY: "sk-xxx" } });
+      const before = structuredClone(profile);
+      buildCodexLaunchOverride(profile);
+      expect(profile).toEqual(before);
+    });
   });
 
   describe("thread/start、thread/resume 带上 config（假 app-server）", () => {

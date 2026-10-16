@@ -1,12 +1,13 @@
 // Derived from paseo packages/server/src/server/agent/providers/codex-app-server-agent.ts (Apache-2.0); modified for AgentDeck
 // 移植 normalizeOpenAICompatibleBaseUrl 与 buildCodexCustomProviderConfig 的思路；
-// AgentDeck 改动：由 ProviderProfile（baseUrl / apiKey / authMode / env / settings）推导，
-// Claude 额外生成 --settings（整份设置深合并）与 --disallowedTools（design.md 4.7）。
+// AgentDeck 改动：由 ProviderProfile（baseUrl / apiKey / authMode / env / settings / codexConfig / codexAuth）推导，
+// Claude 额外生成 --settings（整份设置深合并）与 --disallowedTools；
+// Codex 额外支持粘贴的 config.toml / auth.json（只做会话级 config 覆盖，不写 ~/.codex，design.md 4.7）。
 import type { ProviderProfile } from "@agentdeck/protocol";
 
 import type { ClaudeLaunchOverride } from "../claude/claude-agent.js";
 import type { CodexLaunchOverride } from "../codex/codex-agent.js";
-import { isPlainObject } from "./schema.js";
+import { isPlainObject, parseCodexConfigToml } from "./schema.js";
 
 /** 从继承环境中剔除的凭据变量（design.md 4.7） */
 export const CLAUDE_CREDENTIAL_ENV = [
@@ -173,31 +174,93 @@ export function normalizeOpenAiBaseUrl(value: string): string {
   return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
-/** 推导出的 Codex 子进程环境：apiKey → OPENAI_API_KEY，最后叠加 profile.env */
+/** 非空白字符串才算有值（空白视为未填） */
+function nonBlank(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/** Codex 中转解析结果（启动与 provider.test 共用） */
+export interface CodexRelayResolution {
+  /** 合并进 thread/start、thread/resume 的 `config` 覆盖；没有任何配置时缺省 */
+  threadConfig?: Record<string, unknown>;
+  /** 生效密钥：profile.env.OPENAI_API_KEY > 表单 apiKey > codexAuth.OPENAI_API_KEY（空白视为没有） */
+  apiKey?: string;
+  /** 生效的中转地址：表单 baseUrl（补 /v1）> config.toml 中生效条目的 base_url（原样）；非中转或都没有时缺省 */
+  baseUrl?: string;
+}
+
+/**
+ * 解析 Codex 中转配置（design.md 4.7「Codex 中转的 config.toml / auth.json」）：
+ * 1. 以解析后的 config.toml 为底，删除 `model_providers`（只保留 `agentdeck-<id>` 一项，避免与用户同名 provider 合并）；
+ * 2. 生效条目 = `model_provider` 指向的条目（浅拷贝）；表单 baseUrl 存在时 `base_url` 以表单为准；
+ *    存在条目或表单 baseUrl 即为中转：键名统一为 `agentdeck-<id>`，缺省补 name / wire_api；
+ * 3. 密钥优先级 env > 表单 apiKey > auth.json（只读 OPENAI_API_KEY）；
+ * 4. 中转凭据隔离：条目强制 `requires_openai_auth = false`，有密钥且条目无 `env_key` 时写 `env_key = "OPENAI_API_KEY"`。
+ * 非中转时 config.toml 中的其它键原样透传（沿用用户登录）。config.toml 须已通过 schema 校验。
+ */
+export function resolveCodexRelay(profile: ProviderProfile): CodexRelayResolution {
+  const config = profile.codexConfig !== undefined ? parseCodexConfigToml(profile.codexConfig) : {};
+  const providers = config.model_providers;
+  delete config.model_providers;
+  const selected = typeof config.model_provider === "string" ? config.model_provider : undefined;
+  const picked = selected !== undefined && isPlainObject(providers) ? providers[selected] : undefined;
+  const entry = isPlainObject(picked) ? { ...picked } : undefined;
+
+  const apiKey =
+    nonBlank(profile.env?.OPENAI_API_KEY) ??
+    nonBlank(profile.apiKey) ??
+    nonBlank(profile.codexAuth?.OPENAI_API_KEY);
+
+  const resolution: CodexRelayResolution = {};
+  if (apiKey !== undefined) {
+    resolution.apiKey = apiKey;
+  }
+
+  if (entry === undefined && !profile.baseUrl) {
+    if (Object.keys(config).length > 0) {
+      resolution.threadConfig = config;
+    }
+    return resolution;
+  }
+
+  const baseUrl = profile.baseUrl ? normalizeOpenAiBaseUrl(profile.baseUrl) : nonBlank(entry?.base_url);
+  if (baseUrl !== undefined) {
+    resolution.baseUrl = baseUrl;
+  }
+  const key = codexModelProviderKey(profile.id);
+  const providerConfig: Record<string, unknown> = {
+    name: profile.label,
+    wire_api: "responses",
+    ...entry,
+    ...(profile.baseUrl ? { base_url: baseUrl } : {}),
+    requires_openai_auth: false,
+  };
+  if (apiKey !== undefined && providerConfig.env_key === undefined) {
+    providerConfig.env_key = "OPENAI_API_KEY";
+  }
+  resolution.threadConfig = { ...config, model_provider: key, model_providers: { [key]: providerConfig } };
+  return resolution;
+}
+
+/** 推导出的 Codex 子进程环境：生效密钥（env > apiKey > auth.json）→ OPENAI_API_KEY，其余为 profile.env */
 export function deriveCodexEnv(profile: ProviderProfile): Record<string, string> {
-  return { ...(profile.apiKey ? { OPENAI_API_KEY: profile.apiKey } : {}), ...profile.env };
+  const { apiKey } = resolveCodexRelay(profile);
+  return { ...profile.env, ...(apiKey !== undefined ? { OPENAI_API_KEY: apiKey } : {}) };
 }
 
 /**
  * Codex 中转的启动覆盖：剔除继承的 OPENAI_* 凭据变量，叠加 OPENAI_API_KEY 与 profile.env；
- * baseUrl 存在时生成 thread/start、thread/resume 的 `config` 覆盖：
- * `model_provider = "agentdeck-<id>"`、`model_providers.agentdeck-<id> = { name, base_url, wire_api: "responses", env_key?, requires_openai_auth? }`。
+ * config.toml / baseUrl 合成 thread/start、thread/resume 的 `config` 覆盖（见 resolveCodexRelay）：
+ * 中转时 `model_provider = "agentdeck-<id>"`、`model_providers.agentdeck-<id> = { name, base_url, wire_api, env_key?, requires_openai_auth: false, ... }`。
  */
 export function buildCodexLaunchOverride(profile: ProviderProfile): CodexLaunchOverride {
-  const envOverlay = deriveCodexEnv(profile);
-  const override: CodexLaunchOverride = { stripEnv: [...CODEX_CREDENTIAL_ENV], envOverlay };
-  if (profile.baseUrl) {
-    const key = codexModelProviderKey(profile.id);
-    const providerConfig: Record<string, unknown> = {
-      name: profile.label,
-      base_url: normalizeOpenAiBaseUrl(profile.baseUrl),
-      wire_api: "responses",
-    };
-    if (envOverlay.OPENAI_API_KEY?.trim()) {
-      providerConfig.env_key = "OPENAI_API_KEY";
-      providerConfig.requires_openai_auth = false;
-    }
-    override.threadConfig = { model_provider: key, model_providers: { [key]: providerConfig } };
+  const { threadConfig, apiKey } = resolveCodexRelay(profile);
+  const override: CodexLaunchOverride = {
+    stripEnv: [...CODEX_CREDENTIAL_ENV],
+    envOverlay: { ...profile.env, ...(apiKey !== undefined ? { OPENAI_API_KEY: apiKey } : {}) },
+  };
+  if (threadConfig) {
+    override.threadConfig = threadConfig;
   }
   return override;
 }

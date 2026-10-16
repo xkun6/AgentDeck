@@ -1,4 +1,4 @@
-// 自定义 provider 的日志 / 错误脱敏（design.md 4.7：日志与错误信息中不得出现 apiKey、env 与 settings.env 的值）。
+// 自定义 provider 的日志 / 错误脱敏（design.md 4.7：日志与错误信息中不得出现 apiKey、codexAuth 的密钥、env 与 settings.env 的值）。
 import { format } from "node:util";
 
 import type { AgentBackgroundTask, AgentStreamEvent, ProviderProfile } from "@agentdeck/protocol";
@@ -11,11 +11,17 @@ export const REDACTED = "***";
 /** env 中过短的值（如 "1"、"true"）不当作机密替换，否则会把日志改得面目全非 */
 const MIN_ENV_SECRET_LENGTH = 6;
 
-/** profile 中需要脱敏的值：apiKey、env 的值与 settings.env 的字符串值（长度足够的） */
-export function collectSecrets(profile: Pick<ProviderProfile, "apiKey" | "env" | "settings">): string[] {
+/** profile 中需要脱敏的值：apiKey、codexAuth.OPENAI_API_KEY、env 的值与 settings.env 的字符串值（长度足够的） */
+export function collectSecrets(
+  profile: Pick<ProviderProfile, "apiKey" | "env" | "settings" | "codexAuth">,
+): string[] {
   const secrets = new Set<string>();
   if (profile.apiKey) {
     secrets.add(profile.apiKey);
+  }
+  const authKey = profile.codexAuth?.OPENAI_API_KEY;
+  if (typeof authKey === "string" && authKey) {
+    secrets.add(authKey);
   }
   const envValues = [
     ...Object.values(profile.env ?? {}),

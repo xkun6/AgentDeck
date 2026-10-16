@@ -4,6 +4,7 @@ import {
   CUSTOM_PROVIDER_ID_PREFIX,
   type ProviderProfile,
 } from "@agentdeck/protocol";
+import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 
 export const PROFILE_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -65,6 +66,33 @@ const settingsSchema = z
   .custom<Record<string, unknown>>(isPlainObject, "settings 必须是 JSON 对象")
   .optional();
 
+const codexAuthSchema = z
+  .custom<Record<string, unknown>>(isPlainObject, "auth.json 必须是 JSON 对象")
+  .refine(
+    (value) => value.OPENAI_API_KEY === undefined || typeof value.OPENAI_API_KEY === "string",
+    "auth.json 的 OPENAI_API_KEY 必须是字符串",
+  )
+  .optional();
+
+/** 解析 Codex config.toml 原文；语法错误抛出 Error（message 含行列位置）。日期类值转为字符串。 */
+export function parseCodexConfigToml(text: string): Record<string, unknown> {
+  return normalizeTomlValue(parseToml(text)) as Record<string, unknown>;
+}
+
+/** smol-toml 的日期类值（Date 子类）无法 JSON 序列化为 TOML 日期，统一转成字符串 */
+function normalizeTomlValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeTomlValue);
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeTomlValue(item)]));
+  }
+  return value;
+}
+
 const modelSchema = z.object({
   id: z.string().trim().min(1, "模型 id 不能为空"),
   label: z.string().trim().min(1, "模型名称不能为空"),
@@ -95,10 +123,40 @@ export const providerProfileSchema = z
     models: z.array(modelSchema).optional(),
     disallowedTools: z.array(z.string().trim().min(1, "工具名不能为空")).optional(),
     settings: settingsSchema,
+    codexConfig: optionalText,
+    codexAuth: codexAuthSchema,
   })
   .superRefine((profile, ctx) => {
     if (profile.extends !== "claude" && profile.settings !== undefined) {
       ctx.addIssue({ code: "custom", path: ["settings"], message: "只有基于 Claude Code 的中转可以使用内联设置" });
+    }
+    const codexOnlyMessage = "只有基于 Codex 的中转可以使用 config.toml / auth.json";
+    if (profile.extends !== "codex") {
+      if (profile.codexConfig !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["codexConfig"], message: codexOnlyMessage });
+      }
+      if (profile.codexAuth !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["codexAuth"], message: codexOnlyMessage });
+      }
+    } else if (profile.codexConfig !== undefined) {
+      let config: Record<string, unknown> | undefined;
+      try {
+        config = parseCodexConfigToml(profile.codexConfig);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        ctx.addIssue({ code: "custom", path: ["codexConfig"], message: `config.toml 解析失败：${reason}` });
+      }
+      const modelProvider = config?.model_provider;
+      if (typeof modelProvider === "string") {
+        const providers = config?.model_providers;
+        if (!isPlainObject(providers) || !isPlainObject(providers[modelProvider])) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["codexConfig"],
+            message: `config.toml 的 model_provider「${modelProvider}」没有对应的 [model_providers.${modelProvider}]`,
+          });
+        }
+      }
     }
     if (profile.extends === "acp" && (!profile.command || profile.command.length === 0)) {
       ctx.addIssue({ code: "custom", path: ["command"], message: "ACP provider 必须填写启动命令" });
@@ -148,6 +206,8 @@ export function toProviderProfile(parsed: z.output<typeof providerProfileSchema>
   }
   if (parsed.disallowedTools !== undefined) profile.disallowedTools = [...parsed.disallowedTools];
   if (parsed.settings !== undefined) profile.settings = structuredClone(parsed.settings);
+  if (parsed.codexConfig !== undefined) profile.codexConfig = parsed.codexConfig;
+  if (parsed.codexAuth !== undefined) profile.codexAuth = structuredClone(parsed.codexAuth);
   return profile;
 }
 

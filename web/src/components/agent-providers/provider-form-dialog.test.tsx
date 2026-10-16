@@ -237,4 +237,67 @@ describe("ProviderFormDialog", () => {
     expect(await screen.findByText("服务端：settings 必须是 JSON 对象")).toBeTruthy();
     expect(screen.getByLabelText("设置 JSON").getAttribute("data-invalid")).toBe("true");
   });
+
+  it("Codex 配置：只在 Codex 显示 config.toml / auth.json；auth.json 非法就地报错并禁止保存；保存时写入", async () => {
+    const { request, onClose } = setup(async (method) => {
+      if (method === "provider.config.set") return { providers: PROVIDERS };
+      throw new Error(`unexpected ${method}`);
+    });
+    change(input(/名称/), "Mine");
+    expect(screen.queryByLabelText("config.toml")).toBeNull();
+    expect(screen.queryByLabelText("auth.json")).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Codex/ }));
+    expect(screen.queryByLabelText("设置 JSON")).toBeNull();
+    const config = screen.getByLabelText("config.toml") as HTMLTextAreaElement;
+    const auth = screen.getByLabelText("auth.json") as HTMLTextAreaElement;
+    expect(screen.getByText(/不会读取或改动你本机的 ~\/\.codex/)).toBeTruthy();
+    const save = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
+
+    change(auth, "[1]");
+    expect(screen.getByText("必须是 JSON 对象（{ … }），不能是数组或其它值")).toBeTruthy();
+    expect(auth.getAttribute("data-invalid")).toBe("true");
+    expect(save.disabled).toBe(true);
+    change(auth, '{ "OPENAI_API_KEY": ');
+    expect(screen.getByText(/^不是合法的 JSON/)).toBeTruthy();
+    expect(save.disabled).toBe(true);
+
+    change(auth, '{"OPENAI_API_KEY":"sk-a"}');
+    change(config, "# c" + String.fromCharCode(10) + 'model = "gpt-5"');
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [, params] = request.mock.calls[0]!;
+    expect((params as { providers: ProviderProfile[] }).providers).toEqual([
+      {
+        id: "mine",
+        extends: "codex",
+        label: "Mine",
+        codexConfig: "# c" + String.fromCharCode(10) + 'model = "gpt-5"',
+        codexAuth: { OPENAI_API_KEY: "sk-a" },
+      },
+    ]);
+
+    fireEvent.click(screen.getByRole("radio", { name: /Claude Code/ }));
+    expect(screen.queryByLabelText("config.toml")).toBeNull();
+  });
+
+  it("Codex 配置：校验错误 providers.<i>.codexConfig 就地显示", async () => {
+    setup(async (method) => {
+      if (method === "provider.config.set") {
+        throw new SidecarRpcError({
+          code: -32602,
+          message: "参数错误",
+          data: { issues: [{ path: "providers.0.codexConfig", message: "config.toml 解析失败：服务端" }] },
+        });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    change(input(/名称/), "Mine");
+    fireEvent.click(screen.getByRole("radio", { name: /Codex/ }));
+    change(screen.getByLabelText("config.toml"), "model = ");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("config.toml 解析失败：服务端")).toBeTruthy();
+    expect(screen.getByLabelText("config.toml").getAttribute("data-invalid")).toBe("true");
+  });
 });

@@ -1,7 +1,7 @@
 // 自定义 provider / 三方中转（design.md 4.7）的前端纯逻辑：
 // - id slug 生成与校验；
 // - 启动命令的切分（支持引号）与回显；
-// - 表单状态 ↔ ProviderProfile 互转（空字段省略、默认模型单选、Claude 设置 JSON）；
+// - 表单状态 ↔ ProviderProfile 互转（空字段省略、默认模型单选、Claude 设置 JSON、Codex config.toml / auth.json）；
 // - provider.config.set / provider.test 校验错误（data.issues）路径 → 表单字段；
 // - Agent 菜单的「内置 / 中转」分组。
 // 本文件不做任何 IO，也不打印密钥。
@@ -197,6 +197,10 @@ export interface ProviderFormState {
   env: ProviderFormEnv[];
   /** 仅 Claude：设置 JSON 文本（留空表示不用） */
   settingsText: string;
+  /** 仅 Codex：config.toml 原文（留空表示不用；语法由 sidecar 校验） */
+  codexConfigText: string;
+  /** 仅 Codex：auth.json 文本（JSON 对象；留空表示不用） */
+  codexAuthText: string;
 }
 
 let rowKeySeq = 0;
@@ -222,6 +226,8 @@ export function emptyProviderForm(extendsValue: ProviderProfileExtends = "claude
     commandText: "",
     env: [],
     settingsText: "",
+    codexConfigText: "",
+    codexAuthText: "",
   };
 }
 
@@ -248,6 +254,8 @@ export function profileToForm(profile: ProviderProfile): ProviderFormState {
     commandText: profile.command ? joinCommandLine(profile.command) : "",
     env: Object.entries(profile.env ?? {}).map(([name, value]) => ({ key: newRowKey("env"), name, value })),
     settingsText: profile.settings ? JSON.stringify(profile.settings, null, 2) : "",
+    codexConfigText: profile.codexConfig ?? "",
+    codexAuthText: profile.codexAuth ? JSON.stringify(profile.codexAuth, null, 2) : "",
   };
 }
 
@@ -316,6 +324,12 @@ export function formToProfile(form: ProviderFormState): ProviderProfile {
     // 非法 JSON 由 validateProviderForm 拦下；这里只写入能解析成对象的内容
     const settings = parseSettingsText(form.settingsText);
     if (settings.kind === "ok") profile.settings = settings.value;
+  }
+  if (form.extends === "codex") {
+    // config.toml 原样提交（保留注释与格式）；auth.json 非法由 validateProviderForm 拦下
+    if (form.codexConfigText.trim()) profile.codexConfig = form.codexConfigText;
+    const auth = parseSettingsText(form.codexAuthText);
+    if (auth.kind === "ok") profile.codexAuth = auth.value;
   }
 
   const env: Record<string, string> = {};
@@ -395,6 +409,10 @@ export function validateProviderForm(form: ProviderFormState): ProviderFormError
   if (form.extends === "claude") {
     const settings = parseSettingsText(form.settingsText);
     if (settings.kind === "error") errors.settings = settings.message;
+  }
+  if (form.extends === "codex") {
+    const auth = parseSettingsText(form.codexAuthText);
+    if (auth.kind === "error") errors.codexAuth = auth.message;
   }
 
   const models = form.models.filter((model) => !isBlankModel(model));
