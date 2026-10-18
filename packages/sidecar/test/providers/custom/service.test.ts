@@ -117,6 +117,28 @@ describe("ProviderRegistry 自定义项", () => {
   });
 });
 
+describe("自定义命令不受「编程 Agent」页全局路径影响", () => {
+  test("全局配置了 claude / codex 路径时，自定义命令仍按自己的路径解析为可用", async () => {
+    // 全局路径指向不存在的文件：若被自定义解析读到，会返回 source "config" 或无效 → 误判不可用
+    const missing = path.join(dataDir, "no-such-agent.exe");
+    writeFileSync(
+      path.join(dataDir, "coding-agent-paths.json"),
+      JSON.stringify({ claude: missing, codex: missing }),
+    );
+    const env = { AGENTDECK_DATA_DIR: dataDir };
+    for (const kind of ["claude", "codex"] as const) {
+      // node --version 能成功，代替真实 CLI 通过版本校验
+      const client = createCustomProviderClient(profile({ extends: kind, command: [process.execPath] }), {
+        logger: createSilentLogger(),
+        env,
+      });
+      const availability = await client.isAvailable();
+      expect(availability.reason).toBeUndefined();
+      expect(availability.available).toBe(true);
+    }
+  });
+});
+
 describe("CustomProviderClient 包装", () => {
   test("静态模型替代动态发现；未指定模型时用 isDefault 模型；provider id 改写", async () => {
     const inner = new MockAgentClient();

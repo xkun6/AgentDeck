@@ -143,11 +143,13 @@ async function resolveCustomClaudeExecutable(
 ): Promise<ClaudeExecutableResolution> {
   const located = await locate(command, find);
   if (located) {
-    const resolution = await resolveClaudeExecutable(
-      createDefaultClaudeExecutableDeps({ ...env, AGENTDECK_CLAUDE_PATH: located }, (message) =>
+    const resolution = await resolveClaudeExecutable({
+      ...createDefaultClaudeExecutableDeps({ ...env, AGENTDECK_CLAUDE_PATH: located }, (message) =>
         logger.warn(message),
       ),
-    );
+      // 自定义命令只认自己的路径，不受「编程 Agent」页全局路径影响
+      configuredPath: () => null,
+    });
     if (resolution.available && resolution.source === "env") {
       return resolution;
     }
@@ -167,6 +169,8 @@ async function resolveCustomCodexLaunch(
   }
   const launch = resolveCodexLaunch({
     env: { ...env, AGENTDECK_CODEX_PATH: located },
+    // 自定义命令只认自己的路径，不受「编程 Agent」页全局路径影响
+    configuredPath: null,
     onWarning: (message) => logger.warn("[codex] %s", message),
   });
   if (!launch || launch.source !== "env") {
