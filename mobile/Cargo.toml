@@ -1,6 +1,6 @@
 [package]
 name = "agentdeck-mobile"
-version = "0.3.5"
+version = "0.3.6"
 description = "AgentDeck 安卓 App"
 authors = ["AgentDeck Contributors"]
 edition = "2021"
