@@ -17,6 +17,15 @@ import { writeFileAtomic } from "../agent/agent-store.js";
 import { AgentRpcError } from "../agent/errors.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import { TRANSLATION_CACHE_FILE, createTranslationCacheStore, type TranslationCacheStore } from "./cache-store.js";
+import {
+  BATCH_COALESCE_MS,
+  BATCH_MAX_ITEMS,
+  BATCH_SYSTEM_ADDENDUM,
+  packTranslationBatches,
+  parseTranslationBatch,
+  pickBatchNonce,
+  wrapTranslationBatch,
+} from "./batch.js";
 import { completeChat } from "./llm-client.js";
 import { promptTranslationParts, translationSystemPrompt, wrapTranslationInput } from "./prompt-text.js";
 
@@ -46,6 +55,19 @@ export const translationEndpointPatchSchema = z
   .partial()
   .strict();
 
+interface BatchItem {
+  text: string;
+  endpoint: TranslationEndpoint;
+  systemPrompt: string;
+  resolve: (translated: string) => void;
+  reject: (error: unknown) => void;
+}
+
+interface PendingBatch {
+  items: BatchItem[];
+  timer: NodeJS.Timeout;
+}
+
 type Languages = Pick<SidecarSettings["translation"], "userLanguage" | "agentLanguage">;
 
 export interface TranslationServiceOptions {
@@ -67,6 +89,8 @@ export class TranslationService {
   private active = 0;
   private readonly waiting: Array<() => void> = [];
   private writeChain: Promise<void> = Promise.resolve();
+  /** 合并窗口中的请求，按设置分组 */
+  private readonly batches = new Map<string, PendingBatch>();
 
   constructor(private readonly options: TranslationServiceOptions) {
     this.logger = options.logger ?? createSilentLogger();
@@ -144,8 +168,9 @@ export class TranslationService {
         ? [languages.userLanguage, languages.agentLanguage]
         : [languages.agentLanguage, languages.userLanguage];
     const systemPrompt = translationSystemPrompt(source, target);
-    // 键覆盖所有影响输出的设置：改语言 / endpoint / 模型 / 协议 / 思考强度后不会命中旧结果
-    const key = JSON.stringify({
+    // 键覆盖所有影响输出的设置：改语言 / endpoint / 模型 / 协议 / 思考强度后不会命中旧结果；
+    // 去掉 text 的部分即合并分组键：设置相同的请求才能打进同一包
+    const settingsKey = {
       direction,
       source,
       target,
@@ -154,8 +179,8 @@ export class TranslationService {
       protocol: endpoint.protocol,
       effort: endpoint.reasoningEffort,
       prompt: digest(systemPrompt),
-      text: digest(text),
-    });
+    };
+    const key = JSON.stringify({ ...settingsKey, text: digest(text) });
     const cached = this.cache.get(key);
     if (cached !== undefined) {
       return cached;
@@ -164,16 +189,7 @@ export class TranslationService {
     if (pending) {
       return pending;
     }
-    const request = this.withSlot(() =>
-      completeChat(
-        endpoint,
-        [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: wrapTranslationInput(text) },
-        ],
-        this.options.fetchFn,
-      ),
-    )
+    const request = this.enqueue(JSON.stringify(settingsKey), { text, endpoint, systemPrompt })
       .then((translated) => {
         this.cache.set(key, translated);
         return translated;
@@ -207,6 +223,87 @@ export class TranslationService {
         block.type === "text" ? { ...block, text: await translateBlock(block.text) } : block,
       ),
     );
+  }
+
+  /** 进入合并窗口；窗口到期（或攒满一包）时整组发出 */
+  private enqueue(
+    groupKey: string,
+    request: { text: string; endpoint: TranslationEndpoint; systemPrompt: string },
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      let group = this.batches.get(groupKey);
+      if (!group) {
+        const created: PendingBatch = { items: [], timer: setTimeout(() => this.flush(groupKey), BATCH_COALESCE_MS) };
+        this.batches.set(groupKey, created);
+        group = created;
+      }
+      group.items.push({ ...request, resolve, reject });
+      if (group.items.length >= BATCH_MAX_ITEMS) {
+        clearTimeout(group.timer);
+        this.flush(groupKey);
+      }
+    });
+  }
+
+  private flush(groupKey: string): void {
+    const group = this.batches.get(groupKey);
+    if (!group) {
+      return;
+    }
+    this.batches.delete(groupKey);
+    for (const pack of packTranslationBatches(group.items)) {
+      void (pack.length === 1 ? this.runSingle(pack[0]!) : this.runBatch(pack));
+    }
+  }
+
+  private async runSingle(item: BatchItem): Promise<void> {
+    try {
+      item.resolve(
+        await this.withSlot(() =>
+          completeChat(
+            item.endpoint,
+            [
+              { role: "system", content: item.systemPrompt },
+              { role: "user", content: wrapTranslationInput(item.text) },
+            ],
+            this.options.fetchFn,
+          ),
+        ),
+      );
+    } catch (error) {
+      item.reject(error);
+    }
+  }
+
+  /** 一包多条：批量请求失败或解析不出全部条目时退回逐条请求 */
+  private async runBatch(items: BatchItem[]): Promise<void> {
+    const first = items[0]!;
+    const texts = items.map((item) => item.text);
+    let results: string[] | null = null;
+    try {
+      const nonce = pickBatchNonce(texts);
+      const output = await this.withSlot(() =>
+        completeChat(
+          first.endpoint,
+          [
+            { role: "system", content: `${first.systemPrompt} ${BATCH_SYSTEM_ADDENDUM}` },
+            { role: "user", content: wrapTranslationBatch(texts, nonce) },
+          ],
+          this.options.fetchFn,
+        ),
+      );
+      results = parseTranslationBatch(output, items.length, nonce);
+      if (!results) {
+        this.logger.warn("批量翻译结果解析失败（%d 条），改为逐条翻译", items.length);
+      }
+    } catch (error) {
+      this.logger.warn("批量翻译失败（%d 条），改为逐条翻译：%s", items.length, String(error));
+    }
+    if (results) {
+      items.forEach((item, index) => item.resolve(results[index]!));
+      return;
+    }
+    await Promise.all(items.map((item) => this.runSingle(item)));
   }
 
   /** 并发上限：满了就排队，结束时把名额直接交给队首 */

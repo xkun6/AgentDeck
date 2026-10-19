@@ -12,6 +12,7 @@ import type { PendingApproval } from "@/stores/chat";
 import { ElicitationCard } from "./elicitation-card";
 import { MessageText } from "./message-text";
 import { QuestionCard } from "./question-card";
+import { TranslatedMessageText, useTimelineTranslation } from "./translated-text";
 import { HANDLED_ELSEWHERE_MESSAGE, useApprovalFailure } from "./use-approval-failure";
 import s from "./approval-dialog.module.css";
 
@@ -57,6 +58,12 @@ function actionClass(action: AgentPermissionAction, defaultDeny: boolean): strin
   return defaultDeny ? s.allowNeutral : s.allow;
 }
 
+/** 计划正文：会话开启翻译时显示译文，可切换原文（design.md 4.35） */
+function PlanText({ text }: { text: string }) {
+  const { enabled } = useTimelineTranslation();
+  return enabled ? <TranslatedMessageText text={text} /> : <MessageText text={text} />;
+}
+
 function ApprovalDetail({ request, fallback }: { request?: AgentPermissionRequest; fallback: string }) {
   const detail = request?.detail;
   if (!detail) {
@@ -85,7 +92,7 @@ function ApprovalDetail({ request, fallback }: { request?: AgentPermissionReques
     case "plan":
       return (
         <div className={s.plan} data-kind="plan">
-          <MessageText text={detail.text} />
+          <PlanText text={detail.text} />
         </div>
       );
     default:

@@ -15,6 +15,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/agent/agent-manager.js";
 import { AgentRpcError } from "../src/agent/errors.js";
 import type { AgentClient, AgentSession } from "../src/agent/types.js";
+import { packTranslationBatches, parseTranslationBatch, wrapTranslationBatch } from "../src/translation/batch.js";
 import { createTranslationCacheStore } from "../src/translation/cache-store.js";
 import { TranslationService } from "../src/translation/translation-service.js";
 
@@ -28,7 +29,9 @@ interface Call {
 }
 
 /** 假 endpoint：把 <translate-input> 里的原文加上 "EN:" 前缀返回 */
-function fakeFetch(options: { status?: number; protocol?: "chat" | "responses" } = {}) {
+function fakeFetch(
+  options: { status?: number; protocol?: "chat" | "responses"; batch?: "malformed" | "http-error" } = {},
+) {
   const calls: Call[] = [];
   const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -41,7 +44,16 @@ function fakeFetch(options: { status?: number; protocol?: "chat" | "responses" }
         ? (body.input as Array<{ content: Array<{ text: string }> }>)[0]!.content[0]!.text
         : (body.messages as Array<{ role: string; content: string }>).find((m) => m.role === "user")!.content;
     const source = /<translate-input>\n([\s\S]*)\n<\/translate-input>/.exec(userText)![1]!;
-    const translated = `EN:${source}`;
+    const isBatch = source.startsWith("<ti n=");
+    if (isBatch && options.batch === "http-error") {
+      return new Response("batch not supported", { status: 500 });
+    }
+    // 批量请求：逐项加前缀并保留标签；malformed 时模型丢了标签
+    const translated = !isBatch
+      ? `EN:${source}`
+      : options.batch === "malformed"
+        ? "EN: everything merged"
+        : source.replace(/(<ti n="[^"]+" i="\d+">\n)([\s\S]*?)(\n<\/ti n="[^"]+" i="\d+">)/g, "$1EN:$2$3");
     const payload =
       options.protocol === "responses"
         ? { output: [{ type: "message", content: [{ type: "output_text", text: translated }] }] }
@@ -162,6 +174,59 @@ describe("TranslationService（design.md 4.35）", () => {
   });
 });
 
+describe("批量合并（design.md 4.35）", () => {
+  test("窗口内的不同原文打成一次带标签的请求，各自拿到译文并按单条键缓存", async () => {
+    const { fn, calls } = fakeFetch();
+    const service = await createService(fn);
+    await service.setEndpoint(ENDPOINT);
+    const results = await Promise.all(
+      ["第一段", "第二段\n含换行", "第三段"].map((t) => service.translate("agent-to-user", t)),
+    );
+    expect(results).toEqual(["EN:第一段", "EN:第二段\n含换行", "EN:第三段"]);
+    expect(calls).toHaveLength(1);
+    const system = (calls[0]!.body.messages as Array<{ content: string }>)[0]!.content;
+    expect(system).toContain("translate each item independently");
+    // 之后单条请求命中缓存
+    expect(await service.translate("agent-to-user", "第二段\n含换行")).toBe("EN:第二段\n含换行");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("方向不同不合并", async () => {
+    const { fn, calls } = fakeFetch();
+    const service = await createService(fn);
+    await service.setEndpoint(ENDPOINT);
+    await Promise.all([service.translate("agent-to-user", "甲"), service.translate("user-to-agent", "乙")]);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => !JSON.stringify(call.body).includes("<ti n="))).toBe(true);
+  });
+
+  test.each(["malformed", "http-error"] as const)("批量结果 %s → 退回逐条请求", async (batch) => {
+    const { fn, calls } = fakeFetch({ batch });
+    const service = await createService(fn);
+    await service.setEndpoint(ENDPOINT);
+    const results = await Promise.all(["一", "二", "三"].map((t) => service.translate("agent-to-user", t)));
+    expect(results).toEqual(["EN:一", "EN:二", "EN:三"]);
+    expect(calls).toHaveLength(4);
+  });
+});
+
+describe("batch 工具函数", () => {
+  test("parseTranslationBatch：容忍标签外文字，缺项 / 空项返回 null", () => {
+    const wrapped = wrapTranslationBatch(["a", "b"], "N");
+    expect(wrapped).toContain('<ti n="N" i="1">\nb\n</ti n="N" i="1">');
+    const ok = 'Sure:\n<ti n="N" i="0">\nA\n</ti n="N" i="0">\n<ti n="N" i="1">\nB\n</ti n="N" i="1">';
+    expect(parseTranslationBatch(ok, 2, "N")).toEqual(["A", "B"]);
+    expect(parseTranslationBatch('<ti n="N" i="0">\nA\n</ti n="N" i="0">', 2, "N")).toBeNull();
+    expect(parseTranslationBatch('<ti n="N" i="0">\n \n</ti n="N" i="0">', 1, "N")).toBeNull();
+  });
+
+  test("packTranslationBatches：按条数与字数分包，超长单条自成一包", () => {
+    const items = ["aa", "bb", "cc", "x".repeat(10)].map((text) => ({ text }));
+    expect(packTranslationBatches(items, { maxItems: 2, maxChars: 100 }).map((p) => p.length)).toEqual([2, 2]);
+    expect(packTranslationBatches(items, { maxItems: 10, maxChars: 5 }).map((p) => p.length)).toEqual([2, 1, 1]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // AgentManager 接入
 // ---------------------------------------------------------------------------
@@ -171,6 +236,7 @@ class FakeSession implements AgentSession {
   id: string | null = null;
   prompts: AgentPromptInput[] = [];
   steers: AgentPromptInput[] = [];
+  responses: Array<{ id: string; response: AgentPermissionResponse }> = [];
   private listeners = new Set<(event: AgentStreamEvent) => void>();
   private counter = 0;
 
@@ -198,7 +264,10 @@ class FakeSession implements AgentSession {
   getPendingPermissions(): AgentPermissionRequest[] {
     return [];
   }
-  async respondToPermission(_id: string, _r: AgentPermissionResponse): Promise<void> {}
+  async respondToPermission(id: string, response: AgentPermissionResponse): Promise<void> {
+    this.responses.push({ id, response });
+    this.emit({ type: "permission_resolved", requestId: id, response });
+  }
   async interrupt(): Promise<void> {}
   async close(): Promise<void> {}
   describePersistence(): AgentPersistenceHandle | null {
@@ -231,14 +300,19 @@ function createManager(options: { fail?: boolean; defaultOn?: boolean } = {}) {
     if (options.fail) throw new AgentRpcError("TRANSLATION_FAILED", "翻译 endpoint 返回 HTTP 500：x");
     return typeof prompt === "string" ? `EN:${prompt}` : prompt;
   });
+  const translateToAgent = vi.fn(async (text: string) => {
+    if (options.fail) throw new AgentRpcError("TRANSLATION_FAILED", "翻译 endpoint 返回 HTTP 500：x");
+    return `EN:${text}`;
+  });
   manager = new AgentManager({
     registry: { get: (id) => (id === "fake" ? client : undefined) },
     translatePrompt,
+    translateToAgent,
     translationDefault: () => options.defaultOn ?? false,
   });
   const streams: AgentStreamEnvelope[] = [];
   manager.subscribe({ onStream: (envelope) => streams.push(envelope), onState: () => undefined });
-  return { manager, sessions, streams, translatePrompt };
+  return { manager, sessions, streams, translatePrompt, translateToAgent };
 }
 
 const userItems = (streams: AgentStreamEnvelope[]) =>
@@ -292,6 +366,108 @@ describe("AgentManager 翻译接入（design.md 4.35）", () => {
     await h.manager.updateAgent(agent.id, { translation: false });
     await h.manager.sendPrompt(agent.id, "你好", "cm", { translate: true });
     expect(h.sessions[0]!.prompts).toEqual(["你好"]);
+  });
+
+  test("审批回答：拒绝理由、提问「其他」、表单文本字段翻译；选项 label、secret、带 format 的字段原样", async () => {
+    const h = createManager();
+    const agent = await h.manager.createAgent({ provider: "fake", cwd: "/work" });
+    await h.manager.updateAgent(agent.id, { translation: true });
+    await h.manager.sendPrompt(agent.id, "开始", undefined, { translate: true });
+    const session = h.sessions[0]!;
+    const ask = async (request: AgentPermissionRequest) => {
+      session.emit({ type: "permission_requested", turnId: "turn-1", request });
+      await vi.waitFor(() =>
+        expect(h.manager.getAgent(agent.id).pendingPermissions.map((p) => p.id)).toContain(request.id),
+      );
+    };
+
+    await ask({ id: "p1", provider: "fake", name: "Bash", kind: "tool" });
+    await h.manager.respondToPermission(agent.id, "p1", { behavior: "deny", message: "别删文件" });
+
+    await ask({
+      id: "p2",
+      provider: "fake",
+      name: "AskUserQuestion",
+      kind: "question",
+      input: { questions: [] },
+      detail: {
+        type: "question",
+        questions: [
+          { question: "Which DB?", multiSelect: false, options: [{ label: "Postgres" }, { label: "SQLite" }] },
+          { question: "Features?", multiSelect: true, options: [{ label: "Auth" }, { label: "Billing" }] },
+          { question: "Token?", multiSelect: false, options: [], freeText: true, isSecret: true },
+          { question: "Notes?", multiSelect: false, options: [], freeText: true },
+        ],
+      },
+    });
+    await h.manager.respondToPermission(agent.id, "p2", {
+      behavior: "allow",
+      updatedInput: {
+        questions: [],
+        answers: { "Which DB?": "SQLite", "Features?": "Auth, 还要导出", "Token?": "秘密", "Notes?": "尽快" },
+      },
+    });
+
+    await ask({
+      id: "p3",
+      provider: "fake",
+      name: "mcp",
+      kind: "elicitation",
+      detail: {
+        type: "elicitation",
+        serverName: "s",
+        mode: "form",
+        message: "fill",
+        fields: [
+          { key: "title", type: "string", required: true },
+          { key: "email", type: "string", format: "email", required: true },
+          { key: "pwd", type: "string", secret: true, required: true },
+          { key: "env", type: "select", required: true, options: [{ value: "prod", label: "Prod" }] },
+        ],
+      },
+    });
+    await h.manager.respondToPermission(agent.id, "p3", {
+      behavior: "allow",
+      updatedInput: { content: { title: "修复登录", email: "a@b.c", pwd: "密码", env: "prod" } },
+    });
+
+    expect(session.responses.map((r) => r.response)).toEqual([
+      { behavior: "deny", message: "EN:别删文件" },
+      {
+        behavior: "allow",
+        updatedInput: {
+          questions: [],
+          answers: { "Which DB?": "SQLite", "Features?": "EN:Auth, 还要导出", "Token?": "秘密", "Notes?": "EN:尽快" },
+        },
+      },
+      {
+        behavior: "allow",
+        updatedInput: { content: { title: "EN:修复登录", email: "a@b.c", pwd: "密码", env: "prod" } },
+      },
+    ]);
+  });
+
+  test("审批回答翻译失败：抛 TRANSLATION_FAILED，不提交、请求仍待处理；未开启翻译的会话原样提交", async () => {
+    const h = createManager({ fail: true });
+    const agent = await h.manager.createAgent({ provider: "fake", cwd: "/work" });
+    await h.manager.sendPrompt(agent.id, "开始");
+    const session = h.sessions[0]!;
+    session.emit({
+      type: "permission_requested",
+      turnId: "turn-1",
+      request: { id: "p1", provider: "fake", name: "Bash", kind: "tool" },
+    });
+    await h.manager.updateAgent(agent.id, { translation: true });
+    await expect(
+      h.manager.respondToPermission(agent.id, "p1", { behavior: "deny", message: "不行" }),
+    ).rejects.toMatchObject({ code: "TRANSLATION_FAILED" });
+    expect(session.responses).toEqual([]);
+    expect(h.manager.getAgent(agent.id).pendingPermissions.map((p) => p.id)).toEqual(["p1"]);
+
+    await h.manager.updateAgent(agent.id, { translation: false });
+    await h.manager.respondToPermission(agent.id, "p1", { behavior: "deny", message: "不行" });
+    expect(session.responses).toEqual([{ id: "p1", response: { behavior: "deny", message: "不行" } }]);
+    expect(h.translateToAgent).toHaveBeenCalledTimes(1);
   });
 
   test("enabledByDefault 只作用于用户新建的会话", async () => {

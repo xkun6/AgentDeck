@@ -1,6 +1,6 @@
 // 翻译显示（design.md 4.35）：助手文本 / 思考的译文与「显示原文」切换，用户消息的已发送译文。
 // 翻译请求只走 use-agent-session（translation.translate），sidecar 侧有磁盘缓存。
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { TranslationDirection } from "@agentdeck/protocol";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { MessageText } from "./message-text";
@@ -57,8 +57,11 @@ export function useDisplayTranslation(
     setNonce((value) => value + 1);
   };
 
+  const failed = failure?.key === key;
+
   useEffect(() => {
-    if (!enabled || results.has(key)) return;
+    // 失败后停在错误状态，只由「重试」重新请求
+    if (!enabled || failed || results.has(key)) return;
     let cancelled = false;
     let request = inflight.get(key);
     if (!request) {
@@ -82,12 +85,12 @@ export function useDisplayTranslation(
     return () => {
       cancelled = true;
     };
-  }, [actions, direction, text, key, enabled, nonce]);
+  }, [actions, direction, text, key, enabled, failed, nonce]);
 
   if (!enabled) return { status: "idle", retry };
   const cached = results.get(key);
   if (cached !== undefined) return { status: "done", text: cached, retry };
-  if (failure?.key === key) return { status: "error", error: failure.error, retry };
+  if (failed) return { status: "error", error: failure.error, retry };
   return { status: "pending", retry };
 }
 
@@ -132,13 +135,44 @@ function TranslationBar({
   );
 }
 
-/** 已完成的助手文本块：译文就绪后替换显示（Markdown） */
+/**
+ * 元素进入可见区域（上下预留 200px）后返回 true 并保持；环境没有 IntersectionObserver 时直接视为可见。
+ * 用于只翻译看得到的内容，打开长会话不会一次翻译全部历史。
+ */
+function useSeenOnce(): [(node: Element | null) => void, boolean] {
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === "undefined");
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const ref = useCallback(
+    (node: Element | null) => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      if (!node || seen) return;
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer.disconnect();
+            setSeen(true);
+          }
+        },
+        { rootMargin: "200px 0px" },
+      );
+      observer.observe(node);
+      observerRef.current = observer;
+    },
+    [seen],
+  );
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+  return [ref, seen];
+}
+
+/** 已完成的助手文本块：进入可见区域后请求翻译，译文就绪后替换显示（Markdown） */
 export function TranslatedMessageText({ text }: { text: string }) {
-  const translation = useDisplayTranslation(text, "agent-to-user", true);
+  const [ref, seen] = useSeenOnce();
+  const translation = useDisplayTranslation(text, "agent-to-user", seen);
   const [showOriginal, setShowOriginal] = useState(false);
   const translated = distinctTranslation(text, translation);
   return (
-    <>
+    <div ref={ref}>
       <MessageText text={translated && !showOriginal ? translated : text} />
       <TranslationBar
         translation={translation}
@@ -146,8 +180,19 @@ export function TranslatedMessageText({ text }: { text: string }) {
         showOriginal={showOriginal}
         onToggle={() => setShowOriginal((value) => !value)}
       />
-    </>
+    </div>
   );
+}
+
+/** 短文本（提问卡题目 / 选项等）：会话开启翻译时显示译文，悬停显示原文；未就绪或失败显示原文 */
+export function TranslatedInline({ text }: { text: string }) {
+  const { enabled } = useTimelineTranslation();
+  return enabled && text.trim().length > 0 ? <InlineTranslation text={text} /> : <>{text}</>;
+}
+
+function InlineTranslation({ text }: { text: string }) {
+  const translated = distinctTranslation(text, useDisplayTranslation(text, "agent-to-user", true));
+  return translated ? <span title={text}>{translated}</span> : <>{text}</>;
 }
 
 /** 展开后的思考块正文：纯文本，样式由调用方的 className 决定 */

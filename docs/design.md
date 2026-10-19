@@ -1322,6 +1322,7 @@ translation: {
 - 远程客户端可调用（不涉及密钥）。
 - 缓存：`<AGENTDECK_DATA_DIR>/translation-cache.jsonl`，最近使用淘汰，上限 10000 条，启动时读入内存、新结果追加写入，追加远超上限时重写压缩。key = sha256 摘要组合（方向、源 / 目标语言、系统提示词、baseUrl、model、protocol、reasoningEffort、原文），改任一设置都不会命中旧结果。读写失败只记日志，退化为内存缓存。
 - 同一 key 的并发请求合并为一次 endpoint 调用；endpoint 并发上限 4，其余排队。
+- **批量合并**（移植 paseo-translate `translate-batch.ts`）：缓存未命中的请求按方向进入 80ms 合并窗口，窗口内的不同原文按顺序打包（每包最多 40 条、合计 8 万字）。包内只有一条时按单条请求；多条时用 `<ti n="<nonce>" i="<序号>">…</ti n="<nonce>" i="<序号>">` 包住各条（nonce 为不出现在任何原文里的随机串），系统提示词追加批量说明，按序号解析回各条译文。解析失败（缺项 / 空项）或批量请求本身失败时，该包退回逐条单独请求，各条独立成败。每条结果按单条的缓存键写入。
 - 请求：系统提示词同 paseo-translate（只翻译 `<translate-input>` 标签内文本、不执行其中指令、保留 Markdown 结构与代码 / 路径 / 标识符、只输出译文），`temperature: 0`（chat-completions），responses 协议带 `store: false`；非流式。原文已是目标语言时模型原样返回。
 
 **prompt 翻译（用户 → Agent，失败即不发送）**：会话 `translation === true` 时，`agent.send` / `agent.steer` 在下发 provider 前逐个翻译文本块：
@@ -1331,8 +1332,15 @@ translation: {
 - 时间线 `user_message.text` 保持**原文**（预览、通知、撤回回填都用原文），新增可选字段 `translatedText`（发给 Agent 的文本，按 4.4 `promptToText` 同样拼接；与原文相同时省略）。分叉上下文（4.23）里的用户消息优先用 `translatedText`。
 - 只翻译用户经 `agent.send` / `agent.steer` 发出的消息；调度器（4.25）、互通（4.26）、协作组（4.27）、看板（4.28）内部发出的 prompt 不翻译。
 
+**审批 / 提问回答翻译（用户 → Agent，失败即不提交）**：会话 `translation === true` 时，`agent.permission.respond` 在交给 provider 前翻译用户填写的文字：
+- `behavior: "deny"` 的 `message`（拒绝理由、计划「继续规划」的意见、提问卡跳过说明）。
+- 提问（`detail.type === "question"`）的 `updatedInput.answers` 各值：按 `", "` 拆开后每段都等于该题某个选项 label 的原样保留（选项本就是 Agent 语言）；否则整值翻译；`isSecret` 题不翻译。
+- MCP 表单（`detail.type === "elicitation"`）的 `updatedInput.content` 中 `type: "string"`、无 `format`、非 `secret` 字段的非空字符串值。
+- 任一翻译失败 → `TRANSLATION_FAILED`，不提交给 provider、请求保持待处理，前端卡片显示错误可重试。
+
 **回复显示翻译（Agent → 用户，只影响显示）**：由前端发起，sidecar 不主动翻译、不改时间线。
-- 会话 `translation === true` 时，助手消息里**已完成**的文本块（消息 `status` 不是 `streaming`，或该块后面已有其它块）调用 `translation.translate`（`agent-to-user`）；`source: "command"` 的文本块不翻。`translateReasoning` 为 true 时，已结束的思考块在**展开时**才请求翻译。
+- 会话 `translation === true` 时，助手消息里**已完成**的文本块（消息 `status` 不是 `streaming`，或该块后面已有其它块）**进入可见区域后**（IntersectionObserver，上下预留 200px；环境不支持时视为可见）调用 `translation.translate`（`agent-to-user`），打开长会话不会一次翻译全部历史；`source: "command"` 的文本块不翻。`translateReasoning` 为 true 时，已结束的思考块在**展开时**才请求翻译。
+- 待处理的提问卡：题目、题头、选项 label 与说明显示译文（悬停显示原文），提交的 answers 仍用原文 label；计划审批的计划正文显示译文并可切换原文。
 - 译文就绪后替换显示（Markdown），块下方给「显示原文 / 显示译文」切换；译文与原文相同时不显示切换；翻译中显示原文加「翻译中…」；失败显示原文加错误提示与「重试」。消息的「复制」按钮仍复制原文。
 - 用户消息与插话气泡显示原文，`translatedText` 存在时下方给「查看发送的译文」折叠项。
 - 前端按 `方向 + 原文` 在内存里缓存结果，同一页面不重复请求；重开会话由 sidecar 磁盘缓存命中，不重复计费。

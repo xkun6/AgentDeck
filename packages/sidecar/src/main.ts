@@ -245,6 +245,7 @@ async function main(): Promise<void> {
     interop,
     idleReclaim: () => settings.get().idleReclaim,
     translatePrompt: (prompt) => translation.translatePrompt(prompt),
+    translateToAgent: (text) => translation.translate("user-to-agent", text),
     translationDefault: () => settings.get().translation.enabledByDefault,
     ...(store ? { store } : {}),
   });

@@ -6,6 +6,7 @@ import type {
   AgentMcpStatusResult,
   AgentStatusSection,
   AgentModelDefinition,
+  AgentPermissionRequest,
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
@@ -103,6 +104,8 @@ export interface AgentManagerOptions {
   idleReclaim?: () => { enabled: boolean; idleMinutes: number };
   /** 翻译（design.md 4.35）：开启翻译的会话发出用户消息前调用；失败抛错即不发送。不传则不翻译 */
   translatePrompt?: (prompt: AgentPromptInput) => Promise<AgentPromptInput>;
+  /** 翻译（design.md 4.35）：把用户在审批 / 提问 / 表单里填写的文字翻成 Agent 语言；失败抛错即不提交 */
+  translateToAgent?: (text: string) => Promise<string>;
   /** 用户新建会话是否默认开启翻译（design.md 4.35）；不传视为 false */
   translationDefault?: () => boolean;
 }
@@ -203,6 +206,7 @@ export class AgentManager {
   private readonly interop: AgentManagerOptions["interop"];
   private readonly idleReclaim: AgentManagerOptions["idleReclaim"];
   private readonly translatePrompt: AgentManagerOptions["translatePrompt"];
+  private readonly translateToAgent: AgentManagerOptions["translateToAgent"];
   private readonly translationDefault: AgentManagerOptions["translationDefault"];
   private idleReclaimTimer: NodeJS.Timeout | null = null;
   /** 每个会话的回合账本折叠器（只在内存） */
@@ -218,6 +222,7 @@ export class AgentManager {
     this.interop = options.interop;
     this.idleReclaim = options.idleReclaim;
     this.translatePrompt = options.translatePrompt;
+    this.translateToAgent = options.translateToAgent;
     this.translationDefault = options.translationDefault;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
@@ -861,21 +866,77 @@ export class AgentManager {
     response: AgentPermissionResponse,
   ): Promise<void> {
     const agent = this.requireOpenAgent(agentId);
-    const pending = agent.snapshot.pendingPermissions.some((request) => request.id === requestId);
-    if (!pending) {
+    const request = agent.snapshot.pendingPermissions.find((item) => item.id === requestId);
+    if (!request) {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
+    // 翻译失败在这里抛出：请求保持待处理，截断记录也还在，可重试
+    const translated = await this.translatePermissionResponse(agent, request, response);
     // 回传给 provider 的 updatedInput：UI 没改过的被截断字段换回原始值
     const truncated = agent.truncatedPermissions.get(requestId);
     agent.truncatedPermissions.delete(requestId);
     const outgoing: AgentPermissionResponse =
-      truncated && response.behavior === "allow" && response.updatedInput
-        ? { ...response, updatedInput: restoreTruncatedInput(response.updatedInput, truncated) }
-        : response;
+      truncated && translated.behavior === "allow" && translated.updatedInput
+        ? { ...translated, updatedInput: restoreTruncatedInput(translated.updatedInput, truncated) }
+        : translated;
     await this.requireSession(agent).respondToPermission(requestId, outgoing);
     // 兜底：session 未发 permission_resolved 时补发（已解决的会在处理时被去重丢弃）
     this.enqueueEvent(agent, { type: "permission_resolved", requestId, response });
     await agent.tail;
+  }
+
+  /**
+   * design.md 4.35：会话开启翻译时，把用户填写的文字翻成 Agent 语言——拒绝理由、提问回答（整值都是选项
+   * label 的原样保留，isSecret 题不翻）、MCP 表单里无 format 的非 secret 文本字段。
+   */
+  private async translatePermissionResponse(
+    agent: ManagedAgent,
+    request: AgentPermissionRequest,
+    response: AgentPermissionResponse,
+  ): Promise<AgentPermissionResponse> {
+    const translate = this.translateToAgent;
+    if (!agent.snapshot.translation || !translate) {
+      return response;
+    }
+    if (response.behavior === "deny") {
+      return response.message?.trim() ? { ...response, message: await translate(response.message) } : response;
+    }
+    const input = response.updatedInput;
+    const detail = request.detail;
+    if (!input || !detail) {
+      return response;
+    }
+    if (detail.type === "question" && isPlainRecord(input.answers)) {
+      const answers: Record<string, unknown> = { ...input.answers };
+      await Promise.all(
+        detail.questions.map(async (question) => {
+          const value = answers[question.question];
+          if (typeof value !== "string" || !value.trim() || question.isSecret) {
+            return;
+          }
+          const labels = new Set(question.options.map((option) => option.label));
+          if (value.split(", ").every((part) => labels.has(part))) {
+            return;
+          }
+          answers[question.question] = await translate(value);
+        }),
+      );
+      return { ...response, updatedInput: { ...input, answers } };
+    }
+    if (detail.type === "elicitation" && isPlainRecord(input.content)) {
+      const content: Record<string, unknown> = { ...input.content };
+      await Promise.all(
+        (detail.fields ?? []).map(async (field) => {
+          const value = content[field.key];
+          if (field.type !== "string" || field.format || field.secret || typeof value !== "string" || !value.trim()) {
+            return;
+          }
+          content[field.key] = await translate(value);
+        }),
+      );
+      return { ...response, updatedInput: { ...input, content } };
+    }
+    return response;
   }
 
   async setModel(agentId: string, modelId: string | null): Promise<AgentSnapshot> {
@@ -1954,6 +2015,10 @@ export class AgentManager {
       }
     }
   }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** user_message 的文本：原文，翻译后的文本不同时另带 translatedText（design.md 4.35） */

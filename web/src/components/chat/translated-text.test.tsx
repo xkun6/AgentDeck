@@ -9,7 +9,10 @@ vi.mock("@/hooks/use-agent-session", () => ({
   humanizeSidecarError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
 }));
 
+import type { AgentPermissionRequest } from "@agentdeck/protocol";
+import { ApprovalDialog } from "./approval-dialog";
 import { MessageTimeline } from "./message-timeline";
+import { TimelineTranslationContext } from "./translated-text";
 import type { ChatMessage } from "./chat-types";
 
 beforeEach(() => {
@@ -19,6 +22,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   translateText.mockReset();
+  vi.unstubAllGlobals();
 });
 
 const ON = { enabled: true, translateReasoning: false };
@@ -72,5 +76,85 @@ describe("时间线翻译显示（design.md 4.35）", () => {
     fireEvent.click(screen.getByText("查看发送的译文"));
     await waitFor(() => expect(screen.getByText("Fix login")).toBeTruthy());
     expect(translateText).not.toHaveBeenCalled();
+  });
+});
+
+describe("只翻可见内容与提问卡（design.md 4.35）", () => {
+  it("文本块进入可见区域后才请求翻译", async () => {
+    const observers: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+          observers.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    translateText.mockResolvedValue("看见了");
+    renderTimeline([assistant("Seen later.", "complete", "v1")]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(translateText).not.toHaveBeenCalled();
+    observers.forEach((callback) => callback([{ isIntersecting: true }]));
+    expect(await screen.findByText("看见了")).toBeTruthy();
+    expect(translateText).toHaveBeenCalledWith("agent-to-user", "Seen later.");
+  });
+
+  it("提问卡显示题目 / 选项译文（悬停原文），提交的 answers 仍用原文", async () => {
+    translateText.mockImplementation(async (_direction, text) => `译:${text}`);
+    const request: AgentPermissionRequest = {
+      id: "q1",
+      provider: "claude",
+      name: "AskUserQuestion",
+      kind: "question",
+      input: { questions: [] },
+      detail: {
+        type: "question",
+        questions: [{ question: "Which DB?", multiSelect: false, options: [{ label: "SQLite", description: "Light" }] }],
+      },
+    };
+    const onRespond = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TimelineTranslationContext.Provider value={ON}>
+        <ApprovalDialog
+          approval={{ requestId: "q1", sessionId: "agent-1", command: "", permission: request }}
+          onRespond={onRespond}
+        />
+      </TimelineTranslationContext.Provider>,
+    );
+    expect(await screen.findByText("译:Which DB?")).toBeTruthy();
+    expect(await screen.findByText("译:Light")).toBeTruthy();
+    const label = await screen.findByText("译:SQLite");
+    expect(label.getAttribute("title")).toBe("SQLite");
+    fireEvent.click(label);
+    fireEvent.click(screen.getByRole("button", { name: "提交回答" }));
+    await waitFor(() =>
+      expect(onRespond).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: "q1" }),
+        expect.objectContaining({
+          behavior: "allow",
+          updatedInput: expect.objectContaining({ answers: { "Which DB?": "SQLite" } }),
+        }),
+      ),
+    );
+  });
+
+  it("计划审批的计划正文显示译文", async () => {
+    translateText.mockResolvedValue("计划译文");
+    const request: AgentPermissionRequest = {
+      id: "plan1",
+      provider: "claude",
+      name: "ExitPlanMode",
+      kind: "plan",
+      detail: { type: "plan", text: "1. Do it" },
+    };
+    render(
+      <TimelineTranslationContext.Provider value={ON}>
+        <ApprovalDialog approval={{ requestId: "plan1", sessionId: "agent-1", command: "", permission: request }} onRespond={vi.fn()} />
+      </TimelineTranslationContext.Provider>,
+    );
+    expect(await screen.findByText("计划译文")).toBeTruthy();
+    expect(screen.getByText("显示原文")).toBeTruthy();
   });
 });
