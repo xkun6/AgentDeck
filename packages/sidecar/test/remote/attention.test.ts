@@ -83,6 +83,18 @@ describe("AttentionService 判定", () => {
     expect(t.sent).toHaveLength(1);
   });
 
+  test("缓存保活回合（keepalive，design.md 4.36）的完成 / 失败不发", () => {
+    const t = setupUnit();
+    t.emit("a1", { type: "turn_started", turnId: "k1", origin: "keepalive" });
+    t.emit("a1", { type: "turn_completed", turnId: "k1" });
+    t.emit("a1", { type: "turn_started", turnId: "k2", origin: "keepalive" });
+    t.emit("a1", { type: "turn_failed", turnId: "k2", error: "x" });
+    expect(t.sent).toHaveLength(0);
+    t.emit("a1", { type: "turn_started", turnId: "t1" });
+    t.emit("a1", { type: "turn_completed", turnId: "t1" });
+    expect(t.sent).toHaveLength(1);
+  });
+
   test("background 回合被取消后不再残留标记", () => {
     const t = setupUnit();
     t.emit("a1", { type: "turn_started", turnId: "bg1", origin: "background" });

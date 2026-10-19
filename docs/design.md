@@ -135,7 +135,7 @@ sidecar 入口：
 | `agent.tasks.output` | `{ agentId, taskId, maxBytes? }` | `{ text, truncated, size }`（见 4.15） |
 | `translation.translate` | `{ direction, text }` | `{ text }`（见 4.35） |
 | `translation.endpoint.get` / `translation.endpoint.set` | `{}` / `{ patch }` | `TranslationEndpoint`（远程禁止，见 4.35） |
-| `agent.update` | `{ agentId, title?: string \| null, pinned?, archived?, interopTarget?, translation? }` | `{ agent: AgentSnapshot }`（重命名 / 置顶 / 归档 / 互通 / 翻译开关，见 4.17、4.26、4.35） |
+| `agent.update` | `{ agentId, title?: string \| null, pinned?, archived?, interopTarget?, translation?, cacheKeepAlive? }` | `{ agent: AgentSnapshot }`（重命名 / 置顶 / 归档 / 互通 / 翻译 / 缓存保活开关，见 4.17、4.26、4.35、4.36） |
 | `agent.search` | `{ query, limit?, agentIds? }` | `{ hits: AgentSearchHit[], truncated }`（全文搜索，见 4.19） |
 | `usage.summary` | `{ sinceMs?, untilMs? }` | `UsageSummary`（跨会话用量统计，见 4.20） |
 | `agent.steer` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{}`（运行中插话，见 4.22） |
@@ -546,7 +546,7 @@ interface ProviderProfile {
 Claude Code 的后台子代理（`Agent` 工具 `run_in_background`）与后台命令（`Bash` `run_in_background`）完成后，CLI 会把 `<task-notification>` 注入为一条内部 user 消息并**自行开始新的一轮**，不需要 AgentDeck 发 prompt。参照 paseo 的 autonomous turn（`providers/claude/agent.ts` 的 `startAutonomousTurn` / `completeAutonomousTurn`）。
 
 **协议**：
-- `AgentTurnOrigin = "background"`；`turn_started` 增加可选 `origin`，缺省 = 由 `agent.send` 发起，`"background"` = provider 在没有 startTurn 的情况下自行开始的轮次。之后的 timeline / 权限 / usage 与普通回合相同，结束时同样只发一次 `turn_completed` / `turn_failed` / `turn_canceled`。
+- `AgentTurnOrigin = "background" | "keepalive"`；`turn_started` 增加可选 `origin`，缺省 = 由 `agent.send` 发起，`"background"` = provider 在没有 startTurn 的情况下自行开始的轮次，`"keepalive"` = 缓存保活发起的回合（4.36，由 AgentManager 标注）。之后的 timeline / 权限 / usage 与普通回合相同，结束时同样只发一次 `turn_completed` / `turn_failed` / `turn_canceled`。
 - AgentManager：自发轮次同样置 `status: "running"`、`activeTurnId`，结束恢复 `idle`（与普通回合同一套快照、落盘与 agent.state 推送）；不写 `user_message`。自发轮次进行中 `agent.send` **不**返回 `TURN_IN_PROGRESS`，交给 provider 的 startTurn 接管（见下）；普通回合进行中仍返回。`agent.cancel` 对自发轮次同样有效。
 - 前端：没有前置用户消息的 `turn_started` 另起一条助手消息（回放同理），运行态显示「运行中」，结束后恢复；输入框在运行中照常禁用、可中断。
 
@@ -953,7 +953,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 | `list_providers` | — | 可用 provider（id、label、可用性） |
 | `list_agents` | `{ includeArchived?: boolean, callableOnly?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId、`interopTarget`、`callable`、`updatedAt`）；标题未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准；`callable` = 调用方可对其 `send_to_agent` / `cancel_agent`（非自己，且为子孙或 `interopTarget`）；`callableOnly: true` 只返回 `callable` 的会话；`updatedAt` 为 ISO 时间 |
 | `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */ }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字 |
-| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, title?, worktree?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600）返回 `status: "running"` |
+| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, title?, worktree?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"` |
 | `send_to_agent` | `{ agentId, message, wait?: boolean, timeoutSec?: number }` | 同上；目标忙 → 工具错误「目标会话正在运行」 |
 | `wait_agent` | `{ agentId, timeoutSec?: number }` | 等到目标当前回合结束，返回最后一条助手消息 |
 | `cancel_agent` | `{ agentId }` | 中断目标会话当前回合 |
@@ -1280,6 +1280,7 @@ Codex 的 `request_user_input` 工具向用户提问时，app-server 发 server�
 - 已加载：`session !== null`，且不在关闭 / 恢复 / 发送中，未被删除；
 - `status` 为 `idle` 或 `error`，`activeTurnId` 为空，`pendingPermissions` 为空，`backgroundActive` 不为 true；
 - `resumable === true`；未置顶（`pinned !== true`，置顶会话只能手动回收）；
+- 不是「开启缓存保活且有直接子会话仍在工作」（4.36）；
 - 距最近一次活动 ≥ `idleMinutes`。「活动」= 会话创建 / 恢复完成、`agent.send` 受理、任一 `agent.stream` 事件发出（只在内存记录，不持久化；sidecar 重启后会话本就是 dormant）。
 
 **并发**：关闭进行中再 `agent.send`，先等关闭完成再按 dormant 恢复（`ensureSession` 等待 `agent.closing`），不返回 `AGENT_CLOSED`。回收写日志「回收空闲 agent <id>（手动 / 空闲 N 分钟）」。
@@ -1349,6 +1350,26 @@ translation: {
 - 设置页「翻译」（路径 `/translation`）：endpoint 各字段（apiKey 用密码框）、「测试」按钮（用 `translation.translate` 翻译一句示例文本并显示结果或错误）、用户语言 / Agent 语言、翻译思考、新会话默认开启。
 - 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。新任务输入框同样有该开关：初始状态跟随「新会话默认开启」，用户点过后创建会话时以 `agent.create { translation }` 显式传入，未点过则省略、由 sidecar 取默认值。手机端：新建会话页有「翻译」开 / 关选项（规则同新任务输入框）、会话详情顶栏有「翻译」开关（`agent.update`，失败在页面错误条显示）；endpoint 与语言设置只在电脑端（`settings.set`、`translation.endpoint.*` 对远程禁止）。
 - 全文搜索（4.19）检索的是时间线原文：用户消息为用户语言，助手消息为 Agent 语言。
+
+### 4.36 缓存保活（仅 Claude）
+
+Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有新请求即过期（订阅套餐额度内主会话 1 小时；用量积分 / API key / 云厂商 5 分钟），过期后下一次请求把整段上下文重新写入缓存。主会话等子代理 / 后台任务（构建类任务常跑数小时）时不发请求。缓存保活 = 在**当前会话**里发一条内部消息开一个短回合：请求读取整段前缀，刷新 TTL。
+
+**开关**：`AgentSnapshot.cacheKeepAlive?: boolean`（缺省 false，随 meta 持久化，加载时校验类型），经 `agent.update { agentId, cacheKeepAlive }` 设置（同 4.17 只改元数据）。只对 Claude 类 provider（`AgentClient.kind === "claude"`，含 extends claude 的自定义中转）可开：其它 provider 或 provider 已不存在时设为 true → `NOT_SUPPORTED`（「该 Agent 不支持缓存保活」）；设为 false 总是允许。不注入 TTL 相关环境变量，依赖订阅套餐内主会话默认的 1 小时 TTL（5 分钟 TTL 下 50 分钟一次的保活不起作用）。
+
+**触发**：`CacheKeepAlive`（`agent/cache-keepalive.ts`，订阅 AgentManager）每 60 秒扫一次（定时器 `unref`，`stop` 时清除），对满足以下**全部**条件的会话发一次保活：
+- `cacheKeepAlive === true`，且 provider 为 Claude 类；
+- 已加载且空闲：`status === "idle"`，`activeTurnId` 为空，`pendingPermissions` 为空（dormant / closed / error 不发；发送中由 `TURN_IN_PROGRESS` 挡掉）；
+- 在等待：`backgroundActive === true`（4.11 / 4.15），或有直接子会话（`parentAgentId` 为它，4.26）处于 `running` / `starting`、`activeTurnId` 非空或 `backgroundActive`。**置顶**（`pinned === true`）的会话不要求在等待：进程未被回收期间一直保活，长任务全部结束后用户回来时缓存仍在。有后台活动的会话本就不会被自动回收（4.34）；开启保活且在等子会话的会话同样不自动回收；
+- 距该会话最近一次主线程请求 ≥ 50 分钟。「请求」取 sidecar 收到该会话 `turn_started` / `usage_updated`（主线程每个 `message_start` 一次，4.3）的时间，只在内存记录；sidecar 启动后该会话还没有过请求则不保活（不知道缓存是否还在）；
+- 上一次保活发送失败（`sendPrompt` 抛错）后同样等满 50 分钟再试；同一会话同时只有一次发送在进行。
+
+**保活消息**：`AgentManager.sendPrompt(agentId, prompt, undefined, { internal: true, keepAlive: true })`：内部消息，不翻译、不算用户介入（4.25 目标循环不因此停止），照常写 `user_message`、开回合、计入用量与 `updatedAt`。文本固定：「【AgentDeck 缓存保活】这是自动发送的消息，用于在等待期间保持提示缓存，不是新任务。请只回复「ok」，不要调用任何工具，也不要检查或汇报后台任务。」
+- 该回合的 `turn_started` 由 AgentManager 标 `origin: "keepalive"`（4.12）。远程提醒（4.31）与桌面通知不对它提醒「本轮已完成 / 失败」；调度器（4.25）、协作组（4.27）、看板（4.28）与 CLI 自发轮次一样不把它当作所等待回合的结果。前端照常显示这条用户消息与回复。
+
+**互通阻塞等待**：调用方 `cacheKeepAlive === true` 时，`delegate` / `send_to_agent` / `wait_agent` 的单次等待上限为 3000 秒（其它会话仍为 3600），超时照常返回 `status: "running"` 与「可用 wait_agent 继续等待」；Agent 再次调用即产生一次新请求，阻塞等待期间也能刷新缓存。
+
+**前端**：会话右键菜单（与「⋯」菜单共用）对 Claude 类会话显示「缓存保活」，开启时图标为勾选；失败用应用内提示框反馈。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

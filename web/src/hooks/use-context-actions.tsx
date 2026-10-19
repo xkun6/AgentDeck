@@ -14,6 +14,7 @@ import {
   FileText,
   FolderOpen,
   GitFork,
+  HeartPulse,
   MessageSquarePlus,
   MessageSquare,
   Pencil,
@@ -27,6 +28,7 @@ import {
 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import type { ContextMenuEntry } from "@/components/context-menu/entity-context-menu";
+import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { humanizeSidecarError, isInactiveAgent, useAgentSession } from "@/hooks/use-agent-session";
 import { useDeleteAgentSession } from "@/hooks/use-delete-agent-session";
 import { useExportSession } from "@/hooks/use-export-session";
@@ -174,6 +176,7 @@ export function useSessionActions() {
   const exportSession = useExportSession();
   const forkSession = useForkSession();
   const actions = useAgentSession();
+  const providers = useAgentProviders().data;
   const store = useStore();
   const setScheduleDialog = useSetAtom(scheduleDialogAtom);
   const { confirm, prompt } = useConfirm();
@@ -182,7 +185,13 @@ export function useSessionActions() {
   const updateSession = useCallback(
     async (
       agentId: string,
-      patch: { title?: string | null; pinned?: boolean; archived?: boolean; interopTarget?: boolean },
+      patch: {
+        title?: string | null;
+        pinned?: boolean;
+        archived?: boolean;
+        interopTarget?: boolean;
+        cacheKeepAlive?: boolean;
+      },
       failureTitle: string,
     ): Promise<void> => {
       try {
@@ -282,6 +291,9 @@ export function useSessionActions() {
       const cwd = normalizeWorkspacePath(agent.cwd || readSessionWorkspaceMap()[agent.id]);
       const running = agent.status === "running" || agent.status === "starting";
       const hasProject = !!cwd && readWorkspaceProjects().some((project) => project.path === cwd);
+      // provider 种类（自定义中转取 extends 的值）：缓存保活只对 Claude 类会话提供（design.md 4.36）
+      const providerKind = providers?.find((provider) => provider.id === agent.provider)?.kind
+        ?? (agent.provider === "claude" ? "claude" : undefined);
       return [
         { key: "open", label: "打开会话", icon: <MessageSquare size={ICON} />, onSelect: () => openSession(agent) },
         { key: "rename", label: "重命名", icon: <Pencil size={ICON} />, onSelect: () => void renameSession(agent, title) },
@@ -329,6 +341,20 @@ export function useSessionActions() {
               agent.interopTarget ? "取消允许被其它会话调用失败" : "设置允许被其它会话调用失败",
             ),
         },
+        ...(providerKind === "claude"
+          ? [{
+              // 缓存保活（design.md 4.36）：等待子代理 / 后台任务时每 50 分钟保活；勾选表示已开启
+              key: "cache-keepalive",
+              label: "缓存保活",
+              icon: agent.cacheKeepAlive ? <Check size={ICON} /> : <HeartPulse size={ICON} />,
+              onSelect: () =>
+                void updateSession(
+                  agent.id,
+                  { cacheKeepAlive: !agent.cacheKeepAlive },
+                  agent.cacheKeepAlive ? "关闭缓存保活失败" : "开启缓存保活失败",
+                ),
+            }]
+          : []),
         { key: "snapshots", label: "快照历史", icon: <Camera size={ICON} />, onSelect: () => openSnapshotHistory(agent) },
         {
           key: "goal-loop",
@@ -370,7 +396,7 @@ export function useSessionActions() {
         },
       ];
     },
-    [deleteSession, exportSession, forkSession, navigate, openScheduleDialog, openSession, openSnapshotHistory, reclaimSession, renameSession, updateSession],
+    [deleteSession, exportSession, forkSession, navigate, openScheduleDialog, openSession, openSnapshotHistory, providers, reclaimSession, renameSession, updateSession],
   );
 
   return { openSession, buildMenu };

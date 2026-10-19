@@ -31,6 +31,8 @@ export const INTEROP_READ_DEFAULT_MESSAGES = 10;
 export const INTEROP_READ_MAX_MESSAGES = 50;
 export const INTEROP_DEFAULT_TIMEOUT_SEC = 600;
 export const INTEROP_MAX_TIMEOUT_SEC = 3600;
+/** 调用方开启缓存保活时的单次等待上限（design.md 4.36）：短于 1 小时 TTL，返回后 Agent 再次调用即刷新缓存 */
+export const INTEROP_KEEPALIVE_MAX_TIMEOUT_SEC = 3000;
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024;
 /** 即使目录里查不到，这些 modeId 也一律视为危险（跳过权限确认类） */
 const DANGEROUS_MODE_PATTERN = /bypass|full-access|dangerous|yolo/i;
@@ -62,9 +64,11 @@ function errorResult(message: string): ToolResult {
   return { isError: true, content: [{ type: "text", text: redactInteropTokens(message) }] };
 }
 
-function clampTimeoutSec(value: number | undefined): number {
+/** 等待秒数：缺省 600，取整后夹在 1 到上限之间；调用方开启缓存保活时上限更短（design.md 4.36） */
+export function clampTimeoutSec(value: number | undefined, caller: AgentSnapshot | undefined): number {
   const raw = value ?? INTEROP_DEFAULT_TIMEOUT_SEC;
-  return Math.min(Math.max(Math.floor(raw), 1), INTEROP_MAX_TIMEOUT_SEC);
+  const max = caller?.cacheKeepAlive === true ? INTEROP_KEEPALIVE_MAX_TIMEOUT_SEC : INTEROP_MAX_TIMEOUT_SEC;
+  return Math.min(Math.max(Math.floor(raw), 1), max);
 }
 
 function truncateReply(text: string): string {
@@ -391,7 +395,13 @@ export class McpInteropEndpoint {
         title: z.string().max(200).optional(),
         worktree: z.boolean().optional().describe("为 true 时在独立 git worktree（新分支）中工作，要求 cwd 在 git 仓库内"),
         wait: z.boolean().optional().describe("是否等待回合结束，默认 true"),
-        timeoutSec: z.number().positive().optional().describe(`等待超时秒数，默认 ${INTEROP_DEFAULT_TIMEOUT_SEC}，上限 ${INTEROP_MAX_TIMEOUT_SEC}`),
+        timeoutSec: z
+          .number()
+          .positive()
+          .optional()
+          .describe(
+            `等待超时秒数，默认 ${INTEROP_DEFAULT_TIMEOUT_SEC}，上限 ${INTEROP_MAX_TIMEOUT_SEC}（开启缓存保活的会话为 ${INTEROP_KEEPALIVE_MAX_TIMEOUT_SEC}）`,
+          ),
       },
       (args, signal) => this.delegate(callerId, args, signal),
     );
@@ -569,7 +579,7 @@ export class McpInteropEndpoint {
         `子会话 ${id} 已创建，但发送任务失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return this.finish(id, 0, args.wait !== false, clampTimeoutSec(args.timeoutSec), signal, worktree);
+    return this.finish(id, 0, args.wait !== false, clampTimeoutSec(args.timeoutSec, caller), signal, worktree);
   }
 
   private async sendToAgent(
@@ -596,7 +606,13 @@ export class McpInteropEndpoint {
       }
       throw error;
     }
-    return this.finish(target.id, sinceSeq, args.wait !== false, clampTimeoutSec(args.timeoutSec), signal);
+    return this.finish(
+      target.id,
+      sinceSeq,
+      args.wait !== false,
+      clampTimeoutSec(args.timeoutSec, this.callerSnapshot(callerId)),
+      signal,
+    );
   }
 
   private async waitAgent(
@@ -611,7 +627,16 @@ export class McpInteropEndpoint {
     if (this.ancestorsOf(callerId).includes(target.id)) {
       throw new ToolError("不能等待自己的上级会话（会互相等待）");
     }
-    return this.finish(target.id, 0, true, clampTimeoutSec(args.timeoutSec), signal);
+    return this.finish(target.id, 0, true, clampTimeoutSec(args.timeoutSec, this.callerSnapshot(callerId)), signal);
+  }
+
+  /** 调用方快照（取等待上限用）；调用方已被删除时为 undefined */
+  private callerSnapshot(callerId: string): AgentSnapshot | undefined {
+    try {
+      return this.manager.getAgent(callerId);
+    } catch {
+      return undefined;
+    }
   }
 
   private async cancelAgent(callerId: string, args: { agentId: string }): Promise<ToolResult> {

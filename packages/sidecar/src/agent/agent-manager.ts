@@ -138,6 +138,8 @@ interface SentTurn {
   hasOutput: boolean;
   /** 已写入 user_message_retracted */
   retracted: boolean;
+  /** 缓存保活发出的回合（design.md 4.36）：turn_started 标 origin keepalive */
+  keepAlive?: boolean;
 }
 
 interface ToolCallSlot {
@@ -404,9 +406,10 @@ export class AgentManager {
     clientMessageId?: string,
     /**
      * internal = 调度器发出的消息（design.md 4.25），不算用户介入；
-     * translate = 用户经 agent.send 发出，会话开启翻译时先翻成 Agent 语言（design.md 4.35）
+     * translate = 用户经 agent.send 发出，会话开启翻译时先翻成 Agent 语言（design.md 4.35）；
+     * keepAlive = 缓存保活（design.md 4.36，与 internal 同用），该回合的 turn_started 标 origin keepalive
      */
-    opts?: { internal?: boolean; translate?: boolean },
+    opts?: { internal?: boolean; translate?: boolean; keepAlive?: boolean },
   ): Promise<{ turnId: string }> {
     const agent = this.requireAgent(agentId);
     // 恢复期间也持有 sending：并发 send 只触发一次恢复，其余按单 turn 约束返回 TURN_IN_PROGRESS。
@@ -436,6 +439,7 @@ export class AgentManager {
         turnId: null,
         hasOutput: false,
         retracted: false,
+        ...(opts?.keepAlive ? { keepAlive: true } : {}),
       };
       agent.sentTurn = sentTurn;
       // user_message 先在事件链中占位（排在 startTurn 期间 provider 发出的事件之前），
@@ -1026,7 +1030,8 @@ export class AgentManager {
     const now = this.now();
     const thresholdMs = settings.idleMinutes * 60_000;
     const targets = Array.from(this.agents.values()).filter(
-      (agent) => isIdleReclaimable(agent) && now - agent.lastActivityAt >= thresholdMs,
+      (agent) =>
+        isIdleReclaimable(agent) && !this.keepAliveWaitingOnChild(agent) && now - agent.lastActivityAt >= thresholdMs,
     );
     await Promise.allSettled(
       targets.map((agent) => {
@@ -1041,6 +1046,26 @@ export class AgentManager {
     return targets.map((agent) => agent.id);
   }
 
+  /** 开启缓存保活且仍有委派子会话在工作（design.md 4.36）：不自动回收，否则保活无从发出 */
+  private keepAliveWaitingOnChild(agent: ManagedAgent): boolean {
+    if (agent.snapshot.cacheKeepAlive !== true) {
+      return false;
+    }
+    for (const other of this.agents.values()) {
+      const child = other.snapshot;
+      if (
+        child.parentAgentId === agent.id &&
+        (child.status === "running" ||
+          child.status === "starting" ||
+          Boolean(child.activeTurnId) ||
+          child.backgroundActive === true)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * design.md 4.17：只改元数据（标题 / 置顶 / 归档）。任何状态可调，不恢复会话、不受单 turn 约束、
    * 不改 updatedAt；立即落盘 meta 并推 agent.state。title 为 null / 空白 = 清除自定义标题。
@@ -1053,10 +1078,15 @@ export class AgentManager {
       archived?: boolean;
       interopTarget?: boolean;
       translation?: boolean;
+      cacheKeepAlive?: boolean;
     },
   ): Promise<AgentSnapshot> {
     const agent = this.requireAgent(agentId);
     const snapshot = agent.snapshot;
+    // 缓存保活只对 Claude 类 provider 可开（design.md 4.36）；先校验，不合法时整个 patch 都不生效
+    if (patch.cacheKeepAlive === true && this.registry.get(snapshot.provider)?.kind !== "claude") {
+      throw new AgentRpcError("NOT_SUPPORTED", "该 Agent 不支持缓存保活");
+    }
     if (patch.title !== undefined) {
       const title = patch.title?.trim() ?? "";
       if (title) {
@@ -1076,6 +1106,9 @@ export class AgentManager {
     }
     if (patch.translation !== undefined) {
       snapshot.translation = patch.translation;
+    }
+    if (patch.cacheKeepAlive !== undefined) {
+      snapshot.cacheKeepAlive = patch.cacheKeepAlive;
     }
     await this.persistNow(agent);
     this.emitState(agent);
@@ -1590,7 +1623,10 @@ export class AgentManager {
       this.applySubagentEvent(agent, rawEvent.event);
       return;
     }
-    const event = this.limitPermissionSize(agent, this.limitToolCallSize(this.attachTurnId(agent, rawEvent)));
+    const event = this.tagKeepAliveTurn(
+      agent,
+      this.limitPermissionSize(agent, this.limitToolCallSize(this.attachTurnId(agent, rawEvent))),
+    );
     const sentTurn = agent.sentTurn;
     if (sentTurn) {
       if (sentTurn.retracted && event.type === "timeline") {
@@ -1645,6 +1681,20 @@ export class AgentManager {
       agent.truncatedPermissions.set(request.id, truncatedInput);
     }
     return { ...event, request };
+  }
+
+  /** 缓存保活发出的回合（design.md 4.36）：provider 发的 turn_started 标上 origin keepalive */
+  private tagKeepAliveTurn(agent: ManagedAgent, event: AgentStreamEvent): AgentStreamEvent {
+    const sentTurn = agent.sentTurn;
+    if (
+      event.type !== "turn_started" ||
+      event.origin !== undefined ||
+      !sentTurn?.keepAlive ||
+      (sentTurn.turnId !== null && sentTurn.turnId !== event.turnId)
+    ) {
+      return event;
+    }
+    return { ...event, origin: "keepalive" };
   }
 
   /** 工具调用项统一限制大小（文本截断、图片占位），先于合并 / 快照 / 广播 / 落盘（design.md 5.3） */

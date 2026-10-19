@@ -96,6 +96,8 @@ export interface ChatSessionRuntime {
   agentTextMessageId?: string;
   /** AgentDeck：进行中的回合是 CLI 自发轮次（origin background，design.md 4.12），不提供重试（4.21）。 */
   activeTurnBackground?: boolean;
+  /** AgentDeck：进行中的回合是缓存保活（origin keepalive，design.md 4.36），结束时不发桌面通知。 */
+  activeTurnKeepAlive?: boolean;
 }
 
 export type ChatRuntimeBySession = Record<string, ChatSessionRuntime>;
@@ -919,6 +921,7 @@ function reduceAgentEventInner(
           turnStartedAt: active ? runtime.turnStartedAt ?? timestamp : timestamp,
           turnFirstTokenAt: undefined,
           activeTurnBackground: event.origin === "background",
+          activeTurnKeepAlive: event.origin === "keepalive",
           statusMessage: "",
           statusKind: undefined,
           statusUpdatedAt: undefined,
@@ -1146,6 +1149,7 @@ export const startAgentPromptAtom = atom(
         turnFirstTokenAt: undefined,
         activeAssistantId: assistantId,
         activeTurnBackground: false,
+        activeTurnKeepAlive: false,
       })),
     );
   },

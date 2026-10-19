@@ -652,6 +652,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         archived?: boolean;
         interopTarget?: boolean;
         translation?: boolean;
+        cacheKeepAlive?: boolean;
       },
     ): Promise<AgentSnapshot> {
       const { agent } = await client.request("agent.update", { agentId, ...patch });

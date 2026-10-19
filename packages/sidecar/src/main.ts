@@ -9,6 +9,7 @@ import path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStore } from "./agent/agent-store.js";
+import { CacheKeepAlive } from "./agent/cache-keepalive.js";
 import { GroupService } from "./groups/group-service.js";
 import { GroupStore } from "./groups/store.js";
 import {
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
   let server: RpcServer | null = null;
   let remote: RemoteService | null = null;
   let attention: AttentionService | null = null;
+  let keepAlive: CacheKeepAlive | null = null;
   let parentTimer: NodeJS.Timeout | null = null;
   let shuttingDown = false;
 
@@ -142,6 +144,7 @@ async function main(): Promise<void> {
     try {
       await withTimeout(
         (async () => {
+          keepAlive?.stop();
           await scheduler?.stop();
           await board?.stop();
           await groups?.stop();
@@ -266,6 +269,13 @@ async function main(): Promise<void> {
   } catch (error) {
     logger.error("启动调度器失败：%s", String(error));
   }
+  // 缓存保活（design.md 4.36）：只对 Claude 类 provider 的会话生效
+  keepAlive = new CacheKeepAlive({
+    manager,
+    isClaude: (provider) => registry?.get(provider)?.kind === "claude",
+    logger,
+  });
+  keepAlive.start();
   // 看板（design.md 4.28）：补判重启前仍在 running 的任务、检查自动派发；启动失败只记日志
   board = new BoardService({
     manager,
