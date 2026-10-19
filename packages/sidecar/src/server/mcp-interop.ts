@@ -328,8 +328,14 @@ export class McpInteropEndpoint {
 
     register(
       "list_agents",
-      "列出 AgentDeck 里的会话：id、标题、provider、工作目录、状态、模型、父会话 id。",
-      { includeArchived: z.boolean().optional().describe("是否包含已归档会话，默认 false") },
+      "列出 AgentDeck 里的会话：id、标题（未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准）、provider、工作目录、状态、模型、父会话 id、是否被用户标记为允许被其它会话调用（interopTarget）、当前会话能否对其 send_to_agent / cancel_agent（callable）、最近更新时间。",
+      {
+        includeArchived: z.boolean().optional().describe("是否包含已归档会话，默认 false"),
+        callableOnly: z
+          .boolean()
+          .optional()
+          .describe("为 true 时只返回当前会话可以 send_to_agent / cancel_agent 的会话（子孙会话或被用户允许调用的会话）"),
+      },
       async (args) => {
         const agents = this.manager
           .listAgents()
@@ -342,7 +348,11 @@ export class McpInteropEndpoint {
             status: agent.status,
             model: agent.model ?? null,
             parentAgentId: agent.parentAgentId ?? null,
-          }));
+            interopTarget: agent.interopTarget === true,
+            callable: agent.id !== callerId && this.canOperate(callerId, agent),
+            updatedAt: new Date(agent.updatedAt).toISOString(),
+          }))
+          .filter((agent) => args.callableOnly !== true || agent.callable);
         return textResult(agents);
       },
     );

@@ -343,6 +343,7 @@ export function useSessionActions() {
           onSelect: () => openScheduleDialog(agent.id, "heartbeat"),
         },
         { key: "copy-title", label: "复制会话标题", icon: <Copy size={ICON} />, onSelect: () => void copyText(title) },
+        { key: "copy-id", label: "复制会话 ID", icon: <Copy size={ICON} />, onSelect: () => void copyText(agent.id) },
         ...(cwd
           ? [{ key: "copy-cwd", label: "复制工作目录", icon: <Copy size={ICON} />, onSelect: () => void copyText(cwd) }]
           : []),

@@ -951,7 +951,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 | 工具 | 参数 | 返回 |
 |---|---|---|
 | `list_providers` | — | 可用 provider（id、label、可用性） |
-| `list_agents` | `{ includeArchived?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId） |
+| `list_agents` | `{ includeArchived?: boolean, callableOnly?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId、`interopTarget`、`callable`、`updatedAt`）；标题未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准；`callable` = 调用方可对其 `send_to_agent` / `cancel_agent`（非自己，且为子孙或 `interopTarget`）；`callableOnly: true` 只返回 `callable` 的会话；`updatedAt` 为 ISO 时间 |
 | `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */ }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字 |
 | `delegate` | `{ provider, prompt, cwd?, model?, modeId?, title?, worktree?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600）返回 `status: "running"` |
 | `send_to_agent` | `{ agentId, message, wait?: boolean, timeoutSec?: number }` | 同上；目标忙 → 工具错误「目标会话正在运行」 |
@@ -966,7 +966,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 
 **快照**：`AgentSnapshot` 增加 `parentAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
 
-**前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关。
+**前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关与「复制会话 ID」（便于用户把准确的目标 id 告诉 Agent）。
 
 **实测结论（claude 2.1.296、codex-cli 0.162.1，探针见 `tmp/mcp-probe.mjs`、`run-claude.mjs`、`run-codex.mjs`、`e2e.mjs`）**：
 - Claude `--mcp-config '<内联 JSON>'`（`type: "http"` + `headers`，shell:false 传参）：**可用**。stream-json 模式下 `system init` 的 `mcp_servers` 里 `agentdeck` 为 `connected`（source `dynamic`），工具名 `mcp__agentdeck__<tool>`，调用结果正常返回。CLI 握手顺序为 `POST server/discover`（探测，返回 method-not-found 即可）→ `initialize` → `notifications/initialized` → `GET /mcp`（想开 SSE 通道，无状态端点返回 405 即可）→ `tools/list` → `tools/call`，均带 Authorization 头；与官方 SDK 的无状态 + `enableJsonResponse` 服务端兼容。用户 settings 允许时不弹权限；默认模式下每次工具调用走现有审批流。

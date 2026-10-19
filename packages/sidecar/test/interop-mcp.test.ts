@@ -527,8 +527,16 @@ describe("send_to_agent / wait_agent / cancel_agent 的安全约束", () => {
     expect(denied.isError).toBe(true);
     expect(denied.text).toContain("允许被其它会话调用");
     expect((await callTool(client, "cancel_agent", { agentId: stranger.id })).isError).toBe(true);
+    type Listed = { id: string; interopTarget: boolean; callable: boolean; updatedAt: string };
+    const before = (await callTool(client, "list_agents")).json as Listed[];
+    expect(before.find((a) => a.id === stranger.id)).toMatchObject({ interopTarget: false, callable: false });
+    expect(before.find((a) => a.id === caller.id)?.callable).toBe(false);
+    expect(Number.isNaN(Date.parse(before[0]!.updatedAt))).toBe(false);
+    expect((await callTool(client, "list_agents", { callableOnly: true })).json).toEqual([]);
 
     await h.manager.updateAgent(stranger.id, { interopTarget: true });
+    const callable = (await callTool(client, "list_agents", { callableOnly: true })).json as Listed[];
+    expect(callable.map((a) => [a.id, a.interopTarget, a.callable])).toEqual([[stranger.id, true, true]]);
     const allowed = await callTool(client, "send_to_agent", { agentId: stranger.id, message: "你好" });
     expect(allowed.isError).toBe(false);
     expect((allowed.json as { reply: string }).reply).toBe("回答:你好");
@@ -575,6 +583,8 @@ describe("send_to_agent / wait_agent / cancel_agent 的安全约束", () => {
     const client = await h.connect(caller.token);
     const child = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:长任务", wait: false }))
       .json as { agentId: string };
+    const callable = (await callTool(client, "list_agents", { callableOnly: true })).json as Array<{ id: string }>;
+    expect(callable.map((a) => a.id)).toEqual([child.agentId]);
     const result = await callTool(client, "cancel_agent", { agentId: child.agentId });
     expect(result.isError).toBe(false);
     expect(h.sessions.at(-1)!.interrupts).toBe(1);
