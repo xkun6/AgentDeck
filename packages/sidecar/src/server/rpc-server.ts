@@ -482,6 +482,7 @@ export class RpcServer {
           modeId: z.string().optional(),
           thinkingOptionId: z.string().min(1).nullable().optional(),
           title: z.string().optional(),
+          translation: z.boolean().optional(),
         }),
         async (params) => ({ agent: await manager.createAgent(params) }),
       ),

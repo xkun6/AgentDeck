@@ -5,6 +5,7 @@ import { useAtomValue } from "jotai";
 import { agentListAtom } from "@/stores/agents";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
+import { useDraftTranslation } from "@/components/chat/translation-toggle";
 import { isDangerousMode, resolveProvider } from "@/lib/agent-selection";
 import { cwdBaseName, cwdKey, recentCwdOptions } from "./cwd-options";
 import s from "./mobile.module.css";
@@ -22,6 +23,7 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
   const [pickedCwd, setPickedCwd] = useState<string | null>(null);
   const [manualCwd, setManualCwd] = useState("");
   const [manualSelected, setManualSelected] = useState(false);
+  const translation = useDraftTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,6 +47,7 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
         cwd,
         ...(model ? { model } : {}),
         ...(mode ? { modeId: mode } : {}),
+        ...(translation.picked !== undefined ? { translation: translation.picked } : {}),
       });
       onCreated(agent.id);
     } catch (e) {
@@ -199,6 +202,26 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
               />
             </label>
           ) : null}
+        </section>
+
+        <section className={s.section} aria-label="翻译">
+          <h2 className={s.sectionTitle}>翻译</h2>
+          <div className={s.optionGroup} role="radiogroup" aria-label="翻译">
+            {([false, true] as const).map((value) => (
+              <button
+                key={String(value)}
+                type="button"
+                role="radio"
+                aria-checked={translation.on === value}
+                className={s.option}
+                data-selected={translation.on === value ? "true" : undefined}
+                onClick={() => translation.set(value)}
+              >
+                {value ? "开启" : "关闭"}
+                {value ? <span className={s.optionNote}>消息译成 Agent 语言发送，回复显示译文</span> : null}
+              </button>
+            ))}
+          </div>
         </section>
 
         {error ? (

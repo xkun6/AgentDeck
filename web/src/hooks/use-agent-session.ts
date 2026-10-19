@@ -104,6 +104,8 @@ export interface CreateAgentSessionInput {
   /** 思考强度；省略 = 跟随 CLI 设置 */
   thinkingOptionId?: string;
   title?: string;
+  /** 翻译开关；省略 = sidecar 取默认设置 */
+  translation?: boolean;
 }
 
 export interface SendAgentPromptOptions {
@@ -421,6 +423,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         ...(input.modeId ? { modeId: input.modeId } : {}),
         ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
         ...(input.title ? { title: input.title } : {}),
+        ...(input.translation !== undefined ? { translation: input.translation } : {}),
       });
       store.set(upsertAgentSnapshotAtom, agent);
       store.set(ensureChatSessionAtom, agent.id);

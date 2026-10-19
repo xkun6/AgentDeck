@@ -125,6 +125,8 @@ export interface CreateAgentParams {
   /** null / 省略 = 跟随 CLI 自身设置（design.md 4.10） */
   thinkingOptionId?: string | null;
   title?: string;
+  /** 会话翻译开关；省略 = 用户新建的会话取默认设置（design.md 4.35） */
+  translation?: boolean;
 }
 
 interface SentTurn {
@@ -307,7 +309,9 @@ export class AgentManager {
       ...(params.parentAgentId !== undefined ? { parentAgentId: params.parentAgentId } : {}),
       ...(params.origin !== undefined ? { origin: params.origin } : {}),
       ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
-      ...((params.origin ?? "user") === "user" && this.translationDefault?.() ? { translation: true } : {}),
+      ...((params.translation ?? ((params.origin ?? "user") === "user" && this.translationDefault?.()))
+        ? { translation: true }
+        : {}),
       model: params.model ?? null,
       modeId: params.modeId ?? null,
       thinkingOptionId,

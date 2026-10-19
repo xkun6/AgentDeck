@@ -477,4 +477,15 @@ describe("AgentManager 翻译接入（design.md 4.35）", () => {
       (await h.manager.createAgent({ provider: "fake", cwd: "/work", origin: "delegate" })).translation,
     ).toBeUndefined();
   });
+
+  test("agent.create 显式 translation 优先于默认设置", async () => {
+    const on = createManager({ defaultOn: true });
+    expect(
+      (await on.manager.createAgent({ provider: "fake", cwd: "/work", translation: false })).translation,
+    ).toBeUndefined();
+    const off = createManager();
+    expect((await off.manager.createAgent({ provider: "fake", cwd: "/work", translation: true })).translation).toBe(
+      true,
+    );
+  });
 });

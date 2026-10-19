@@ -1100,6 +1100,8 @@ export interface AgentRpcMethods {
       /** null / 省略 = 跟随 CLI 自身设置 */
       thinkingOptionId?: string | null;
       title?: string;
+      /** 会话翻译开关；省略 = 用户新建的会话取 settings.translation.enabledByDefault（design.md 4.35） */
+      translation?: boolean;
     };
     result: { agent: AgentSnapshot };
   };

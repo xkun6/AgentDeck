@@ -112,7 +112,7 @@ sidecar 入口：
 | `sidecar.info` | — | `{ version, pid }` |
 | `provider.list` | — | `ProviderInfo[]` |
 | `provider.listModels` | `{ provider, cwd? }` | `{ models: AgentModelDefinition[], modes: AgentMode[] }` |
-| `agent.create` | `{ provider, cwd, model?, modeId?, thinkingOptionId?: string \| null, title? }` | `{ agent: AgentSnapshot }` |
+| `agent.create` | `{ provider, cwd, model?, modeId?, thinkingOptionId?: string \| null, title?, translation? }` | `{ agent: AgentSnapshot }`（`translation` 见 4.35） |
 | `agent.list` | — | `{ agents: AgentSnapshot[] }` |
 | `agent.send` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{ turnId }` |
 | `agent.cancel` | `{ agentId }` | `{}` |
@@ -1314,7 +1314,7 @@ translation: {
 }
 ```
 
-**会话开关**：`AgentSnapshot.translation?: boolean`（缺省 = false，随 meta 持久化）。用户新建的会话（origin 缺省 / `"user"`）在 `agent.create` 时取 `settings.translation.enabledByDefault`，委派 / 协作组 / 看板 / 调度新建的会话不开启；分叉（4.23）继承原会话；之后经 `agent.update { agentId, translation }` 切换（同 4.17 只改元数据）。
+**会话开关**：`AgentSnapshot.translation?: boolean`（缺省 = false，随 meta 持久化）。`agent.create` 可带 `translation?: boolean` 显式指定（新任务输入框的开关）；省略时，用户新建的会话（origin 缺省 / `"user"`）取 `settings.translation.enabledByDefault`，委派 / 协作组 / 看板 / 调度新建的会话不开启；分叉（4.23）继承原会话；之后经 `agent.update { agentId, translation }` 切换（同 4.17 只改元数据）。
 
 **翻译 RPC**：`translation.translate { direction: "user-to-agent" | "agent-to-user"; text: string }` → `{ text: string }`。
 - `text` 1–100000 字，超出 → `-32602`。全空白原样返回，不请求 endpoint。
@@ -1347,7 +1347,7 @@ translation: {
 
 **前端**：
 - 设置页「翻译」（路径 `/translation`）：endpoint 各字段（apiKey 用密码框）、「测试」按钮（用 `translation.translate` 翻译一句示例文本并显示结果或错误）、用户语言 / Agent 语言、翻译思考、新会话默认开启。
-- 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。手机端只按会话开关显示译文，不提供开关与设置。
+- 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。新任务输入框同样有该开关：初始状态跟随「新会话默认开启」，用户点过后创建会话时以 `agent.create { translation }` 显式传入，未点过则省略、由 sidecar 取默认值。手机端：新建会话页有「翻译」开 / 关选项（规则同新任务输入框）、会话详情顶栏有「翻译」开关（`agent.update`，失败在页面错误条显示）；endpoint 与语言设置只在电脑端（`settings.set`、`translation.endpoint.*` 对远程禁止）。
 - 全文搜索（4.19）检索的是时间线原文：用户消息为用户语言，助手消息为 Agent 语言。
 
 ## 5. sidecar 内部结构（packages/sidecar）

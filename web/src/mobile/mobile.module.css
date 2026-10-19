@@ -59,6 +59,26 @@
   white-space: nowrap;
 }
 
+.headerToggle {
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--h-line);
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 13px;
+}
+
+.headerToggle[data-on="true"] {
+  border-color: var(--h-accent);
+  background: var(--h-accent-soft);
+  color: var(--h-accent);
+}
+
+.headerToggle:disabled {
+  opacity: 0.4;
+}
+
 .body {
   flex: 1;
   min-height: 0;

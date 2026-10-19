@@ -89,6 +89,7 @@ export function SessionDetail({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const loadingOlderRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [savingTranslation, setSavingTranslation] = useState(false);
   const [text, setText] = useState("");
   const [images, setImages] = useState<DraftImage[]>([]);
   const [imagesBusy, setImagesBusy] = useState(false);
@@ -238,6 +239,25 @@ export function SessionDetail({
         </button>
         <h1 className={s.titleSmall}>{title}</h1>
         {snapshot ? <span className={s.conn}>{agentStatusLabel(snapshot)}</span> : null}
+        {snapshot ? (
+          <button
+            type="button"
+            className={s.headerToggle}
+            data-on={translation.enabled ? "true" : undefined}
+            aria-pressed={translation.enabled}
+            disabled={!connected || savingTranslation}
+            onClick={() => {
+              setSavingTranslation(true);
+              setError(null);
+              actions
+                .updateSession(agentId, { translation: !translation.enabled })
+                .catch((e: unknown) => setError(`切换翻译失败：${humanizeSidecarError(e)}`))
+                .finally(() => setSavingTranslation(false));
+            }}
+          >
+            翻译
+          </button>
+        ) : null}
       </header>
       {inHistory ? (
         <div className={s.historyBar} role="status">

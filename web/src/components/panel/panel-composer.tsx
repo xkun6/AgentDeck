@@ -21,6 +21,7 @@ import { composerPrefillAtom } from "@/stores/panel";
 import { composerSubmitShortcutAtom } from "@/stores/ui";
 import { GooseComposer } from "@/components/chat/goose-composer";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
+import { DraftTranslationToggle, useDraftTranslation } from "@/components/chat/translation-toggle";
 import type { ComposerSubmitPayload } from "@/components/chat/composer-types";
 import s from "./panel-composer.module.css";
 
@@ -35,6 +36,7 @@ export function PanelComposer() {
   const initialWorkspacePath = normalizeWorkspacePath(searchParams.get("workspace"));
   const [cwd, setCwd] = useState(() => initialWorkspacePath || readWorkspacePath());
   const agent = useAgentSessionSelection(cwd);
+  const translation = useDraftTranslation();
   const submitShortcutHint = composerSubmitShortcutHint(composerSubmitShortcut);
   const newTaskDraftKey = useMemo(() => composerDraftStorageKey({ kind: "new" }), []);
   const storedDraft = useMemo(() => readComposerDraftByKey(newTaskDraftKey), [newTaskDraftKey]);
@@ -58,7 +60,7 @@ export function PanelComposer() {
     if (sending) return;
     setSending(true);
     try {
-      await createAndSendSession(payload, agent.selection);
+      await createAndSendSession(payload, agent.selection, translation.picked);
       forgetComposerDraftByKey(newTaskDraftKey);
     } catch (err) {
       console.error("新建会话失败：", err);
@@ -66,7 +68,7 @@ export function PanelComposer() {
     } finally {
       setSending(false);
     }
-  }, [sending, createAndSendSession, agent.selection, newTaskDraftKey]);
+  }, [sending, createAndSendSession, agent.selection, translation.picked, newTaskDraftKey]);
 
   const onDraftChange = useCallback((text: string) => {
     writeComposerDraftByKey(newTaskDraftKey, text);
@@ -99,6 +101,9 @@ export function PanelComposer() {
             catalogError={agent.catalogError}
             disabled={sending}
           />
+        }
+        toolbarTrailing={
+          <DraftTranslationToggle on={translation.on} onToggle={() => translation.set(!translation.on)} disabled={sending} />
         }
       />
       {!cwd ? (
