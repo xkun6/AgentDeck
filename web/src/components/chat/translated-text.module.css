@@ -1,0 +1,42 @@
+.bar {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--h-text-3);
+  font-size: 11px;
+}
+
+.bar[data-tone="error"] .error {
+  color: var(--h-err);
+  overflow-wrap: anywhere;
+}
+
+.action {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.action:hover {
+  color: var(--h-text);
+}
+
+.sent {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--h-text-3);
+}
+
+.sentText {
+  margin-top: 4px;
+  color: var(--h-text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}

@@ -24,6 +24,7 @@ export function useCreateAndSendSession() {
   return useCallback(async (
     payload: ComposerSubmitPayload,
     selection: AgentSelection,
+    translation?: boolean,
   ): Promise<string> => {
     const cwd = payload.workspacePath?.trim();
     if (!cwd) throw new Error(WORKSPACE_REQUIRED_MESSAGE);
@@ -38,6 +39,7 @@ export function useCreateAndSendSession() {
       ...(selection.modeId ? { modeId: selection.modeId } : {}),
       ...(selection.thinkingOptionId ? { thinkingOptionId: selection.thinkingOptionId } : {}),
       ...(title ? { title } : {}),
+      ...(translation !== undefined ? { translation } : {}),
     });
 
     rememberWorkspaceProject(cwd);

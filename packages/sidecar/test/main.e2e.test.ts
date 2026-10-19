@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -199,6 +201,68 @@ describe("main.ts 端到端", () => {
     second.child.stdin!.end();
     await withTimeout(second.exited, 5_000, "第二次关闭 stdin 后未退出");
     await c2.close();
+  });
+
+  test("翻译（design.md 4.35）：配置 endpoint → 会话开启翻译 → Agent 收到译文、时间线保留原文 → 回复翻译经磁盘缓存跨重启复用", async () => {
+    // 假的 OpenAI 兼容接口：把 <translate-input> 里的原文加 "EN:" 前缀
+    let llmCalls = 0;
+    const llm: Server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => (body += String(chunk)));
+      req.on("end", () => {
+        llmCalls += 1;
+        const parsed = JSON.parse(body) as { messages: Array<{ role: string; content: string }> };
+        const user = parsed.messages.find((m) => m.role === "user")!.content;
+        const source = /<translate-input>\n([\s\S]*)\n<\/translate-input>/.exec(user)![1]!;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ choices: [{ message: { content: `EN:${source}` } }] }));
+      });
+    });
+    await new Promise<void>((resolve) => llm.listen(0, "127.0.0.1", resolve));
+    const llmPort = (llm.address() as AddressInfo).port;
+    const dataDir = mkdtempSync(path.join(tmpdir(), "agentdeck-sidecar-translation-"));
+    tempDirs.push(dataDir);
+    try {
+      const first = startSidecar({ AGENTDECK_TOKEN: TOKEN, AGENTDECK_DATA_DIR: dataDir });
+      const ready = await first.ready;
+      const client = await TestRpcClient.connect(`ws://127.0.0.1:${ready.port}/rpc?token=${TOKEN}`);
+      await client.call("translation.endpoint.set", {
+        patch: { baseUrl: `http://127.0.0.1:${llmPort}/v1`, model: "fake" },
+      });
+      const { agent } = await client.call("agent.create", { provider: "mock", cwd: PACKAGE_DIR });
+      await client.call("agent.update", { agentId: agent.id, translation: true });
+      await client.call("agent.send", { agentId: agent.id, prompt: "端到端" });
+      await client.waitForTurnEnd(agent.id);
+      const events = client.eventsFor(agent.id);
+      const user = events.find((e) => e.type === "timeline" && e.item.type === "user_message");
+      expect(user).toMatchObject({ item: { text: "端到端", translatedText: "EN:端到端" } });
+      const reply = events
+        .map((e) => (e.type === "timeline" && e.item.type === "assistant_message" ? e.item.text : ""))
+        .join("");
+      expect(reply).toBe("Mock 回复：EN:端到端");
+      expect(await client.call("translation.translate", { direction: "agent-to-user", text: reply })).toEqual({
+        text: `EN:${reply}`,
+      });
+      expect(llmCalls).toBe(2);
+      first.child.stdin!.end();
+      await withTimeout(first.exited, 5_000, "关闭 stdin 后 5 秒内未退出");
+      await client.close();
+
+      // 同目录重启：endpoint 配置还在，回复翻译命中磁盘缓存
+      const second = startSidecar({ AGENTDECK_TOKEN: TOKEN, AGENTDECK_DATA_DIR: dataDir });
+      const ready2 = await second.ready;
+      const client2 = await TestRpcClient.connect(`ws://127.0.0.1:${ready2.port}/rpc?token=${TOKEN}`);
+      expect(await client2.call("translation.endpoint.get")).toMatchObject({ model: "fake" });
+      expect(await client2.call("translation.translate", { direction: "agent-to-user", text: reply })).toEqual({
+        text: `EN:${reply}`,
+      });
+      expect(llmCalls).toBe(2);
+      second.child.stdin!.end();
+      await withTimeout(second.exited, 5_000, "关闭 stdin 后 5 秒内未退出");
+      await client2.close();
+    } finally {
+      await new Promise<void>((resolve) => llm.close(() => resolve()));
+    }
   });
 
   test("缺少 AGENTDECK_TOKEN 时以退出码 2 退出", async () => {

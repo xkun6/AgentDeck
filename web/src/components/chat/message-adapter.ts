@@ -177,7 +177,13 @@ function partsToBlocks(
     }
     if (part.type === "steer") {
       const text = normalizeContent(part.text);
-      if (text) blocks.push({ type: "steer", text });
+      if (text) {
+        blocks.push({
+          type: "steer",
+          text,
+          ...(part.translatedText ? { translatedText: part.translatedText } : {}),
+        });
+      }
       continue;
     }
     if (part.type === "moa_reference") {
@@ -345,6 +351,7 @@ export function agentUIMessageToChatMessage(msg: AgentUIMessage): ChatMessage | 
     ...(typeof msg.retryFor === "string" ? { retryUserMessageId: msg.retryFor } : {}),
     ...(msg.restored === true ? { restored: true } : {}),
     ...(typeof msg.firstSeq === "number" ? { firstSeq: msg.firstSeq } : {}),
+    ...(typeof msg.translatedText === "string" ? { translatedText: msg.translatedText } : {}),
   };
 }
 

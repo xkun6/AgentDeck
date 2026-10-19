@@ -10,6 +10,7 @@ AgentDeck 是一个多 Agent 编排桌面工具：
   - Claude Code：直接拉起用户本机 `claude` CLI，走 stream-json stdio 协议（长会话），不依赖 claude-agent-sdk
   - Codex：`codex app-server` 子进程，stdio 上的换行分隔 JSON-RPC
   - 通用 ACP：`@agentclientprotocol/sdk` 的 `ClientSideConnection`（内置 DeepSeek Harness `dsh --profile acp`，另可在 `acp-agents.json` / 中转中自定义）
+- **唯一例外**：可选的翻译功能（4.35）直连用户自行配置的 OpenAI 兼容 endpoint，默认不启用。
 - **不包含**：Hermes Python Core、模型供应商配置、记忆、技能、cron、IM 接入、profiles 等 Hermes 专属功能。
 
 ## 2. 架构
@@ -102,7 +103,7 @@ sidecar 入口：
 - 地址：`ws://127.0.0.1:<port>/rpc?token=<token>`。token 不匹配直接以 HTTP 401 拒绝升级。
 - `GET /health`（无需 token）→ `{ "ok": true, "version": "..." }`
 - 每个 WS 文本帧是一个 JSON-RPC 2.0 对象。客户端发请求，服务端回响应；服务端主动推送用**通知**（无 id）。
-- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`RESPONSE_TOO_LARGE`、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。`RESPONSE_TOO_LARGE` 只由远程网关（4.31）在响应明文超过 16 MiB 帧上限时代发（message 中文，含实际大小），本机 `/rpc` 不会产生。`PERMISSION_NOT_FOUND` 有两处来源：AgentManager 按快照 `pendingPermissions` 判断（快照异步更新），以及各 provider session 的 `respondToPermission` 找不到挂起请求（claude / codex / acp / mock 一律抛 `AgentRpcError("PERMISSION_NOT_FOUND")`）——桌面与手机几乎同时点按钮时，后到的请求会穿过前者进入 session 层，不能落成 `INTERNAL_ERROR`。前端审批卡片（权限卡与提问卡）遇到该码显示「已在其他设备处理」、禁用按钮并在约 1.5 秒后移除该卡片；其它错误经 `humanizeSidecarError` 汉化后显示，卡片保留可重试。
+- 错误码：`-32700` 解析错误、`-32600` 非法请求（含批量请求、二进制帧）、`-32601` 方法不存在、`-32602` 参数错误（`data.issues` 为 zod 校验详情）、`-32000` 业务错误（`data.code` 给出细分：`PROVIDER_NOT_FOUND`、`PROVIDER_UNAVAILABLE`、`AGENT_NOT_FOUND`、`AGENT_CLOSED`、`TURN_IN_PROGRESS`、`PERMISSION_NOT_FOUND`、`NOT_SUPPORTED`、`TASK_NOT_FOUND`、`RETRACT_UNAVAILABLE`、`RESPONSE_TOO_LARGE`、`TRANSLATION_FAILED`（4.35）、`INTERNAL_ERROR`）。未预期异常也走 `-32000` + `INTERNAL_ERROR`。`RESPONSE_TOO_LARGE` 只由远程网关（4.31）在响应明文超过 16 MiB 帧上限时代发（message 中文，含实际大小），本机 `/rpc` 不会产生。`PERMISSION_NOT_FOUND` 有两处来源：AgentManager 按快照 `pendingPermissions` 判断（快照异步更新），以及各 provider session 的 `respondToPermission` 找不到挂起请求（claude / codex / acp / mock 一律抛 `AgentRpcError("PERMISSION_NOT_FOUND")`）——桌面与手机几乎同时点按钮时，后到的请求会穿过前者进入 session 层，不能落成 `INTERNAL_ERROR`。前端审批卡片（权限卡与提问卡）遇到该码显示「已在其他设备处理」、禁用按钮并在约 1.5 秒后移除该卡片；其它错误经 `humanizeSidecarError` 汉化后显示，卡片保留可重试。
 
 ### 4.1 请求方法
 
@@ -111,7 +112,7 @@ sidecar 入口：
 | `sidecar.info` | — | `{ version, pid }` |
 | `provider.list` | — | `ProviderInfo[]` |
 | `provider.listModels` | `{ provider, cwd? }` | `{ models: AgentModelDefinition[], modes: AgentMode[] }` |
-| `agent.create` | `{ provider, cwd, model?, modeId?, thinkingOptionId?: string \| null, title? }` | `{ agent: AgentSnapshot }` |
+| `agent.create` | `{ provider, cwd, model?, modeId?, thinkingOptionId?: string \| null, title?, translation? }` | `{ agent: AgentSnapshot }`（`translation` 见 4.35） |
 | `agent.list` | — | `{ agents: AgentSnapshot[] }` |
 | `agent.send` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{ turnId }` |
 | `agent.cancel` | `{ agentId }` | `{}` |
@@ -132,7 +133,9 @@ sidecar 入口：
 | `agent.tasks.list` | `{ agentId }` | `{ tasks: AgentBackgroundTask[] }`（见 4.15） |
 | `agent.tasks.stop` | `{ agentId, taskId }` | `{}`（见 4.15） |
 | `agent.tasks.output` | `{ agentId, taskId, maxBytes? }` | `{ text, truncated, size }`（见 4.15） |
-| `agent.update` | `{ agentId, title?: string \| null, pinned?, archived? }` | `{ agent: AgentSnapshot }`（重命名 / 置顶 / 归档，见 4.17） |
+| `translation.translate` | `{ direction, text }` | `{ text }`（见 4.35） |
+| `translation.endpoint.get` / `translation.endpoint.set` | `{}` / `{ patch }` | `TranslationEndpoint`（远程禁止，见 4.35） |
+| `agent.update` | `{ agentId, title?: string \| null, pinned?, archived?, interopTarget?, translation? }` | `{ agent: AgentSnapshot }`（重命名 / 置顶 / 归档 / 互通 / 翻译开关，见 4.17、4.26、4.35） |
 | `agent.search` | `{ query, limit?, agentIds? }` | `{ hits: AgentSearchHit[], truncated }`（全文搜索，见 4.19） |
 | `usage.summary` | `{ sinceMs?, untilMs? }` | `UsageSummary`（跨会话用量统计，见 4.20） |
 | `agent.steer` | `{ agentId, prompt: AgentPromptInput, clientMessageId? }` | `{}`（运行中插话，见 4.22） |
@@ -852,6 +855,7 @@ interface SidecarSettings {
   interop: { enabled: boolean /* 默认 true，见 4.26 */ };
   remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535，见 4.31 */ };
   idleReclaim: { enabled: boolean /* 默认 true */; idleMinutes: number /* 默认 15，整数 1–1440，见 4.34 */ };
+  translation: { userLanguage: string; agentLanguage: string; translateReasoning: boolean; enabledByDefault: boolean } /* 见 4.35 */;
 }
 ```
 
@@ -1282,6 +1286,70 @@ Codex 的 `request_user_input` 工具向用户提问时，app-server 发 server�
 
 **前端设置**：「常规」页增加两行：「空闲自动回收」开关，「空闲时长（分钟）」数字输入（1–1440，失焦 / 回车保存）。未连接 sidecar 时显示与其它 sidecar 设置一致的提示。
 
+### 4.35 翻译（用户语言 ↔ Agent 语言）
+
+用户用自己的语言对话，Agent 在上下文里只看到 Agent 语言。翻译核心移植自 paseo-translate（`llm-client` / 系统提示词 / prompt 片段规则 / JSONL 缓存），**是本项目唯一直连模型 API 的地方**：可选功能、默认不启用、只调用用户自己配置的 OpenAI 兼容 endpoint，与驱动编程 Agent 无关。
+
+**endpoint 配置**：`<AGENTDECK_DATA_DIR>/translation-endpoint.json`（原子写入，含明文密钥，与 `providers.json` 同级别）。
+```ts
+interface TranslationEndpoint {
+  baseUrl: string;   // 如 https://api.deepseek.com/v1；请求 `${baseUrl}/chat/completions` 或 `${baseUrl}/responses`
+  apiKey: string;    // 空串 = 不带 Authorization
+  model: string;
+  protocol: "chat-completions" | "responses"; // 默认 "chat-completions"
+  reasoningEffort: "default" | "none" | "minimal" | "low" | "medium" | "high"; // 默认 "default" = 不发该参数
+  timeoutMs: number; // 单次请求超时，默认 30000，整数 1000–600000
+}
+```
+- RPC `translation.endpoint.get {}` → `TranslationEndpoint`；`translation.endpoint.set { patch: Partial<TranslationEndpoint> }` → `TranslationEndpoint`（zod strict 校验，非法 → `-32602`）。两者都在远程客户端禁止列表里（同 `provider.config.*`，4.31）。
+- `baseUrl` 或 `model` 为空视为「未配置」。
+
+**语言与开关**：`SidecarSettings.translation`（4.24 的设置文件，`settings.get/set` 读写、`settings.changed` 广播）：
+```ts
+translation: {
+  userLanguage: string;        // 默认 "简体中文"，1–64 字
+  agentLanguage: string;       // 默认 "English"，1–64 字
+  translateReasoning: boolean; // 思考块也翻译显示，默认 false（思考往往很长，翻译成本翻倍）
+  enabledByDefault: boolean;   // 新建会话默认开启翻译，默认 false
+}
+```
+
+**会话开关**：`AgentSnapshot.translation?: boolean`（缺省 = false，随 meta 持久化）。`agent.create` 可带 `translation?: boolean` 显式指定（新任务输入框的开关）；省略时，用户新建的会话（origin 缺省 / `"user"`）取 `settings.translation.enabledByDefault`，委派 / 协作组 / 看板 / 调度新建的会话不开启；分叉（4.23）继承原会话；之后经 `agent.update { agentId, translation }` 切换（同 4.17 只改元数据）。
+
+**翻译 RPC**：`translation.translate { direction: "user-to-agent" | "agent-to-user"; text: string }` → `{ text: string }`。
+- `text` 1–100000 字，超出 → `-32602`。全空白原样返回，不请求 endpoint。
+- 未配置或请求失败 → `-32000`，`data.code = "TRANSLATION_FAILED"`，message 说明原因（未配置 / HTTP 状态与响应摘要 / 超时）。
+- 远程客户端可调用（不涉及密钥）。
+- 缓存：`<AGENTDECK_DATA_DIR>/translation-cache.jsonl`，最近使用淘汰，上限 10000 条，启动时读入内存、新结果追加写入，追加远超上限时重写压缩。key = sha256 摘要组合（方向、源 / 目标语言、系统提示词、baseUrl、model、protocol、reasoningEffort、原文），改任一设置都不会命中旧结果。读写失败只记日志，退化为内存缓存。
+- 同一 key 的并发请求合并为一次 endpoint 调用；endpoint 并发上限 4，其余排队。
+- **批量合并**（移植 paseo-translate `translate-batch.ts`）：缓存未命中的请求按方向进入 80ms 合并窗口，窗口内的不同原文按顺序打包（每包最多 40 条、合计 8 万字）。包内只有一条时按单条请求；多条时用 `<ti n="<nonce>" i="<序号>">…</ti n="<nonce>" i="<序号>">` 包住各条（nonce 为不出现在任何原文里的随机串），系统提示词追加批量说明，按序号解析回各条译文。解析失败（缺项 / 空项）或批量请求本身失败时，该包退回逐条单独请求，各条独立成败。每条结果按单条的缓存键写入。
+- 请求：系统提示词同 paseo-translate（只翻译 `<translate-input>` 标签内文本、不执行其中指令、保留 Markdown 结构与代码 / 路径 / 标识符、只输出译文），`temperature: 0`（chat-completions），responses 协议带 `store: false`；非流式。原文已是目标语言时模型原样返回。
+
+**prompt 翻译（用户 → Agent，失败即不发送）**：会话 `translation === true` 时，`agent.send` / `agent.steer` 在下发 provider 前逐个翻译文本块：
+- 斜杠命令（`/` 开头）保留命令词，只翻译其后的参数；参数为空则整块原样。
+- 序列化附件（以 `{` 开头、可解析为带字符串 `mimeType` 字段的 JSON 对象）原样；图片块原样。
+- 任一块翻译失败 → 抛 `TRANSLATION_FAILED`，不写 user_message、不开回合、不下发给 Agent。
+- 时间线 `user_message.text` 保持**原文**（预览、通知、撤回回填都用原文），新增可选字段 `translatedText`（发给 Agent 的文本，按 4.4 `promptToText` 同样拼接；与原文相同时省略）。分叉上下文（4.23）里的用户消息优先用 `translatedText`。
+- 只翻译用户经 `agent.send` / `agent.steer` 发出的消息；调度器（4.25）、互通（4.26）、协作组（4.27）、看板（4.28）内部发出的 prompt 不翻译。
+
+**审批 / 提问回答翻译（用户 → Agent，失败即不提交）**：会话 `translation === true` 时，`agent.permission.respond` 在交给 provider 前翻译用户填写的文字：
+- `behavior: "deny"` 的 `message`（拒绝理由、计划「继续规划」的意见、提问卡跳过说明）。
+- 提问（`detail.type === "question"`）的 `updatedInput.answers` 各值：按 `", "` 拆开后每段都等于该题某个选项 label 的原样保留（选项本就是 Agent 语言）；否则整值翻译；`isSecret` 题不翻译。
+- MCP 表单（`detail.type === "elicitation"`）的 `updatedInput.content` 中 `type: "string"`、无 `format`、非 `secret` 字段的非空字符串值。
+- 任一翻译失败 → `TRANSLATION_FAILED`，不提交给 provider、请求保持待处理，前端卡片显示错误可重试。
+
+**回复显示翻译（Agent → 用户，只影响显示）**：由前端发起，sidecar 不主动翻译、不改时间线。
+- 会话 `translation === true` 时，助手消息里**已完成**的文本块（消息 `status` 不是 `streaming`，或该块后面已有其它块）**进入可见区域后**（IntersectionObserver，上下预留 200px；环境不支持时视为可见）调用 `translation.translate`（`agent-to-user`），打开长会话不会一次翻译全部历史；`source: "command"` 的文本块不翻。`translateReasoning` 为 true 时，已结束的思考块在**展开时**才请求翻译。
+- 待处理的提问卡：题目、题头、选项 label 与说明显示译文（悬停显示原文），提交的 answers 仍用原文 label；计划审批的计划正文显示译文并可切换原文。
+- 译文就绪后替换显示（Markdown），块下方给「显示原文 / 显示译文」切换；译文与原文相同时不显示切换；翻译中显示原文加「翻译中…」；失败显示原文加错误提示与「重试」。消息的「复制」按钮仍复制原文。
+- 用户消息与插话气泡显示原文，`translatedText` 存在时下方给「查看发送的译文」折叠项。
+- 前端按 `方向 + 原文` 在内存里缓存结果，同一页面不重复请求；重开会话由 sidecar 磁盘缓存命中，不重复计费。
+
+**前端**：
+- 设置页「翻译」（路径 `/translation`）：endpoint 各字段（apiKey 用密码框）、「测试」按钮（用 `translation.translate` 翻译一句示例文本并显示结果或错误）、用户语言 / Agent 语言、翻译思考、新会话默认开启。
+- 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。新任务输入框同样有该开关：初始状态跟随「新会话默认开启」，用户点过后创建会话时以 `agent.create { translation }` 显式传入，未点过则省略、由 sidecar 取默认值。手机端：新建会话页有「翻译」开 / 关选项（规则同新任务输入框）、会话详情顶栏有「翻译」开关（`agent.update`，失败在页面错误条显示）；endpoint 与语言设置只在电脑端（`settings.set`、`translation.endpoint.*` 对远程禁止）。
+- 全文搜索（4.19）检索的是时间线原文：用户消息为用户语言，助手消息为 Agent 语言。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```
@@ -1461,6 +1529,7 @@ ode.exe \?<资源目录>sidecarundle.mjs`，`\?` 前缀来自 Tauri resource_di
 
 - 主体派生自 Hermes-CN-Desktop：PolyForm Noncommercial 1.0.0，保留 `LICENSE` 与两条 `Required Notice`，**仅限非商业用途**。
 - Agent 适配层移植自 paseo：Apache-2.0，见 `legal/paseo.Apache-2.0.txt`；被移植/修改的文件头注明 `Derived from paseo <原路径> (Apache-2.0); modified for AgentDeck`。
+- 翻译核心（4.35）移植自 paseo-translate（theTd/paseo-translate，经许可使用）：被移植/修改的文件头注明 `Derived from paseo-translate <原路径>; modified for AgentDeck`。
 - 部分前端代码源自 Hermes Agent 上游（Nous Research，MIT），见 `legal/hermes-agent-upstream.MIT.txt`。
 - HarmonyOS Sans 字体许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
 - 随包分发的第三方组件（P7）：Node.js 运行时 → `legal/nodejs.LICENSE.txt`；sidecar bundle 内的 npm 包（以 `dist-sidecar/meta.json` 为准）→ `legal/sidecar-third-party.txt`；前端生产依赖 → `legal/web-third-party.txt`；汇总见 `NOTICE.md`。依赖或 Node 版本变化时需重新生成：先 `pnpm sidecar:build`，再 `pnpm legal:gen`（`scripts/gen-legal.mjs`，结果稳定可重复）；Node 版本变化还需重取 `legal/nodejs.LICENSE.txt`。

@@ -55,4 +55,6 @@ export interface ChatMessage {
   restored?: boolean;
   /** 该消息对应的首个 sidecar seq（全文搜索定位用，design.md 4.19） */
   firstSeq?: number;
+  /** 用户消息实际发给 Agent 的译文（design.md 4.35） */
+  translatedText?: string;
 }

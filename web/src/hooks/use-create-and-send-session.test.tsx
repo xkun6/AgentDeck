@@ -37,4 +37,16 @@ describe("useCreateAndSendSession", () => {
     await result.current(payload, { provider: "claude", model: null, modeId: null, thinkingOptionId: null });
     expect(createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty("thinkingOptionId");
   });
+
+  it("翻译开关显式值随 agent.create 传入；未指定时不传（design.md 4.35）", async () => {
+    const { result } = renderHook(() => useCreateAndSendSession(), { wrapper });
+    const payload = { text: "你好", attachments: [], workspacePath: "/work" };
+    const selection = { provider: "claude", model: null, modeId: null, thinkingOptionId: null };
+
+    await result.current(payload, selection, false);
+    expect(createSession.mock.calls.at(-1)?.[0]).toHaveProperty("translation", false);
+
+    await result.current(payload, selection);
+    expect(createSession.mock.calls.at(-1)?.[0]).not.toHaveProperty("translation");
+  });
 });

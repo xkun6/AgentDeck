@@ -4,6 +4,7 @@ import { useAtomValue } from "jotai";
 import type { AgentPermissionResponse } from "@agentdeck/protocol";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { MessageTimeline } from "@/components/chat/message-timeline";
+import { useSessionTranslation } from "@/components/chat/translation-toggle";
 import { agentUIMessagesToChatMessages } from "@/components/chat/message-adapter";
 import { ComposerStatusRow } from "@/components/chat/status-row/composer-status-row";
 import { SubagentPanelBody } from "@/components/chat/subagents/subagent-panel";
@@ -57,6 +58,7 @@ export function SessionDetail({
   const connected = useAtomValue(sidecarConnectionAtom) === "open";
   const runtimeBySession = useAtomValue(chatRuntimeBySessionAtom);
   const snapshot = useAtomValue(agentSnapshotsAtom)[agentId];
+  const translation = useSessionTranslation(snapshot);
   const subagents = useProviderSubagents(agentId);
   const providers = useAgentProviders().data ?? null;
   const runtime = useMemo(() => runtimeBySession[agentId] ?? createEmptyChatRuntime(), [runtimeBySession, agentId]);
@@ -87,6 +89,7 @@ export function SessionDetail({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const loadingOlderRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [savingTranslation, setSavingTranslation] = useState(false);
   const [text, setText] = useState("");
   const [images, setImages] = useState<DraftImage[]>([]);
   const [imagesBusy, setImagesBusy] = useState(false);
@@ -236,6 +239,25 @@ export function SessionDetail({
         </button>
         <h1 className={s.titleSmall}>{title}</h1>
         {snapshot ? <span className={s.conn}>{agentStatusLabel(snapshot)}</span> : null}
+        {snapshot ? (
+          <button
+            type="button"
+            className={s.headerToggle}
+            data-on={translation.enabled ? "true" : undefined}
+            aria-pressed={translation.enabled}
+            disabled={!connected || savingTranslation}
+            onClick={() => {
+              setSavingTranslation(true);
+              setError(null);
+              actions
+                .updateSession(agentId, { translation: !translation.enabled })
+                .catch((e: unknown) => setError(`切换翻译失败：${humanizeSidecarError(e)}`))
+                .finally(() => setSavingTranslation(false));
+            }}
+          >
+            翻译
+          </button>
+        ) : null}
       </header>
       {inHistory ? (
         <div className={s.historyBar} role="status">
@@ -269,6 +291,7 @@ export function SessionDetail({
           onRetract={() => void retraction.run()}
           retractDisabled={retraction.retracting}
           onReachTop={loadEarlier}
+          translation={translation}
           topSlot={
             hidden > 0 || hasOlder ? (
               <button type="button" className={s.moreButton} onClick={loadEarlier} disabled={loadingOlder}>

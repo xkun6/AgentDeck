@@ -342,6 +342,8 @@ export type AgentTimelineItem =
       clientMessageId?: string;
       /** 运行中插话（design.md 4.22）：归属当前回合，不开新回合 */
       steer?: true;
+      /** 会话开启翻译时实际发给 Agent 的文本（design.md 4.35）；与 text 相同时省略 */
+      translatedText?: string;
     }
   | { type: "assistant_message"; text: string; messageId?: string; source?: "command" } // 增量 chunk，前端按 messageId/顺序拼接
   | { type: "reasoning"; text: string } // 增量 chunk
@@ -518,6 +520,8 @@ export interface AgentSnapshot {
   groupId?: string;
   /** 允许被其它会话经 send_to_agent 调用（design.md 4.26），经 agent.update 设置 */
   interopTarget?: boolean;
+  /** 会话开启翻译（design.md 4.35），经 agent.update 设置；缺省视为 false */
+  translation?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -735,6 +739,8 @@ export type AgentRpcBusinessErrorCode =
   | "TASK_NOT_FOUND"
   | "RETRACT_UNAVAILABLE"
   | "RESPONSE_TOO_LARGE"
+  /** 翻译未配置或请求失败（design.md 4.35） */
+  | "TRANSLATION_FAILED"
   | "INTERNAL_ERROR";
 
 // ---------------------------------------------------------------------------
@@ -846,6 +852,13 @@ export interface SidecarSettings {
   remote: { enabled: boolean; port: number };
   /** 4.34 空闲会话回收：enabled 默认 true；idleMinutes 默认 15，整数 1–1440 */
   idleReclaim: { enabled: boolean; idleMinutes: number };
+  /** 4.35 翻译：语言与显示开关（endpoint 另存，见 TranslationEndpoint） */
+  translation: {
+    userLanguage: string;
+    agentLanguage: string;
+    translateReasoning: boolean;
+    enabledByDefault: boolean;
+  };
 }
 
 export interface SidecarSettingsPatch {
@@ -853,6 +866,23 @@ export interface SidecarSettingsPatch {
   interop?: Partial<SidecarSettings["interop"]>;
   remote?: Partial<SidecarSettings["remote"]>;
   idleReclaim?: Partial<SidecarSettings["idleReclaim"]>;
+  translation?: Partial<SidecarSettings["translation"]>;
+}
+
+// ---------------------------------------------------------------------------
+// 4.35 翻译
+// ---------------------------------------------------------------------------
+
+export type TranslationDirection = "user-to-agent" | "agent-to-user";
+
+/** 翻译 endpoint（`translation-endpoint.json`，含明文密钥；远程客户端不可读写） */
+export interface TranslationEndpoint {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  protocol: "chat-completions" | "responses";
+  reasoningEffort: "default" | "none" | "minimal" | "low" | "medium" | "high";
+  timeoutMs: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,6 +1059,9 @@ export const AGENT_RPC_METHODS = {
   remoteStatus: "remote.status",
   remotePairingCreate: "remote.pairing.create",
   remoteDevicesRevoke: "remote.devices.revoke",
+  translationTranslate: "translation.translate",
+  translationEndpointGet: "translation.endpoint.get",
+  translationEndpointSet: "translation.endpoint.set",
 } as const;
 
 export const AGENT_RPC_NOTIFICATIONS = {
@@ -1067,6 +1100,8 @@ export interface AgentRpcMethods {
       /** null / 省略 = 跟随 CLI 自身设置 */
       thinkingOptionId?: string | null;
       title?: string;
+      /** 会话翻译开关；省略 = 用户新建的会话取 settings.translation.enabledByDefault（design.md 4.35） */
+      translation?: boolean;
     };
     result: { agent: AgentSnapshot };
   };
@@ -1100,6 +1135,8 @@ export interface AgentRpcMethods {
       archived?: boolean;
       /** 允许被其它会话经 send_to_agent 调用（design.md 4.26） */
       interopTarget?: boolean;
+      /** 会话翻译开关（design.md 4.35） */
+      translation?: boolean;
     };
     result: { agent: AgentSnapshot };
   };
@@ -1272,6 +1309,16 @@ export interface AgentRpcMethods {
   };
   /** 吊销设备并立即断开其全部连接；远程客户端调用返回 -32601 */
   "remote.devices.revoke": { params: { deviceId: string }; result: Record<string, never> };
+  /** 翻译（design.md 4.35）：text 1–100000 字；未配置 / 失败 → TRANSLATION_FAILED */
+  "translation.translate": {
+    params: { direction: TranslationDirection; text: string };
+    result: { text: string };
+  };
+  "translation.endpoint.get": { params: AgentRpcEmptyParams; result: TranslationEndpoint };
+  "translation.endpoint.set": {
+    params: { patch: Partial<TranslationEndpoint> };
+    result: TranslationEndpoint;
+  };
 }
 
 export type AgentRpcMethodName = keyof AgentRpcMethods;

@@ -570,7 +570,7 @@ describe("认证后的远程连接", () => {
     phone.close();
   });
 
-  test("settings.set / remote.* / provider.config.* 返回 -32601；settings.get 可用；已删除的 client.presence 同样不存在", async () => {
+  test("settings.set / remote.* / provider.config.* / translation.endpoint.* 返回 -32601；settings.get 可用；已删除的 client.presence 同样不存在", async () => {
     const { phone } = await h.pairPhone();
     for (const [method, params] of [
       ["settings.set", { patch: { remote: { enabled: false } } }],
@@ -579,6 +579,8 @@ describe("认证后的远程连接", () => {
       ["remote.devices.revoke", { deviceId: "x" }],
       ["provider.config.get", undefined],
       ["provider.config.set", { providers: [] }],
+      ["translation.endpoint.get", undefined],
+      ["translation.endpoint.set", { patch: { model: "x" } }],
     ] as const) {
       const error = await phone.errorOf(method, params);
       expect(error?.code, method).toBe(-32601);

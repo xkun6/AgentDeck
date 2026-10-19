@@ -30,6 +30,7 @@ import { InteropService } from "./server/interop-service.js";
 import { McpInteropEndpoint } from "./server/mcp-interop.js";
 import { RpcServer } from "./server/rpc-server.js";
 import { SettingsStore } from "./settings/sidecar-settings.js";
+import { TranslationService } from "./translation/translation-service.js";
 import { SnapshotService } from "./snapshots/snapshot-service.js";
 import { UsageLedger } from "./usage/ledger.js";
 import { withTimeout } from "./utils/promise-timeout.js";
@@ -227,6 +228,13 @@ async function main(): Promise<void> {
     listAgents: () => manager?.listAgents().map((agent) => ({ id: agent.id, cwd: agent.cwd })) ?? [],
     isCwdBusy: (cwd) => manager?.isCwdBusy(cwd) ?? false,
   });
+  // 翻译（design.md 4.35）：endpoint 配置读取失败只记日志，沿用默认值（未配置）
+  const translation = new TranslationService({
+    logger,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+    languages: () => settings.get().translation,
+  });
+  await translation.load();
   // 会话互通（design.md 4.26）：每会话 token 与 /mcp 端点；端口在监听后告知
   const interop = new InteropService({ settings: () => settings.get().interop });
   manager = new AgentManager({
@@ -236,6 +244,9 @@ async function main(): Promise<void> {
     snapshots,
     interop,
     idleReclaim: () => settings.get().idleReclaim,
+    translatePrompt: (prompt) => translation.translatePrompt(prompt),
+    translateToAgent: (text) => translation.translate("user-to-agent", text),
+    translationDefault: () => settings.get().translation.enabledByDefault,
     ...(store ? { store } : {}),
   });
   manager.subscribe({ onRemoved: (agentId) => interop.forget(agentId) });
@@ -299,6 +310,7 @@ async function main(): Promise<void> {
     snapshots,
     scheduler,
     board,
+    translation,
     mcp: new McpInteropEndpoint({
       manager,
       registry,

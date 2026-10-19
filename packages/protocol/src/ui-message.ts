@@ -126,6 +126,8 @@ interface AgentSteerMessagePart {
   type: "steer";
   text: string;
   clientMessageId?: string;
+  /** 实际发给 Agent 的译文（design.md 4.35） */
+  translatedText?: string;
 }
 
 /** 多模型参考输出块（历史结构，保留以兼容渲染层的分支）。 */

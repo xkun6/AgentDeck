@@ -29,6 +29,8 @@ import type {
   RemoteStatus,
   SidecarSettings,
   SidecarSettingsPatch,
+  TranslationDirection,
+  TranslationEndpoint,
   SnapshotTurn,
   Board,
   BoardSettingsPatch,
@@ -102,6 +104,8 @@ export interface CreateAgentSessionInput {
   /** 思考强度；省略 = 跟随 CLI 设置 */
   thinkingOptionId?: string;
   title?: string;
+  /** 翻译开关；省略 = sidecar 取默认设置 */
+  translation?: boolean;
 }
 
 export interface SendAgentPromptOptions {
@@ -181,6 +185,8 @@ export function describeAgentSendError(
       case "TURN_IN_PROGRESS":
         if (context.resuming) return { message: SESSION_RESUME_BUSY_MESSAGE, unrecoverable: false };
         break;
+      case "TRANSLATION_FAILED":
+        return { message: `翻译失败，消息未发送：${error.message}`, unrecoverable: false };
       case "PROVIDER_UNAVAILABLE":
         if (context.resuming) {
           return {
@@ -417,6 +423,7 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
         ...(input.modeId ? { modeId: input.modeId } : {}),
         ...(input.thinkingOptionId ? { thinkingOptionId: input.thinkingOptionId } : {}),
         ...(input.title ? { title: input.title } : {}),
+        ...(input.translation !== undefined ? { translation: input.translation } : {}),
       });
       store.set(upsertAgentSnapshotAtom, agent);
       store.set(ensureChatSessionAtom, agent.id);
@@ -639,7 +646,13 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
      */
     async updateSession(
       agentId: string,
-      patch: { title?: string | null; pinned?: boolean; archived?: boolean; interopTarget?: boolean },
+      patch: {
+        title?: string | null;
+        pinned?: boolean;
+        archived?: boolean;
+        interopTarget?: boolean;
+        translation?: boolean;
+      },
     ): Promise<AgentSnapshot> {
       const { agent } = await client.request("agent.update", { agentId, ...patch });
       store.set(upsertAgentSnapshotAtom, agent);
@@ -661,6 +674,20 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     /** usage.summary：跨会话用量统计（design.md 4.20）；sinceMs 缺省为最近 30 天，0 表示全部。 */
     async usageSummary(range?: { sinceMs?: number; untilMs?: number }): Promise<UsageSummary> {
       return client.request("usage.summary", range ?? {}, { timeoutMs: 60_000 });
+    },
+
+    /** translation.translate：翻译一段文本（design.md 4.35）；endpoint 单次超时最长 10 分钟，另留排队余量。 */
+    async translateText(direction: TranslationDirection, text: string): Promise<string> {
+      const result = await client.request("translation.translate", { direction, text }, { timeoutMs: 660_000 });
+      return result.text;
+    },
+
+    /** translation.endpoint.get / set：含明文 apiKey，界面负责遮挡显示，不得打日志（design.md 4.35）。 */
+    async getTranslationEndpoint(): Promise<TranslationEndpoint> {
+      return client.request("translation.endpoint.get", {});
+    },
+    async setTranslationEndpoint(patch: Partial<TranslationEndpoint>): Promise<TranslationEndpoint> {
+      return client.request("translation.endpoint.set", { patch });
     },
 
     /** settings.get / settings.set：sidecar 设置（design.md 4.24）。 */

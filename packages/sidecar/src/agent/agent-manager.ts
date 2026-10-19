@@ -6,6 +6,7 @@ import type {
   AgentMcpStatusResult,
   AgentStatusSection,
   AgentModelDefinition,
+  AgentPermissionRequest,
   AgentPermissionResponse,
   AgentPersistenceHandle,
   AgentPromptInput,
@@ -101,6 +102,12 @@ export interface AgentManagerOptions {
   interop?: { endpointFor(agentId: string): InteropEndpoint | undefined };
   /** 空闲回收设置（design.md 4.34）：每次扫描时读取；不传则不自动回收 */
   idleReclaim?: () => { enabled: boolean; idleMinutes: number };
+  /** 翻译（design.md 4.35）：开启翻译的会话发出用户消息前调用；失败抛错即不发送。不传则不翻译 */
+  translatePrompt?: (prompt: AgentPromptInput) => Promise<AgentPromptInput>;
+  /** 翻译（design.md 4.35）：把用户在审批 / 提问 / 表单里填写的文字翻成 Agent 语言；失败抛错即不提交 */
+  translateToAgent?: (text: string) => Promise<string>;
+  /** 用户新建会话是否默认开启翻译（design.md 4.35）；不传视为 false */
+  translationDefault?: () => boolean;
 }
 
 export interface CreateAgentParams {
@@ -118,6 +125,8 @@ export interface CreateAgentParams {
   /** null / 省略 = 跟随 CLI 自身设置（design.md 4.10） */
   thinkingOptionId?: string | null;
   title?: string;
+  /** 会话翻译开关；省略 = 用户新建的会话取默认设置（design.md 4.35） */
+  translation?: boolean;
 }
 
 interface SentTurn {
@@ -198,6 +207,9 @@ export class AgentManager {
   private readonly snapshots: SnapshotService | undefined;
   private readonly interop: AgentManagerOptions["interop"];
   private readonly idleReclaim: AgentManagerOptions["idleReclaim"];
+  private readonly translatePrompt: AgentManagerOptions["translatePrompt"];
+  private readonly translateToAgent: AgentManagerOptions["translateToAgent"];
+  private readonly translationDefault: AgentManagerOptions["translationDefault"];
   private idleReclaimTimer: NodeJS.Timeout | null = null;
   /** 每个会话的回合账本折叠器（只在内存） */
   private readonly usageTrackers = new Map<string, UsageTurnTracker>();
@@ -211,6 +223,9 @@ export class AgentManager {
     this.snapshots = options.snapshots;
     this.interop = options.interop;
     this.idleReclaim = options.idleReclaim;
+    this.translatePrompt = options.translatePrompt;
+    this.translateToAgent = options.translateToAgent;
+    this.translationDefault = options.translationDefault;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
@@ -294,6 +309,9 @@ export class AgentManager {
       ...(params.parentAgentId !== undefined ? { parentAgentId: params.parentAgentId } : {}),
       ...(params.origin !== undefined ? { origin: params.origin } : {}),
       ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
+      ...((params.translation ?? ((params.origin ?? "user") === "user" && this.translationDefault?.()))
+        ? { translation: true }
+        : {}),
       model: params.model ?? null,
       modeId: params.modeId ?? null,
       thinkingOptionId,
@@ -372,12 +390,23 @@ export class AgentManager {
     return cloneSnapshot(this.requireAgent(agentId).snapshot);
   }
 
+  /** 会话开启翻译时把用户 prompt 翻成 Agent 语言（design.md 4.35）；未开启原样返回 */
+  private async translateForAgent(agent: ManagedAgent, prompt: AgentPromptInput): Promise<AgentPromptInput> {
+    if (!agent.snapshot.translation || !this.translatePrompt) {
+      return prompt;
+    }
+    return this.translatePrompt(prompt);
+  }
+
   async sendPrompt(
     agentId: string,
     prompt: AgentPromptInput,
     clientMessageId?: string,
-    /** internal = 调度器发出的消息（design.md 4.25），不算用户介入 */
-    opts?: { internal?: boolean },
+    /**
+     * internal = 调度器发出的消息（design.md 4.25），不算用户介入；
+     * translate = 用户经 agent.send 发出，会话开启翻译时先翻成 Agent 语言（design.md 4.35）
+     */
+    opts?: { internal?: boolean; translate?: boolean },
   ): Promise<{ turnId: string }> {
     const agent = this.requireAgent(agentId);
     // 恢复期间也持有 sending：并发 send 只触发一次恢复，其余按单 turn 约束返回 TURN_IN_PROGRESS。
@@ -399,6 +428,7 @@ export class AgentManager {
       if (agent.snapshot.archived) {
         agent.snapshot.archived = false;
       }
+      const sent = opts?.translate ? await this.translateForAgent(agent, prompt) : prompt;
       const session = await this.ensureSession(agent);
       const sentTurn: SentTurn = {
         prompt,
@@ -418,7 +448,7 @@ export class AgentManager {
         type: "timeline",
         item: {
           type: "user_message",
-          text: promptToText(prompt),
+          ...userMessageText(prompt, sent),
           ...(clientMessageId !== undefined ? { clientMessageId } : {}),
         },
       };
@@ -431,7 +461,7 @@ export class AgentManager {
       const forkContext = agent.pendingForkContext;
       try {
         ({ turnId } = await session.startTurn(
-          forkContext !== undefined ? prependForkContext(prompt, forkContext) : prompt,
+          forkContext !== undefined ? prependForkContext(sent, forkContext) : sent,
           clientMessageId !== undefined ? { clientMessageId } : undefined,
         ));
       } catch (error) {
@@ -586,8 +616,15 @@ export class AgentManager {
    * design.md 4.22：运行中插话。校验当前有进行中的（非自发）回合且 provider 支持后，把 user_message
    * （steer: true，归属当前 turnId）占位进事件链，provider.steer 成功后才写入；失败不落盘。
    */
-  async steer(agentId: string, prompt: AgentPromptInput, clientMessageId?: string): Promise<void> {
+  async steer(
+    agentId: string,
+    prompt: AgentPromptInput,
+    clientMessageId?: string,
+    /** translate 同 sendPrompt（design.md 4.35）；翻译在校验之前，翻译期间回合结束则按无回合处理 */
+    opts?: { translate?: boolean },
+  ): Promise<void> {
     const agent = this.requireAgent(agentId);
+    const sent = opts?.translate ? await this.translateForAgent(agent, prompt) : prompt;
     // 先等已到达的事件处理完，activeTurnId 才准确
     await agent.tail;
     const turnId = agent.snapshot.activeTurnId;
@@ -611,7 +648,7 @@ export class AgentManager {
       turnId,
       item: {
         type: "user_message",
-        text: promptToText(prompt),
+        ...userMessageText(prompt, sent),
         ...(clientMessageId !== undefined ? { clientMessageId } : {}),
         steer: true,
       },
@@ -623,7 +660,7 @@ export class AgentManager {
     });
     try {
       await session.steer(
-        prompt,
+        sent,
         clientMessageId !== undefined ? { clientMessageId } : undefined,
       );
     } catch (error) {
@@ -783,6 +820,7 @@ export class AgentManager {
       lastError: null,
       persistence: handle,
       ...(preview !== undefined ? { preview } : {}),
+      ...(originSnapshot.translation ? { translation: true } : {}),
       lastSeq: copied.length,
       resumable: false,
       createdAt: now,
@@ -832,21 +870,77 @@ export class AgentManager {
     response: AgentPermissionResponse,
   ): Promise<void> {
     const agent = this.requireOpenAgent(agentId);
-    const pending = agent.snapshot.pendingPermissions.some((request) => request.id === requestId);
-    if (!pending) {
+    const request = agent.snapshot.pendingPermissions.find((item) => item.id === requestId);
+    if (!request) {
       throw new AgentRpcError("PERMISSION_NOT_FOUND", `找不到待处理的权限请求：${requestId}`);
     }
+    // 翻译失败在这里抛出：请求保持待处理，截断记录也还在，可重试
+    const translated = await this.translatePermissionResponse(agent, request, response);
     // 回传给 provider 的 updatedInput：UI 没改过的被截断字段换回原始值
     const truncated = agent.truncatedPermissions.get(requestId);
     agent.truncatedPermissions.delete(requestId);
     const outgoing: AgentPermissionResponse =
-      truncated && response.behavior === "allow" && response.updatedInput
-        ? { ...response, updatedInput: restoreTruncatedInput(response.updatedInput, truncated) }
-        : response;
+      truncated && translated.behavior === "allow" && translated.updatedInput
+        ? { ...translated, updatedInput: restoreTruncatedInput(translated.updatedInput, truncated) }
+        : translated;
     await this.requireSession(agent).respondToPermission(requestId, outgoing);
     // 兜底：session 未发 permission_resolved 时补发（已解决的会在处理时被去重丢弃）
     this.enqueueEvent(agent, { type: "permission_resolved", requestId, response });
     await agent.tail;
+  }
+
+  /**
+   * design.md 4.35：会话开启翻译时，把用户填写的文字翻成 Agent 语言——拒绝理由、提问回答（整值都是选项
+   * label 的原样保留，isSecret 题不翻）、MCP 表单里无 format 的非 secret 文本字段。
+   */
+  private async translatePermissionResponse(
+    agent: ManagedAgent,
+    request: AgentPermissionRequest,
+    response: AgentPermissionResponse,
+  ): Promise<AgentPermissionResponse> {
+    const translate = this.translateToAgent;
+    if (!agent.snapshot.translation || !translate) {
+      return response;
+    }
+    if (response.behavior === "deny") {
+      return response.message?.trim() ? { ...response, message: await translate(response.message) } : response;
+    }
+    const input = response.updatedInput;
+    const detail = request.detail;
+    if (!input || !detail) {
+      return response;
+    }
+    if (detail.type === "question" && isPlainRecord(input.answers)) {
+      const answers: Record<string, unknown> = { ...input.answers };
+      await Promise.all(
+        detail.questions.map(async (question) => {
+          const value = answers[question.question];
+          if (typeof value !== "string" || !value.trim() || question.isSecret) {
+            return;
+          }
+          const labels = new Set(question.options.map((option) => option.label));
+          if (value.split(", ").every((part) => labels.has(part))) {
+            return;
+          }
+          answers[question.question] = await translate(value);
+        }),
+      );
+      return { ...response, updatedInput: { ...input, answers } };
+    }
+    if (detail.type === "elicitation" && isPlainRecord(input.content)) {
+      const content: Record<string, unknown> = { ...input.content };
+      await Promise.all(
+        (detail.fields ?? []).map(async (field) => {
+          const value = content[field.key];
+          if (field.type !== "string" || field.format || field.secret || typeof value !== "string" || !value.trim()) {
+            return;
+          }
+          content[field.key] = await translate(value);
+        }),
+      );
+      return { ...response, updatedInput: { ...input, content } };
+    }
+    return response;
   }
 
   async setModel(agentId: string, modelId: string | null): Promise<AgentSnapshot> {
@@ -953,7 +1047,13 @@ export class AgentManager {
    */
   async updateAgent(
     agentId: string,
-    patch: { title?: string | null; pinned?: boolean; archived?: boolean; interopTarget?: boolean },
+    patch: {
+      title?: string | null;
+      pinned?: boolean;
+      archived?: boolean;
+      interopTarget?: boolean;
+      translation?: boolean;
+    },
   ): Promise<AgentSnapshot> {
     const agent = this.requireAgent(agentId);
     const snapshot = agent.snapshot;
@@ -973,6 +1073,9 @@ export class AgentManager {
     }
     if (patch.interopTarget !== undefined) {
       snapshot.interopTarget = patch.interopTarget;
+    }
+    if (patch.translation !== undefined) {
+      snapshot.translation = patch.translation;
     }
     await this.persistNow(agent);
     this.emitState(agent);
@@ -1918,6 +2021,20 @@ export class AgentManager {
   }
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** user_message 的文本：原文，翻译后的文本不同时另带 translatedText（design.md 4.35） */
+function userMessageText(
+  prompt: AgentPromptInput,
+  sent: AgentPromptInput,
+): { text: string; translatedText?: string } {
+  const text = promptToText(prompt);
+  const translatedText = promptToText(sent);
+  return translatedText !== text ? { text, translatedText } : { text };
+}
+
 function promptToText(prompt: AgentPromptInput): string {
   if (typeof prompt === "string") {
     return prompt;
@@ -2191,7 +2308,7 @@ export function buildForkTranscript(entries: AgentStreamEnvelope[]): string {
     if (item.type === "user_message") {
       parts.push({
         kind: "user",
-        text: item.text,
+        text: item.translatedText ?? item.text,
         ...(item.clientMessageId !== undefined ? { clientMessageId: item.clientMessageId } : {}),
       });
     } else if (item.type === "assistant_message") {

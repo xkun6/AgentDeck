@@ -32,6 +32,11 @@ import {
 import { testProviderProfile } from "../providers/custom/test-connection.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { SettingsStore, settingsPatchSchema } from "../settings/sidecar-settings.js";
+import {
+  TRANSLATION_TEXT_LIMIT,
+  translationEndpointPatchSchema,
+  type TranslationService,
+} from "../translation/translation-service.js";
 import type { SnapshotService } from "../snapshots/snapshot-service.js";
 import type { BoardService } from "../kanban/board-service.js";
 import type { GroupService } from "../groups/group-service.js";
@@ -48,14 +53,17 @@ export const RPC_PATH = "/rpc";
 
 /**
  * 远程客户端（手机）不可调用的方法，一律按「方法不存在」处理（design.md 4.31）：
- * `remote.*`、`settings.set`，以及会把自定义 provider 明文密钥交出去的 `provider.config.get` / `provider.config.set`
+ * `remote.*`、`settings.set`，以及会把明文密钥交出去的 `provider.config.get` / `provider.config.set`、
+ * `translation.endpoint.get` / `translation.endpoint.set`（design.md 4.35）
  */
 function isRemoteForbiddenMethod(method: string): boolean {
   return (
     method.startsWith("remote.") ||
     method === "settings.set" ||
     method === "provider.config.get" ||
-    method === "provider.config.set"
+    method === "provider.config.set" ||
+    method === "translation.endpoint.get" ||
+    method === "translation.endpoint.set"
   );
 }
 
@@ -120,6 +128,8 @@ export interface RpcServerOptions {
   mcp?: McpInteropEndpoint;
   /** 远程网关（design.md 4.31）；不传时 remote.status 返回关闭状态，pairing / revoke 返回 NOT_SUPPORTED */
   remote?: RemoteController;
+  /** 翻译（design.md 4.35）；不传时 translation.* 返回 NOT_SUPPORTED */
+  translation?: TranslationService;
   logger?: Logger;
 }
 
@@ -412,6 +422,12 @@ export class RpcServer {
       }
       return snapshots;
     };
+    const requireTranslation = (): TranslationService => {
+      if (!this.options.translation) {
+        throw new AgentRpcError("NOT_SUPPORTED", "未启用翻译");
+      }
+      return this.options.translation;
+    };
     const requireScheduler = (): Scheduler => {
       if (!this.options.scheduler) {
         throw new AgentRpcError("NOT_SUPPORTED", "未启用调度器");
@@ -466,6 +482,7 @@ export class RpcServer {
           modeId: z.string().optional(),
           thinkingOptionId: z.string().min(1).nullable().optional(),
           title: z.string().optional(),
+          translation: z.boolean().optional(),
         }),
         async (params) => ({ agent: await manager.createAgent(params) }),
       ),
@@ -479,7 +496,8 @@ export class RpcServer {
           prompt: promptSchema,
           clientMessageId: z.string().optional(),
         }),
-        (params) => manager.sendPrompt(params.agentId, params.prompt, params.clientMessageId),
+        (params) =>
+          manager.sendPrompt(params.agentId, params.prompt, params.clientMessageId, { translate: true }),
       ),
       defineMethod(
         AGENT_RPC_METHODS.agentSteer,
@@ -489,7 +507,7 @@ export class RpcServer {
           clientMessageId: z.string().optional(),
         }),
         async (params) => {
-          await manager.steer(params.agentId, params.prompt, params.clientMessageId);
+          await manager.steer(params.agentId, params.prompt, params.clientMessageId, { translate: true });
           return {};
         },
       ),
@@ -591,14 +609,16 @@ export class RpcServer {
             pinned: z.boolean().optional(),
             archived: z.boolean().optional(),
             interopTarget: z.boolean().optional(),
+            translation: z.boolean().optional(),
           })
           .refine(
             (value) =>
               value.title !== undefined ||
               value.pinned !== undefined ||
               value.archived !== undefined ||
-              value.interopTarget !== undefined,
-            { message: "title / pinned / archived / interopTarget 至少需要提供一个" },
+              value.interopTarget !== undefined ||
+              value.translation !== undefined,
+            { message: "title / pinned / archived / interopTarget / translation 至少需要提供一个" },
           ),
         async (params) => ({
           agent: await manager.updateAgent(params.agentId, {
@@ -606,6 +626,7 @@ export class RpcServer {
             ...(params.pinned !== undefined ? { pinned: params.pinned } : {}),
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.interopTarget !== undefined ? { interopTarget: params.interopTarget } : {}),
+            ...(params.translation !== undefined ? { translation: params.translation } : {}),
           }),
         }),
       ),
@@ -652,6 +673,24 @@ export class RpcServer {
         },
       ),
       defineMethod(AGENT_RPC_METHODS.settingsGet, emptyParams, () => settings.get()),
+      defineMethod(
+        AGENT_RPC_METHODS.translationTranslate,
+        z.object({
+          direction: z.enum(["user-to-agent", "agent-to-user"]),
+          text: z.string().min(1).max(TRANSLATION_TEXT_LIMIT),
+        }),
+        async (params) => ({
+          text: await requireTranslation().translate(params.direction, params.text),
+        }),
+      ),
+      defineMethod(AGENT_RPC_METHODS.translationEndpointGet, emptyParams, () =>
+        requireTranslation().getEndpoint(),
+      ),
+      defineMethod(
+        AGENT_RPC_METHODS.translationEndpointSet,
+        z.object({ patch: translationEndpointPatchSchema }),
+        (params) => requireTranslation().setEndpoint(params.patch),
+      ),
       defineMethod(
         AGENT_RPC_METHODS.settingsSet,
         z.object({ patch: settingsPatchSchema }),

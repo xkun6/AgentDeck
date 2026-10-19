@@ -271,10 +271,14 @@ describe("NewSession 新建会话", () => {
     ],
   };
 
-  function setup(agents = [agent("a", { cwd: "J:/Program/A", updatedAt: 5 }), agent("b", { cwd: "J:/Program/B", updatedAt: 9 })]) {
+  function setup(
+    agents = [agent("a", { cwd: "J:/Program/A", updatedAt: 5 }), agent("b", { cwd: "J:/Program/B", updatedAt: 9 })],
+    translationDefault = false,
+  ) {
     const created = agent("new-1");
     const client = makeClient((method) => {
       if (method === "provider.list") return PROVIDERS;
+      if (method === "settings.get") return { translation: { enabledByDefault: translationDefault } };
       if (method === "provider.listModels") return CATALOG;
       if (method === "agent.create") return { agent: created };
       return {};
@@ -381,6 +385,22 @@ describe("NewSession 新建会话", () => {
     expect((screen.getByRole("button", { name: "创建会话" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByPlaceholderText(/J:\/Program\/MyProject/), { target: { value: "J:/x" } });
     expect((screen.getByRole("button", { name: "创建会话" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("翻译选项跟随「新会话默认开启」，未改动时不传 translation；改选后显式传入（design.md 4.35）", async () => {
+    const { client } = setup(undefined, true);
+    const group = () => within(screen.getByRole("radiogroup", { name: "翻译" }));
+    await vi.waitFor(() => expect(group().getByRole("radio", { name: /开启/ }).getAttribute("aria-checked")).toBe("true"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    });
+    expect(createCalls(client)[0]![1]).not.toHaveProperty("translation");
+
+    fireEvent.click(group().getByRole("radio", { name: "关闭" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
+    });
+    expect(createCalls(client)[1]![1]).toMatchObject({ translation: false });
   });
 });
 
@@ -561,6 +581,16 @@ describe("SessionDetail 时间线向前分页", () => {
       fireEvent.scroll(log);
     });
     expect(client.fetchOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it("顶栏「翻译」开关经 agent.update 切换会话翻译（design.md 4.35）", async () => {
+    const { client } = setup();
+    const toggle = await screen.findByRole("button", { name: "翻译" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(client.request).toHaveBeenCalledWith("agent.update", { agentId: "a1", translation: true });
   });
 
   it("provider 支持 steer 时空闲状态显示发送、状态行不渲染空芯片", async () => {

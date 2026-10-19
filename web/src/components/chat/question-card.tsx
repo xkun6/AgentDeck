@@ -10,6 +10,7 @@ import type {
   AgentQuestion,
 } from "@agentdeck/protocol";
 import type { PendingApproval } from "@/stores/chat";
+import { TranslatedInline } from "./translated-text";
 import { HANDLED_ELSEWHERE_MESSAGE, useApprovalFailure } from "./use-approval-failure";
 import a from "./approval-dialog.module.css";
 import s from "./question-card.module.css";
@@ -135,8 +136,14 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
             return (
               <fieldset key={`${index}-${question.question}`} className={s.question}>
                 <legend className={s.legend}>
-                  {question.header ? <span className={s.chip}>{question.header}</span> : null}
-                  <span className={s.questionText}>{question.question}</span>
+                  {question.header ? (
+                    <span className={s.chip}>
+                      <TranslatedInline text={question.header} />
+                    </span>
+                  ) : null}
+                  <span className={s.questionText}>
+                    <TranslatedInline text={question.question} />
+                  </span>
                 </legend>
                 <input
                   className={s.otherInput}
@@ -154,8 +161,14 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
           return (
             <fieldset key={`${index}-${question.question}`} className={s.question}>
               <legend className={s.legend}>
-                {question.header ? <span className={s.chip}>{question.header}</span> : null}
-                <span className={s.questionText}>{question.question}</span>
+                {question.header ? (
+                  <span className={s.chip}>
+                    <TranslatedInline text={question.header} />
+                  </span>
+                ) : null}
+                <span className={s.questionText}>
+                  <TranslatedInline text={question.question} />
+                </span>
                 {question.multiSelect ? <span className={s.hint}>可多选</span> : null}
               </legend>
               <div
@@ -177,9 +190,13 @@ export function QuestionCard({ approval, request, questions, onRespond, remainin
                         onChange={() => update(index, toggleOption(question, selection, option.label))}
                       />
                       <span className={s.optionBody}>
-                        <span className={s.optionLabel}>{option.label}</span>
+                        <span className={s.optionLabel}>
+                          <TranslatedInline text={option.label} />
+                        </span>
                         {option.description ? (
-                          <span className={s.optionDescription}>{option.description}</span>
+                          <span className={s.optionDescription}>
+                            <TranslatedInline text={option.description} />
+                          </span>
                         ) : null}
                         {checked && option.preview ? <pre className={s.preview}>{option.preview}</pre> : null}
                       </span>

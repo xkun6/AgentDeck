@@ -44,7 +44,7 @@ export type AssistantTurnBlock =
   | { type: "progress"; text: string }
   | { type: "image"; image: ImageEntry }
   | { type: "tool"; tool: ToolEntry }
-  | { type: "steer"; text: string }
+  | { type: "steer"; text: string; translatedText?: string }
   | { type: "moa_reference"; label: string; text: string; index?: number; count?: number };
 
 export interface PendingApproval {
@@ -664,6 +664,7 @@ function reduceAgentTimelineItem(
               type: "steer",
               text: item.text,
               ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
+              ...(item.translatedText ? { translatedText: item.translatedText } : {}),
             },
           ],
         }));
@@ -675,6 +676,7 @@ function reduceAgentTimelineItem(
           ...message,
           status: "complete",
           ...(message.firstSeq === undefined ? { firstSeq: seq } : {}),
+          ...(item.translatedText ? { translatedText: item.translatedText } : {}),
         }));
       }
       return {
@@ -693,6 +695,7 @@ function reduceAgentTimelineItem(
             // 由时间线重建：图片没有落盘，再次发送只能重发文字（design.md 4.21）
             restored: true,
             firstSeq: seq,
+            ...(item.translatedText ? { translatedText: item.translatedText } : {}),
           },
         ],
       };

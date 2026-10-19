@@ -77,6 +77,7 @@ function MainApp() {
             <Route path="/snapshots" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/interop" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/remote" element={withBoundary(<AdvancedRoute />)} />
+            <Route path="/translation" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/debug" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/about" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/advanced/*" element={withBoundary(<AdvancedRoute />)} />
