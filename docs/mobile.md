@@ -118,7 +118,7 @@ cd gen/android && ./gradlew assembleArm64Release -x rustBuildArm64Release
 # 产物：mobile/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk
 ```
 
-整套脚本见（gitignore 的）`tmp/build-apk-release.sh`。验证：`apksigner verify --verbose --print-certs <apk>`（build-tools 里）看证书 DN 为 `CN=AgentDeck, O=AgentDeck`；`aapt2 dump badging <apk>` 看 `versionName` / `versionCode`（0.3.0 → 3000，由 `tauri.conf.json` 的 version 经 `tauri.properties` 生成）。注意：APK 只带 v2 签名（minSdk 24，AGP 默认不加 v1），Android 7.0+ 均可安装；与 debug 版签名不同，**已装 debug 版的手机必须先卸载才能装 release 版**，配对数据会丢失。
+整套脚本见（gitignore 的）`tmp/build-apk-release.sh`。验证：`apksigner verify --verbose --print-certs <apk>`（build-tools 里）看证书 DN 为 `CN=AgentDeck, O=AgentDeck`；`aapt2 dump badging <apk>` 看 `versionName` / `versionCode`（0.3.0 → 3000，由 `tauri.conf.json` 的 version 经 `tauri.properties` 生成）。注意：APK 只带 v2 签名（minSdk 24，AGP 默认不加 v1），Android 7.0+ 均可安装；与 debug 版签名不同，**已装 debug 版的手机必须先卸载才能装 release 版**，配对数据会丢失。华为等带「隐私空间 / 应用分身」的手机，桌面卸载只移除当前用户，其它用户空间里的旧包仍在，安装会继续报签名不一致：用 `adb shell pm list packages -u | grep agentdeck` 检查，`adb uninstall local.agentdeck.mobile` 会从所有用户空间移除。
 
 **release 放行明文 ws 的原因**：手机经局域网 / Tailscale 以 `ws://<电脑IP>:47631` 直连电脑网关，IP 段无法用 `domain-config` 限定；传输内容已是 tweetnacl 端到端加密，明文通道本身不泄露内容。放行依靠 `AndroidManifest.xml` 的 `android:networkSecurityConfig="@xml/network_security_config"`（`base-config cleartextTrafficPermitted="true"`，debug / release 共用）。该属性在 API 24+ 优先于 `usesCleartextTraffic`；Tauri 生成的 `manifestPlaceholders["usesCleartextTraffic"]` 默认 release 为 `false`，当前清单并未引用该占位符，为避免日后有人引用而误关，release 里也显式设为 `"true"`。
 
