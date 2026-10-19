@@ -955,6 +955,20 @@ describe("空闲会话回收（design.md 4.34）", () => {
     expect(await busy.manager.reclaimIdleAgents()).toEqual([]);
   });
 
+  test("自动回收：开启缓存保活且委派子会话仍在工作时跳过，子会话结束后照常回收（design.md 4.36）", async () => {
+    const parent = await idleAgent();
+    internalAgent(parent.manager, parent.agentId).snapshot.cacheKeepAlive = true;
+    const child = await parent.manager.createAgent({ provider: "fake", cwd: "/w", parentAgentId: parent.agentId });
+    const { turnId } = await parent.manager.sendPrompt(child.id, "长时间构建");
+    parent.clock.value += 60 * 60_000;
+    expect(await parent.manager.reclaimIdleAgents()).toEqual([]);
+
+    parent.sessions.at(-1)!.emit({ type: "turn_completed", turnId });
+    await vi.waitFor(() => expect(parent.manager.getAgent(child.id).status).toBe("idle"));
+    parent.clock.value += 60 * 60_000;
+    expect(await parent.manager.reclaimIdleAgents()).toContain(parent.agentId);
+  });
+
   test("回收进行中并发 send：等关闭完成后恢复，不返回 AGENT_CLOSED", async () => {
     const { manager, sessions, resumeCalls, agentId } = await idleAgent();
     let release!: () => void;

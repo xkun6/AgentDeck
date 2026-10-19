@@ -88,6 +88,8 @@ export function decideNotification(input: {
     // 重放防护：本地没有活跃回合（timeline 回放、重连）或用户已手动中断时
     // 不通知。回合收尾后会清空 activeAssistantId，同一回合只有一次「在场」的结束事件。
     if (!prevRuntime?.activeAssistantId || prevRuntime.interrupted) return null;
+    // 缓存保活回合（design.md 4.36）是 sidecar 自动发的，不打扰用户。
+    if (prevRuntime.activeTurnKeepAlive) return null;
     const dedupeKey = `complete:${agentId}:${event.turnId}`;
     if (alreadyNotified(dedupeKey)) return null;
     if (event.type === "turn_failed") {

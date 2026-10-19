@@ -610,6 +610,7 @@ export class RpcServer {
             archived: z.boolean().optional(),
             interopTarget: z.boolean().optional(),
             translation: z.boolean().optional(),
+            cacheKeepAlive: z.boolean().optional(),
           })
           .refine(
             (value) =>
@@ -617,8 +618,9 @@ export class RpcServer {
               value.pinned !== undefined ||
               value.archived !== undefined ||
               value.interopTarget !== undefined ||
-              value.translation !== undefined,
-            { message: "title / pinned / archived / interopTarget / translation 至少需要提供一个" },
+              value.translation !== undefined ||
+              value.cacheKeepAlive !== undefined,
+            { message: "title / pinned / archived / interopTarget / translation / cacheKeepAlive 至少需要提供一个" },
           ),
         async (params) => ({
           agent: await manager.updateAgent(params.agentId, {
@@ -627,6 +629,7 @@ export class RpcServer {
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.interopTarget !== undefined ? { interopTarget: params.interopTarget } : {}),
             ...(params.translation !== undefined ? { translation: params.translation } : {}),
+            ...(params.cacheKeepAlive !== undefined ? { cacheKeepAlive: params.cacheKeepAlive } : {}),
           }),
         }),
       ),

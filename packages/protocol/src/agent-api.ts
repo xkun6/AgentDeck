@@ -392,12 +392,15 @@ export type AgentPermissionResponse =
   | { behavior: "allow"; selectedActionId?: string; updatedInput?: Record<string, unknown> }
   | { behavior: "deny"; selectedActionId?: string; message?: string; interrupt?: boolean };
 
-/** 轮次来源：`background` 表示 CLI 在没有 agent.send 的情况下自行开始的轮次（如后台子代理完成后的续写） */
-export type AgentTurnOrigin = "background";
+/**
+ * 轮次来源：`background` 表示 CLI 在没有 agent.send 的情况下自行开始的轮次（如后台子代理完成后的续写）；
+ * `keepalive` 表示缓存保活发出的回合（design.md 4.36）
+ */
+export type AgentTurnOrigin = "background" | "keepalive";
 
 export type AgentStreamEvent =
   | { type: "thread_started"; sessionId: string }
-  /** origin 缺省 = 由 agent.send 发起；"background" = CLI 自发轮次（design.md 4.12） */
+  /** origin 缺省 = 由 agent.send 发起；"background" = CLI 自发轮次（design.md 4.12）；"keepalive" = 缓存保活（4.36） */
   | { type: "turn_started"; turnId: string; origin?: AgentTurnOrigin }
   /** nativeRef：provider 原生回合锚点，供 agent.fork 截断分叉用（Claude = 本轮最后一条 assistant 消息 uuid，Codex = 原生 turnId，design.md 4.23） */
   | { type: "turn_completed"; turnId: string; usage?: AgentUsage; nativeRef?: string }
@@ -522,6 +525,8 @@ export interface AgentSnapshot {
   interopTarget?: boolean;
   /** 会话开启翻译（design.md 4.35），经 agent.update 设置；缺省视为 false */
   translation?: boolean;
+  /** 缓存保活（design.md 4.36，仅 Claude），经 agent.update 设置；缺省视为 false */
+  cacheKeepAlive?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -1137,6 +1142,8 @@ export interface AgentRpcMethods {
       interopTarget?: boolean;
       /** 会话翻译开关（design.md 4.35） */
       translation?: boolean;
+      /** 缓存保活开关（design.md 4.36，仅 Claude） */
+      cacheKeepAlive?: boolean;
     };
     result: { agent: AgentSnapshot };
   };

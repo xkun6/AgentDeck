@@ -820,7 +820,8 @@ export class Scheduler {
       case "turn_started":
         this.idleSince.delete(agentId);
         this.trackers.set(agentId, {
-          background: event.origin === "background",
+          // 缓存保活回合（design.md 4.36）与 CLI 自发轮次一样不算所等待回合的结果
+          background: event.origin === "background" || event.origin === "keepalive",
           messageId: null,
           text: "",
         });

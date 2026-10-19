@@ -59,13 +59,13 @@ export interface AttentionServiceOptions {
 
 /**
  * client.attention 判定（design.md 4.31）：主时间线 `turn_completed` / `turn_failed`
- * （CLI 自发轮次与 judge 会话除外）、`permission_requested`、`schedule.notice`；
+ * （CLI 自发轮次、缓存保活回合与 judge 会话除外）、`permission_requested`、`schedule.notice`；
  * 另在 `permission_resolved` 时发撤回信号（kind "resolved"）。
  * 一律发给所有已认证的远程连接，不判断用户是否在电脑前；是否提醒由手机端设置决定。
  */
 export class AttentionService {
   private readonly now: () => number;
-  /** 每个会话里的 CLI 自发轮次 id（turn_started.origin 为 background），回合结束时清理 */
+  /** 每个会话里不提醒的回合 id（turn_started.origin 为 background / keepalive），回合结束时清理 */
   private readonly backgroundTurns = new Map<string, Set<string>>();
   private readonly unsubscribers: Array<() => void> = [];
 
@@ -97,7 +97,8 @@ export class AttentionService {
     const event = envelope.event;
     switch (event.type) {
       case "turn_started":
-        if (event.origin === "background") {
+        // CLI 自发轮次与缓存保活回合（design.md 4.36）都不提醒
+        if (event.origin === "background" || event.origin === "keepalive") {
           let turns = this.backgroundTurns.get(envelope.agentId);
           if (!turns) {
             turns = new Set();

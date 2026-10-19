@@ -674,7 +674,12 @@ export class BoardService {
     const { agentId, event } = envelope;
     switch (event.type) {
       case "turn_started":
-        this.trackers.set(agentId, { background: event.origin === "background", messageId: null, text: "" });
+        // 缓存保活回合（design.md 4.36）与 CLI 自发轮次一样不算任务结果
+        this.trackers.set(agentId, {
+          background: event.origin === "background" || event.origin === "keepalive",
+          messageId: null,
+          text: "",
+        });
         return;
       case "timeline": {
         const item = event.item;

@@ -526,6 +526,9 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   if (typeof value.translation !== "boolean") {
     delete meta.translation;
   }
+  if (typeof value.cacheKeepAlive !== "boolean") {
+    delete meta.cacheKeepAlive;
+  }
   if (!ORIGINS.has(value.origin as string)) {
     delete meta.origin;
   }

@@ -8,6 +8,7 @@ import type {
   AgentPermissionRequest,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentSnapshot,
   AgentStreamEvent,
 } from "@agentdeck/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -20,6 +21,7 @@ import { ProviderRegistry } from "../src/providers/registry.js";
 import { InteropService } from "../src/server/interop-service.js";
 import {
   buildReadTranscript,
+  clampTimeoutSec,
   INTEROP_MAX_RUNNING_CHILDREN,
   lastAssistantText,
   McpInteropEndpoint,
@@ -664,5 +666,19 @@ describe("agent.update interopTarget 与持久化字段", () => {
     const updated = await h.manager.updateAgent(child.id, { interopTarget: true });
     expect(updated.interopTarget).toBe(true);
     expect(h.manager.getAgent(child.id).interopTarget).toBe(true);
+  });
+});
+
+describe("等待上限", () => {
+  test("缺省 600、上限 3600；调用方开启缓存保活时上限 3000（design.md 4.36）", () => {
+    const plain = { cacheKeepAlive: false } as AgentSnapshot;
+    const keepAlive = { cacheKeepAlive: true } as AgentSnapshot;
+    expect(clampTimeoutSec(undefined, plain)).toBe(600);
+    expect(clampTimeoutSec(undefined, keepAlive)).toBe(600);
+    expect(clampTimeoutSec(5000, plain)).toBe(3600);
+    expect(clampTimeoutSec(5000, undefined)).toBe(3600);
+    expect(clampTimeoutSec(3600, keepAlive)).toBe(3000);
+    expect(clampTimeoutSec(1200.7, keepAlive)).toBe(1200);
+    expect(clampTimeoutSec(0.2, keepAlive)).toBe(1);
   });
 });

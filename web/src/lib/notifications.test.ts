@@ -293,6 +293,18 @@ describe("decideNotification — turn_completed / turn_failed", () => {
       }),
     ).toBeNull();
   });
+
+  it("returns null for a cache keep-alive turn (design.md 4.36)", async () => {
+    const { decideNotification } = await loadNotifications();
+    expect(
+      decideNotification({
+        envelope: completeEvent(),
+        prevRuntime: runtimeWith({ activeAssistantId: "agent-turn-t1", activeTurnKeepAlive: true }),
+        settings: settings(),
+        alreadyNotified: never,
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("decideNotification — other events", () => {

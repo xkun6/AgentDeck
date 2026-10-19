@@ -472,7 +472,8 @@ export class GroupService {
     }
     const event = envelope.event;
     if (event.type === "turn_started") {
-      if (event.origin === "background") {
+      // 缓存保活回合（design.md 4.36）与 CLI 自发轮次一样不算成员结果
+      if (event.origin === "background" || event.origin === "keepalive") {
         this.backgroundTurns.add(event.turnId);
       }
       return;

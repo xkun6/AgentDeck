@@ -115,6 +115,25 @@ describe("右键菜单「允许被其它会话调用」", () => {
     await waitFor(() => expect(updateSession).toHaveBeenCalledWith("b", { interopTarget: false }));
   });
 
+  it("「缓存保活」只对 Claude 会话显示，点击切换 cacheKeepAlive（design.md 4.36）", async () => {
+    renderSidebar([
+      agent("a"),
+      agent("b", { cacheKeepAlive: true }),
+      agent("c", { provider: "codex" }),
+    ]);
+    fireEvent.contextMenu(screen.getByText("会话-a"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "缓存保活" }));
+    await waitFor(() => expect(updateSession).toHaveBeenCalledWith("a", { cacheKeepAlive: true }));
+
+    fireEvent.contextMenu(screen.getByText("会话-b"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "缓存保活" }));
+    await waitFor(() => expect(updateSession).toHaveBeenCalledWith("b", { cacheKeepAlive: false }));
+
+    fireEvent.contextMenu(screen.getByText("会话-c"));
+    await screen.findByRole("menuitem", { name: "复制会话 ID" });
+    expect(screen.queryByRole("menuitem", { name: "缓存保活" })).toBeNull();
+  });
+
   it("「复制会话 ID」把 agentId 写入剪贴板", async () => {
     const writeText = vi.fn(async (_text: string) => undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
