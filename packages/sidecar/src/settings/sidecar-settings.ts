@@ -14,6 +14,12 @@ export const DEFAULT_SIDECAR_SETTINGS: SidecarSettings = {
   interop: { enabled: true },
   remote: { enabled: false, port: 47_631 },
   idleReclaim: { enabled: true, idleMinutes: 15 },
+  translation: {
+    userLanguage: "简体中文",
+    agentLanguage: "English",
+    translateReasoning: false,
+    enabledByDefault: false,
+  },
 };
 
 /** settings.set 的 patch 校验：未知字段、非法取值一律拒绝（-32602） */
@@ -36,6 +42,15 @@ export const settingsPatchSchema = z
       .object({ enabled: z.boolean(), idleMinutes: z.number().int().min(1).max(1440) })
       .partial()
       .strict(),
+    translation: z
+      .object({
+        userLanguage: z.string().trim().min(1).max(64),
+        agentLanguage: z.string().trim().min(1).max(64),
+        translateReasoning: z.boolean(),
+        enabledByDefault: z.boolean(),
+      })
+      .partial()
+      .strict(),
   })
   .partial()
   .strict();
@@ -46,6 +61,7 @@ function cloneSettings(settings: SidecarSettings): SidecarSettings {
     interop: { ...settings.interop },
     remote: { ...settings.remote },
     idleReclaim: { ...settings.idleReclaim },
+    translation: { ...settings.translation },
   };
 }
 
@@ -55,7 +71,7 @@ function mergeWithDefaults(raw: unknown): SidecarSettings {
   if (typeof raw !== "object" || raw === null) {
     return result;
   }
-  for (const key of ["snapshots", "interop", "remote", "idleReclaim"] as const) {
+  for (const key of ["snapshots", "interop", "remote", "idleReclaim", "translation"] as const) {
     const section = (raw as Record<string, unknown>)[key];
     if (typeof section !== "object" || section === null) {
       continue;
@@ -111,6 +127,7 @@ export class SettingsStore {
     Object.assign(next.interop, patch.interop);
     Object.assign(next.remote, patch.remote);
     Object.assign(next.idleReclaim, patch.idleReclaim);
+    Object.assign(next.translation, patch.translation);
     if (this.file) {
       const file = this.file;
       const write = this.writeChain.then(async () => {

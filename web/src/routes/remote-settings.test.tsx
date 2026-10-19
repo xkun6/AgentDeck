@@ -39,6 +39,7 @@ const BASE_SETTINGS: SidecarSettings = {
   interop: { enabled: true },
   remote: { enabled: true, port: 47_631 },
   idleReclaim: { enabled: true, idleMinutes: 15 },
+  translation: { userLanguage: "简体中文", agentLanguage: "English", translateReasoning: false, enabledByDefault: false },
 };
 
 const STATUS: RemoteStatus = {

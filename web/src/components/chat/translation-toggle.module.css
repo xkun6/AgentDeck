@@ -1,0 +1,35 @@
+.toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  cursor: pointer;
+}
+
+.toggle:hover:not(:disabled) {
+  color: var(--h-text);
+}
+
+.toggle[data-on="true"] {
+  color: var(--h-color-accent-fg);
+}
+
+.toggle[data-error="true"] {
+  color: var(--h-color-danger-fg);
+}
+
+.toggle:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.toggle:focus-visible {
+  outline: var(--h-focus-outline);
+}

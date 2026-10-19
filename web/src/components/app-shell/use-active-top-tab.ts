@@ -22,6 +22,7 @@ export const SETTINGS_ROUTES = [
   "/snapshots",
   "/interop",
   "/remote",
+  "/translation",
   "/debug",
   "/about",
   "/advanced",

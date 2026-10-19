@@ -10,6 +10,14 @@ import { MessageImage } from "./message-image";
 import { findMessageIdForSeq } from "./focus-seq";
 import { MessageSkeleton } from "./message-skeleton";
 import { MessageText } from "./message-text";
+import {
+  SentTranslation,
+  TimelineTranslationContext,
+  TranslatedMessageText,
+  TranslatedReasoningText,
+  useTimelineTranslation,
+  type TimelineTranslation,
+} from "./translated-text";
 import { DelegateCard } from "./delegate-card";
 import { SubAgentToolDetail } from "./subagents/subagent-tool-detail";
 import { CopyButton } from "@/components/ui/copy-button";
@@ -68,7 +76,11 @@ interface MessageTimelineProps {
   onReachTop?: () => void;
   /** 渲染在消息列表最上方的插槽（手机端「加载更早」入口）。 */
   topSlot?: ReactNode;
+  /** 会话翻译（design.md 4.35）：开启时已完成的助手文本显示译文；缺省不翻译。 */
+  translation?: TimelineTranslation;
 }
+
+const NO_TRANSLATION: TimelineTranslation = { enabled: false, translateReasoning: false };
 
 /** 定位后消息高亮持续的时间（与 CSS 动画时长一致） */
 const FOCUS_HIGHLIGHT_MS = 2000;
@@ -266,6 +278,9 @@ function ProgressBlock({ turnStartedAt, sessionUsage, progressModel, progressTex
 
 function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean }) {
   const [open, setOpen] = useState(false);
+  const translation = useTimelineTranslation();
+  // 翻译思考块（design.md 4.35）：展开且已结束时才请求
+  const translate = translation.enabled && translation.translateReasoning && !streaming;
 
   return (
     <div className={s.reasoning}>
@@ -278,7 +293,13 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming?: boolean
         <span className={s.chevron}>›</span>
         <span>{streaming ? "正在思考" : "推理过程"}</span>
       </button>
-      {open ? <pre className={s.reasoningBody}>{text}</pre> : null}
+      {open ? (
+        translate ? (
+          <TranslatedReasoningText text={text} className={s.reasoningBody} />
+        ) : (
+          <pre className={s.reasoningBody}>{text}</pre>
+        )
+      ) : null}
     </div>
   );
 }
@@ -553,6 +574,7 @@ interface MessageBlocksProps {
 
 function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progressModel }: MessageBlocksProps) {
   const showReasoning = useAtomValue(showReasoningAtom);
+  const translation = useTimelineTranslation();
   const blocks = message.blocks ?? [];
   const items: ReactNode[] = [];
   let pendingTools: ChatToolItem[] = [];
@@ -582,6 +604,11 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
             <div className={s.commandOutputLabel}>命令输出</div>
             <pre className={s.commandOutput}>{block.text}</pre>
           </div>
+        ) : translation.enabled && !(streaming && index === blocks.length - 1) ? (
+          // 已完成的文本块才翻译（design.md 4.35）：消息已结束，或后面已有其它块
+          <div key={`text-${index}`} className={s.turnText}>
+            <TranslatedMessageText text={block.text} />
+          </div>
         ) : (
           <div key={`text-${index}`} className={s.turnText}>
             <MessageText text={block.text} streaming={streaming && index === blocks.length - 1} />
@@ -596,7 +623,10 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
       items.push(
         <div key={`steer-${index}`} className={s.steerBubble} data-testid="steer-bubble">
           <span className={s.steerLabel}>插话</span>
-          <span className={s.steerText}>{block.text}</span>
+          <span className={s.steerText}>
+            {block.text}
+            {block.translatedText ? <SentTranslation text={block.translatedText} /> : null}
+          </span>
         </div>,
       );
       return;
@@ -1002,6 +1032,7 @@ function MessageBubble({
           ) : (
             <>
               {message.text ? <MessageText text={message.text} streaming={streaming} /> : null}
+              {isUser && message.translatedText ? <SentTranslation text={message.translatedText} /> : null}
               {message.images?.length ? (
                 <div className={s.messageImages}>
                   {message.images.map((image, index) => (
@@ -1094,6 +1125,7 @@ export function MessageTimeline({
   onOpenSnapshot,
   onReachTop,
   topSlot,
+  translation = NO_TRANSLATION,
 }: MessageTimelineProps) {
   const compact = density === "compact";
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -1490,6 +1522,7 @@ export function MessageTimeline({
 
   return (
     <WaitingApprovalContext.Provider value={Boolean(pendingApproval)}>
+    <TimelineTranslationContext.Provider value={translation}>
     <div
       ref={containerRef}
       className={s.scroll}
@@ -1577,6 +1610,7 @@ export function MessageTimeline({
         {pendingApproval}
       </div>
     </div>
+    </TimelineTranslationContext.Provider>
     </WaitingApprovalContext.Provider>
   );
 }

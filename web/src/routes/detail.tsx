@@ -74,6 +74,7 @@ import {
 } from "@/stores/composer-queue";
 import type { ComposerSubmitPayload } from "@/components/chat/composer-types";
 import { MessageTimeline } from "@/components/chat/message-timeline";
+import { TranslationToggle, useSessionTranslation } from "@/components/chat/translation-toggle";
 import { parseFocusSeq } from "@/components/chat/focus-seq";
 import { StallNotice } from "@/components/chat/stall-notice";
 import { AutomationStatusBar } from "@/components/chat/automation-status-bar";
@@ -150,6 +151,7 @@ export function DetailRoute() {
     [runtimeBySession, taskId],
   );
   const snapshot = taskId ? snapshots[taskId] : undefined;
+  const translation = useSessionTranslation(snapshot);
   const providersQuery = useAgentProviders();
   const catalogQuery = useAgentCatalog(snapshot?.provider ?? null, snapshot?.cwd ?? "");
   const commandsQuery = useAgentCommands(taskId, snapshot?.status);
@@ -696,6 +698,7 @@ export function DetailRoute() {
             onFork={(seq) => { if (taskId) void forkSession(taskId, seq); }}
             snapshotTurns={snapshotTurns}
             onOpenSnapshot={openSnapshotPanel}
+            translation={translation}
           />
           <div className={s.composerArea}>
             {retraction.notice ? (
@@ -777,12 +780,15 @@ export function DetailRoute() {
               onStop={onStop}
               // 运行时 usage 比快照新（压缩后会清掉已用量，见 stores/chat.ts）；没有时退回快照
               toolbarTrailing={
-                <ContextUsageIndicator
-                  usage={runtime.agentUsage ?? snapshot?.lastUsage}
-                  onCompact={compactSupported ? onCompact : undefined}
-                  compactDisabled={runtimeIsBusy || compactUnavailable}
-                  compactDisabledReason={compactDisabledReason}
-                />
+                <>
+                  {snapshot ? <TranslationToggle snapshot={snapshot} disabled={notFound || missing} /> : null}
+                  <ContextUsageIndicator
+                    usage={runtime.agentUsage ?? snapshot?.lastUsage}
+                    onCompact={compactSupported ? onCompact : undefined}
+                    compactDisabled={runtimeIsBusy || compactUnavailable}
+                    compactDisabledReason={compactDisabledReason}
+                  />
+                </>
               }
               slashCommands={slashCommands}
               onSlashMenuOpen={onSlashMenuOpen}
