@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 侧栏子会话嵌套与「允许被其它会话调用」菜单项（design.md 4.26）。
+// 侧栏子会话嵌套与「允许被其它会话调用」「复制会话 ID」菜单项（design.md 4.26）。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -113,5 +113,14 @@ describe("右键菜单「允许被其它会话调用」", () => {
     fireEvent.contextMenu(screen.getByText("会话-b"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "允许被其它会话调用" }));
     await waitFor(() => expect(updateSession).toHaveBeenCalledWith("b", { interopTarget: false }));
+  });
+
+  it("「复制会话 ID」把 agentId 写入剪贴板", async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderSidebar([agent("a")]);
+    fireEvent.contextMenu(screen.getByText("会话-a"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "复制会话 ID" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("a"));
   });
 });
