@@ -1,4 +1,4 @@
-//! 编程Agent CLI（Claude Code / Codex）的深度检测：安装状态、版本、登录态。
+//! 编程Agent CLI（Claude Code / Codex / DeepSeek Harness）的深度检测：安装状态、版本、登录态。
 //!
 //! 与 environment.rs 的声明式工具体检互补：那边只做 PATH 快检行，这里为
 //! 「编程Agent」设置页提供更完整的状态——覆盖 PATH 之外的常见安装点
@@ -129,6 +129,9 @@ pub struct CodingAgentStatus {
     pub installed: bool,
     /// 版本号；未安装或版本命令失败时为原因说明（如「配置的路径不存在：…」）。
     pub version: Option<String>,
+    /// 找到了可执行文件但版本命令失败（无法运行）的原因；能正常运行时省略。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_error: Option<String>,
     pub path: Option<String>,
     /// 「编程 Agent」页手动配置的路径（None = 自动查找）。
     pub configured_path: Option<String>,
@@ -165,6 +168,23 @@ pub(crate) fn codex_config_dir(env_override: Option<&str>, home: &Path) -> PathB
     match env_override.map(str::trim) {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => home.join(".codex"),
+    }
+}
+
+/// DeepSeek Harness 主目录：DSH_HOME 显式优先，否则 ~/.dsh。
+pub(crate) fn dsh_home_dir(env_override: Option<&str>, home: &Path) -> PathBuf {
+    match env_override.map(str::trim) {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => home.join(".dsh"),
+    }
+}
+
+/// 找到了但版本命令失败 = 无法运行。
+fn run_error(probe: &CommandProbe) -> Option<String> {
+    if probe.found {
+        probe.error.clone()
+    } else {
+        None
     }
 }
 
@@ -321,6 +341,7 @@ pub fn collect_coding_agents_check(data_dir: &Path) -> CodingAgentsCheckResult {
 
     let claude_dir = claude_config_dir(std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(), &home);
     let codex_dir = codex_config_dir(std::env::var("CODEX_HOME").ok().as_deref(), &home);
+    let dsh_dir = dsh_home_dir(std::env::var("DSH_HOME").ok().as_deref(), &home);
 
     let claude_probe = probe_agent_binary(
         configured.claude.as_deref(),
@@ -340,6 +361,9 @@ pub fn collect_coding_agents_check(data_dir: &Path) -> CodingAgentsCheckResult {
         (CodingAgentLoginState::Unknown, None)
     };
 
+    // dsh 没有登录概念：模型与 API Key 在 DeepSeek Harness 桌面端配置，登录态恒为 Unknown
+    let dsh_probe = probe_commands(&["dsh"], &["--version"]);
+
     CodingAgentsCheckResult {
         generated_at_ms: now_ms(),
         platform: std::env::consts::OS.to_string(),
@@ -348,6 +372,7 @@ pub fn collect_coding_agents_check(data_dir: &Path) -> CodingAgentsCheckResult {
                 id: "claude-code".into(),
                 label: "Claude Code".into(),
                 installed: claude_probe.found,
+                run_error: run_error(&claude_probe),
                 version: claude_probe.version.or(claude_probe.error),
                 path: claude_probe.path.map(|p| p.to_string_lossy().into_owned()),
                 configured_path: configured.claude,
@@ -362,6 +387,7 @@ pub fn collect_coding_agents_check(data_dir: &Path) -> CodingAgentsCheckResult {
                 id: "codex".into(),
                 label: "Codex".into(),
                 installed: codex_probe.found,
+                run_error: run_error(&codex_probe),
                 version: codex_probe.version.or(codex_probe.error),
                 path: codex_probe.path.map(|p| p.to_string_lossy().into_owned()),
                 configured_path: configured.codex,
@@ -372,6 +398,21 @@ pub fn collect_coding_agents_check(data_dir: &Path) -> CodingAgentsCheckResult {
                 install_hint: "npm install -g @openai/codex".into(),
                 login_hint: "运行 codex login 完成登录（或在 ~/.codex/auth.json 配置 API Key）"
                     .into(),
+            },
+            CodingAgentStatus {
+                id: "dsh".into(),
+                label: "DeepSeek Harness".into(),
+                installed: dsh_probe.found,
+                run_error: run_error(&dsh_probe),
+                version: dsh_probe.version.or(dsh_probe.error),
+                path: dsh_probe.path.map(|p| p.to_string_lossy().into_owned()),
+                configured_path: None,
+                login_state: CodingAgentLoginState::Unknown,
+                login_detail: None,
+                config_dir: dsh_dir.to_string_lossy().into_owned(),
+                skill_name: "dsh".into(),
+                install_hint: "安装 DeepSeek Harness 桌面端，并在其设置中安装 dsh 命令".into(),
+                login_hint: "模型与 API Key 在 DeepSeek Harness 桌面端中配置".into(),
             },
         ],
     }
@@ -401,6 +442,34 @@ mod tests {
             PathBuf::from("/custom/codex")
         );
         assert_eq!(codex_config_dir(None, home), home.join(".codex"));
+    }
+
+    #[test]
+    fn dsh_home_dir_prefers_env_override() {
+        let home = Path::new("/home/u");
+        assert_eq!(
+            dsh_home_dir(Some("/custom/dsh"), home),
+            PathBuf::from("/custom/dsh")
+        );
+        assert_eq!(dsh_home_dir(Some(" "), home), home.join(".dsh"));
+        assert_eq!(dsh_home_dir(None, home), home.join(".dsh"));
+    }
+
+    #[test]
+    fn run_error_only_when_found_but_version_failed() {
+        let probe = |found: bool, error: Option<&str>| CommandProbe {
+            found,
+            path: None,
+            version: None,
+            error: error.map(String::from),
+        };
+        assert_eq!(run_error(&probe(true, None)), None);
+        assert_eq!(
+            run_error(&probe(true, Some("版本命令退出码 1"))),
+            Some("版本命令退出码 1".to_string())
+        );
+        // 未找到时 error 是「未在 PATH 中找到」，不算无法运行
+        assert_eq!(run_error(&probe(false, Some("未在 PATH 中找到 dsh"))), None);
     }
 
     #[test]
@@ -668,6 +737,12 @@ mod tests {
 
         let json = serde_json::to_value(claude).unwrap();
         assert_eq!(json["configuredPath"], serde_json::json!(missing_claude));
+        assert!(json.get("runError").is_none(), "{json}");
+
+        let dsh = &result.agents[2];
+        assert_eq!(dsh.id, "dsh");
+        assert_eq!(dsh.configured_path, None);
+        assert_eq!(dsh.login_state, CodingAgentLoginState::Unknown);
     }
 
     #[test]

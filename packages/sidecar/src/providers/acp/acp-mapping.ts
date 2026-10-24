@@ -291,6 +291,37 @@ export function findThoughtLevel(
     : null;
 }
 
+/** session 的模型配置项（category 为 model 的 select 项） */
+export interface AcpModelOption {
+  configId: string;
+  currentValue: string;
+  models: ModelInfo[];
+}
+
+/**
+ * 从 configOptions 中取 category 为 model 的 select 项（分组选项展开）；没有返回 null。
+ * 用于不给 `models` 而用配置项报模型的 agent（如 DeepSeek Harness 0.2）。
+ */
+export function findModelOption(
+  configOptions: SessionConfigOption[] | null | undefined,
+): AcpModelOption | null {
+  const option = (configOptions ?? []).find(
+    (entry) => entry.category === "model" && entry.type === "select",
+  );
+  if (!option || option.type !== "select") {
+    return null;
+  }
+  const flat = option.options.flatMap((entry) => ("group" in entry ? entry.options : [entry]));
+  const models = flat.map((entry) => ({
+    modelId: entry.value,
+    name: entry.name,
+    ...(entry.description ? { description: entry.description } : {}),
+  }));
+  return models.length > 0
+    ? { configId: option.id, currentValue: option.currentValue, models }
+    : null;
+}
+
 /**
  * agent 报告的模型 → AgentModelDefinition，思考档位挂到每个模型上。
  * agent 没有 models 但有思考档位时给一个占位模型，前端才能显示思考强度选择器。

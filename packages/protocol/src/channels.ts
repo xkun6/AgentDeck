@@ -98,6 +98,8 @@ export interface CodingAgentStatus {
   installed: boolean;
   /** 版本号；未安装或版本命令失败时为原因说明（如「配置的路径不存在：…」） */
   version?: string;
+  /** 找到了可执行文件但版本命令失败（无法运行）的原因；能正常运行时缺省 */
+  runError?: string;
   path?: string;
   /** 「编程 Agent」页手动配置的可执行文件路径；null / 缺省 = 自动查找 */
   configuredPath?: string | null;

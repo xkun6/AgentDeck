@@ -4,16 +4,18 @@ import ReactDOMServer from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import type { CodingAgentStatus } from "@agentdeck/protocol";
 
 import { useSaveCodingAgentPath } from "@/hooks/use-coding-agents";
 import { AGENT_QUERY_KEYS } from "@/lib/agent-query-keys";
-import { AgentPathField, CodingAgentToolbar } from "./settings-coding-agents";
+import { AgentPathField, CodingAgentToolbar, CodingAgentsSection } from "./settings-coding-agents";
 
 const previousBridge = window.agentdeckDesktop;
 afterEach(() => {
   cleanup();
   window.agentdeckDesktop = previousBridge;
+  delete window.__AGENTDECK_RUNTIME__;
 });
 
 describe("CodingAgentToolbar", () => {
@@ -123,5 +125,45 @@ describe("useSaveCodingAgentPath", () => {
       await result.current("claude", null);
     });
     expect(codingAgentPathsSet).toHaveBeenLastCalledWith({ claude: null });
+  });
+});
+
+describe("CodingAgentsSection", () => {
+  it("DeepSeek Harness 卡片：找到但无法运行时标「无法运行」并显示错误，不计入就绪，也没有路径配置栏", async () => {
+    const codingAgentsCheck = vi.fn(async () => ({
+      generatedAtMs: 0,
+      platform: "windows",
+      agents: [
+        agent(),
+        agent({
+          id: "dsh",
+          label: "DeepSeek Harness",
+          version: "node:internal/modules/cjs/loader:1568",
+          runError: "版本命令退出码 exit code: 1: Error: Cannot find module 'bin.js'",
+          path: "C:\\dsh\\bin\\dsh.exe",
+          loginState: "unknown",
+          configDir: "C:\\Users\\u\\.dsh",
+          skillName: "dsh",
+        }),
+      ],
+    }));
+    window.agentdeckDesktop = { windowType: "tauri", codingAgentsCheck, codingAgentPathsSet: vi.fn() };
+    window.__AGENTDECK_RUNTIME__ = { platform: "tauri" };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <CodingAgentsSection />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("DeepSeek Harness")).toBeTruthy();
+    expect(screen.getByText("无法运行")).toBeTruthy();
+    expect(screen.getByText(/DeepSeek Harness 已找到但无法运行/)).toBeTruthy();
+    expect(screen.getByText(/Cannot find module/)).toBeTruthy();
+    expect(screen.queryByText("node:internal/modules/cjs/loader:1568")).toBeNull();
+    expect(screen.getByText("1/2 就绪")).toBeTruthy();
+    expect(screen.queryByLabelText("DeepSeek Harness 可执行文件路径")).toBeNull();
+    expect(screen.getByLabelText("Claude Code 可执行文件路径")).toBeTruthy();
   });
 });

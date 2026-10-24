@@ -11,6 +11,8 @@
 //   FAKE_ACP_MCP_LOG=<file>   newSession / loadSession 收到的 mcpServers 追加写入该文件（每行一个 JSON）
 //   FAKE_ACP_THOUGHT=1        返回 thought_level 配置项（同 DeepSeek Harness：reasoning_effort，默认 high），
 //                             支持 session/set_config_option，echo 回显当前档位
+//   FAKE_ACP_MODEL_OPTION=1   返回 category 为 model 的分组配置项（同 DeepSeek Harness 0.2：id model），
+//                             支持经 session/set_config_option 切换模型；常与 FAKE_ACP_NO_MODES 合用
 import { appendFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 
@@ -72,21 +74,44 @@ class FakeAgent {
   }
 
   configOptions(state) {
-    return [
-      {
+    const options = [];
+    if (env.FAKE_ACP_MODEL_OPTION === "1") {
+      options.push({
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: state.model,
+        options: [
+          {
+            group: "fake-official",
+            name: "Fake",
+            options: MODELS.map((model) => ({
+              value: model.modelId,
+              name: model.name,
+              ...(model.description ? { description: model.description } : {}),
+            })),
+          },
+        ],
+      });
+    }
+    if (env.FAKE_ACP_THOUGHT === "1") {
+      options.push({
         id: "reasoning_effort",
         name: "Reasoning effort",
         category: "thought_level",
         type: "select",
         currentValue: state.thought,
         options: THOUGHT_VALUES,
-      },
-    ];
+      });
+    }
+    return options;
   }
 
   sessionState(sessionId) {
     const state = this.sessions.get(sessionId);
-    const config = env.FAKE_ACP_THOUGHT === "1" ? { configOptions: this.configOptions(state) } : {};
+    const hasConfig = env.FAKE_ACP_THOUGHT === "1" || env.FAKE_ACP_MODEL_OPTION === "1";
+    const config = hasConfig ? { configOptions: this.configOptions(state) } : {};
     if (env.FAKE_ACP_NO_MODES === "1") {
       return config;
     }
@@ -99,6 +124,13 @@ class FakeAgent {
 
   async setSessionConfigOption(params) {
     const state = this.requireSession(params.sessionId);
+    if (env.FAKE_ACP_MODEL_OPTION === "1" && params.configId === "model") {
+      if (!MODELS.some((model) => model.modelId === params.value)) {
+        throw RequestError.invalidParams({ value: params.value }, "未知模型");
+      }
+      state.model = params.value;
+      return { configOptions: this.configOptions(state) };
+    }
     if (env.FAKE_ACP_THOUGHT !== "1" || params.configId !== "reasoning_effort") {
       throw RequestError.invalidParams({ configId: params.configId }, "未知配置项");
     }
@@ -292,6 +324,12 @@ class FakeAgent {
             { content: "第三步", priority: "low", status: "pending" },
           ],
         });
+        return { stopReason: "end_turn" };
+      }
+      case "modelupdate": {
+        // agent 自己改了模型：发 config_option_update
+        state.model = "fake-large";
+        await this.update(sessionId, { sessionUpdate: "config_option_update", configOptions: this.configOptions(state) });
         return { stopReason: "end_turn" };
       }
       case "thoughtupdate": {

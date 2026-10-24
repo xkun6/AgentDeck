@@ -583,6 +583,52 @@ describe("AcpAgentSession 思考强度（thought_level）", () => {
   });
 });
 
+describe("AcpAgentSession 模型配置项（category model）", () => {
+  // 同 DeepSeek Harness 0.2：不给 models，模型与档位都在 configOptions 里
+  const MODEL_OPTION = { FAKE_ACP_MODEL_OPTION: "1", FAKE_ACP_THOUGHT: "1", FAKE_ACP_NO_MODES: "1" };
+
+  test("分组的 model 配置项 → 模型目录（展开分组、currentValue 为默认、挂思考档位），不再给占位模型", async () => {
+    const client = fakeClient(MODEL_OPTION);
+    const session = await client.createSession({ cwd: CWD });
+    sessions.push(session);
+    const { models } = await client.fetchCatalog();
+    expect(models.map((m) => [m.id, m.label, m.isDefault ?? false])).toEqual([
+      ["fake-small", "Fake Small", true],
+      ["fake-large", "Fake Large", false],
+    ]);
+    expect(models[1]!.description).toBe("更大");
+    expect(models[0]!.thinkingOptions?.map((o) => o.id)).toEqual(["off", "low", "high", "max"]);
+  });
+
+  test("setModel / 建会话 model → session/set_config_option；null 设回建会话时的模型", async () => {
+    const { session, events } = await open(MODEL_OPTION);
+    await session.setModel!("fake-large");
+    expect(events.at(-1)).toEqual({ type: "model_changed", modelId: "fake-large" });
+    await session.startTurn("hi");
+    await waitForTerminal(events);
+    expect(assistantText(events)).toContain("模型:fake-large");
+
+    await session.setModel!(null);
+    await session.startTurn("hi");
+    await waitForTerminal(events, 2);
+    expect(assistantText(events)).toContain("模型:fake-small");
+
+    const created = await open(MODEL_OPTION, { model: "fake-large" });
+    await created.session.startTurn("hi");
+    await waitForTerminal(created.events);
+    expect(assistantText(created.events)).toContain("模型:fake-large");
+  });
+
+  test("config_option_update 改变模型 → model_changed", async () => {
+    const { session, events } = await open(MODEL_OPTION);
+    await session.startTurn("scenario:modelupdate");
+    await waitForTerminal(events);
+    expect(events.filter((e) => e.type === "model_changed")).toEqual([
+      { type: "model_changed", modelId: "fake-large" },
+    ]);
+  });
+});
+
 describe("resumeSession", () => {
   test("agent 声明 loadSession：加载指定会话，重放的历史不外发", async () => {
     const client = fakeClient({ FAKE_ACP_LOAD_SESSION: "1" });

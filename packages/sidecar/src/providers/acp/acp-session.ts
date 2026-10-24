@@ -1,6 +1,6 @@
 // Derived from paseo packages/server/src/server/agent/providers/acp-agent.ts (Apache-2.0); modified for AgentDeck
 // 改动：只保留 AgentDeck 需要的会话能力（无 terminal / fs 客户端能力、无历史导入、无 config option 回退；
-// configOptions 只用 thought_level 一项做思考强度，design.md 4.10），
+// configOptions 只用 thought_level 做思考强度、model 做模型（agent 不给 models 时），design.md 4.10），
 // 事件收敛到 AgentDeck 精简协议；SDK 在连接关闭时不会拒绝挂起请求，这里用进程退出 Promise 兜底。
 import { randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -43,6 +43,7 @@ import { spawnProcess } from "../../utils/spawn.js";
 import { terminateWithTreeKill } from "../../utils/tree-kill.js";
 import {
   ACP_PLACEHOLDER_MODEL_ID,
+  findModelOption,
   findThoughtLevel,
   fromAcpUsage,
   fromAcpUsageUpdate,
@@ -175,7 +176,7 @@ export class AcpAgentSession implements AgentSession {
     return {
       models: toModelDefinitions(
         this.provider,
-        this.models?.availableModels,
+        this.modelState()?.availableModels,
         this.defaultModelId,
         thought ? { options: thought.options, defaultId: this.defaultThoughtValue } : null,
       ),
@@ -188,7 +189,16 @@ export class AcpAgentSession implements AgentSession {
   }
 
   get currentModelId(): string | null {
-    return this.models?.currentModelId ?? null;
+    return this.modelState()?.currentModelId ?? null;
+  }
+
+  /** 模型状态：agent 给了 models 就用它，否则取 category 为 model 的配置项（design.md 4.10） */
+  private modelState(): SessionModelState | null {
+    if (this.models?.availableModels?.length) {
+      return this.models;
+    }
+    const option = findModelOption(this.configOptions);
+    return option ? { availableModels: option.models, currentModelId: option.currentValue } : this.models;
   }
 
   // -------------------------------------------------------------------------
@@ -340,20 +350,43 @@ export class AcpAgentSession implements AgentSession {
     if (!target) {
       throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 未提供默认模型，无法恢复默认`);
     }
+    try {
+      await this.writeModel(connection, sessionId, target, (promise) => this.raceExit(promise));
+    } catch (error) {
+      if (error instanceof AgentRpcError) {
+        throw error;
+      }
+      this.logger.warn("[%s] 切换模型 %s 失败：%s", this.provider, target, errorMessage(error));
+      throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 不支持切换模型：${errorMessage(error)}`);
+    }
+    this.emit({ type: "model_changed", modelId });
+  }
+
+  /** 有 model 配置项就走 session/set_config_option，否则 unstable_setSessionModel；成功后本地记下新值 */
+  private async writeModel(
+    connection: ClientSideConnection,
+    sessionId: string,
+    modelId: string,
+    run: <T>(promise: Promise<T>) => Promise<T>,
+  ): Promise<void> {
+    const option = this.models?.availableModels?.length ? null : findModelOption(this.configOptions);
+    if (option) {
+      const response = await run(
+        connection.setSessionConfigOption({ sessionId, configId: option.configId, value: modelId }),
+      );
+      this.configOptions = (response.configOptions ?? this.configOptions ?? []).map((entry) =>
+        entry.id === option.configId && entry.type === "select" ? { ...entry, currentValue: modelId } : entry,
+      );
+      return;
+    }
     if (typeof connection.unstable_setSessionModel !== "function") {
       this.logger.warn("[%s] 当前 ACP SDK 不支持 unstable_setSessionModel", this.provider);
       throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 不支持切换模型`);
     }
-    try {
-      await this.raceExit(connection.unstable_setSessionModel({ sessionId, modelId: target }));
-    } catch (error) {
-      this.logger.warn("[%s] 切换模型 %s 失败：%s", this.provider, target, errorMessage(error));
-      throw new AgentRpcError("NOT_SUPPORTED", `${this.label} 不支持切换模型：${errorMessage(error)}`);
-    }
+    await run(connection.unstable_setSessionModel({ sessionId, modelId }));
     if (this.models) {
-      this.models = { ...this.models, currentModelId: target };
+      this.models = { ...this.models, currentModelId: modelId };
     }
-    this.emit({ type: "model_changed", modelId });
   }
 
   async setMode(modeId: string): Promise<void> {
@@ -427,7 +460,7 @@ export class AcpAgentSession implements AgentSession {
   }
 
   private usesPlaceholderModel(): boolean {
-    return !this.models?.availableModels?.length && findThoughtLevel(this.configOptions) !== null;
+    return !this.modelState()?.availableModels?.length && findThoughtLevel(this.configOptions) !== null;
   }
 
   // -------------------------------------------------------------------------
@@ -488,13 +521,9 @@ export class AcpAgentSession implements AgentSession {
     const placeholderModel = this.usesPlaceholderModel() && init.model === ACP_PLACEHOLDER_MODEL_ID;
     if (init.model !== undefined && init.model !== this.currentModelId && !placeholderModel) {
       try {
-        await step(
-          connection.unstable_setSessionModel({ sessionId: created.sessionId, modelId: init.model }),
-          "session/set_model",
+        await this.writeModel(connection, created.sessionId, init.model, (promise) =>
+          step(promise, "session/set_model"),
         );
-        if (this.models) {
-          this.models = { ...this.models, currentModelId: init.model };
-        }
       } catch (error) {
         // design.md 5.1：模型设置失败忽略，沿用 agent 默认模型
         this.logger.warn("[%s] 设置初始模型 %s 失败，沿用默认：%s", this.provider, init.model, errorMessage(error));
@@ -574,18 +603,23 @@ export class AcpAgentSession implements AgentSession {
   ): void {
     this.modes = modes ?? null;
     this.models = models ?? null;
-    this.defaultModelId = models?.currentModelId ?? null;
     this.configOptions = configOptions ?? null;
+    this.defaultModelId = this.modelState()?.currentModelId ?? null;
     this.defaultThoughtValue = findThoughtLevel(this.configOptions)?.currentValue ?? null;
   }
 
-  /** config_option_update：记下最新配置；thought_level 的当前值变了就同步思考强度 */
+  /** config_option_update：记下最新配置；thought_level / model 配置项的当前值变了就同步思考强度 / 模型 */
   private applyConfigOptionUpdate(configOptions: SessionConfigOption[], emit: boolean): void {
     const previous = findThoughtLevel(this.configOptions)?.currentValue ?? null;
+    const previousModel = this.currentModelId;
     this.configOptions = configOptions;
     const next = findThoughtLevel(configOptions)?.currentValue ?? null;
     if (emit && next !== null && next !== previous) {
       this.emit({ type: "thinking_option_changed", thinkingOptionId: next });
+    }
+    const nextModel = this.currentModelId;
+    if (emit && nextModel !== null && nextModel !== previousModel) {
+      this.emit({ type: "model_changed", modelId: nextModel });
     }
   }
 

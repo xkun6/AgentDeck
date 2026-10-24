@@ -1,6 +1,6 @@
 // 「编程 Agent」检测页。
 //
-// 检测 Claude Code / Codex CLI 的安装、版本与登录态（Rust coding_agents.rs，
+// 检测 Claude Code / Codex / DeepSeek Harness CLI 的安装、版本与登录态（Rust coding_agents.rs，
 // 不读任何 token 密文）。
 // 边界：本页只做检测 + 指引，不代写 ~/.claude / ~/.codex 配置文件——
 // 三方中转在「Agent 与中转」（/agent-providers）中配置，不改 CLI 自身配置。
@@ -42,8 +42,15 @@ const LOGIN_LABELS: Record<CodingAgentStatus["loginState"], string> = {
   unknown: "未知",
 };
 
+const AGENT_DESCRIPTIONS: Record<string, string> = {
+  "claude-code": "Anthropic 自主编程Agent CLI",
+  codex: "OpenAI 自主编程Agent CLI",
+  dsh: "DeepSeek 自主编程Agent（经 ACP 驱动 dsh --profile acp）",
+};
+
 function agentCardStatus(agent: CodingAgentStatus): CardStatus {
   if (!agent.installed) return "warning";
+  if (agent.runError) return "error";
   if (agent.loginState === "expired" || agent.loginState === "not_logged_in") return "warning";
   if (agent.loginState === "unknown") return "unknown";
   return "ok";
@@ -56,6 +63,9 @@ function agentStatusLine(agent: CodingAgentStatus): string {
   }
   if (!agent.installed) {
     return `${agent.label} 未安装；安装后才能在 AgentDeck 中新建 ${agent.label} 会话`;
+  }
+  if (agent.runError) {
+    return `${agent.label} 已找到但无法运行，新建 ${agent.label} 会话会失败；请检查或重新安装`;
   }
   if (agent.loginState === "logged_in") {
     return `${agent.label} 可用，可在 AgentDeck 中新建 ${agent.label} 会话`;
@@ -242,15 +252,15 @@ function AgentCard({ agent, onOpenPath, onSavePath }: {
           </div>
           <div className={s.codingAgentIdentityText}>
             <h3>{agent.label}</h3>
-            <p>{agent.id === "claude-code" ? "Anthropic 自主编程Agent CLI" : "OpenAI 自主编程Agent CLI"}</p>
+            <p>{AGENT_DESCRIPTIONS[agent.id] ?? "自主编程Agent CLI"}</p>
           </div>
         </div>
         <div className={s.codingAgentStatusGroup} aria-label={`${agent.label} 当前状态`}>
           <span className={s.envStatusTag} data-status={status}>
             <StatusIcon status={status} />
-            {agent.installed ? "已安装" : "未安装"}
+            {agent.installed ? (agent.runError ? "无法运行" : "已安装") : "未安装"}
           </span>
-          {agent.installed ? (
+          {agent.installed && !agent.runError ? (
             <span className={s.envStatusTag} data-status={agent.loginState === "logged_in" ? "ok" : status}>
               <KeyRound size={12} aria-hidden />
               {LOGIN_LABELS[agent.loginState]}
@@ -263,7 +273,8 @@ function AgentCard({ agent, onOpenPath, onSavePath }: {
         <p className={s.envCheckSummary} data-status={status}>{agentStatusLine(agent)}</p>
 
         <div className={[s.runtimeGrid, s.envCheckDetails, s.codingAgentRuntimeGrid].join(" ")}>
-          {agent.installed && agent.version ? <RuntimeField label="版本" value={agent.version} mono /> : null}
+          {agent.installed && agent.version && !agent.runError ? <RuntimeField label="版本" value={agent.version} mono /> : null}
+          {agent.runError ? <RuntimeField label="运行错误" value={agent.runError} mono wide /> : null}
           {agent.loginDetail ? <RuntimeField label="登录状态" value={agent.loginDetail} /> : null}
           {agent.installed && agent.path ? <RuntimeField label="路径" value={agent.path} mono wide /> : null}
           <RuntimeField label="配置目录" value={agent.configDir} mono wide />
@@ -281,7 +292,7 @@ function AgentCard({ agent, onOpenPath, onSavePath }: {
               wide
             />
           ) : null}
-          {agent.installed && agent.loginState !== "logged_in" ? (
+          {agent.installed && !agent.runError && agent.loginState !== "logged_in" ? (
             <RuntimeField label="登录" value={agent.loginHint} wide />
           ) : null}
         </div>
@@ -310,9 +321,10 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
   const hasBridge = typeof window !== "undefined" && Boolean(window.agentdeckDesktop?.codingAgentsCheck);
 
   const readyCount = (data?.agents ?? []).filter(
-    (agent) => agent.installed && agent.loginState !== "expired" && agent.loginState !== "not_logged_in",
+    (agent) =>
+      agent.installed && !agent.runError && agent.loginState !== "expired" && agent.loginState !== "not_logged_in",
   ).length;
-  const total = data?.agents.length ?? 2;
+  const total = data?.agents.length ?? 3;
   const allReady = data ? readyCount === total : false;
 
   const openPath = async (path: string | undefined) => {
@@ -343,7 +355,7 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
               : "正在检测编程 Agent"}
           </h3>
           <p>
-            AgentDeck 直接驱动本机的 Claude Code 与 Codex CLI 执行编码任务，会话中实时展示它们的输出、工具调用与权限请求。
+            AgentDeck 直接驱动本机的 Claude Code、Codex 与 DeepSeek Harness 执行编码任务，会话中实时展示它们的输出、工具调用与权限请求。
             本页只做检测与指引，不会改写 CLI 自身的配置文件；三方中转请在
             {" "}<Link className={s.inlineLink} to="/agent-providers">Agent 与中转</Link>{" "}
             中配置（只对 AgentDeck 启动的会话生效）。

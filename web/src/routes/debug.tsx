@@ -32,7 +32,7 @@ const EVENT_TYPE_LABELS: Record<"all" | DebugEntryType, string> = {
   backend: "backend",
 };
 // provider.list 的 id ↔ coding_agents_check 的 agent id（两边命名不同，合并为一行显示）
-const CODING_AGENT_ID_BY_PROVIDER: Record<string, string> = { claude: "claude-code", codex: "codex" };
+const CODING_AGENT_ID_BY_PROVIDER: Record<string, string> = { claude: "claude-code", codex: "codex", "acp:dsh": "dsh" };
 
 function useDebugEvents(): DebugEntry[] {
   return useSyncExternalStore(
