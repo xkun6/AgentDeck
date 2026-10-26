@@ -30,10 +30,6 @@ AgentDeck 的 Agent 适配层（`packages/sidecar` 中的 provider、会话管�
 - Copyright (c) 2025 Nous Research
 - 许可全文：`legal/hermes-agent-upstream.MIT.txt`
 
-## 其他第三方资源
-
-- HarmonyOS Sans 字体：许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
-
 ## 随包分发的第三方组件
 
 Windows 安装包除 AgentDeck 自身代码外，还包含下列第三方组件。安装包会把本文件、`LICENSE` 与下列许可文件一并放进安装目录。

@@ -6,22 +6,6 @@
   box-sizing: border-box;
 }
 
-/* Community UI invariants: depth comes from surfaces and 1px separators.
-   Keep these global so legacy route CSS cannot reintroduce gradients or shadows. */
-#root,
-#root *,
-#root *::before,
-#root *::after {
-  background-image: none !important;
-  box-shadow: none;
-  text-shadow: none !important;
-}
-
-/* Explicit design-system exception: the approved tokenized pinhole paper texture. */
-#root [data-page-texture="pinhole"] {
-  background-image: var(--h-texture-pinhole-grid) !important;
-}
-
 #root :focus-visible:not(input):not(textarea):not(select):not([contenteditable="true"]) {
   outline: var(--h-focus-outline) !important;
   outline-offset: 2px;
@@ -99,17 +83,22 @@ body[data-agentdeck-window-type="electron"] :where(button, input, textarea, sele
   -webkit-app-region: no-drag;
 }
 
+/* 细滚动条：透明轨道，滑块内缩 2px 显得更轻 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--h-line);
-  border-radius: 0;
+  background: color-mix(in srgb, var(--h-text-3) 40%, transparent);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: var(--h-radius-pill);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--h-text-3);
+  background: color-mix(in srgb, var(--h-text-3) 70%, transparent);
+  background-clip: content-box;
 }

@@ -537,12 +537,12 @@ export interface ProviderMenuEntry {
 function relayBasis(extendsValue: ProviderProfileExtends | undefined, baseUrl?: string): string {
   const basis = `基于 ${PROFILE_EXTENDS_LABELS[extendsValue ?? "claude"]}`;
   const host = profileHost(baseUrl);
-  return host ? `${basis} · ${host}` : basis;
+  return host ? `${basis}，${host}` : basis;
 }
 
 /**
  * Agent 菜单：先「内置」，后「中转」。中转按 providers.json 顺序列出，停用项（不在 provider.list 中）
- * 与不可用项置灰；副文字为「基于 Claude Code · host」。配置尚未加载时只按 provider.list 列出。
+ * 与不可用项置灰；副文字为「基于 Claude Code，host」。配置尚未加载时只按 provider.list 列出。
  */
 export function buildProviderMenuEntries(
   providers: readonly ProviderInfo[] | null,
@@ -571,7 +571,7 @@ export function buildProviderMenuEntries(
     const info = infoById.get(id);
     const basis = relayBasis(profile.extends, profile.baseUrl);
     if (profile.enabled === false || !info) {
-      relay.push({ value: id, label: profile.label, disabled: true, description: `已停用 · ${basis}`, group: PROVIDER_GROUP_RELAY });
+      relay.push({ value: id, label: profile.label, disabled: true, description: `已停用，${basis}`, group: PROVIDER_GROUP_RELAY });
       continue;
     }
     relay.push({
@@ -580,7 +580,7 @@ export function buildProviderMenuEntries(
       disabled: !info.available,
       description: info.available
         ? basis
-        : `不可用${info.unavailableReason ? `：${info.unavailableReason}` : ""} · ${basis}`,
+        : `不可用${info.unavailableReason ? `：${info.unavailableReason}` : ""}，${basis}`,
       group: PROVIDER_GROUP_RELAY,
     });
   }
@@ -593,7 +593,7 @@ export function buildProviderMenuEntries(
       disabled: !info.available,
       description: info.available
         ? basis
-        : `不可用${info.unavailableReason ? `：${info.unavailableReason}` : ""} · ${basis}`,
+        : `不可用${info.unavailableReason ? `：${info.unavailableReason}` : ""}，${basis}`,
       group: PROVIDER_GROUP_RELAY,
     });
   }

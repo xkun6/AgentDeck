@@ -10,7 +10,7 @@
 .head {
   flex: 0 0 auto;
   padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .title {
@@ -79,11 +79,15 @@
 
 /* ── 分段选择（基于 / 认证方式） ───────────────────────────────────────── */
 
+/* 分段控件：细描边容器 + 2px 内边距，选中项浅填充（不用下划线） */
 .segmented {
   display: grid;
   grid-auto-columns: minmax(0, 1fr);
   grid-auto-flow: column;
-  border: 1px solid var(--h-line);
+  gap: 2px;
+  padding: 2px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
 }
 
 .segment {
@@ -94,8 +98,8 @@
   min-width: 0;
   padding: 8px 12px;
   border: 0;
-  border-left: 1px solid var(--h-line);
-  background: var(--h-bg-input);
+  border-radius: var(--h-radius-sm);
+  background: transparent;
   color: var(--h-text-2);
   font-family: inherit;
   text-align: left;
@@ -105,30 +109,26 @@
     color var(--h-duration-fast) var(--h-ease-standard);
 }
 
-.segment:first-child {
-  border-left: 0;
-}
-
 .segment:hover:not([data-active="true"]) {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
+  color: var(--h-text);
 }
 
 .segment:focus-visible {
   outline: var(--h-focus-outline);
-  outline-offset: -2px;
+  outline-offset: 1px;
 }
 
 .segment[data-active="true"] {
-  background: var(--h-color-accent-soft);
+  background: var(--h-bg-selected);
   color: var(--h-text);
-  box-shadow: inset 0 -2px 0 var(--h-accent);
 }
 
 .segmentLabel {
   max-width: 100%;
   overflow: hidden;
   font-size: var(--h-font-size-sm);
-  font-weight: 600;
+  font-weight: 500;
   line-height: var(--h-line-height-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -158,7 +158,8 @@
 .table {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--h-line-soft);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
 }
 
 .tableHead,
@@ -172,14 +173,14 @@
 
 .tableHead {
   padding-block: 8px 4px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
   color: var(--h-text-3);
   font-size: var(--h-font-size-xs);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .tableRow + .tableRow {
-  border-top: 1px dashed var(--h-line-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .cell {
@@ -215,8 +216,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  border: 1px solid var(--h-color-accent-border);
   background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
 }
 
 .fetchedList {
@@ -274,8 +275,9 @@
   color: var(--h-text-2);
   font-family: inherit;
   font-size: var(--h-font-size-sm);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
+  border-radius: var(--h-radius-sm);
 }
 
 .disclosure:focus-visible {
@@ -316,11 +318,11 @@
   gap: 4px;
   margin: 0;
   padding: 8px 12px 8px 24px;
-  border-left: 2px solid var(--h-line);
   background: var(--h-bg-soft);
   color: var(--h-text-3);
   font-size: var(--h-font-size-xs);
   line-height: var(--h-line-height-normal);
+  border-radius: var(--h-radius-md);
 }
 
 /* ── 文本 ─────────────────────────────────────────────────────────────── */
@@ -339,12 +341,12 @@
 .note {
   margin: 0;
   padding: 8px 12px;
-  border-left: 2px solid var(--h-line);
   background: var(--h-bg-soft);
   color: var(--h-text-3);
   font-size: var(--h-font-size-xs);
   line-height: var(--h-line-height-normal);
   overflow-wrap: anywhere;
+  border-radius: var(--h-radius-md);
 }
 
 .path {
@@ -361,7 +363,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 20px 0;
-  border-top: 1px solid var(--h-line-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .status + .foot {
@@ -376,7 +378,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 12px 20px 16px;
-  border-top: 1px solid var(--h-line-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .footTest {
@@ -405,14 +407,5 @@
 
   .segmented {
     grid-auto-flow: row;
-  }
-
-  .segment {
-    border-left: 0;
-    border-top: 1px solid var(--h-line);
-  }
-
-  .segment:first-child {
-    border-top: 0;
   }
 }

@@ -1,243 +1,124 @@
-/* AgentDeck Community UI — Colors
-   Default modern themes are achromatic. Status colors remain semantic signals,
-   while navigation, selection and primary actions stay black / white / grey. */
-
-:root {
-  /* ── Raw palette (ink/bone/accents)
-     ── Source: hermes-cn-ui-prototypes/src/styles/tokens.base.css */
-  --ink-000: var(--h-color-ink-000);
-  --ink-050: var(--h-color-ink-050);
-  --ink-100: var(--h-color-ink-100);
-  --ink-200: var(--h-color-ink-200);
-  --ink-300: var(--h-color-ink-300);
-  --ink-400: var(--h-color-ink-400);
-  --ink-500: var(--h-color-ink-500);
-  --ink-600: var(--h-color-ink-600);
-  --ink-700: var(--h-color-ink-700);
-  --ink-800: var(--h-color-ink-800);
-
-  --bone-100: var(--h-color-bone-100);
-  --bone-200: var(--h-color-bone-200);
-  --bone-300: var(--h-color-bone-300);
-  --bone-400: var(--h-color-bone-400);
-  --bone-500: var(--h-color-bone-500);
-  --bone-600: var(--h-color-bone-600);
-
-  --persimmon: var(--h-color-persimmon-500);
-  --persimmon-dim: var(--h-color-persimmon-600);
-  --amber: var(--h-color-amber-500);
-  --moss: var(--h-color-green-500);
-  --moss-deep: var(--h-color-green-600);
-  --rust: var(--h-color-red-500);
-  --rust-deep: var(--h-color-red-600);
-  --sky: var(--h-color-sky-500);
-  --plum: var(--h-color-plum-500);
-}
+/* AgentDeck Design Tokens — Theme colors
+   每个主题只定义这一层原始槽位，组件经 semantic.css 消费。
+   结构色为中性灰；主操作用墨色（亮）/ 骨白（暗）；蓝色只给开关、焦点与链接；
+   绿 / 黄 / 红只表达状态。 */
 
 :root,
-[data-theme="light"] {
-  --h-bg-app: #fbfaf7;
-  --h-bg-pane: #ffffff;
-  --h-bg-soft: #f8f7f3;
-  --h-bg-input: #ffffff;
-  --h-bg-chip: #f5f2ec;
-  --h-bg-code: #f7f6f1;
-  --h-line: #e8e4dc;
-  --h-line-soft: #efebe4;
-  --h-text: var(--ink-300);
-  --h-text-2: var(--ink-700);
-  --h-text-3: var(--ink-800);
-  /* Was #cac4b6 (~1.7:1 on the cream bg — effectively invisible). */
-  --h-text-4: var(--bone-500);
-  --h-ok: #6b8e5a;
-  --h-ok-soft: #e3ecdc;
-  --h-warn: #c08828;
-  --h-warn-soft: #f5e6c5;
-  --h-err: #c4554d;
-  --h-shadow: none;
-  --h-shadow-l: none;
-  --h-shadow-soft: none;
-  --h-sidebar-stripe: #fbfaf7;
-  --h-accent: #ff7a3d;
-  --h-accent-contrast: #ffffff;
-  --h-accent-soft: #f4dfd0;
-  --h-accent-border: #e8b896;
-}
-
+[data-theme="light"],
 [data-theme="light-modern"] {
-  /* Neutral light: paper-white surfaces and graphite controls. */
-  --h-bg-app: #f4f4f3;
+  --h-bg-app: #ffffff;
+  --h-bg-sidebar: #f3f3f3;
   --h-bg-pane: #ffffff;
-  --h-bg-soft: #f7f7f6;
+  --h-bg-elevated: #ffffff;
+  --h-bg-soft: #f6f6f6;
   --h-bg-input: #ffffff;
-  --h-bg-chip: #ececeb;
-  --h-bg-code: #f3f3f2;
-  --h-line: #d5d5d2;
-  --h-line-soft: #e8e8e5;
-  --h-text: #171716;
-  --h-text-2: #3f3f3d;
-  --h-text-3: #656562;
-  --h-text-4: #858581;
-  --h-ok: #16825d;
-  --h-ok-soft: rgba(22, 130, 93, 0.1);
-  --h-warn: #9d6b00;
-  --h-warn-soft: rgba(157, 107, 0, 0.1);
-  --h-err: #d13438;
-  --h-danger: #d13438;
-  --h-shadow: none;
-  --h-shadow-l: none;
-  --h-shadow-soft: none;
-  --h-sidebar-stripe: #f1f1ef;
-  --h-accent: #171716;
+  --h-bg-chip: #f0f0f0;
+  --h-bg-code: #f4f4f4;
+  --h-bg-hover: rgb(0 0 0 / 4.5%);
+  --h-bg-selected: rgb(0 0 0 / 7.5%);
+  --h-line: rgb(0 0 0 / 12%);
+  --h-line-soft: rgb(0 0 0 / 7%);
+  --h-text: #1a1a1a;
+  --h-text-2: #525252;
+  --h-text-3: #737373;
+  --h-text-4: #a3a3a3;
+  --h-accent: #1a1a1a;
   --h-accent-contrast: #ffffff;
-  --h-accent-soft: #ececeb;
-  --h-accent-border: #777773;
-  --sky: #525250;
-  --plum: #8e44ad;
-  --amber: #9d6b00;
-  --moss: #16825d;
-  --rust: #d13438;
+  --h-accent-soft: rgb(0 0 0 / 6%);
+  --h-accent-border: rgb(0 0 0 / 28%);
+  --h-highlight: var(--h-color-blue-500);
+  --h-highlight-soft: rgb(10 132 224 / 12%);
+  --h-scrim: rgb(0 0 0 / 32%);
+  --h-shadow-color: rgb(0 0 0 / 8%);
+  --h-shadow-color-strong: rgb(0 0 0 / 14%);
 }
 
-[data-theme="dark"] {
-  /* Dark theme remapped onto the ink/bone palette so existing components
-     adopt the prototype's deeper, cooler palette without per-component
-     rewrites. */
-  --h-bg-app: var(--ink-050);
-  --h-bg-pane: var(--ink-100);
-  --h-bg-soft: var(--ink-200);
-  --h-bg-input: var(--ink-200);
-  --h-bg-chip: var(--ink-300);
-  --h-bg-code: var(--ink-200);
-  --h-line: #2a2725;
-  --h-line-soft: #1d1b19;
-  --h-text: #faf7f0;
-  --h-text-2: var(--bone-200);
-  --h-text-3: var(--bone-300);
-  --h-text-4: var(--bone-500);
-  --h-ok: var(--moss);
-  --h-ok-soft: rgba(141, 181, 128, 0.08);
-  --h-warn: var(--amber);
-  --h-warn-soft: rgba(232, 184, 93, 0.08);
-  --h-err: var(--rust);
-  --h-shadow: none;
-  --h-shadow-l: none;
-  --h-shadow-soft: none;
-  --h-sidebar-stripe: var(--ink-100);
-  --h-accent: var(--persimmon);
-  --h-accent-contrast: #ffffff;
-  --h-accent-soft: rgba(255, 122, 61, 0.08);
-  --h-accent-border: rgba(255, 122, 61, 0.3);
-}
-
+[data-theme="dark"],
 [data-theme="dark-modern"] {
-  /* Neutral dark: carbon surfaces, white primary action, no blue cast. */
-  --h-bg-app: #111111;
-  --h-bg-pane: #181818;
-  --h-bg-soft: #202020;
-  --h-bg-input: #242424;
-  --h-bg-chip: #2a2a2a;
-  --h-bg-code: #151515;
-  --h-line: #3a3a3a;
-  --h-line-soft: #292929;
-  --h-text: #f1f1ef;
-  --h-text-2: #cececa;
-  --h-text-3: #a1a19d;
-  --h-text-4: #858581;
-  --h-ok: #89d185;
-  --h-ok-soft: rgba(137, 209, 133, 0.1);
-  --h-warn: #cca700;
-  --h-warn-soft: rgba(204, 167, 0, 0.12);
-  --h-err: #f48771;
-  --h-danger: #f48771;
-  --h-shadow: none;
-  --h-shadow-l: none;
-  --h-shadow-soft: none;
-  --h-sidebar-stripe: #181818;
-  --h-accent: #f1f1ef;
-  --h-accent-contrast: #111111;
-  --h-accent-soft: #2a2a2a;
-  --h-accent-border: #858581;
-  --sky: #b8b8b4;
-  --plum: #c586c0;
-  --amber: #dcdcaa;
-  --moss: #89d185;
-  --rust: #f48771;
+  --h-bg-app: #1b1b1b;
+  --h-bg-sidebar: #0f0f0f;
+  --h-bg-pane: #232323;
+  --h-bg-elevated: #262626;
+  --h-bg-soft: #222222;
+  --h-bg-input: #262626;
+  --h-bg-chip: #2b2b2b;
+  --h-bg-code: #222222;
+  --h-bg-hover: rgb(255 255 255 / 5%);
+  --h-bg-selected: rgb(255 255 255 / 11%);
+  --h-line: rgb(255 255 255 / 13%);
+  --h-line-soft: rgb(255 255 255 / 7%);
+  --h-text: #ececec;
+  --h-text-2: #b4b4b4;
+  --h-text-3: #8f8f8f;
+  --h-text-4: #666666;
+  --h-accent: #ececec;
+  --h-accent-contrast: #1b1b1b;
+  --h-accent-soft: rgb(255 255 255 / 8%);
+  --h-accent-border: rgb(255 255 255 / 30%);
+  --h-highlight: var(--h-color-blue-400);
+  --h-highlight-soft: rgb(58 160 240 / 16%);
+  --h-scrim: rgb(0 0 0 / 56%);
+  --h-shadow-color: rgb(0 0 0 / 32%);
+  --h-shadow-color-strong: rgb(0 0 0 / 48%);
 }
 
 [data-theme="dracula"] {
-  /* Dracula: deep violet surfaces with its familiar pink and purple accents. */
   --h-bg-app: #282a36;
-  --h-bg-pane: #282a36;
-  --h-bg-soft: #44475a;
-  --h-bg-input: #44475a;
-  --h-bg-chip: #44475a;
+  --h-bg-sidebar: #21222c;
+  --h-bg-pane: #303241;
+  --h-bg-elevated: #343746;
+  --h-bg-soft: #2f3140;
+  --h-bg-input: #303241;
+  --h-bg-chip: #3a3d4f;
   --h-bg-code: #21222c;
-  --h-line: #6272a4;
-  --h-line-soft: #44475a;
+  --h-bg-hover: rgb(248 248 242 / 5%);
+  --h-bg-selected: rgb(248 248 242 / 11%);
+  --h-line: rgb(248 248 242 / 14%);
+  --h-line-soft: rgb(248 248 242 / 7%);
   --h-text: #f8f8f2;
-  --h-text-2: #e7e7df;
-  --h-text-3: #c2c4d2;
-  --h-text-4: #a2a5bb;
-  --h-ok: #50fa7b;
-  --h-ok-soft: rgba(80, 250, 123, 0.12);
-  --h-warn: #f1fa8c;
-  --h-warn-soft: rgba(241, 250, 140, 0.12);
-  --h-err: #ff5555;
-  --h-danger: #ff5555;
-  --h-shadow: none;
-  --h-shadow-l: none;
-  --h-shadow-soft: none;
-  --h-sidebar-stripe: #282a36;
+  --h-text-2: #d0d1db;
+  --h-text-3: #a2a5bb;
+  --h-text-4: #7a7e98;
   --h-accent: #bd93f9;
   --h-accent-contrast: #282a36;
-  --h-accent-soft: rgba(189, 147, 249, 0.16);
-  --h-accent-border: rgba(189, 147, 249, 0.44);
-  --sky: #8be9fd;
-  --plum: #ff79c6;
-  --amber: #ffb86c;
-  --moss: #50fa7b;
-  --rust: #ff5555;
+  --h-accent-soft: rgb(189 147 249 / 16%);
+  --h-accent-border: rgb(189 147 249 / 44%);
+  --h-highlight: #bd93f9;
+  --h-highlight-soft: rgb(189 147 249 / 18%);
+  --h-scrim: rgb(0 0 0 / 56%);
+  --h-shadow-color: rgb(0 0 0 / 32%);
+  --h-shadow-color-strong: rgb(0 0 0 / 48%);
 }
 
 [data-theme="catppuccin-mocha"] {
-  /* Catppuccin Mocha: layered blue-grey neutrals with muted pastel accents. */
   --h-bg-app: #1e1e2e;
-  --h-bg-pane: #181825;
-  --h-bg-soft: #313244;
-  --h-bg-input: #313244;
-  --h-bg-chip: #45475a;
-  --h-bg-code: #11111b;
-  --h-line: #45475a;
-  --h-line-soft: #313244;
+  --h-bg-sidebar: #181825;
+  --h-bg-pane: #26263a;
+  --h-bg-elevated: #2a2a3e;
+  --h-bg-soft: #24243a;
+  --h-bg-input: #26263a;
+  --h-bg-chip: #313244;
+  --h-bg-code: #181825;
+  --h-bg-hover: rgb(205 214 244 / 5%);
+  --h-bg-selected: rgb(205 214 244 / 10%);
+  --h-line: rgb(205 214 244 / 13%);
+  --h-line-soft: rgb(205 214 244 / 7%);
   --h-text: #cdd6f4;
   --h-text-2: #bac2de;
-  --h-text-3: #a6adc8;
-  --h-text-4: #9399b2;
-  --h-ok: #a6e3a1;
-  --h-ok-soft: rgba(166, 227, 161, 0.12);
-  --h-warn: #f9e2af;
-  --h-warn-soft: rgba(249, 226, 175, 0.12);
-  --h-err: #f38ba8;
-  --h-danger: #f38ba8;
-  --h-shadow: none;
-  --h-shadow-l: none;
-  --h-shadow-soft: none;
-  --h-sidebar-stripe: #181825;
+  --h-text-3: #9399b2;
+  --h-text-4: #6c7086;
   --h-accent: #cba6f7;
   --h-accent-contrast: #1e1e2e;
-  --h-accent-soft: rgba(203, 166, 247, 0.16);
-  --h-accent-border: rgba(203, 166, 247, 0.44);
-  --sky: #89dceb;
-  --plum: #f5c2e7;
-  --amber: #fab387;
-  --moss: #a6e3a1;
-  --rust: #f38ba8;
+  --h-accent-soft: rgb(203 166 247 / 16%);
+  --h-accent-border: rgb(203 166 247 / 44%);
+  --h-highlight: #89b4fa;
+  --h-highlight-soft: rgb(137 180 250 / 16%);
+  --h-scrim: rgb(0 0 0 / 56%);
+  --h-shadow-color: rgb(0 0 0 / 32%);
+  --h-shadow-color-strong: rgb(0 0 0 / 48%);
 }
 
-/* ── PrimeAPP tri-state status palette
-   Black / white / grey remain the structural palette. Operational states use
-   only PrimeAPP green, yellow and red across every theme. */
+/* 状态三色：绿 = 正常 / 完成，黄 = 注意 / 进行中，红 = 错误 / 危险。 */
 :root,
 [data-theme="light"],
 [data-theme="light-modern"] {
@@ -250,14 +131,6 @@
   --h-err: var(--h-palette-danger-light-fg);
   --h-err-soft: var(--h-palette-danger-light-surface);
   --h-err-border: var(--h-palette-danger-light-border);
-  --h-info: var(--h-warn);
-  --h-info-soft: var(--h-warn-soft);
-  --h-info-border: var(--h-warn-border);
-  --h-danger: var(--h-err);
-  --moss: var(--h-ok);
-  --amber: var(--h-warn);
-  --rust: var(--h-err);
-  --sky: var(--h-info);
 }
 
 [data-theme="dark"],
@@ -273,12 +146,13 @@
   --h-err: var(--h-palette-danger-dark-fg);
   --h-err-soft: var(--h-palette-danger-dark-surface);
   --h-err-border: var(--h-palette-danger-dark-border);
-  --h-info: var(--h-warn);
-  --h-info-soft: var(--h-warn-soft);
-  --h-info-border: var(--h-warn-border);
+}
+
+/* 由主题槽位派生的别名（所有主题共用） */
+:root,
+[data-theme] {
+  --h-info: var(--h-highlight);
+  --h-info-soft: var(--h-highlight-soft);
+  --h-info-border: color-mix(in srgb, var(--h-highlight) 36%, transparent);
   --h-danger: var(--h-err);
-  --moss: var(--h-ok);
-  --amber: var(--h-warn);
-  --rust: var(--h-err);
-  --sky: var(--h-info);
 }

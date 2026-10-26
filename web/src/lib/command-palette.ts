@@ -57,7 +57,7 @@ export interface CommandPaletteFileCandidate {
 export interface CommandPaletteSession {
   id: string;
   title: string;
-  /** 例如「Claude Code · /path/to/repo」。 */
+  /** 例如「Claude Code，/path/to/repo」。 */
   subtitle?: string;
   preview?: string;
   updatedAt: number;
@@ -97,19 +97,19 @@ function command(
 
 export const COMMAND_PALETTE_COMMANDS: readonly CommandPaletteItem[] = [
   command("command-new-session", "新建对话", "回到工作台并开始新任务", ["new", "chat", "session", "task", "compose", "新任务", "新会话"], "new", "/", 0),
-  command("command-history", "对话历史", "/history · 搜索和管理会话", ["history", "sessions", "chat", "conversation", "历史", "会话"], "history", "/history", 1),
-  command("command-projects", "项目 / 工作空间", "/projects · 查看已登记项目", ["project", "workspace", "folder", "cwd", "工作区", "目录"], "project", "/projects", 2),
-  command("command-console", "终端", "/console · 在工作区打开终端", ["console", "terminal", "command", "shell", "终端", "命令行"], "console", "/console", 3),
-  command("command-usage", "用量统计", "/usage · 跨会话 tokens、费用与性能", ["usage", "stats", "statistics", "token", "tokens", "cost", "用量", "统计", "费用", "花费"], "usage", "/usage", 3),
-  command("command-automation", "自动化", "/automation · 定时任务、心跳与目标循环", ["automation", "schedule", "cron", "heartbeat", "goal", "loop", "自动化", "定时", "心跳", "目标", "循环"], "automation", "/automation", 3),
-  command("command-agent-providers", "Agent 与中转", "/agent-providers · 管理三方中转与 Agent 可用状态", ["agents", "providers", "relay", "proxy", "claude", "codex", "acp", "中转", "接口", "密钥"], "agents", "/agent-providers", 4),
-  command("command-coding-agents", "编程 Agent", "/coding-agents · 检测已安装的 Agent CLI", ["agents", "claude", "codex", "acp", "cli", "编程", "检测"], "agents", "/coding-agents", 4),
-  command("command-env", "环境检测", "/env · 检查本机 CLI 与可选工具", ["env", "environment", "tools", "diagnostics", "环境", "检测"], "env", "/env", 5),
-  command("command-debug", "打开调试面板", "/debug · 运行状态、日志与诊断包导出", ["debug", "diagnostics", "log", "logs", "bundle", "调试", "日志", "诊断", "诊断包"], "env", "/debug", 6, false),
-  command("command-settings", "常规设置", "/common · 显示、发送快捷键与助手名称", ["settings", "preferences", "common", "设置", "常规"], "settings", "/common", 6, false),
-  command("command-notifications", "通知设置", "/notifications · 任务完成与权限确认提醒", ["notifications", "notify", "sound", "通知", "提醒"], "notifications", "/notifications", 7, false),
-  command("command-theme", "主题", "/theme · 外观、密度与字号", ["theme", "appearance", "dark", "light", "主题", "外观"], "theme", "/theme", 8, false),
-  command("command-about", "关于 AgentDeck", "/about · 版本、许可与第三方声明", ["about", "version", "license", "notice", "关于", "版本", "许可"], "info", "/about", 9, false),
+  command("command-history", "对话历史", "搜索和管理会话", ["history", "sessions", "chat", "conversation", "历史", "会话"], "history", "/history", 1),
+  command("command-projects", "项目 / 工作空间", "查看已登记项目", ["project", "workspace", "folder", "cwd", "工作区", "目录"], "project", "/projects", 2),
+  command("command-console", "终端", "在工作区打开终端", ["console", "terminal", "command", "shell", "终端", "命令行"], "console", "/console", 3),
+  command("command-usage", "用量统计", "跨会话 tokens、费用与性能", ["usage", "stats", "statistics", "token", "tokens", "cost", "用量", "统计", "费用", "花费"], "usage", "/usage", 3),
+  command("command-automation", "自动化", "定时任务、心跳与目标循环", ["automation", "schedule", "cron", "heartbeat", "goal", "loop", "自动化", "定时", "心跳", "目标", "循环"], "automation", "/automation", 3),
+  command("command-agent-providers", "Agent 与中转", "管理三方中转与 Agent 可用状态", ["agents", "providers", "relay", "proxy", "claude", "codex", "acp", "中转", "接口", "密钥"], "agents", "/agent-providers", 4),
+  command("command-coding-agents", "编程 Agent", "检测已安装的 Agent CLI", ["agents", "claude", "codex", "acp", "cli", "编程", "检测"], "agents", "/coding-agents", 4),
+  command("command-env", "环境检测", "检查本机 CLI 与可选工具", ["env", "environment", "tools", "diagnostics", "环境", "检测"], "env", "/env", 5),
+  command("command-debug", "打开调试面板", "运行状态、日志与诊断包导出", ["debug", "diagnostics", "log", "logs", "bundle", "调试", "日志", "诊断", "诊断包"], "env", "/debug", 6, false),
+  command("command-settings", "常规设置", "显示、发送快捷键与助手名称", ["settings", "preferences", "common", "设置", "常规"], "settings", "/common", 6, false),
+  command("command-notifications", "通知设置", "任务完成与权限确认提醒", ["notifications", "notify", "sound", "通知", "提醒"], "notifications", "/notifications", 7, false),
+  command("command-theme", "主题", "外观、密度与字号", ["theme", "appearance", "dark", "light", "主题", "外观"], "theme", "/theme", 8, false),
+  command("command-about", "关于 AgentDeck", "版本、许可与第三方声明", ["about", "version", "license", "notice", "关于", "版本", "许可"], "info", "/about", 9, false),
 ];
 
 function cleanText(value: string | null | undefined): string {
@@ -175,7 +175,7 @@ function buildSessionItems(sessions: readonly CommandPaletteSession[]): CommandP
         id: `session-${session.id}`,
         group: "sessions",
         label: title,
-        subtitle: [subtitle || "会话", preview].filter(Boolean).join(" · "),
+        subtitle: [subtitle || "会话", preview].filter(Boolean).join("，"),
         keywords: [session.id, title, subtitle, preview, "session", "chat", "conversation", "会话", "对话"].filter(Boolean),
         icon: "history",
         to: `/tasks/${encodeURIComponent(session.id)}`,
@@ -207,7 +207,7 @@ export function buildFileItems(files: readonly CommandPaletteFileCandidate[]): C
     id: `file-${entry.path}`,
     group: "files",
     label: entry.name,
-    subtitle: `${projectName} · ${entry.path}`,
+    subtitle: `${projectName}，${entry.path}`,
     keywords: [entry.name, entry.path, projectName, projectPath, entry.is_dir ? "directory folder 目录 文件夹" : "file 文件"],
     icon: entry.is_dir ? "folder" : "file",
     action: {

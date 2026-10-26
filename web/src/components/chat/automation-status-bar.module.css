@@ -11,17 +11,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px;
-  border: 1px solid var(--h-line);
+  min-height: 36px;
+  padding: 4px 4px 4px 12px;
+  border: 0;
   background: var(--h-bg-soft);
   color: var(--h-text-2);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
+  border-radius: var(--h-radius-lg);
 }
 
 .bar[data-tone="active"] {
-  border-color: var(--h-accent-border);
   background: var(--h-accent-soft);
+  color: var(--h-text);
 }
 
 .label {
@@ -34,17 +36,27 @@
 
 .action {
   flex: 0 0 auto;
-  padding: 0 8px;
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-pane);
+  box-sizing: border-box;
+  height: var(--h-button-height-sm);
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
   color: var(--h-text);
-  font-family: var(--h-font-cn);
-  font-size: var(--h-font-size-xs);
+  font-family: var(--h-font-ui);
+  font-size: var(--h-font-size-sm);
+  font-weight: 500;
   cursor: pointer;
+  /* 同心圆角：外层 lg − 4px 内边距 */
+  border-radius: var(--h-radius-md);
 }
 
 .action:hover:not(:disabled) {
-  border-color: var(--h-accent);
+  background: var(--h-bg-hover);
+}
+
+.action:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: -2px;
 }
 
 .action:disabled {

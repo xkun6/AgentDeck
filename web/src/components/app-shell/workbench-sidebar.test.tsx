@@ -9,6 +9,7 @@ import { AGENT_STATUS_LABELS } from "@/lib/agent-session-display";
 import { stubRadixGlobals } from "@/test-utils/radix";
 import { ConfirmProvider } from "@/lib/use-confirm";
 import { replaceAgentSnapshotsAtom } from "@/stores/agents";
+import { __resetUiStoreForTests } from "@/lib/ui-store";
 import { WorkbenchSidebar } from "./workbench-sidebar";
 
 stubRadixGlobals();
@@ -64,6 +65,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   window.agentdeckDesktop = undefined;
+  __resetUiStoreForTests();
 });
 
 describe("侧栏会话列表", () => {
@@ -80,11 +82,79 @@ describe("侧栏会话列表", () => {
   });
 });
 
+describe("侧栏按项目分组", () => {
+  const project = (path: string, updatedAt: number) => ({ path, name: path.split("/").pop(), createdAt: 1, updatedAt });
+
+  it("会话归到 cwd 所在项目；置顶项目在前，其余按最近活动；项目内运行中的在前；未归入项目的放在「其他对话」", () => {
+    __resetUiStoreForTests({
+      "agentdeck-cn-ui.workspaceProjects": [project("C:/work/alpha", 1), project("C:/work/beta", 1), project("C:/work/empty", 1)],
+      "agentdeck-cn-ui.pinnedWorkspaceProjects": ["C:/work/empty"],
+    });
+    renderSidebar([
+      agent("b1", { cwd: "C:/work/beta", updatedAt: 6000 }),
+      agent("a1", { cwd: "C:/work/alpha", updatedAt: 5000 }),
+      agent("loose", { cwd: "C:/elsewhere", updatedAt: 4000 }),
+      agent("a2", { cwd: "C:/work/alpha", status: "running", updatedAt: 3000 }),
+    ]);
+    const labels = screen.getAllByText(/^(会话-|alpha|beta|empty|其他对话|暂无对话)/).map((node) => node.textContent);
+    expect(labels).toEqual(["empty", "暂无对话", "beta", "会话-b1", "alpha", "会话-a2", "会话-a1", "其他对话", "会话-loose"]);
+  });
+
+  it("项目可折叠，折叠状态记住", () => {
+    __resetUiStoreForTests({ "agentdeck-cn-ui.workspaceProjects": [project("C:/work/demo", 1)] });
+    renderSidebar([agent("a", { status: "running" })]);
+    fireEvent.click(screen.getByRole("button", { name: "折叠项目：demo" }));
+    expect(screen.queryByText("会话-a")).toBeNull();
+    cleanup();
+    renderSidebar([agent("a")]);
+    expect(screen.queryByText("会话-a")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展开项目：demo" }));
+    expect(screen.getByText("会话-a")).toBeTruthy();
+  });
+
+  it("cwd 在项目 git worktree 里的会话按仓库归回该项目；查不到所属仓库的留在「其他对话」", async () => {
+    __resetUiStoreForTests({ "agentdeck-cn-ui.workspaceProjects": [project("C:/work/alpha", 1)] });
+    const list = vi.fn(async ({ repoPath }: { repoPath: string }) =>
+      repoPath === "C:/work/alpha"
+        ? [
+            { path: "C:/work/alpha", branch: "main", isMain: true, detached: false, locked: false },
+            { path: "D:/data/worktrees/task-1", branch: "agentdeck/t1", isMain: false, detached: false, locked: false },
+          ]
+        : [],
+    );
+    window.agentdeckDesktop = { windowType: "tauri", exportSessionFile, git: { worktree: { list } } } as never;
+    renderSidebar([
+      agent("wt", { cwd: "D:\\data\\worktrees\\task-1", updatedAt: 3000 }),
+      agent("gone", { cwd: "D:\\data\\worktrees\\task-2", updatedAt: 2000 }),
+    ]);
+    await waitFor(() =>
+      expect(screen.getAllByText(/^(会话-|alpha|其他对话)/).map((node) => node.textContent)).toEqual([
+        "alpha",
+        "会话-wt",
+        "其他对话",
+        "会话-gone",
+      ]),
+    );
+    expect(list).toHaveBeenCalledWith({ repoPath: "C:/work/alpha" });
+  });
+
+  it("超过 8 个会话时收进「显示更多」", () => {
+    __resetUiStoreForTests({ "agentdeck-cn-ui.workspaceProjects": [project("C:/work/demo", 1)] });
+    renderSidebar(Array.from({ length: 10 }, (_, index) => agent(`s${index}`, { updatedAt: 100 - index })));
+    expect(screen.getAllByText(/^会话-/)).toHaveLength(8);
+    fireEvent.click(screen.getByRole("button", { name: "显示更多（2）" }));
+    expect(screen.getAllByText(/^会话-/)).toHaveLength(10);
+    fireEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(screen.getAllByText(/^会话-/)).toHaveLength(8);
+  });
+});
+
 describe("侧栏会话状态（backgroundActive）", () => {
-  it("idle 且 backgroundActive 显示「运行中」文案；普通 idle 显示「空闲」", () => {
+  it("idle 且 backgroundActive 的悬停提示为「运行中」；普通 idle 为「空闲」", () => {
     renderSidebar([agent("bg", { backgroundActive: true }), agent("plain")]);
-    expect(screen.getAllByText(new RegExp(AGENT_STATUS_LABELS.running))).toHaveLength(1);
-    expect(screen.getAllByText(new RegExp(AGENT_STATUS_LABELS.idle))).toHaveLength(1);
+    const tooltip = (title: string) => screen.getByText(title).closest("[title]")?.getAttribute("title") ?? "";
+    expect(tooltip("会话-bg")).toContain(AGENT_STATUS_LABELS.running);
+    expect(tooltip("会话-plain")).toContain(AGENT_STATUS_LABELS.idle);
   });
 });
 

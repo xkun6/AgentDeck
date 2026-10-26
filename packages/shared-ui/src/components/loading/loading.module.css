@@ -68,13 +68,13 @@
 
 .label {
   color: var(--h-text-2);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 20px;
 }
 
 .description {
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 20px;
 }
 

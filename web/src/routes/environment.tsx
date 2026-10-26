@@ -148,7 +148,6 @@ export function EnvironmentSection({ showHeading = true }: { showHeading?: boole
       <div className={s.aboutHero} data-ok={healthy && data ? "true" : undefined}>
         <div className={s.aboutHeroMark}>{healthy ? <ShieldCheck size={24} /> : <MonitorCog size={24} />}</div>
         <div className={s.aboutHeroBody}>
-          <div className={s.aboutEyebrow}>本机环境与依赖检查</div>
           <h3>{data ? (healthy ? "核心环境正常" : "发现需要关注的环境项") : "正在读取环境状态"}</h3>
           <p>
             此页展示 AgentDeck 的数据目录、Agent 服务（Node sidecar）状态，以及 Git、npm、ripgrep、Claude Code / Codex CLI 等本机工具。

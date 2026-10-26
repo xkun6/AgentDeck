@@ -347,7 +347,7 @@ describe("AgentSessionPicker", () => {
     expect(resolveProvider(null, [PROVIDERS[0]!])).toBeNull();
   });
 
-  it("中转分组：「内置」/「中转」标题，显示名用 label，副文字为「基于 … · host」，停用置灰", () => {
+  it("中转分组：「内置」/「中转」标题，显示名用 label，副文字为「基于 …，host」，停用置灰", () => {
     const providers: ProviderInfo[] = [
       ...PROVIDERS,
       { id: "custom:relay", kind: "claude", label: "我的中转", available: true, custom: true, extends: "claude" },
@@ -373,7 +373,7 @@ describe("AgentSessionPicker", () => {
     expect(names.findIndex((name) => name.includes("Mock"))).toBeLessThan(names.findIndex((name) => name.includes("我的中转")));
 
     const relay = within(list).getByRole("option", { name: /我的中转/ });
-    expect(relay.textContent).toContain("基于 Claude Code · 127.0.0.1:8787");
+    expect(relay.textContent).toContain("基于 Claude Code，127.0.0.1:8787");
     expect(relay.getAttribute("aria-disabled")).toBeNull();
     const off = within(list).getByRole("option", { name: /停用中转/ });
     expect(off.getAttribute("aria-disabled")).toBe("true");

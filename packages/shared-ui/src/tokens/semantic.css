@@ -1,39 +1,34 @@
 /* AgentDeck Design Tokens — Semantic aliases
    组件和页面应优先使用这一层，而不是直接依赖原始色值。 */
 
-:root {
+:root,
+[data-theme] {
   --h-color-bg-app: var(--h-bg-app);
   --h-color-bg-surface: var(--h-bg-pane);
-  /* Secondary split panes inherit the page canvas instead of adding grey fill. */
-  --h-color-bg-secondary-surface: transparent;
-  /* PrimeAPP paper canvas with the approved 24px pinhole-grid texture. */
-  --h-color-bg-page-canvas: #ffffff;
-  /* Avatars may contain transparent rounded artwork; keep their square frame
-     paper-white in every theme so the transparent corners never inherit grey. */
+  /* 头像可能带透明圆角，底色在所有主题下保持白色 */
   --h-color-bg-avatar: #ffffff;
-  --h-texture-pinhole-grid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M0 0H24M0 0V24' fill='none' stroke='%233f3f3c' stroke-opacity='.055' stroke-width='1'/%3E%3Ccircle cx='0' cy='0' r='1.5' fill='%233f3f3c' fill-opacity='.18'/%3E%3C/svg%3E");
   --h-color-bg-subtle: var(--h-bg-soft);
   --h-color-bg-input: var(--h-bg-input);
   --h-color-bg-chip: var(--h-bg-chip);
-  --h-color-bg-code: var(--h-bg-code);
+  --h-color-bg-hover: var(--h-bg-hover);
+  --h-color-scrim: var(--h-scrim);
 
   --h-color-fg-default: var(--h-text);
   --h-color-fg-muted: var(--h-text-2);
   --h-color-fg-subtle: var(--h-text-3);
-  --h-color-fg-disabled: var(--h-text-4);
   --h-color-fg-on-accent: var(--h-accent-contrast);
+  --h-color-fg-link: var(--h-highlight);
 
   --h-color-border-default: var(--h-line);
   --h-color-border-subtle: var(--h-line-soft);
-  --h-color-border-strong: color-mix(in srgb, var(--h-line) 72%, var(--h-text-3));
+  --h-color-border-strong: color-mix(in srgb, var(--h-line) 60%, var(--h-text-3));
 
   --h-color-accent-bg: var(--h-accent);
   --h-color-accent-fg: var(--h-accent);
   --h-color-accent-soft: var(--h-accent-soft);
   --h-color-accent-border: var(--h-accent-border);
+  --h-color-highlight: var(--h-highlight);
 
-  /* PrimeAPP status contract: green = normal, yellow = attention/info,
-     red = error/danger. Structural UI remains black / white / grey. */
   --h-status-success: var(--h-ok);
   --h-status-warning: var(--h-warn);
   --h-status-danger: var(--h-err);
@@ -46,31 +41,24 @@
   --h-color-warning-fg: var(--h-status-warning);
   --h-color-warning-border: var(--h-warn-border);
 
-  --h-danger: var(--h-status-danger);
   --h-color-danger-bg: var(--h-err-soft);
   --h-color-danger-fg: var(--h-status-danger);
   --h-color-danger-border: var(--h-err-border);
-  /* 实心 danger 底上的前景（如自绘标题栏关闭按钮悬停）。 */
+  /* 实心 danger 底上的前景（如自绘标题栏关闭按钮悬停） */
   --h-color-fg-on-danger: #ffffff;
+  /* Windows 11 标题栏关闭按钮悬停色 */
+  --h-color-window-close: #c42b1c;
 
   --h-color-info-bg: var(--h-info-soft);
-  --h-color-info-fg: var(--h-status-warning);
+  --h-color-info-fg: var(--h-info);
   --h-color-info-border: var(--h-info-border);
 
-  /* Elevation is expressed by fill + border, never by shadow. */
-  --h-shadow-sm: none;
-  --h-shadow-lg: none;
-  --h-focus-outline: 2px solid var(--h-accent);
-  --h-focus-outline-danger: 2px solid var(--h-err);
-  --h-focus-ring: none;
-  --h-focus-ring-danger: none;
-}
-
-[data-theme="dark"],
-[data-theme="dark-modern"],
-[data-theme="dracula"],
-[data-theme="catppuccin-mocha"] {
-  --h-color-bg-page-canvas: var(--h-bg-pane);
-  --h-color-fg-on-danger: #ffffff;
-  --h-texture-pinhole-grid: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M0 0H24M0 0V24' fill='none' stroke='%23f1f1ef' stroke-opacity='.055' stroke-width='1'/%3E%3Ccircle cx='0' cy='0' r='1.5' fill='%23f1f1ef' fill-opacity='.16'/%3E%3C/svg%3E");
+  /* 阴影只给浮层（菜单、弹窗、浮动按钮）与输入框，平面内容不用阴影。
+     外扩余量 = offset + blur + spread：sm 3px，md 10px，lg 30px。 */
+  --h-shadow-md: 0 2px 8px var(--h-shadow-color);
+  --h-shadow-lg: 0 8px 24px var(--h-shadow-color-strong);
+  --h-shadow-composer: 0 2px 8px var(--h-shadow-color);
+  --h-focus-outline: 2px solid color-mix(in srgb, var(--h-highlight) 70%, transparent);
+  --h-focus-ring: 0 0 0 3px var(--h-highlight-soft);
+  --h-focus-ring-danger: 0 0 0 3px var(--h-err-soft);
 }

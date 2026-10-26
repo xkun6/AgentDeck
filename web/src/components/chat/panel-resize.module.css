@@ -20,7 +20,7 @@
 .grip {
   width: 4px;
   height: 28px;
-  border-radius: 0;
+  border-radius: var(--h-radius-pill);
   background: var(--h-line);
 }
 

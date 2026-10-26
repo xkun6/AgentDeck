@@ -94,7 +94,7 @@ describe("项目右键菜单", () => {
     togglePinnedWorkspaceProject(CWD);
     expect(readWorkspaceProjects().some((p) => p.path === CWD)).toBe(true);
     renderSidebar();
-    fireEvent.contextMenu(screen.getByTitle(CWD));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "折叠项目：demo" }));
     for (const label of ["新对话", "打开项目详情", "复制路径", "删除项目"]) {
       expect(await screen.findByRole("menuitem", { name: label })).toBeTruthy();
     }

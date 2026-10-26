@@ -101,26 +101,26 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
         scrollback: 4000,
         convertEol: true,
         theme: {
-          background: "#080807",
-          foreground: "#f5efe5",
-          cursor: "#ffb35c",
-          selectionBackground: "#5a3b22",
-          black: "#191714",
+          background: "#121212",
+          foreground: "#e6e6e6",
+          cursor: "#e6e6e6",
+          selectionBackground: "#3a3a3a",
+          black: "#1e1e1e",
           red: "#d76f54",
           green: "#7fc083",
           yellow: "#d7a84d",
           blue: "#7aa7d9",
           magenta: "#b989d6",
           cyan: "#74b8c4",
-          white: "#f3eee6",
-          brightBlack: "#6f675d",
+          white: "#e6e6e6",
+          brightBlack: "#6e6e6e",
           brightRed: "#ff8b6e",
           brightGreen: "#9fe1a5",
           brightYellow: "#ffd074",
           brightBlue: "#9cc9ff",
           brightMagenta: "#d9a9ff",
           brightCyan: "#9be7ef",
-          brightWhite: "#fffaf1",
+          brightWhite: "#ffffff",
         },
       });
       const fit = new FitAddon();
@@ -136,7 +136,7 @@ export const EmbeddedTerminal = forwardRef<EmbeddedTerminalHandle, EmbeddedTermi
       terminalRef.current = term;
 
       if (showBanner) {
-        term.writeln("\x1b[38;5;214mAgentDeck\x1b[0m \x1b[38;5;81m终端\x1b[0m");
+        term.writeln("\x1b[1mAgentDeck\x1b[0m \x1b[38;5;244m终端\x1b[0m");
         term.writeln("这里是真实终端，输入的命令会在本机执行。\r\n");
       }
 

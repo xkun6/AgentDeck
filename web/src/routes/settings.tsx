@@ -131,7 +131,6 @@ export function GeneralSection({ showHeading = true }: SettingsSectionProps) {
         </div>
       } />
       {assistantProfileError ? <p className={s.assistantProfileError}>{assistantProfileError}</p> : null}
-      <p className={s.assistantProfileStorageHint}>名称和头像只改变桌面端显示，不影响模型本身。清空名称、移除头像后即可恢复默认样式。</p>
       <IdleReclaimSettingsSection />
     </div>
   );
@@ -253,23 +252,14 @@ const UI_SCALE_OPTIONS: Array<{ value: ThemeConfig["scale"]; label: string }> = 
 export function ThemeSection({ showHeading = true }: SettingsSectionProps) {
   const { config, update } = useTheme();
   const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
-  const densityLabel = config.density === "compact" ? "紧凑" : "舒适";
 
   return (
     <div>
       {showHeading && <h2 className={s.heading}>主题</h2>}
       <div className={s.appearancePanel}>
-        <div className={s.appearanceHeader}>
-          <div className={s.appearanceHeaderText}>
-            <h3>界面外观</h3>
-            <p>默认主题采用中性黑白灰，同时保留兼容主题。</p>
-          </div>
-          <span className={s.appearanceMeta}>实时生效 · {densityLabel}</span>
-        </div>
-
         <AppearanceRow
           label="主题"
-          sub="现代浅色与现代深色遵循同一套扁平设计令牌，其他主题作为兼容选项保留。"
+          sub="浅色、深色与两款配色主题。"
           right={
             <ThemeSkinPicker
               value={config.theme}
@@ -307,6 +297,11 @@ export function ThemeSection({ showHeading = true }: SettingsSectionProps) {
   );
 }
 
+const LEGACY_THEME_ALIASES: Partial<Record<ThemeConfig["theme"], ThemeConfig["theme"]>> = {
+  light: "light-modern",
+  dark: "dark-modern",
+};
+
 const THEME_SKINS: Array<{
   value: ThemeConfig["theme"];
   label: string;
@@ -318,44 +313,24 @@ const THEME_SKINS: Array<{
   accent: string;
 }> = [
   {
-    value: "light",
-    label: "浅色",
-    sub: "明亮柔和",
-    bg: "#fbfaf7",
-    pane: "#ffffff",
-    soft: "#f5f2ec",
-    text: "#232120",
-    accent: "#ff7a3d",
-  },
-  {
     value: "light-modern",
-    label: "现代浅色",
-    sub: "纸白与石墨",
-    bg: "#f4f4f3",
+    label: "浅色",
+    sub: "白底与墨色",
+    bg: "#f3f3f3",
     pane: "#ffffff",
-    soft: "#ececeb",
-    text: "#171716",
-    accent: "#171716",
-  },
-  {
-    value: "dark",
-    label: "经典深色",
-    sub: "暖墨颗粒",
-    bg: "#0a0908",
-    pane: "#11100e",
-    soft: "#232120",
-    text: "#faf7f0",
-    accent: "#ff7a3d",
+    soft: "#f6f6f6",
+    text: "#1a1a1a",
+    accent: "#1a1a1a",
   },
   {
     value: "dark-modern",
-    label: "现代深色",
-    sub: "炭黑与暖白",
-    bg: "#111111",
-    pane: "#181818",
-    soft: "#2a2a2a",
-    text: "#f1f1ef",
-    accent: "#f1f1ef",
+    label: "深色",
+    sub: "近黑与浅灰",
+    bg: "#0f0f0f",
+    pane: "#1b1b1b",
+    soft: "#222222",
+    text: "#ececec",
+    accent: "#ececec",
   },
   {
     value: "dracula",
@@ -412,7 +387,8 @@ function ThemeSkinPicker({
   return (
     <div className={s.skinPicker} role="radiogroup" aria-label="主题皮肤">
       {THEME_SKINS.map((skin) => {
-        const active = skin.value === value;
+        // 旧的 light / dark 与现代主题视觉相同，选中态落到对应卡片
+        const active = skin.value === (LEGACY_THEME_ALIASES[value] ?? value);
         const style = {
           "--skin-bg": skin.bg,
           "--skin-pane": skin.pane,

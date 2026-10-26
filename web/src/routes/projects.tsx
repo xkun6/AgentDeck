@@ -2,16 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAtomValue } from "jotai";
 import { LoadingState, Popover } from "@agentdeck/shared-ui";
-import {
-  ExternalLink,
-  FolderPlus,
-  MoreHorizontal,
-  Pin,
-  PinOff,
-  Plus,
-  Search,
-  Trash2,
-} from "lucide-react";
+import { ExternalLink, Folder, FolderPlus, MoreHorizontal, Pin, PinOff, Plus, Search, Trash2 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { formatTokens, relativeTime } from "@/lib/format";
@@ -234,7 +225,7 @@ export function ProjectsRoute() {
         sub={
           isLoading
             ? "加载中…"
-            : `${projects.length} 个项目 · ${totalSessionCount} 个会话`
+            : `${projects.length} 个项目，${totalSessionCount} 个会话`
         }
         right={
           <TopBarActionButton onClick={handleAddProject}>
@@ -254,7 +245,7 @@ export function ProjectsRoute() {
             onChange={(event) => setSearchQuery(event.target.value)}
           />
         </div>
-        <span className={s.sortHint}>排序 · 最近活动 ↓</span>
+        <span className={s.sortHint}>按最近活动排序</span>
       </div>
 
       <div className={s.scroll}>
@@ -305,7 +296,7 @@ export function ProjectsRoute() {
                       data-active={openMenuPath === project.path ? "true" : undefined}
                     >
                       <td>
-                        <span className={s.colorDot} aria-hidden />
+                        <Folder size={16} className={s.rowIcon} aria-hidden />
                       </td>
                       <td className={s.projectCell} title={`${project.name}\n${project.path}`}>
                         <span className={s.nameLine}>
@@ -359,7 +350,7 @@ export function ProjectsRoute() {
 
       <div className={s.foot}>
         <span>
-          {filtered.length} / {projects.length} 个项目 ·{" "}
+          {filtered.length} / {projects.length} 个项目，
           {formatTokens(aggregates.reduce((sum, item) => sum + item.totalTokens, 0))} tokens
         </span>
         <button type="button" className={s.footAction} onClick={handleAddProject}>

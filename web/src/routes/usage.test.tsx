@@ -69,7 +69,7 @@ describe("UsageRoute", () => {
     expect(screen.getByText("120k")).toBeTruthy();
     expect(screen.getByText("$1.50")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
-    expect(screen.getByText("默认模型 · claude")).toBeTruthy();
+    expect(screen.getByText("默认模型（claude）")).toBeTruthy();
     expect(screen.getByText("800ms")).toBeTruthy();
     expect(screen.getByText("43 tok/s")).toBeTruthy();
 

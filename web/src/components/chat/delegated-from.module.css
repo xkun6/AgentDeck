@@ -17,20 +17,21 @@
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--h-accent);
+  color: var(--h-highlight);
   font: inherit;
-  text-decoration: underline;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
   -webkit-app-region: no-drag;
+  border-radius: var(--h-radius-sm);
 }
 
 .link:hover {
-  color: var(--h-text);
+  text-decoration: underline;
 }
 
 .link:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--h-accent) 45%, transparent);
+  outline: var(--h-focus-outline);
   outline-offset: 2px;
 }

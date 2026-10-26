@@ -1,106 +1,62 @@
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
+/* 运行中任务卡：浅填充圆角卡，无描边；标题 + 状态、两行预览、一行元信息。 */
 
 .card {
+  width: 100%;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  text-align: left;
-  background: var(--h-bg-pane);
-  border: 1px solid color-mix(in srgb, var(--h-ok) 32%, var(--h-line));
-  border-radius: 0;
-  padding: 16px 20px;
-  cursor: pointer;
-  transition: border-color 0.12s, background-color 0.12s;
-  font: inherit;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
   color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--h-duration-fast) var(--h-ease-standard);
 }
 
 .card:hover {
-  border-color: var(--h-accent-border);
-  box-shadow: none;
+  background: color-mix(in srgb, var(--h-bg-soft) 96%, var(--h-text));
 }
 
 .head {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 11px;
-  color: var(--h-text-3);
-  margin-bottom: 8px;
   min-width: 0;
 }
 
-.headId {
-  font-family: var(--h-font-mono, ui-monospace, "SF Mono", monospace);
-  color: var(--h-text-2);
-}
-
-.headSep {
-  color: var(--h-text-4);
-}
-
-.headSpacer {
-  flex: 1;
-}
-
 .title {
-  font-size: 14.5px;
-  font-weight: 600;
-  color: var(--h-text);
-  line-height: 1.45;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 .desc {
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--h-text-2);
-  line-height: 1.6;
-  overflow: hidden;
-  text-overflow: ellipsis;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--h-text-2);
+  font-size: 13px;
+  line-height: 20px;
   -webkit-box-orient: vertical;
-  min-height: 2.4em;
+  -webkit-line-clamp: 2;
 }
 
 .foot {
   display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--h-line-soft);
-  font-size: 11.5px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   color: var(--h-text-3);
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.footSep {
-  color: var(--h-text-4);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .footAttn {
   color: var(--h-warn);
   font-weight: 500;
-}
-
-.footEnter {
-  margin-left: auto;
-  color: var(--h-accent);
-}
-
-@media (max-width: 760px) {
-  .grid {
-    grid-template-columns: 1fr;
-  }
 }

@@ -1,8 +1,9 @@
-/* MCP 表单 / 浏览器流程卡片；卡片外框、按钮样式沿用 approval-dialog.module.css */
+/* MCP 表单 / 浏览器流程卡片；卡片外框、按钮样式沿用 approval-dialog.module.css；
+   「打开链接」为细线 ghost，主按钮留给「已完成」 */
 .message {
   margin-bottom: 12px;
   color: var(--h-text);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -29,7 +30,7 @@
   margin-bottom: 4px;
   padding: 0;
   color: var(--h-text);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   font-weight: 600;
   line-height: 1.5;
@@ -40,7 +41,7 @@
 }
 
 .required {
-  color: var(--h-warn);
+  color: var(--h-err);
 }
 
 .hint {
@@ -51,9 +52,9 @@
 
 .description {
   margin-top: 4px;
-  color: var(--h-text-2);
-  font-family: var(--h-font-cn);
-  font-size: var(--h-button-font-size-sm);
+  color: var(--h-text-3);
+  font-family: var(--h-font-ui);
+  font-size: var(--h-font-size-sm);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -62,24 +63,30 @@
 .fieldError {
   margin-top: 4px;
   color: var(--h-color-danger-fg);
-  font-size: var(--h-button-font-size-sm);
+  font-size: var(--h-font-size-xs);
   line-height: 1.5;
 }
 
 .input {
   box-sizing: border-box;
   width: 100%;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-input);
   color: var(--h-text);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   padding: 8px 12px;
 }
 
 .input:focus-visible {
-  outline: var(--h-focus-outline);
+  outline: none;
+  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
+}
+
+.input[aria-invalid="true"]:focus-visible {
+  box-shadow: var(--h-focus-ring-danger);
 }
 
 .input[aria-invalid="true"] {
@@ -92,35 +99,40 @@
   gap: 4px;
 }
 
+/* 选项行：填充圆角行，无边框 */
 .checkRow {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: 0;
+  border-radius: var(--h-radius-md);
+  background: var(--h-bg-soft);
   color: var(--h-text);
   cursor: pointer;
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   line-height: 1.5;
   padding: 8px 12px;
   word-break: break-word;
 }
 
+.checkRow:hover {
+  background: var(--h-bg-hover);
+}
+
 .checkRow[data-checked="true"] {
-  border-color: var(--h-ok);
-  background: var(--h-ok-soft);
+  background: var(--h-bg-selected);
 }
 
 .checkRow:focus-within {
   outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .control {
   flex-shrink: 0;
   margin: 0;
-  accent-color: var(--h-ok);
+  accent-color: var(--h-accent);
 }
 
 .control:focus-visible {
@@ -136,14 +148,21 @@
 }
 
 .openLink {
-  border: 1px solid var(--h-ok);
-  border-radius: 0;
+  box-sizing: border-box;
+  height: var(--h-button-height-md);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text);
   cursor: pointer;
-  font-family: var(--h-font-cn);
-  font-size: var(--h-button-font-size-sm);
-  padding: 8px 16px;
+  font-family: var(--h-font-ui);
+  font-size: var(--h-button-font-size-md);
+  font-weight: 500;
+  padding: 0 var(--h-button-padding-x-md);
+}
+
+.openLink:hover:not(:disabled) {
+  background: var(--h-bg-hover);
 }
 
 .openLink:disabled {
@@ -153,13 +172,14 @@
 
 .openLink:focus-visible {
   outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .url {
   max-width: 100%;
   color: var(--h-text-2);
   font-family: var(--h-font-mono);
-  font-size: var(--h-button-font-size-sm);
+  font-size: var(--h-font-size-xs);
   line-height: 1.5;
   user-select: all;
   word-break: break-all;

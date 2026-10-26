@@ -58,8 +58,8 @@ describe("额度芯片文字与颜色", () => {
     );
   });
 
-  it("文字「5h 3% · 7d 96%」，百分比四舍五入", () => {
-    expect(rateLimitChipLabel(limits([five, seven]))).toBe("5h 3% · 7d 96%");
+  it("文字「5h 3%，7d 96%」，百分比四舍五入", () => {
+    expect(rateLimitChipLabel(limits([five, seven]))).toBe("5h 3%，7d 96%");
   });
 
   it("颜色阈值：任一窗口 ≥ 80% 为警告，79% 正常，rejected 为危险（优先）", () => {

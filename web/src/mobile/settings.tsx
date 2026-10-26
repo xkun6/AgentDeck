@@ -112,7 +112,7 @@ export function Settings({
           <div className={s.card}>
             <div className={s.rowTitle}>AgentDeck 手机端</div>
             <div className={s.rowMeta}>
-              {versionLabel(DESKTOP_VERSION)} · {BUILD_COMMIT}
+              {versionLabel(DESKTOP_VERSION)}（{BUILD_COMMIT}）
             </div>
             <div className={s.hint}>手机只是遥控器：Agent 仍运行在电脑上，连接全程端到端加密。</div>
           </div>

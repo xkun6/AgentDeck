@@ -1,6 +1,7 @@
 /* 图片查看器：全屏覆盖，覆写 Dialog 的居中与尺寸（双类提高优先级） */
 .overlay.overlay {
-  background: color-mix(in srgb, var(--h-color-ink-000) 80%, transparent);
+  /* 看图用固定深色底，不随主题变化（原 --h-color-ink-000 已随 token 收敛删除） */
+  background: color-mix(in srgb, var(--h-color-carbon-0) 80%, transparent);
 }
 
 .content.content {
@@ -67,7 +68,9 @@
   position: absolute;
   top: 12px;
   right: 12px;
-  background: var(--h-bg-pane);
+  background: var(--h-bg-elevated);
+  border-radius: 50%;
+  box-shadow: var(--h-shadow-md);
 }
 
 .prev,
@@ -75,7 +78,9 @@
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  background: var(--h-bg-pane);
+  background: var(--h-bg-elevated);
+  border-radius: 50%;
+  box-shadow: var(--h-shadow-md);
 }
 
 .prev {
@@ -96,10 +101,12 @@
   gap: 12px;
   max-width: calc(100vw - 32px);
   padding: 4px 12px;
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-pane);
+  border: var(--h-hairline) solid var(--h-line);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
   color: var(--h-text);
   font-size: var(--h-font-size-sm);
+  border-radius: var(--h-radius-pill);
 }
 
 .name {
@@ -112,6 +119,7 @@
 .meta {
   flex: none;
   color: var(--h-text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /*
@@ -132,6 +140,7 @@
     top: auto;
     bottom: 12px;
     transform: none;
+    border-radius: 50%;
   }
 
   .prev {
@@ -144,5 +153,6 @@
 
   .footer {
     max-width: calc(100vw - 112px);
+    border-radius: var(--h-radius-pill);
   }
 }

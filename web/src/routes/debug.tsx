@@ -264,7 +264,7 @@ export function DebugSection({ showHeading = true }: { showHeading?: boolean }) 
                   {provider.available ? "可用" : "不可用"}
                 </span>
                 <span className={s.muted}>
-                  {[provider.unavailableReason, detected?.version, detected?.path].filter(Boolean).join(" · ")}
+                  {[provider.unavailableReason, detected?.version, detected?.path].filter(Boolean).join("，")}
                 </span>
               </div>
             );
@@ -276,7 +276,7 @@ export function DebugSection({ showHeading = true }: { showHeading?: boolean }) 
               <span className={s.badge} data-ok={agent.installed ? "true" : "false"}>
                 {agent.installed ? "已安装" : "未安装"}
               </span>
-              <span className={s.muted}>{[agent.version, agent.path].filter(Boolean).join(" · ")}</span>
+              <span className={s.muted}>{[agent.version, agent.path].filter(Boolean).join("，")}</span>
             </div>
           ))}
         </div>

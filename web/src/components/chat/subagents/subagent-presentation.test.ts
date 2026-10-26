@@ -49,7 +49,7 @@ describe("parseSubAgentLog", () => {
 describe("子代理药丸", () => {
   it("按状态计数，只列非零项", () => {
     expect(subagentPillLabel([sub("1", "running"), sub("2", "running"), sub("3", "failed")])).toBe(
-      "2 运行中 · 1 失败",
+      "2 运行中，1 失败",
     );
     expect(subagentPillLabel([sub("1", "running"), sub("2", "completed")])).toBe("1 运行中");
     expect(subagentPillLabel([sub("1", "failed"), sub("2", "completed")])).toBe("1 失败");

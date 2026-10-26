@@ -119,23 +119,14 @@ export function ConsoleRoute() {
     >
       <div className={s.layout}>
         <section className={s.mainColumn}>
-          <div className={s.summaryCard}>
+          <div className={s.summaryStats}>
             <div>
-              <div className={s.eyebrow}>本地命令环境</div>
-              <h2>在当前工作区直接运行命令。</h2>
-              <p>
-                终端在本机执行你输入的命令，适合安装或登录 Agent CLI、查看仓库状态等操作。
-              </p>
+              <span>Shell</span>
+              <strong title={session?.shell}>{session?.shell || "—"}</strong>
             </div>
-            <div className={s.summaryStats}>
-              <div>
-                <span>Shell</span>
-                <strong title={session?.shell}>{session?.shell || "—"}</strong>
-              </div>
-              <div>
-                <span>工作目录</span>
-                <strong title={session?.cwd}>{normalizePath(session?.cwd)}</strong>
-              </div>
+            <div>
+              <span>工作目录</span>
+              <strong title={session?.cwd}>{normalizePath(session?.cwd)}</strong>
             </div>
           </div>
 

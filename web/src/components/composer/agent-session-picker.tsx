@@ -25,7 +25,7 @@ export interface AgentSessionPickerProps {
   onChange: (next: AgentSelection) => void;
   /** null 表示仍在加载 */
   providers: ProviderInfo[] | null;
-  /** providers.json 中的中转配置：用于列出已停用的中转（置灰）与「基于 … · host」副文字 */
+  /** providers.json 中的中转配置：用于列出已停用的中转（置灰）与「基于 …，host」副文字 */
   providerProfiles?: ProviderProfile[] | null;
   providersError?: string;
   catalog: { models: AgentModelDefinition[]; modes: AgentMode[] } | null;

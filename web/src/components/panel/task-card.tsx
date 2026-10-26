@@ -3,7 +3,7 @@ import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { pendingPermissionLabel } from "@/lib/permission-label";
 import { Dot, Pill } from "@/components/ui/pill";
-import { sessionTokens, shortId, type PanelSession } from "./panel-session";
+import { sessionTokens, type PanelSession } from "./panel-session";
 import s from "./task-card.module.css";
 
 interface TaskCardProps {
@@ -27,44 +27,24 @@ export function TaskCard({ session, onClick }: TaskCardProps) {
   return (
     <button className={s.card} type="button" onClick={onClick}>
       <div className={s.head}>
-        <span className={s.headId}>{shortId(agent.id)}</span>
-        <span className={s.headSep}>·</span>
-        <span>{provider}</span>
-        {agent.model ? (
-          <>
-            <span className={s.headSep}>·</span>
-            <span>{agent.model}</span>
-          </>
-        ) : null}
-        <span className={s.headSep}>·</span>
-        <span>{relativeTime(agent.createdAt / 1000)} 启动</span>
-        <span className={s.headSpacer} />
+        <span className={s.title}>{title}</span>
         <Pill tone="ok">
           <Dot tone="live" />
           运行中
         </Pill>
       </div>
-
-      <div className={s.title}>{title}</div>
       <div className={s.desc}>{desc}</div>
-
       <div className={s.foot}>
-        <span>
-          {toolCount} 工具
-          {pendingCount > 0 && (
-            <>
-              {" · "}
-              <span className={s.footAttn}>{pendingCount} {pendingPermissionLabel(pendingKind)}</span>
-            </>
-          )}
-        </span>
-        {tokens > 0 && (
-          <>
-            <span className={s.footSep}>|</span>
-            <span>{formatTokens(tokens)} tokens</span>
-          </>
-        )}
-        <span className={s.footEnter}>→ 进入工作台</span>
+        <span>{provider}</span>
+        {agent.model ? <span>{agent.model}</span> : null}
+        <span>{relativeTime(agent.createdAt / 1000)}启动</span>
+        <span>{toolCount} 次工具调用</span>
+        {tokens > 0 ? <span>{formatTokens(tokens)} tokens</span> : null}
+        {pendingCount > 0 ? (
+          <span className={s.footAttn}>
+            {pendingCount} {pendingPermissionLabel(pendingKind)}
+          </span>
+        ) : null}
       </div>
     </button>
   );

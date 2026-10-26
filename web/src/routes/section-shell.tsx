@@ -21,10 +21,16 @@ export function SectionShell({
 }: SectionShellProps) {
   return (
     <main className={s.page}>
-      <TopBar title={title} sub={sub} right={right} />
+      {right ? <TopBar right={right} /> : null}
       <div className={s.body} data-with-rail={rail ? "true" : undefined}>
         <div className={s.scroll}>
-          <div className={s.content}>{children}</div>
+          <div className={s.content}>
+            <header className={s.head}>
+              <h1 className={s.title}>{title}</h1>
+              {sub ? <p className={s.sub}>{sub}</p> : null}
+            </header>
+            {children}
+          </div>
         </div>
         {rail ? (
           <aside className={s.rail} aria-label={railLabel}>

@@ -221,7 +221,7 @@ export function TaskDrawer({ projectPath, board, taskId, onClose, onNotice }: Ta
                 ) : null}
                 {task.worktree ? (
                   <p className={s.muted} title={task.worktree.path}>
-                    分支 {task.worktree.branch} · {shortenPath(task.worktree.path)}
+                    分支 {task.worktree.branch}，{shortenPath(task.worktree.path)}
                   </p>
                 ) : null}
 

@@ -20,19 +20,20 @@
   margin-bottom: 8px;
   padding: 0;
   color: var(--h-text);
-  font-family: var(--h-font-cn);
-  font-size: var(--h-font-size-md);
+  font-family: var(--h-font-ui);
+  font-size: var(--h-font-size-sm);
   line-height: 1.6;
 }
 
 .chip {
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-pill);
   background: var(--h-bg-chip);
   color: var(--h-text-2);
   font-size: var(--h-font-size-xs);
+  font-weight: 500;
   line-height: 1.6;
-  padding: 0 4px;
+  padding: 0 8px;
 }
 
 .questionText {
@@ -50,34 +51,36 @@
   gap: 4px;
 }
 
+/* 选项行：填充圆角行，无边框；悬停 hover、选中 selected */
 .option {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: 0;
+  border-radius: var(--h-radius-md);
+  background: var(--h-bg-soft);
   cursor: pointer;
   padding: 8px 12px;
+  transition: background-color var(--h-duration-fast) var(--h-ease-standard);
 }
 
 .option:hover {
-  border-color: var(--h-line);
+  background: var(--h-bg-hover);
 }
 
 .option[data-checked="true"] {
-  border-color: var(--h-ok);
-  background: var(--h-ok-soft);
+  background: var(--h-bg-selected);
 }
 
 .option:focus-within {
   outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .control {
   flex-shrink: 0;
   margin: 4px 0 0;
-  accent-color: var(--h-ok);
+  accent-color: var(--h-accent);
 }
 
 .control:focus-visible {
@@ -94,15 +97,15 @@
 
 .optionLabel {
   color: var(--h-text);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.5;
 }
 
 .optionDescription {
-  color: var(--h-text-2);
-  font-family: var(--h-font-cn);
+  color: var(--h-text-3);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   line-height: 1.5;
 }
@@ -111,8 +114,8 @@
   max-height: 240px;
   margin: 4px 0 0;
   overflow: auto;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-sm);
   background: var(--h-bg-code);
   color: var(--h-text);
   font-family: var(--h-font-mono);
@@ -126,17 +129,19 @@
 .otherInput {
   box-sizing: border-box;
   width: 100%;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-input);
   color: var(--h-text);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   padding: 8px 12px;
 }
 
 .otherInput:focus-visible {
-  outline: var(--h-focus-outline);
+  outline: none;
+  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 /* 手机 / 触屏：选项行与输入框触控区 >= 44px */

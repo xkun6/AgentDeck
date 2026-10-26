@@ -5,7 +5,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(31, 30, 27, 0.55);
+  background: var(--h-scrim);
   padding: 24px;
 }
 
@@ -14,10 +14,10 @@
   flex-direction: column;
   width: min(640px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 48px));
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-input);
-  box-shadow: none;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-xl);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-lg);
   color: var(--h-text);
   overflow: hidden;
 }
@@ -27,22 +27,22 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
   padding: 16px 20px 16px;
 }
 
 .wpTitleBar h2 {
   margin: 0;
   color: var(--h-text);
-  font-size: 16px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1.2;
 }
 
 .wpClose {
   width: var(--h-button-height-sm);
   height: var(--h-button-height-sm);
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   color: var(--h-text-2);
   padding: 0;
   background: transparent;
@@ -60,24 +60,24 @@
 }
 
 .wpClose:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
 .wpManualRow {
   display: flex;
   gap: 8px;
-  border-bottom: 1px solid var(--h-line-soft);
-  padding: 12px 12px;
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
+  padding: 12px 20px;
 }
 
 .wpManualInput {
   flex: 1;
   min-width: 0;
   height: 32px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-soft);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: var(--h-bg-input);
   color: var(--h-text);
   font-size: 13px;
   outline: 0;
@@ -85,22 +85,23 @@
 }
 
 .wpManualInput:focus {
-  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .wpManualGo {
   height: 32px;
   padding: 0 16px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-soft);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: transparent;
   color: var(--h-text);
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .wpManualGo:hover:not(:disabled) {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
 
 .wpManualGo:disabled {
@@ -112,18 +113,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  border-bottom: 1px solid var(--h-line-soft);
-  padding: 8px 12px;
-  background: var(--h-bg-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
+  padding: 8px 20px;
   min-height: 40px;
 }
 
 .wpUpButton {
   width: var(--h-button-height-sm);
   height: var(--h-button-height-sm);
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-input);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: transparent;
   color: var(--h-text);
   display: inline-flex;
   align-items: center;
@@ -139,7 +139,7 @@
 }
 
 .wpUpButton:hover:not(:disabled) {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
 
 .wpUpButton:disabled {
@@ -169,14 +169,14 @@
   background: transparent;
   color: var(--h-text-2);
   padding: 4px 8px;
-  border-radius: 0;
+  border-radius: var(--h-radius-sm);
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .wpCrumb:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -208,18 +208,18 @@
   background: transparent;
   color: var(--h-text);
   padding: 8px 12px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
 
 .wpEntry:hover:not(:disabled) {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
 }
 
 .wpEntry[data-selected="true"] {
-  background: var(--h-accent-soft);
+  background: var(--h-bg-selected);
   color: var(--h-text);
 }
 
@@ -266,9 +266,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  border-top: 1px solid var(--h-line-soft);
-  padding: 12px 16px;
-  background: var(--h-bg-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
+  padding: 12px 20px;
 }
 
 .wpFooterPath {
@@ -292,30 +291,30 @@
 .wpButtonPrimary {
   height: var(--h-button-height-md);
   padding: 0 16px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
 }
 
 .wpButtonGhost {
-  background: var(--h-bg-input);
+  background: transparent;
   color: var(--h-text);
 }
 
 .wpButtonGhost:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
 
 .wpButtonPrimary {
   background: var(--h-accent);
   color: var(--h-accent-contrast);
-  border-color: var(--h-accent-border);
-  font-weight: 600;
+  border-color: var(--h-accent);
 }
 
 .wpButtonPrimary:hover:not(:disabled) {
-  filter: brightness(1.05);
+  opacity: 0.9;
 }
 
 .wpButtonPrimary:disabled {

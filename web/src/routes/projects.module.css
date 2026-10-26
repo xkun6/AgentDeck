@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--h-bg-pane);
+  background: var(--h-bg-app);
   overflow: hidden;
 }
 
@@ -14,9 +14,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 24px;
-  background: var(--h-bg-pane);
-  border-bottom: 1px solid var(--h-line-soft);
+  padding: 12px 24px 0;
+  background: var(--h-bg-app);
   flex-wrap: wrap;
 }
 
@@ -28,11 +27,16 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
   background: var(--h-bg-input);
-  border-radius: 0;
+  border-radius: var(--h-radius-pill);
   color: var(--h-text-3);
-  font-size: 12px;
+  font-size: 13px;
+  transition: box-shadow var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.searchBox:focus-within {
+  box-shadow: var(--h-focus-ring);
 }
 
 .searchBox input {
@@ -42,8 +46,8 @@
   background: transparent;
   outline: none;
   color: var(--h-text);
-  font-size: 12px;
-  font-family: var(--h-font-cn);
+  font-size: 13px;
+  font-family: var(--h-font-ui);
 }
 
 .searchBox input::placeholder {
@@ -52,9 +56,8 @@
 
 .sortHint {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
 }
 
 .scroll {
@@ -68,16 +71,16 @@
 
 .tableWrap {
   margin: 16px 0;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: transparent;
   overflow: hidden;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
   table-layout: fixed;
 }
 
@@ -111,19 +114,17 @@
 
 .table thead th {
   text-align: left;
-  padding: 12px 12px;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  padding: 10px 12px;
+  font-size: 12px;
   color: var(--h-text-3);
-  background: var(--h-bg-soft);
-  border-bottom: 1px solid var(--h-line-soft);
+  background: transparent;
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
   font-weight: 500;
 }
 
 .table tbody td {
   padding: 12px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
   color: var(--h-text);
   vertical-align: middle;
   min-width: 0;
@@ -135,12 +136,15 @@
 
 .table tbody tr {
   cursor: pointer;
-  transition: background 0.08s;
+  transition: background var(--h-duration-fast) var(--h-ease-standard);
 }
 
-.table tbody tr:hover,
+.table tbody tr:hover {
+  background: var(--h-bg-hover);
+}
+
 .table tbody tr[data-active="true"] {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-selected);
 }
 
 .metricCell {
@@ -151,11 +155,16 @@
 .mono {
   font-family: var(--h-font-mono);
   color: var(--h-text-2);
-  font-size: 11.5px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 360px;
+}
+
+/* 累计 tokens 是数字，不用等宽字体 */
+.mono.metricCell {
+  font-family: var(--h-font-ui);
 }
 
 .projectCell {
@@ -173,7 +182,7 @@
 .nameCell {
   display: block;
   min-width: 0;
-  font-weight: 600;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -181,7 +190,7 @@
 
 .titlePin {
   flex-shrink: 0;
-  color: var(--h-accent);
+  color: var(--h-text-2);
 }
 
 .pathCell {
@@ -191,26 +200,23 @@
   overflow: hidden;
   color: var(--h-text-3);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
-  line-height: 1.35;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .activityCell {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-text-3);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.colorDot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--h-accent);
-  opacity: 0.8;
+.rowIcon {
+  display: block;
+  color: var(--h-text-3);
 }
 
 .menuCell {
@@ -231,43 +237,54 @@
   width: 24px;
   height: 24px;
   border: none;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: inherit;
   cursor: pointer;
 }
 
 .menuTrigger:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
   color: var(--h-text);
+}
+
+.menuTrigger:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 1px;
 }
 
 .rowMenu {
   min-width: 160px;
   padding: 4px;
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .rowMenu button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  min-height: 32px;
+  padding: 0 8px;
   border: none;
   background: transparent;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--h-text);
   cursor: pointer;
   text-align: left;
-  border-radius: 0;
-  font-family: var(--h-font-cn);
+  border-radius: var(--h-radius-md);
+  font-family: var(--h-font-ui);
 }
 
-.rowMenu button:hover {
-  background: var(--h-bg-soft);
+.rowMenu button:hover,
+.rowMenu button:focus-visible {
+  background: var(--h-bg-hover);
+  outline: none;
 }
 
 .rowMenu button[data-tone="danger"] {
@@ -275,7 +292,7 @@
 }
 
 .rowMenu button[data-tone="danger"]:hover {
-  background: color-mix(in srgb, var(--h-err) 12%, transparent);
+  background: var(--h-err-soft);
 }
 
 .emptyState {
@@ -294,11 +311,11 @@
 }
 
 .emptySub {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .emptySub a {
-  color: var(--h-accent);
+  color: var(--h-highlight);
   cursor: pointer;
 }
 
@@ -313,11 +330,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
-  border-top: 1px solid var(--h-line);
-  font-size: 11.5px;
+  padding: 12px 24px;
+  border-top: var(--h-hairline) solid var(--h-line-soft);
+  font-size: 12px;
   color: var(--h-text-3);
-  background: var(--h-bg-pane);
+  background: var(--h-bg-app);
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 
@@ -325,16 +343,23 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-input);
+  height: var(--h-button-height-sm);
+  border: var(--h-hairline) solid var(--h-line);
+  background: transparent;
   color: var(--h-text);
-  padding: 4px 12px;
-  border-radius: 0;
+  padding: 0 12px;
+  border-radius: var(--h-radius-md);
   cursor: pointer;
-  font-size: 11.5px;
-  font-family: var(--h-font-cn);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--h-font-ui);
 }
 
 .footAction:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
+}
+
+.footAction:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }

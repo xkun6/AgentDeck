@@ -547,7 +547,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
     "style",
     "position:fixed;inset:0;background:#111111;" +
       "color:#fbfaf6;display:flex;align-items:center;justify-content:center;" +
-      "font-family:'HarmonyOS Sans SC','HarmonyOS Sans','PingFang SC','Segoe UI',sans-serif;" +
+      "font-family:'Segoe UI','PingFang SC','Microsoft YaHei UI',sans-serif;" +
       "z-index:2147483647;padding:48px;box-sizing:border-box;overflow:auto;",
   );
 
@@ -659,7 +659,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
     "style",
     "font-variant-numeric:tabular-nums;white-space:nowrap;color:rgba(133,126,111,0.76);",
   );
-  uiVersionRow.textContent = `${versionLine.label} ${versionLine.version} · ${versionLine.commit}`;
+  uiVersionRow.textContent = `${versionLine.label} ${versionLine.version}（${versionLine.commit}）`;
   versionPanel.append(uiVersionRow);
   panel.appendChild(versionPanel);
 
@@ -670,7 +670,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
     "font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;" +
       "color:rgba(255,255,255,0.45);letter-spacing:0.06em;",
   );
-  sub.textContent = "AgentDeck · 启动中";
+  sub.textContent = "正在启动";
   panel.appendChild(sub);
 
   root.appendChild(panel);
@@ -722,7 +722,7 @@ function showBootstrapOverlay(initialMessage: string, onRetry: () => void): Boot
         message.textContent = msg || initialMessage;
         detail.style.display = "none";
         retryButton.style.display = "none";
-        sub.textContent = "AgentDeck · 启动中";
+        sub.textContent = "正在启动";
       }
     },
     dismiss() {

@@ -115,7 +115,7 @@ describe("BoardView", () => {
     expect(running.textContent).toContain("Claude Code");
     expect(within(running).getByText("运行中")).toBeTruthy();
     const todo2 = within(column("待办")).getAllByRole("article")[1]!;
-    expect(todo2.textContent).toContain("Claude Code · opus");
+    expect(todo2.textContent).toContain("Claude Code（opus）");
     expect(within(column("阻塞")).getByText("缺少密钥")).toBeTruthy();
   });
 

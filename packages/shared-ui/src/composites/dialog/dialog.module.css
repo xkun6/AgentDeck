@@ -1,7 +1,7 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--h-color-ink-000) 36%, transparent);
+  background: var(--h-color-scrim);
   animation: agentdeckDialogFadeIn 120ms ease-out;
   z-index: var(--h-z-dialog-overlay);
 }
@@ -15,10 +15,11 @@
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: var(--h-z-dialog);
-  background: var(--h-bg-pane);
+  background: var(--h-bg-elevated);
   color: var(--h-text);
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-xl);
+  box-shadow: var(--h-shadow-lg);
   outline: none;
   max-width: min(560px, calc(100vw - 32px));
   max-height: 85vh;

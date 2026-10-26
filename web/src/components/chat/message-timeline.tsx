@@ -267,7 +267,6 @@ function ProgressBlock({ turnStartedAt, sessionUsage, progressModel, progressTex
       {(tokenValue || model) ? (
         <span className={s.thinkingMeta}>
           {tokenValue ? <span>{formatTokens(tokenValue)} tokens</span> : null}
-          {tokenValue && model ? <span className={s.thinkingSep}>·</span> : null}
           {model ? <span className={s.thinkingModel}>{truncateMiddle(model, 24)}</span> : null}
         </span>
       ) : null}
@@ -923,8 +922,6 @@ function MessageBubble({
   if (isToolOnly) {
     return (
       <div className={s.messageRow} data-role="assistant">
-        {/* 与带头像的行保持左缘对齐的占位列。 */}
-        {compact ? null : <div className={s.avatarCol} aria-hidden />}
         <div className={s.messageContent}>
           <ToolChain tools={message.tools ?? []} />
         </div>
@@ -989,15 +986,14 @@ function MessageBubble({
 
   return (
     <div className={s.messageRow} data-role={isUser ? "user" : "assistant"}>
-      {/* IM 式布局：助手头像独立于气泡左侧一列（点击弹资料卡）；用户侧
-          不显示头像与昵称，气泡右贴。 */}
-      {!isUser && !compact ? (
-        <div className={s.avatarCol}>
+      {/* 助手正文通栏、用户气泡右贴；助手名与小头像在正文上方一行（点击弹资料卡）。 */}
+      <div className={s.messageContent}>
+        {!isUser && !compact ? (
           <AssistantProfileCard
             name={assistantName}
             model={progressModel || sessionUsage?.model}
             trigger={
-              <button type="button" className={s.avatarButton} title={`查看 ${assistantName} 资料`}>
+              <button type="button" className={s.assistantName} title={`查看 ${assistantName} 资料`}>
                 {assistantAvatarDataUrl ? (
                   <img
                     className={s.rowAvatar}
@@ -1009,16 +1005,10 @@ function MessageBubble({
                     {avatarInitial(assistantName)}
                   </span>
                 )}
+                <span>{assistantName}</span>
               </button>
             }
           />
-        </div>
-      ) : null}
-      <div className={s.messageContent}>
-        {!isUser && !compact ? (
-          <div className={s.assistantName}>
-            <span>{assistantName}</span>
-          </div>
         ) : null}
         <div className={s.bubble} data-role={isUser ? "user" : "assistant"}>
           {hasBlocks ? (

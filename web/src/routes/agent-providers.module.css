@@ -36,18 +36,19 @@
   margin: 0;
   color: var(--h-text);
   font-size: var(--h-font-size-lg);
-  font-weight: 650;
+  font-weight: 600;
   line-height: var(--h-line-height-tight);
 }
 
 .count {
-  padding: 0 4px;
-  border: 1px solid var(--h-line);
+  padding: 0 8px;
+  background: var(--h-bg-chip);
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
   font-size: var(--h-font-size-xs);
+  font-variant-numeric: tabular-nums;
   font-weight: 500;
   line-height: var(--h-line-height-normal);
+  border-radius: var(--h-radius-pill);
 }
 
 .sectionSub {
@@ -59,12 +60,13 @@
 
 /* ── 列表 ─────────────────────────────────────────────────────────────── */
 
+/* 列表：浅填充圆角行卡（同设置行），行间 8px 留白，不再整框描边 */
 .list {
   display: flex;
   flex-direction: column;
+  gap: 8px;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--h-line);
   list-style: none;
 }
 
@@ -75,11 +77,8 @@
   align-items: center;
   min-height: 56px;
   padding: 12px 16px;
-  background: var(--h-bg-pane);
-}
-
-.row + .row {
-  border-top: 1px solid var(--h-line-soft);
+  background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
 }
 
 .row[data-disabled="true"] .rowMain {
@@ -94,6 +93,7 @@
   height: 32px;
   background: var(--h-bg-chip);
   color: var(--h-text-2);
+  border-radius: var(--h-radius-md);
 }
 
 .rowMain {
@@ -115,7 +115,7 @@
   overflow: hidden;
   color: var(--h-text);
   font-size: var(--h-font-size-md);
-  font-weight: 600;
+  font-weight: 500;
   line-height: var(--h-line-height-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -184,12 +184,13 @@
   height: var(--h-switch-height);
   margin-right: 8px;
   padding: 0;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
   background: var(--h-bg-chip);
   cursor: pointer;
   transition:
     background var(--h-duration-fast) var(--h-ease-standard),
     border-color var(--h-duration-fast) var(--h-ease-standard);
+  border-radius: var(--h-radius-pill);
 }
 
 .switch:focus-visible {
@@ -213,16 +214,17 @@
   transition:
     left var(--h-duration-fast) var(--h-ease-standard),
     background var(--h-duration-fast) var(--h-ease-standard);
+  border-radius: 50%;
 }
 
 .switch[data-on="true"] {
-  border-color: var(--h-accent);
-  background: var(--h-accent);
+  border-color: var(--h-highlight);
+  background: var(--h-highlight);
 }
 
 .switch[data-on="true"] .switchThumb {
   left: calc(100% - var(--h-switch-thumb-size) - 4px);
-  background: var(--h-accent-contrast);
+  background: var(--h-bg-elevated);
 }
 
 .footnote {

@@ -18,8 +18,6 @@ const numericStyle = new RegExp(`\\b(${styleProperty})\\s*:\\s*(-?\\d+(?:\\.\\d+
 const stringStyle = new RegExp(`\\b(${styleProperty})\\s*:\\s*(["'])([^"']+)\\2`, "g");
 const svgRadius = /\\b(rx|ry)\\s*=\\s*(?:\\{\\s*)?["']?(-?\\d+(?:\\.\\d+)?)/g;
 const layoutToken = /^--.*(?:space|gap|pad|width|height|radius|offset|inset|row|column|sidebar|bar|control|button|input|card|dialog|switch|tab)/i;
-// PrimeAPP surfaces stay square. True point/circle semantics retain 50% geometry.
-const circularSelector = /(?:dot|avatar|spinner|orb|thumb)/i;
 const violations = [];
 
 for (const file of CSS_FILES) {
@@ -60,13 +58,13 @@ for (const file of CODE_FILES) {
 }
 
 if (violations.length > 0) {
-  console.error(`4px grid check failed with ${violations.length} violation(s):`);
+  console.error(`2px grid check failed with ${violations.length} violation(s):`);
   for (const violation of violations.slice(0, 120)) console.error(`- ${violation}`);
   if (violations.length > 120) console.error(`- ... ${violations.length - 120} more`);
   process.exit(1);
 }
 
-console.log(`4px grid check passed (${CSS_FILES.length} CSS files, ${CODE_FILES.length} code files).`);
+console.log(`2px grid check passed (${CSS_FILES.length} CSS files, ${CODE_FILES.length} code files).`);
 
 function walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -81,7 +79,7 @@ function checkCss(source, file) {
   for (const match of source.matchAll(cssDeclaration)) {
     const property = match[2].toLowerCase();
     if (/radius$/i.test(property)) {
-      checkRadius(file, source, match.index, property, match[3], match[0], selectorBefore(source, match.index));
+      checkRadius(file, source, match.index, property, match[3], match[0]);
     }
     else checkPixels(file, source, match.index, property, match[3], match[0]);
   }
@@ -99,22 +97,23 @@ function checkPixels(file, source, index, property, value, excerpt) {
   }
 }
 
-function checkRadius(file, source, index, property, value, excerpt, selector = "") {
-  const parts = String(value).trim().split(/\s+/);
-  if (parts.length > 0 && parts.every((part) => /^(?:0|0px)$/.test(part))) return;
-  if (parts.length === 1 && parts[0] === "50%" && circularSelector.test(selector)) return;
-  addViolation(file, source, index, property, String(value).trim(), excerpt);
-}
-
-function selectorBefore(source, index) {
-  const open = source.lastIndexOf("{", index);
-  if (open < 0 || source.lastIndexOf("}", index) > open) return "";
-  const previousClose = source.lastIndexOf("}", open);
-  return source.slice(previousClose + 1, open).trim();
+// 圆角走 --h-radius-* 阶梯（4 / 6 / 8 / 12 / 16 / pill）；同心圆角允许用 calc / max 从 token 推导，
+// 字面量只接受 0、50%、胶囊 999px 与偶数像素。
+function checkRadius(file, source, index, property, value, excerpt) {
+  const parts = String(value).trim().split(/\s+(?![^(]*\))/);
+  const ok = parts.every(
+    (part) =>
+      /^(?:0|0px|50%|999px|inherit)$/.test(part) ||
+      /^var\(--[\w-]*(?:radius|r-)[\w-]*\)$/.test(part) ||
+      /^(?:calc|max|min)\(.*var\(--[\w-]*(?:radius|r-)[\w-]*\).*\)$/.test(part) ||
+      (/^\d+px$/.test(part) && Number.parseInt(part, 10) % 2 === 0),
+  );
+  if (!ok) addViolation(file, source, index, property, String(value).trim(), excerpt);
 }
 
 function checkNumber(file, source, index, property, value, excerpt) {
-  if (value === 0 || Number.isInteger(value / 4)) return;
+  // 布局尺寸走 2px 网格（常用 4 的倍数，2px 仅用于紧凑间隙与 14px 小图标）
+  if (value === 0 || Number.isInteger(value / 2)) return;
   // 1px hairlines and the standard visually-hidden 1px box are strokes,
   // not layout units. Border widths are intentionally outside this checker.
   if ((property === "width" || property === "height") && Math.abs(value) === 1) return;

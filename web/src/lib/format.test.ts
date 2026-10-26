@@ -6,7 +6,6 @@ import {
   formatCostUsd,
   formatDurationMs,
   formatElapsedTimer,
-  formatHeroTimestamp,
   formatTokPerSec,
   formatTokens,
   getGreeting,
@@ -155,15 +154,6 @@ describe("relativeTime", () => {
   it("renders 天前 within a week", () => {
     const now = Date.now() / 1000;
     expect(relativeTime(now - 86400 * 3)).toBe("3天前");
-  });
-});
-
-describe("formatHeroTimestamp", () => {
-  it("includes date, weekday, time, tz", () => {
-    const date = new Date("2026-04-28T16:42:00+08:00");
-    const out = formatHeroTimestamp(date);
-    // Skip exact tz check because test env tz varies; just shape-check.
-    expect(out).toMatch(/^\d{4}-\d{2}-\d{2} · 周[日一二三四五六] · \d{2}:\d{2} /);
   });
 });
 

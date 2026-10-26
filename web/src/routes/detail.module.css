@@ -5,7 +5,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--h-bg-pane);
+  background: var(--h-bg-app);
 }
 
 /* Horizontal work area: chat column (timeline + composer) and the optional
@@ -30,25 +30,25 @@
   width: 100%;
   max-width: var(--conversation-max-width, 780px);
   margin: 0 auto;
-  padding: 12px 28px 0;
+  padding: 8px 0 16px;
 }
 
-/* Flat separator between the scrolling timeline and the composer. */
+/* 时间线滚到输入框后方时渐隐，而不是硬切 */
 .composerArea::before {
   content: "";
   position: absolute;
   bottom: 100%;
   left: 0;
   right: 0;
-  height: 20px;
+  height: 24px;
   pointer-events: none;
-  background: var(--h-bg-pane);
+  background: linear-gradient(to bottom, transparent, var(--h-bg-app));
   z-index: 1;
 }
 
 @media (max-width: 720px) {
   .composerArea {
-    padding: 8px 16px 0;
+    padding: 8px 16px 12px;
   }
 }
 
@@ -61,14 +61,13 @@
   gap: 8px 12px;
   margin-bottom: 8px;
   padding: 8px 12px;
-  border: 1px solid var(--h-color-info-border);
+  border-radius: var(--h-radius-lg);
   background: var(--h-color-info-bg);
-  color: var(--h-color-info-fg);
-  font-size: var(--h-button-font-size-sm);
+  color: var(--h-color-fg-default);
+  font-size: 13px;
 }
 
 .sessionNotice[data-tone="danger"] {
-  border-color: var(--h-color-danger-border);
   background: var(--h-color-danger-bg);
   color: var(--h-color-danger-fg);
 }
@@ -89,17 +88,17 @@
   flex-shrink: 0;
   height: var(--h-button-height-sm);
   padding: 0 12px;
-  border: 1px solid currentColor;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: var(--h-bg-app);
+  color: var(--h-text);
   font: inherit;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .sessionNoticeAction:hover:not(:disabled) {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
 }
 
 .sessionNoticeAction:disabled {

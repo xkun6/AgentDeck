@@ -7,9 +7,9 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  border: 1px dashed var(--h-color-border-default);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--h-color-bg-subtle) 72%, transparent);
+  border: 0;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-color-bg-subtle);
   color: var(--h-color-fg-muted);
   text-align: center;
 }
@@ -38,13 +38,13 @@
 .title {
   color: var(--h-color-fg-default);
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: var(--h-line-height-tight);
 }
 
 .description {
   color: var(--h-color-fg-muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: var(--h-line-height-normal);
 }
 

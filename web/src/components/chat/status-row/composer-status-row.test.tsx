@@ -152,11 +152,11 @@ describe("步骤芯片", () => {
 describe("额度芯片", () => {
   const now = new Date(2026, 9, 14, 8, 30).getTime();
 
-  it("芯片文字「额度 5h 3% · 7d 96%」，≥ 80% 用警告色；弹层每窗口一行：标签、进度条、已用 N%、重置时间，底部更新时间", () => {
+  it("芯片文字「额度 5h 3%，7d 96%」，≥ 80% 用警告色；弹层每窗口一行：标签、进度条、已用 N%、重置时间，底部更新时间", () => {
     render(<RateLimitTrack rateLimits={limits} now={now} />);
     const chip = screen.getByRole("button", { name: /额度/ });
     expect(chip.textContent).toContain("额度");
-    expect(chip.textContent).toContain("5h 3% · 7d 96%");
+    expect(chip.textContent).toContain("5h 3%，7d 96%");
     expect(chip.getAttribute("data-tone")).toBe("warn");
     fireEvent.click(chip);
     const panel = screen.getByLabelText("额度详情");

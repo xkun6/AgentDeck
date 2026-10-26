@@ -24,16 +24,18 @@
 
 .summary {
   color: var(--h-text-3);
-  font-size: var(--h-font-size-sm, 12px);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 .error {
   margin: 0;
   padding: 8px 12px;
-  border: 1px solid var(--h-color-danger-border);
-  background: var(--h-color-danger-bg);
-  color: var(--h-color-danger-fg);
-  font-size: var(--h-font-size-sm, 12px);
+  border: none;
+  background: var(--h-err-soft);
+  color: var(--h-err);
+  font-size: 13px;
+  border-radius: var(--h-radius-md);
 }
 
 .columns {
@@ -44,14 +46,19 @@
   align-items: start;
 }
 
+/* 看板列：浅填充、无可见边框；拖入时浅强调底 */
 .column {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-height: 160px;
-  padding: 8px;
-  border: 1px solid var(--h-line-soft);
+  padding: 6px;
+  border: var(--h-hairline) solid transparent;
   background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
+  transition:
+    background var(--h-duration-fast) var(--h-ease-standard),
+    border-color var(--h-duration-fast) var(--h-ease-standard);
 }
 
 .column[data-over="true"] {
@@ -63,7 +70,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 4px;
+  min-height: 28px;
+  padding: 0 6px;
 }
 
 .columnHead h3 {
@@ -75,30 +83,37 @@
 
 .count {
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
+/* 任务卡：同心圆角 = 列圆角 12 − 列内边距 6 */
 .card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-pane);
+  padding: 8px 10px;
+  border: var(--h-hairline) solid var(--h-line-soft);
+  background: var(--h-bg-app);
   cursor: grab;
+  border-radius: var(--h-radius-sm);
+  transition: border-color var(--h-duration-fast) var(--h-ease-standard);
 }
 
-.card:hover,
+.card:hover {
+  border-color: var(--h-line);
+}
+
 .card:focus-visible {
-  border-color: var(--h-accent-border);
-  outline: none;
+  border-color: var(--h-line);
+  outline: var(--h-focus-outline);
+  outline-offset: 1px;
 }
 
 .card[data-dragging="true"] {
@@ -122,42 +137,44 @@
 }
 
 .agent {
-  font-family: var(--h-font-mono);
+  font-family: var(--h-font-ui);
 }
 
+/* 会话状态标签：soft 底 + 对应前景，无描边 */
 .badge {
-  padding: 0 4px;
-  border: 1px solid var(--h-line);
+  padding: 0 6px;
+  border: none;
+  background: var(--h-bg-chip);
+  color: var(--h-text-2);
   font-size: 12px;
-  line-height: 16px;
+  line-height: 18px;
+  border-radius: var(--h-radius-pill);
 }
 
 .badge[data-tone="running"] {
-  border-color: var(--h-color-info-border);
   background: var(--h-color-info-bg);
   color: var(--h-color-info-fg);
 }
 
 .badge[data-tone="attention"] {
-  border-color: var(--h-color-warning-border);
-  background: var(--h-color-warning-bg);
-  color: var(--h-color-warning-fg);
+  background: var(--h-warn-soft);
+  color: var(--h-warn);
 }
 
 .badge[data-tone="error"] {
-  border-color: var(--h-color-danger-border);
-  background: var(--h-color-danger-bg);
-  color: var(--h-color-danger-fg);
+  background: var(--h-err-soft);
+  color: var(--h-err);
 }
 
 .deps {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 .blocked {
-  color: var(--h-color-danger-fg);
+  color: var(--h-err);
   font-size: 12px;
   line-height: 16px;
   word-break: break-word;

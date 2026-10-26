@@ -3,10 +3,11 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--h-bg-pane);
+  background: var(--h-bg-app);
   overflow: hidden;
 }
 
+/* 工具栏：与页面同底色，不加分隔色带 */
 .toolbar {
   width: 100%;
   max-width: var(--h-page-content-max-width);
@@ -15,8 +16,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--h-line-soft);
+  padding: 12px 24px 0;
 }
 
 .toolbarSpacer {
@@ -28,16 +28,18 @@
   align-items: center;
   gap: 8px;
   color: var(--h-text-2);
-  font-size: var(--h-font-size-sm);
+  font-size: 13px;
 }
 
 .pausedBanner {
   margin: 0;
-  padding: 4px 12px;
-  border: 1px solid var(--h-warn);
+  padding: 4px 10px;
+  border: none;
   background: var(--h-warn-soft);
   color: var(--h-warn);
-  font-size: var(--h-font-size-sm);
+  font-size: 12px;
+  line-height: 18px;
+  border-radius: var(--h-radius-pill);
 }
 
 .scroll {
@@ -60,7 +62,7 @@
   padding: 48px 24px;
   text-align: center;
   color: var(--h-text-3);
-  font-size: var(--h-font-size-sm);
+  font-size: 13px;
 }
 
 .group {
@@ -72,24 +74,27 @@
 .groupTitle {
   margin: 0;
   color: var(--h-text);
-  font-size: var(--h-font-size-md);
+  font-size: 14px;
   font-weight: 600;
 }
 
 .groupHint {
   margin: 0;
   color: var(--h-text-3);
-  font-size: var(--h-font-size-xs);
+  font-size: 12px;
 }
 
+/* 列表：hairline 外框 + 透明底，行间 hairline 分隔 */
 .list {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-input);
+  border: var(--h-hairline) solid var(--h-line);
+  background: transparent;
+  border-radius: var(--h-radius-lg);
+  overflow: hidden;
 }
 
 .row {
@@ -97,7 +102,7 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .row:last-child {
@@ -117,8 +122,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--h-text);
-  font-size: var(--h-font-size-sm);
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .rowMeta {
@@ -126,15 +131,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--h-text-3);
-  font-size: var(--h-font-size-xs);
+  font-size: 12px;
 }
 
 .rowPlan {
   flex: 0 0 auto;
   max-width: 240px;
   color: var(--h-text-2);
-  font-family: var(--h-font-mono);
-  font-size: var(--h-font-size-xs);
+  font-family: var(--h-font-ui);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -151,12 +157,13 @@
   width: var(--h-switch-width);
   height: var(--h-switch-height);
   padding: 0;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
   background: var(--h-bg-chip);
   cursor: pointer;
   transition:
     background var(--h-duration-fast) var(--h-ease-standard),
     border-color var(--h-duration-fast) var(--h-ease-standard);
+  border-radius: var(--h-radius-pill);
 }
 
 .switch:focus-visible {
@@ -180,16 +187,18 @@
   transition:
     left var(--h-duration-fast) var(--h-ease-standard),
     background var(--h-duration-fast) var(--h-ease-standard);
+  border-radius: 50%;
 }
 
+/* 开启态：蓝色轨道 + 浮层底色滑块（亮色为白、暗色为深灰），与 agent-providers 的开关一致 */
 .switch[data-on="true"] {
-  border-color: var(--h-accent);
-  background: var(--h-accent);
+  border-color: var(--h-highlight);
+  background: var(--h-highlight);
 }
 
 .switch[data-on="true"] .switchThumb {
   left: calc(100% - var(--h-switch-thumb-size) - 4px);
-  background: var(--h-accent-contrast);
+  background: var(--h-bg-elevated);
 }
 
 .runsHead {
@@ -200,7 +209,12 @@
 }
 
 .runsFilter {
-  min-width: 160px;
+  flex: 0 0 auto;
+  width: 200px;
+}
+
+.runsHead .groupTitle {
+  white-space: nowrap;
 }
 
 .run {
@@ -208,8 +222,8 @@
   align-items: baseline;
   gap: 12px;
   padding: 8px 16px;
-  border-bottom: 1px solid var(--h-line-soft);
-  font-size: var(--h-font-size-xs);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
+  font-size: 12px;
 }
 
 .run:last-child {
@@ -219,7 +233,7 @@
 .runTime {
   flex: 0 0 auto;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .runName {

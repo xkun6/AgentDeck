@@ -61,11 +61,11 @@ export function formatPercent(usedPercent: number): string {
   return `${Math.round(usedPercent)}%`;
 }
 
-/** 「5h 3% · 7d 96%」 */
+/** 「5h 3%，7d 96%」 */
 export function rateLimitChipLabel(limits: AgentRateLimits): string {
   return limits.windows
     .map((window) => `${rateLimitWindowShortLabel(window)} ${formatPercent(window.usedPercent)}`)
-    .join(" · ");
+    .join("，");
 }
 
 export type RateLimitTone = "normal" | "warn" | "err";
