@@ -121,12 +121,16 @@ function distanceFromBottom(element: HTMLElement): number {
 
 // 只有"用户主动上滑"才应脱离贴底跟随。程序触发的轮次跳转平滑滚动同样会让 scrollTop
 // 递减，但绝不能被当成用户手势——否则会把自己的跳转动画硬取消掉。
+// 内容变矮（译文替换原文、「翻译中…」消失、折叠）时浏览器把 scrollTop 夹回或由滚动锚定上调，
+// scrollTop 同样递减但仍贴着底部；这不是用户上滑，脱离后后续流式内容就不再跟随（design.md 4.35）。
 export function shouldDetachOnScroll(
   scrollTop: number,
   lastScrollTop: number,
   programmaticScroll: boolean,
+  bottomDistance: number,
 ): boolean {
   if (programmaticScroll) return false;
+  if (bottomDistance <= BOTTOM_REATTACH_THRESHOLD_PX) return false;
   return scrollTop < lastScrollTop - 1;
 }
 
@@ -1491,6 +1495,7 @@ export function MessageTimeline({
       container.scrollTop,
       lastScrollTopRef.current,
       programmaticScrollRef.current,
+      bottomDistance,
     );
 
     if (scrollingUp) {

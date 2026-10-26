@@ -32,17 +32,21 @@ describe("MessageTimeline", () => {
   });
 
   it("treats a genuine user upward scroll as a bottom-detach gesture", () => {
-    expect(shouldDetachOnScroll(800, 1000, false)).toBe(true);
+    expect(shouldDetachOnScroll(800, 1000, false, 200)).toBe(true);
   });
 
   it("does not detach while a programmatic turn jump animates upward", () => {
     // The smooth scrollTo from scrollToTurn drives scrollTop down too; without the
     // guard handleScroll would cancel its own jump. This locks in the fix.
-    expect(shouldDetachOnScroll(800, 1000, true)).toBe(false);
+    expect(shouldDetachOnScroll(800, 1000, true, 200)).toBe(false);
+  });
+
+  it("内容变矮把 scrollTop 夹回底部（如译文替换原文）时不脱离贴底", () => {
+    expect(shouldDetachOnScroll(800, 1000, false, 0)).toBe(false);
   });
 
   it("does not detach when scrolling downward", () => {
-    expect(shouldDetachOnScroll(1000, 800, false)).toBe(false);
+    expect(shouldDetachOnScroll(1000, 800, false, 0)).toBe(false);
   });
 
   it("forces bottom positioning when history first loads or the session changes", () => {
