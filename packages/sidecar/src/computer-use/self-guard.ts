@@ -1,6 +1,6 @@
 // Derived from LiveAgent crates/agent-gui/src/lib/tools/cuaSelfGuard.ts (MIT); modified for AgentDeck
 // 改动：在 sidecar 代理里执行（design.md 4.37）；自身窗口与桌面坐标改用驱动自己的 list_windows 判断
-// （按 z_index 找真正接收点击的窗口）；坐标对扩展到 from_x/from_y、to_x/to_y、x1/y1 等；
+// （坐标落在在屏宿主窗口矩形内即拒绝）；坐标对扩展到 from_x/from_y、to_x/to_y、x1/y1 等；
 // 无目标键盘输入一律拒绝（sidecar 无法判断前台窗口）；出参同时过滤 structuredContent。
 //
 // 让模型操作 AgentDeck 自己的窗口是危险的自指：它能点掉审批弹窗（等于绕过审批）、改设置、或直接把应用关掉。
@@ -19,7 +19,6 @@ export interface DriverWindow {
   bounds: { x: number; y: number; width: number; height: number };
   is_on_screen?: boolean;
   minimized?: boolean | null;
-  z_index?: number | null;
 }
 
 export interface Point {
@@ -35,7 +34,7 @@ export const SELF_TARGET_REFUSAL =
 
 export const SELF_REGION_REFUSAL =
   "该坐标处是 AgentDeck 自身的窗口，已被拒绝：按屏幕坐标操作宿主界面同样可以点掉审批弹窗或改写设置。" +
-  `请改为操作其他应用的窗口，或先把目标窗口移到前面。${SETTING_HINT}`;
+  `AgentDeck 窗口范围内的位置不能按屏幕坐标操作；如要操作盖在上面的其他应用，请改用带 pid / window_id 的窗口寻址。${SETTING_HINT}`;
 
 export const KEYBOARD_REFUSAL =
   "没有指定目标窗口的键盘输入会落在当前前台应用上，而 AgentDeck 无法确认前台不是它自己（可能按掉审批弹窗），已被拒绝。" +
@@ -208,27 +207,10 @@ function contains(window: DriverWindow, point: Point): boolean {
 }
 
 /**
- * 实际接收该点的窗口：包含该点、在屏且未最小化的窗口里 z_index 最大的一个。
- * 有窗口缺 z_index 时无法确定层叠顺序，返回 null，由调用方按「任一自身窗口包含即拒绝」处理。
- */
-function windowAtPoint(windows: readonly DriverWindow[], point: Point): DriverWindow | null | undefined {
-  const hits = windows.filter(
-    (window) => window.is_on_screen !== false && window.minimized !== true && contains(window, point),
-  );
-  if (hits.some((window) => typeof window.z_index !== "number")) {
-    return null;
-  }
-  let top: DriverWindow | undefined;
-  for (const window of hits) {
-    if (!top || (window.z_index as number) > (top.z_index as number)) {
-      top = window;
-    }
-  }
-  return top;
-}
-
-/**
- * 桌面坐标检查：任一点（及按截图缩放比还原后的点）落在自身窗口上 → 拒绝。
+ * 桌面坐标检查：任一点（及按截图缩放比还原后的点）落在在屏且未最小化的自身窗口矩形内 → 拒绝，
+ * 不看层叠顺序——驱动自己有一个全屏置顶、点击穿透的光标浮层（`Cua.AgentCursorOverlay`），
+ * 按 z_index 取「最上面的窗口」永远取到它，宿主窗口就拦不住了。代价是被别的窗口盖住的宿主区域也拒绝，
+ * 模型可改用带 pid / window_id 的窗口寻址操作上层窗口。
  * `scale` 为最近一次 get_desktop_state 的「原图宽 / 截图宽」（截图被缩放时 > 1）。
  */
 export function refuseSelfRegionCall(
@@ -237,21 +219,15 @@ export function refuseSelfRegionCall(
   selfPids: ReadonlySet<number>,
   scale = 1,
 ): string | null {
-  const isSelf = (window: DriverWindow) => window.pid !== null && selfPids.has(window.pid);
+  const selfWindows = windows.filter(
+    (window) =>
+      window.pid !== null && selfPids.has(window.pid) && window.is_on_screen !== false && window.minimized !== true,
+  );
   const variants = points.flatMap((point) =>
     scale > 1 ? [point, { x: point.x * scale, y: point.y * scale }] : [point],
   );
-  for (const point of variants) {
-    const top = windowAtPoint(windows, point);
-    if (top === null) {
-      if (windows.some((window) => isSelf(window) && window.minimized !== true && contains(window, point))) {
-        return SELF_REGION_REFUSAL;
-      }
-    } else if (top && isSelf(top)) {
-      return SELF_REGION_REFUSAL;
-    }
-  }
-  return null;
+  const hit = variants.some((point) => selfWindows.some((window) => contains(window, point)));
+  return hit ? SELF_REGION_REFUSAL : null;
 }
 
 /** 从 list_windows 的结构化结果里取窗口列表；格式不对返回 null */
@@ -278,7 +254,6 @@ export function parseWindows(value: unknown): DriverWindow[] | null {
       bounds: { x, y, width, height },
       ...(typeof record.is_on_screen === "boolean" ? { is_on_screen: record.is_on_screen } : {}),
       ...(typeof record.minimized === "boolean" ? { minimized: record.minimized } : {}),
-      ...(readNumber(record.z_index) !== null ? { z_index: readNumber(record.z_index) } : {}),
     });
   }
   return windows;

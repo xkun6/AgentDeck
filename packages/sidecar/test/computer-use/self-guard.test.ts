@@ -73,29 +73,30 @@ describe("桌面坐标", () => {
   });
 
   const windows: DriverWindow[] = [
-    { pid: HOST, window_id: 1, bounds: { x: 0, y: 0, width: 800, height: 600 }, is_on_screen: true, z_index: 1 },
-    { pid: 500, window_id: 2, bounds: { x: 400, y: 300, width: 400, height: 300 }, is_on_screen: true, z_index: 2 },
-    { pid: 600, window_id: 3, bounds: { x: 0, y: 0, width: 200, height: 200 }, minimized: true, z_index: 9 },
+    // 驱动自己的全屏置顶光标浮层（点击穿透）：不能让它把宿主窗口「盖住」
+    { pid: 31444, window_id: 9, bounds: { x: 0, y: 0, width: 4480, height: 1440 }, is_on_screen: true },
+    { pid: HOST, window_id: 1, bounds: { x: 0, y: 0, width: 800, height: 600 }, is_on_screen: true },
+    { pid: 500, window_id: 2, bounds: { x: 400, y: 300, width: 400, height: 300 }, is_on_screen: true },
+    { pid: HOST, window_id: 3, bounds: { x: 1000, y: 0, width: 200, height: 200 }, minimized: true },
+    { pid: HOST, window_id: 4, bounds: { x: 1200, y: 0, width: 200, height: 200 }, is_on_screen: false },
   ];
 
-  test("按 z_index 取真正接收点击的窗口：宿主在最上面才拒绝", () => {
+  test("点落在在屏宿主窗口矩形内即拒绝，不看层叠顺序", () => {
     expect(refuseSelfRegionCall([{ x: 100, y: 100 }], windows, SELF.pids)).toBe(SELF_REGION_REFUSAL);
-    expect(refuseSelfRegionCall([{ x: 500, y: 400 }], windows, SELF.pids)).toBeNull();
+    // 被其它窗口盖住的宿主区域同样拒绝
+    expect(refuseSelfRegionCall([{ x: 500, y: 400 }], windows, SELF.pids)).toBe(SELF_REGION_REFUSAL);
     expect(refuseSelfRegionCall([{ x: 900, y: 900 }], windows, SELF.pids)).toBeNull();
+    // 最小化 / 不在屏的宿主窗口不算
+    expect(refuseSelfRegionCall([{ x: 1100, y: 100 }, { x: 1300, y: 100 }], windows, SELF.pids)).toBeNull();
     // drag 的终点落在宿主上同样拒绝
     expect(refuseSelfRegionCall([{ x: 900, y: 900 }, { x: 10, y: 10 }], windows, SELF.pids)).toBe(SELF_REGION_REFUSAL);
   });
 
   test("截图被缩放时按还原后的坐标再判一次", () => {
-    const host = [{ ...windows[0]!, bounds: { x: 600, y: 400, width: 200, height: 200 } }];
+    const host = [{ ...windows[1]!, bounds: { x: 600, y: 400, width: 200, height: 200 } }];
     expect(refuseSelfRegionCall([{ x: 350, y: 250 }], host, SELF.pids)).toBeNull();
     expect(refuseSelfRegionCall([{ x: 350, y: 250 }], host, SELF.pids, 2)).toBe(SELF_REGION_REFUSAL);
-    expect(refuseSelfRegionCall([{ x: 300, y: 250 }], [windows[1]!], SELF.pids, 2)).toBeNull();
-  });
-
-  test("z_index 缺失时任一自身窗口包含该点即拒绝", () => {
-    const unknown = windows.map(({ z_index: _z, ...rest }) => rest);
-    expect(refuseSelfRegionCall([{ x: 500, y: 400 }], unknown, SELF.pids)).toBe(SELF_REGION_REFUSAL);
+    expect(refuseSelfRegionCall([{ x: 300, y: 250 }], [windows[2]!], SELF.pids, 2)).toBeNull();
   });
 
   test("parseWindows 取 list_windows 的结构化结果", () => {
@@ -106,7 +107,7 @@ describe("桌面坐标", () => {
           { window_id: "bad" },
         ],
       }),
-    ).toEqual([{ pid: HOST, window_id: 1, bounds: { x: 0, y: 0, width: 1, height: 1 }, is_on_screen: true, z_index: 3 }]);
+    ).toEqual([{ pid: HOST, window_id: 1, bounds: { x: 0, y: 0, width: 1, height: 1 }, is_on_screen: true }]);
     expect(parseWindows({})).toBeNull();
   });
 });

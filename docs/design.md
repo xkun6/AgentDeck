@@ -1412,7 +1412,7 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 **防自指**（`allowSelfTargeting` 为 true 时整体关闭）：让模型操作 AgentDeck 自己的窗口，可以点掉审批弹窗、改设置或关闭应用。自身进程 = `AGENTDECK_PARENT_PID`（Tauri 主进程，窗口归它）+ sidecar 自身 pid；自身窗口 = 驱动 `list_windows`（不过滤，缓存 400 毫秒，入参检查与桌面坐标检查共用）中 pid 属于自身进程的窗口（Windows 上 `window_id` 即 HWND）；驱动未返回窗口列表时，凡涉及 `window_id` 或桌面坐标的调用一律拒绝。
 1. **入参寻址**：递归扫描整个参数（深度上限 12，超限一律拒绝）；`pid` / `process_id` / `processId` / `owner_pid` / `ownerPid` 命中自身进程，或 `window_id` / `windowId` 命中自身窗口 → 拒绝。
 2. **无目标键盘输入**：工具名为 `type_text` / `press_key` / `hotkey`，或参数里有字符串 `key` / 字符串数组 `keys`，且参数里**没有任何** pid / window_id → 一律拒绝（sidecar 无法判断前台窗口；Windows 驱动带 pid 时经 PostMessage 投递、不需要前台，能力不丢）。
-3. **桌面坐标**：参数里没有 pid / window_id 且 `target.kind` 不是 `window` 时，所有坐标对（键名形如 `<前缀>x<后缀>` 与 `<前缀>y<后缀>` 且都是数字：`x/y`、`from_x/from_y`、`to_x/to_y`、`x1/y1` …）按桌面物理像素判断：取驱动 `list_windows`（不过滤，缓存 400 毫秒）中包含该点、在屏且未最小化、`z_index` 最大的窗口，属于自身 → 拒绝；`z_index` 缺失时任一自身窗口包含该点即拒绝。最近一次 `get_desktop_state` 结果带 `screenshot_original_width`（截图被缩放）时，按缩放比还原后的坐标再判一次。
+3. **桌面坐标**：参数里没有 pid / window_id 且 `target.kind` 不是 `window` 时，所有坐标对（键名形如 `<前缀>x<后缀>` 与 `<前缀>y<后缀>` 且都是数字：`x/y`、`from_x/from_y`、`to_x/to_y`、`x1/y1` …）按桌面物理像素判断：驱动 `list_windows`（不过滤，缓存 400 毫秒）中任一在屏且未最小化的自身窗口矩形包含该点 → 拒绝，**不看层叠顺序**（驱动自带一个全屏置顶、点击穿透的光标浮层 `Cua.AgentCursorOverlay`，按 `z_index` 取最上层窗口永远取到它，实测会漏拦）；被其它窗口盖住的宿主区域因此也不能按桌面坐标操作，模型可改用带 pid / window_id 的窗口寻址。最近一次 `get_desktop_state` 结果带 `screenshot_original_width`（截图被缩放）时，按缩放比还原后的坐标再判一次。
 4. **出参**：文本块里的 JSON 片段与 `structuredContent` 递归剔除 pid 为自身进程的数组元素。
 5. 由 sidecar 审批时，审批通过后再检查一次（等待期间窗口可能移动）。
 
