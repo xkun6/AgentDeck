@@ -1441,8 +1441,9 @@ fn repo_status_impl(repo_path: &str) -> Option<RepoStatus> {
     })
 }
 
+// async：侧栏会对每个已记住的项目逐个调用，同步命令会在主线程上串行跑 git，把窗口卡成「未响应」。
 #[tauri::command]
-pub fn git_worktree_list(input: RepoPathInput) -> AppResult<Vec<Worktree>> {
+pub async fn git_worktree_list(input: RepoPathInput) -> AppResult<Vec<Worktree>> {
     let Ok(cwd) = resolve_repo_dir(&input.repo_path) else {
         return Ok(Vec::new());
     };

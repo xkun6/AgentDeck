@@ -9,6 +9,18 @@ export function worktreePathKey(path: string): string {
 
 const EMPTY: ReadonlyMap<string, string> = new Map();
 
+type WorktreeList = NonNullable<NonNullable<Window["agentdeckDesktop"]>["git"]>["worktree"]["list"];
+
+interface LookupCache {
+  projectsKey: string;
+  /** 上次查询时已经覆盖过的 cwd 键：都在其中时不必重查（每个项目一次 git，项目多时要好几秒）。 */
+  cwds: ReadonlySet<string>;
+  map: ReadonlyMap<string, string>;
+}
+
+// 按桥函数分开缓存：切换路由、侧栏重挂载或会话列表变化时复用上次结果，只有出现新的 cwd 才重查。
+const caches = new WeakMap<WorktreeList, LookupCache>();
+
 /** 返回 worktreePathKey(worktree 路径) → 项目路径；同一 worktree 被多个项目列出时取靠前的项目。 */
 export function useWorktreeProjects(
   projectPaths: readonly string[],
@@ -17,11 +29,20 @@ export function useWorktreeProjects(
   const list = window.agentdeckDesktop?.git?.worktree.list;
   const projectsKey = projectPaths.join("\n");
   const cwdsKey = Array.from(new Set(unmatchedCwds.map(worktreePathKey))).sort().join("\n");
-  const [map, setMap] = useState(EMPTY);
+  const [map, setMap] = useState(() => {
+    const cached = list ? caches.get(list) : undefined;
+    return cached?.projectsKey === projectsKey ? cached.map : EMPTY;
+  });
 
   useEffect(() => {
     if (!list || !projectsKey || !cwdsKey) {
       setMap(EMPTY);
+      return;
+    }
+    const cwds = cwdsKey.split("\n");
+    const cached = caches.get(list);
+    if (cached?.projectsKey === projectsKey && cwds.every((cwd) => cached.cwds.has(cwd))) {
+      setMap(cached.map);
       return;
     }
     let cancelled = false;
@@ -34,7 +55,6 @@ export function useWorktreeProjects(
         ),
       ),
     ).then((results) => {
-      if (cancelled) return;
       const next = new Map<string, string>();
       results.forEach((worktrees, index) => {
         for (const worktree of worktrees) {
@@ -42,7 +62,8 @@ export function useWorktreeProjects(
           if (!next.has(key)) next.set(key, paths[index]);
         }
       });
-      setMap(next);
+      caches.set(list, { projectsKey, cwds: new Set(cwds), map: next });
+      if (!cancelled) setMap(next);
     });
     return () => {
       cancelled = true;

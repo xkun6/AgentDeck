@@ -138,6 +138,28 @@ describe("侧栏按项目分组", () => {
     expect(list).toHaveBeenCalledWith({ repoPath: "C:/work/alpha" });
   });
 
+  it("worktree 查询结果会缓存：重挂载不重查，出现新的未归属 cwd 才重查", async () => {
+    __resetUiStoreForTests({ "agentdeck-cn-ui.workspaceProjects": [project("C:/work/alpha", 1)] });
+    const list = vi.fn(async () => [
+      { path: "D:/data/worktrees/task-1", branch: "agentdeck/t1", isMain: false, detached: false, locked: false },
+    ]);
+    window.agentdeckDesktop = { windowType: "tauri", exportSessionFile, git: { worktree: { list } } } as never;
+    const first = renderSidebar([agent("wt", { cwd: "D:\\data\\worktrees\\task-1" })]);
+    await waitFor(() => expect(screen.queryByText("其他对话")).toBeNull());
+    first.unmount();
+
+    renderSidebar([agent("wt", { cwd: "D:\\data\\worktrees\\task-1" })]);
+    expect(screen.queryByText("其他对话")).toBeNull();
+    expect(list).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    renderSidebar([
+      agent("wt", { cwd: "D:\\data\\worktrees\\task-1" }),
+      agent("other", { cwd: "D:\\elsewhere" }),
+    ]);
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+  });
+
   it("超过 8 个会话时收进「显示更多」", () => {
     __resetUiStoreForTests({ "agentdeck-cn-ui.workspaceProjects": [project("C:/work/demo", 1)] });
     renderSidebar(Array.from({ length: 10 }, (_, index) => agent(`s${index}`, { updatedAt: 100 - index })));
