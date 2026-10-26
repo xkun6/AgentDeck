@@ -31,6 +31,7 @@ import {
   type RemoteStatus,
   type AttentionNotice,
   type Board,
+  type AgentRpcNotifications,
 } from "@agentdeck/protocol";
 import { debugBus } from "./debug-bus";
 import type { ConnectionEventLog, ConnectionLogInput } from "./connection-log";
@@ -264,6 +265,7 @@ export class SidecarClient {
   private remoteChangedListeners = new Set<Listener<RemoteStatus>>();
   private terminalListeners = new Set<Listener<SidecarTerminalError>>();
   private attentionListeners = new Set<Listener<AttentionNotice>>();
+  private computerUseInstallListeners = new Set<Listener<AgentRpcNotifications["computerUse.installProgress"]>>();
   private syncingListeners = new Set<Listener<boolean>>();
 
   constructor(options: SidecarClientOptions) {
@@ -397,6 +399,13 @@ export class SidecarClient {
   /** `remote.changed` 通知（远程网关启停、设备配对 / 吊销 / 连接 / 断开，design.md 4.31）。 */
   onRemoteChanged(listener: Listener<RemoteStatus>): () => void {
     return subscribe(this.remoteChangedListeners, listener);
+  }
+
+  /** `computerUse.installProgress` 通知（Computer Use 驱动安装输出，只发给本机客户端，design.md 4.37）。 */
+  onComputerUseInstallProgress(
+    listener: Listener<AgentRpcNotifications["computerUse.installProgress"]>,
+  ): () => void {
+    return subscribe(this.computerUseInstallListeners, listener);
   }
 
   /** `client.attention` 通知（只发给远程客户端：完成 / 失败 / 待审批 / 调度，design.md 4.31）。 */
@@ -915,6 +924,10 @@ export class SidecarClient {
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.remoteChanged && record.params) {
       emitTo(this.remoteChangedListeners, record.params as RemoteStatus);
+      return;
+    }
+    if (record.method === AGENT_RPC_NOTIFICATIONS.computerUseInstallProgress && record.params) {
+      emitTo(this.computerUseInstallListeners, record.params as AgentRpcNotifications["computerUse.installProgress"]);
       return;
     }
     if (record.method === AGENT_RPC_NOTIFICATIONS.clientAttention && record.params) {

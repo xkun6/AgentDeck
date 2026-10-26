@@ -20,6 +20,7 @@ export const DEFAULT_SIDECAR_SETTINGS: SidecarSettings = {
     translateReasoning: false,
     enabledByDefault: false,
   },
+  computerUse: { enabled: false, allowSelfTargeting: false },
 };
 
 /** settings.set 的 patch 校验：未知字段、非法取值一律拒绝（-32602） */
@@ -51,6 +52,7 @@ export const settingsPatchSchema = z
       })
       .partial()
       .strict(),
+    computerUse: z.object({ enabled: z.boolean(), allowSelfTargeting: z.boolean() }).partial().strict(),
   })
   .partial()
   .strict();
@@ -62,6 +64,7 @@ function cloneSettings(settings: SidecarSettings): SidecarSettings {
     remote: { ...settings.remote },
     idleReclaim: { ...settings.idleReclaim },
     translation: { ...settings.translation },
+    computerUse: { ...settings.computerUse },
   };
 }
 
@@ -71,7 +74,7 @@ function mergeWithDefaults(raw: unknown): SidecarSettings {
   if (typeof raw !== "object" || raw === null) {
     return result;
   }
-  for (const key of ["snapshots", "interop", "remote", "idleReclaim", "translation"] as const) {
+  for (const key of ["snapshots", "interop", "remote", "idleReclaim", "translation", "computerUse"] as const) {
     const section = (raw as Record<string, unknown>)[key];
     if (typeof section !== "object" || section === null) {
       continue;
@@ -128,6 +131,7 @@ export class SettingsStore {
     Object.assign(next.remote, patch.remote);
     Object.assign(next.idleReclaim, patch.idleReclaim);
     Object.assign(next.translation, patch.translation);
+    Object.assign(next.computerUse, patch.computerUse);
     if (this.file) {
       const file = this.file;
       const write = this.writeChain.then(async () => {

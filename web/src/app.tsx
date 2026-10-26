@@ -72,6 +72,7 @@ function MainApp() {
             <Route path="/common" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/notifications" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/env" element={withBoundary(<AdvancedRoute />)} />
+            <Route path="/computer-use" element={withBoundary(<AdvancedRoute />)} />
             <Route path="/agent-providers" element={withBoundary(<AgentProvidersRoute />)} />
             <Route path="/coding-agents" element={withBoundary(<CodingAgentsRoute />)} />
             <Route path="/snapshots" element={withBoundary(<AdvancedRoute />)} />

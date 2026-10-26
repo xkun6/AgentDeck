@@ -7,6 +7,7 @@ import {
   normalizeReasoningText,
 } from "@/lib/reasoning-filter";
 import { extractImagePartsFromUnknown } from "@/lib/message-images";
+import { toolDisplayName } from "@/lib/computer-use-tools";
 import type { AssistantTurnBlock } from "@/stores/chat";
 import type {
   AssistantMessageStats,
@@ -136,7 +137,7 @@ function toolPartToToolEntry(part: AgentToolPart, message: AgentUIMessage): Chat
   const images = extractImagePartsFromUnknown(part.output).map(imagePartToEntry);
   return {
     tool_id: part.toolCallId,
-    name: part.name,
+    name: toolDisplayName(part.name),
     status: part.state,
     context: input.context,
     preview: part.preview,

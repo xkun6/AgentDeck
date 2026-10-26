@@ -80,6 +80,8 @@ export interface AgentSessionConfig {
   thinkingOptionId?: string | null;
   /** 会话互通 MCP 端点（design.md 4.26） */
   interop?: InteropEndpoint;
+  /** Computer Use 代理端点（design.md 4.37）：url 为 `/mcp/cua`，token 与互通相同；缺省 = 不注入 */
+  computerUse?: InteropEndpoint;
 }
 
 /** resumeSession 的配置 */
@@ -87,6 +89,8 @@ export interface AgentResumeConfig {
   cwd: string;
   /** 会话互通 MCP 端点（design.md 4.26）：重启后端口 / token 都会变，恢复时重新注入 */
   interop?: InteropEndpoint;
+  /** Computer Use 代理端点（design.md 4.37） */
+  computerUse?: InteropEndpoint;
 }
 
 /**
@@ -143,6 +147,11 @@ export interface AgentSession {
    * 不支持的 provider 不实现；当前回合不可插话时抛错（AgentManager 原样转成业务错误）。
    */
   steer?(prompt: AgentPromptInput, opts?: { clientMessageId?: string }): Promise<void>;
+  /**
+   * 当前模式下 CLI 是否会自己审批 MCP 工具调用（用户审批或模型审批）。false / 未实现 = 不会，
+   * Computer Use 代理改由 sidecar 发审批（design.md 4.37）。
+   */
+  cliApprovesMcpTools?(): boolean;
 }
 
 export interface AgentAvailability {

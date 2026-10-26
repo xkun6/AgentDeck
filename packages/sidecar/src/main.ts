@@ -28,6 +28,8 @@ import { RemoteService } from "./remote/service.js";
 import { Scheduler } from "./scheduler/scheduler.js";
 import { ScheduleStore } from "./scheduler/store.js";
 import { InteropService } from "./server/interop-service.js";
+import { COMPUTER_USE_SUPPORTED } from "./computer-use/driver.js";
+import { ComputerUseProxy } from "./computer-use/proxy.js";
 import { McpInteropEndpoint } from "./server/mcp-interop.js";
 import { RpcServer } from "./server/rpc-server.js";
 import { SettingsStore } from "./settings/sidecar-settings.js";
@@ -128,6 +130,7 @@ async function main(): Promise<void> {
   let remote: RemoteService | null = null;
   let attention: AttentionService | null = null;
   let keepAlive: CacheKeepAlive | null = null;
+  let computerUse: ComputerUseProxy | null = null;
   let parentTimer: NodeJS.Timeout | null = null;
   let shuttingDown = false;
 
@@ -151,6 +154,7 @@ async function main(): Promise<void> {
           // manager.shutdown 先落盘、再关闭会话、最后再落盘一次
           await manager?.shutdown();
           await registry?.shutdown();
+          await computerUse?.stop();
           attention?.dispose();
           await remote?.stop();
           await server?.close();
@@ -239,7 +243,11 @@ async function main(): Promise<void> {
   });
   await translation.load();
   // 会话互通（design.md 4.26）：每会话 token 与 /mcp 端点；端口在监听后告知
-  const interop = new InteropService({ settings: () => settings.get().interop });
+  // Computer Use（design.md 4.37）：仅 Windows；与互通共用每会话 token，端点 /mcp/cua
+  const interop = new InteropService({
+    settings: () => settings.get().interop,
+    computerUseEnabled: () => COMPUTER_USE_SUPPORTED && settings.get().computerUse.enabled,
+  });
   manager = new AgentManager({
     registry,
     logger,
@@ -253,6 +261,21 @@ async function main(): Promise<void> {
     ...(store ? { store } : {}),
   });
   manager.subscribe({ onRemoved: (agentId) => interop.forget(agentId) });
+  const agentManager = manager;
+  computerUse = new ComputerUseProxy({
+    settings: () => settings.get().computerUse,
+    agentIdForToken: (token) => interop.agentIdForToken(token),
+    approvals: {
+      cliApprovesMcpTools: (agentId) => agentManager.cliApprovesMcpTools(agentId),
+      requestHostPermission: (agentId, request, signal) =>
+        agentManager.requestHostPermission(agentId, request, signal),
+    },
+    ...(config.parentPid !== undefined ? { hostPid: config.parentPid } : {}),
+    version: SIDECAR_VERSION,
+    logger,
+  });
+  const computerUseProxy = computerUse;
+  settings.subscribe(() => computerUseProxy.onSettingsChanged());
   try {
     await manager.restore();
   } catch (error) {
@@ -321,6 +344,7 @@ async function main(): Promise<void> {
     scheduler,
     board,
     translation,
+    computerUse,
     mcp: new McpInteropEndpoint({
       manager,
       registry,

@@ -7,6 +7,8 @@ import { INTEROP_TOKEN_PREFIX } from "../utils/redact-interop.js";
 
 /** MCP 端点路径（design.md 4.26） */
 export const MCP_PATH = "/mcp";
+/** Computer Use 代理端点路径（design.md 4.37） */
+export const COMPUTER_USE_MCP_PATH = "/mcp/cua";
 
 function digest(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -15,6 +17,8 @@ function digest(token: string): string {
 export interface InteropServiceOptions {
   /** 当前 `settings.interop`；每次调用时取，开关即时生效 */
   settings: () => SidecarSettings["interop"];
+  /** 是否注入 Computer Use 代理端点（design.md 4.37）；不传视为 false */
+  computerUseEnabled?: () => boolean;
 }
 
 /**
@@ -43,13 +47,25 @@ export class InteropService {
     if (!this.enabled || this.port === null) {
       return undefined;
     }
+    return { url: `http://127.0.0.1:${this.port}${MCP_PATH}`, token: this.tokenFor(agentId) };
+  }
+
+  /** 该会话应注入的 Computer Use 代理端点（token 与互通相同）；未启用或 sidecar 尚未监听时返回 undefined */
+  computerUseEndpointFor(agentId: string): InteropEndpoint | undefined {
+    if (this.options.computerUseEnabled?.() !== true || this.port === null) {
+      return undefined;
+    }
+    return { url: `http://127.0.0.1:${this.port}${COMPUTER_USE_MCP_PATH}`, token: this.tokenFor(agentId) };
+  }
+
+  private tokenFor(agentId: string): string {
     let token = this.tokens.get(agentId);
     if (!token) {
       token = `${INTEROP_TOKEN_PREFIX}${randomBytes(24).toString("hex")}`;
       this.tokens.set(agentId, token);
       this.byDigest.set(digest(token), agentId);
     }
-    return { url: `http://127.0.0.1:${this.port}${MCP_PATH}`, token };
+    return token;
   }
 
   /** 由 token 识别调用方 agentId；未知 token 返回 null */

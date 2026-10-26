@@ -29,6 +29,9 @@ import type {
   RemoteStatus,
   SidecarSettings,
   SidecarSettingsPatch,
+  ComputerUseInstallCommand,
+  ComputerUseInstallResult,
+  ComputerUseStatus,
   TranslationDirection,
   TranslationEndpoint,
   SnapshotTurn,
@@ -697,6 +700,20 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     },
     async setSidecarSettings(patch: SidecarSettingsPatch): Promise<SidecarSettings> {
       return client.request("settings.set", { patch });
+    },
+
+    /** computerUse.*：Computer Use 驱动状态与安装（design.md 4.37）；安装最长 15 分钟，另留余量。 */
+    async getComputerUseStatus(): Promise<ComputerUseStatus> {
+      return client.request("computerUse.status", {}, { timeoutMs: 60_000 });
+    },
+    async getComputerUseInstallCommand(): Promise<ComputerUseInstallCommand> {
+      return client.request("computerUse.installCommand", {});
+    },
+    async installComputerUse(): Promise<ComputerUseInstallResult> {
+      return client.request("computerUse.install", {}, { timeoutMs: 16 * 60_000 });
+    },
+    onComputerUseInstallProgress(listener: (progress: { stream: "stdout" | "stderr"; line: string }) => void): () => void {
+      return client.onComputerUseInstallProgress(listener);
     },
 
     /** remote.status / remote.pairing.create / remote.devices.revoke：远程网关（design.md 4.31）。 */

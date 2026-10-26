@@ -864,6 +864,8 @@ export interface SidecarSettings {
     translateReasoning: boolean;
     enabledByDefault: boolean;
   };
+  /** 4.37 Computer Use：enabled 默认 false；allowSelfTargeting（允许操作 AgentDeck 自身）默认 false */
+  computerUse: { enabled: boolean; allowSelfTargeting: boolean };
 }
 
 export interface SidecarSettingsPatch {
@@ -872,6 +874,40 @@ export interface SidecarSettingsPatch {
   remote?: Partial<SidecarSettings["remote"]>;
   idleReclaim?: Partial<SidecarSettings["idleReclaim"]>;
   translation?: Partial<SidecarSettings["translation"]>;
+  computerUse?: Partial<SidecarSettings["computerUse"]>;
+}
+
+// ---------------------------------------------------------------------------
+// 4.37 Computer Use（仅 Windows；sidecar 代理 cua-driver）
+// ---------------------------------------------------------------------------
+
+export interface ComputerUseStatus {
+  /** 当前平台是否支持（只有 Windows） */
+  supported: boolean;
+  installed: boolean;
+  path?: string;
+  version?: string;
+  /** 探测失败原因；未安装不是错误 */
+  error?: string;
+  /** 驱动进程是否在运行 */
+  running: boolean;
+}
+
+/** 将要执行的安装命令（只描述不执行） */
+export interface ComputerUseInstallCommand {
+  program: string;
+  args: string[];
+  /** 可直接粘进终端的完整命令行 */
+  display: string;
+  /** 安装脚本地址 */
+  sourceUrl: string;
+}
+
+export interface ComputerUseInstallResult {
+  ok: boolean;
+  exitCode: number | null;
+  /** stdout + stderr 末尾最多 4000 字 */
+  output: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,6 +1103,9 @@ export const AGENT_RPC_METHODS = {
   translationTranslate: "translation.translate",
   translationEndpointGet: "translation.endpoint.get",
   translationEndpointSet: "translation.endpoint.set",
+  computerUseStatus: "computerUse.status",
+  computerUseInstallCommand: "computerUse.installCommand",
+  computerUseInstall: "computerUse.install",
 } as const;
 
 export const AGENT_RPC_NOTIFICATIONS = {
@@ -1084,6 +1123,7 @@ export const AGENT_RPC_NOTIFICATIONS = {
   groupRemoved: "group.removed",
   remoteChanged: "remote.changed",
   clientAttention: "client.attention",
+  computerUseInstallProgress: "computerUse.installProgress",
 } as const;
 
 /** 无参数方法：`params` 可省略或为空对象 */
@@ -1326,6 +1366,12 @@ export interface AgentRpcMethods {
     params: { patch: Partial<TranslationEndpoint> };
     result: TranslationEndpoint;
   };
+  /** Computer Use 驱动状态（design.md 4.37） */
+  "computerUse.status": { params: AgentRpcEmptyParams; result: ComputerUseStatus };
+  /** 将要执行的安装命令全文，不执行；非 Windows → NOT_SUPPORTED */
+  "computerUse.installCommand": { params: AgentRpcEmptyParams; result: ComputerUseInstallCommand };
+  /** 执行官方安装脚本，进度经 computerUse.installProgress 推送；远程客户端调用返回 -32601 */
+  "computerUse.install": { params: AgentRpcEmptyParams; result: ComputerUseInstallResult };
 }
 
 export type AgentRpcMethodName = keyof AgentRpcMethods;
@@ -1358,6 +1404,8 @@ export interface AgentRpcNotifications {
   "remote.changed": RemoteStatus;
   /** 需要用户回到会话的事件（design.md 4.31），只发给已认证的远程客户端 */
   "client.attention": AttentionNotice;
+  /** Computer Use 驱动安装输出（design.md 4.37），只发给本机客户端 */
+  "computerUse.installProgress": { stream: "stdout" | "stderr"; line: string };
 }
 
 export type AgentRpcNotificationName = keyof AgentRpcNotifications;

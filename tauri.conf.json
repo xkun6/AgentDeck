@@ -41,6 +41,7 @@
       "NOTICE.md": "NOTICE.md",
       "legal/paseo.Apache-2.0.txt": "paseo.Apache-2.0.txt",
       "legal/hermes-agent-upstream.MIT.txt": "hermes-agent-upstream.MIT.txt",
+      "legal/liveagent.MIT.txt": "liveagent.MIT.txt",
       "legal/nodejs.LICENSE.txt": "nodejs.LICENSE.txt",
       "legal/sidecar-third-party.txt": "sidecar-third-party.txt",
       "legal/web-third-party.txt": "web-third-party.txt",

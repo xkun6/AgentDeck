@@ -8,6 +8,9 @@ declare module "which" {
 
   function which(cmd: string, options: WhichOptions & { all: true }): Promise<string[]>;
   function which(cmd: string, options?: WhichOptions & { all?: false }): Promise<string>;
+  namespace which {
+    function sync(cmd: string, options: WhichOptions & { nothrow: true; all?: false }): string | null;
+  }
 
   export default which;
 }

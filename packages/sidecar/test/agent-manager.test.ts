@@ -664,3 +664,57 @@ describe("AgentManager：同 callId 的 tool_call 增量去重（design.md 4.5�
     expect(since.map((e) => e.seq)).toContain(calls[1]!.seq);
   });
 });
+
+describe("AgentManager：sidecar 发起的审批（Computer Use，design.md 4.37）", () => {
+  test("requestHostPermission 发出 permission_requested；应答直接完成，不经 provider", async () => {
+    const { manager, agent, session } = await setup();
+    const { turnId } = await manager.sendPrompt(agent.id, "hi");
+    const pending = manager.requestHostPermission(agent.id, {
+      name: "agentdeck_cua.click",
+      kind: "tool",
+      title: "允许 Computer Use：click？",
+    });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(1));
+    const request = manager.getAgent(agent.id).pendingPermissions[0]!;
+    expect(request).toMatchObject({ name: "agentdeck_cua.click", provider: "fake", kind: "tool" });
+    expect(request.id).toMatch(/^cu-/);
+
+    await manager.respondToPermission(agent.id, request.id, { behavior: "allow", selectedActionId: "allow" });
+    await expect(pending).resolves.toEqual({ behavior: "allow", selectedActionId: "allow" });
+    expect(session.responses).toEqual([]);
+    expect(manager.getAgent(agent.id).pendingPermissions).toEqual([]);
+    const timeline = (await manager.timeline(agent.id)).entries.map((e) => e.event);
+    expect(timeline).toContainEqual({ type: "permission_requested", turnId, request });
+    expect(timeline.filter((e) => e.type === "permission_resolved")).toHaveLength(1);
+  });
+
+  test("回合结束视为拒绝；signal 中断时撤回请求", async () => {
+    const { manager, agent, session } = await setup();
+    const { turnId } = await manager.sendPrompt(agent.id, "hi");
+    const pending = manager.requestHostPermission(agent.id, { name: "agentdeck_cua.click", kind: "tool" });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(1));
+    session.emit({ type: "turn_completed", turnId });
+    await expect(pending).resolves.toMatchObject({ behavior: "deny" });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).activeTurnId).toBeNull());
+
+    await manager.sendPrompt(agent.id, "again");
+    const controller = new AbortController();
+    const aborted = manager.requestHostPermission(
+      agent.id,
+      { name: "agentdeck_cua.click", kind: "tool" },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(1));
+    controller.abort();
+    await expect(aborted).resolves.toEqual({ behavior: "deny", message: "权限请求已取消" });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toEqual([]));
+  });
+
+  test("cliApprovesMcpTools 取会话的判断；会话不支持判断或不存在时为 false", async () => {
+    const { manager, agent, session } = await setup();
+    expect(manager.cliApprovesMcpTools(agent.id)).toBe(false);
+    (session as AgentSession).cliApprovesMcpTools = () => true;
+    expect(manager.cliApprovesMcpTools(agent.id)).toBe(true);
+    expect(manager.cliApprovesMcpTools("missing")).toBe(false);
+  });
+});

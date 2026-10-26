@@ -763,6 +763,7 @@ export class CodexAgentClient implements AgentClient {
       thinkingOptionId: cfg.thinkingOptionId ?? null,
       threadId: null,
       ...(cfg.interop ? { interop: cfg.interop } : {}),
+      ...(cfg.computerUse ? { computerUse: cfg.computerUse } : {}),
     });
     this.sessions.add(session);
     try {
@@ -782,6 +783,7 @@ export class CodexAgentClient implements AgentClient {
       modeId: DEFAULT_CODEX_MODE_ID,
       threadId: handle.sessionId,
       ...(cfg.interop ? { interop: cfg.interop } : {}),
+      ...(cfg.computerUse ? { computerUse: cfg.computerUse } : {}),
     });
     this.sessions.add(session);
     try {
@@ -809,6 +811,7 @@ export class CodexAgentClient implements AgentClient {
       threadId: null,
       forkFrom: { threadId: handle.sessionId, ...(cfg.nativeRef ? { lastTurnId: cfg.nativeRef } : {}) },
       ...(cfg.interop ? { interop: cfg.interop } : {}),
+      ...(cfg.computerUse ? { computerUse: cfg.computerUse } : {}),
     });
     this.sessions.add(session);
     try {
@@ -896,6 +899,8 @@ interface CodexSessionDeps {
   forkFrom?: { threadId: string; lastTurnId?: string };
   /** 会话互通 MCP 端点（design.md 4.26）：合并进 thread/start、resume、fork 的 config.mcp_servers */
   interop?: InteropEndpoint;
+  /** Computer Use 代理端点（design.md 4.37）：同上合并；工具调用一律由 sidecar 审批 */
+  computerUse?: InteropEndpoint;
   onClosed?: (session: CodexAgentSession) => void;
 }
 
@@ -1502,11 +1507,14 @@ export class CodexAgentSession implements AgentSession {
     return this.threadLoading;
   }
 
-  /** thread/start | resume | fork 的 `config`：自定义中转配置 + 会话互通 MCP 服务器（design.md 4.7 / 4.26） */
+  /** thread/start | resume | fork 的 `config`：自定义中转配置 + 会话互通 / Computer Use MCP 服务器（design.md 4.7 / 4.26 / 4.37） */
   private threadConfigParam(fullAccess: boolean): { config?: JsonRecord } {
     const config: JsonRecord = this.deps.threadConfig ? structuredClone(this.deps.threadConfig) : {};
-    if (this.deps.interop) {
-      const interop = codexInteropConfig(this.deps.interop, { fullAccess });
+    if (this.deps.interop || this.deps.computerUse) {
+      const interop = codexInteropConfig(this.deps.interop, {
+        fullAccess,
+        ...(this.deps.computerUse ? { computerUse: this.deps.computerUse } : {}),
+      });
       config.mcp_servers = {
         ...(asRecord(config.mcp_servers) ?? {}),
         ...(interop.mcp_servers as JsonRecord),

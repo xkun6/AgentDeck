@@ -23,6 +23,9 @@ import { fakeClient, waitUntil } from "./acp/helpers.js";
 const TOKEN = `adi_${"ab12cd34".repeat(6)}`;
 const ENDPOINT: InteropEndpoint = { url: "http://127.0.0.1:45678/mcp", token: TOKEN };
 const EXPECTED_BEARER = `Bearer ${TOKEN}`;
+/** Computer Use 代理端点（design.md 4.37） */
+const CU_ENDPOINT: InteropEndpoint = { url: "http://127.0.0.1:45678/mcp/cua", token: TOKEN };
+const EXPECTED_CLAUDE_CU = { type: "http", url: CU_ENDPOINT.url, headers: { Authorization: EXPECTED_BEARER } };
 
 let tmpDir: string;
 const sessions: AgentSession[] = [];
@@ -142,6 +145,71 @@ describe("Claude：--mcp-config", () => {
     expect(second).not.toContain("--mcp-config");
   });
 
+  test("Computer Use：agentdeck_cua 与 agentdeck 合在同一份 --mcp-config；只开 Computer Use 时单独注入", async () => {
+    expect(JSON.parse(claudeInteropArgs(ENDPOINT, CU_ENDPOINT)[1]!)).toEqual({
+      mcpServers: { ...EXPECTED_CONFIG.mcpServers, agentdeck_cua: EXPECTED_CLAUDE_CU },
+    });
+    expect(claudeInteropArgs(undefined)).toEqual([]);
+
+    const seen: ClaudeCliOptions[] = [];
+    const client = makeClient(seen);
+    const resumed = await client.resumeSession(
+      { provider: "claude", sessionId: "sess-1" },
+      { cwd: tmpDir, computerUse: CU_ENDPOINT },
+    );
+    sessions.push(resumed);
+    await resumed.startTurn("hi");
+    expect(mcpConfigOf(buildClaudeCliArgs(seen[0]!))).toEqual({ mcpServers: { agentdeck_cua: EXPECTED_CLAUDE_CU } });
+  });
+
+  test("cliApprovesMcpTools：default / acceptEdits / plan / auto 由 CLI 审批，bypassPermissions 与未知模式由 sidecar 审批", async () => {
+    const client = makeClient([]);
+    for (const [modeId, expected] of [
+      ["default", true],
+      ["acceptEdits", true],
+      ["plan", true],
+      ["auto", true],
+      ["bypassPermissions", false],
+    ] as const) {
+      const session = await client.createSession({ cwd: tmpDir, modeId });
+      sessions.push(session);
+      expect(session.cliApprovesMcpTools?.(), modeId).toBe(expected);
+    }
+    // 跟随用户设置：initialize 报告默认模式之前未知
+    const follow = await client.createSession({ cwd: tmpDir });
+    sessions.push(follow);
+    expect(follow.cliApprovesMcpTools?.()).toBe(false);
+  });
+
+  test("cliApprovesMcpTools：跟随用户设置时按 initialize 报告的 current_permission_mode", async () => {
+    const reported = (mode: string) =>
+      new ClaudeAgentClient({
+        logger: createSilentLogger(),
+        env: {},
+        loadSettings: async () => null,
+        cliFactory: () => ({
+          ...stubCli(),
+          initialized: Promise.resolve({ current_permission_mode: mode }) as ClaudeCliHandle["initialized"],
+        }),
+        terminateProcess: async () => "terminated",
+        resolveExecutable: async () => ({
+          available: true,
+          path: "C:\\fake\\claude.exe",
+          source: "path",
+          version: "2.1.296 (Claude Code)",
+        }),
+      });
+    const auto = await reported("auto").createSession({ cwd: tmpDir });
+    sessions.push(auto);
+    await auto.startTurn("hi");
+    await waitUntil(() => auto.cliApprovesMcpTools?.() === true);
+    const bypass = await reported("bypassPermissions").createSession({ cwd: tmpDir });
+    sessions.push(bypass);
+    await bypass.startTurn("hi");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bypass.cliApprovesMcpTools?.()).toBe(false);
+  });
+
   test("token 不出现在 sidecar 日志里（含 CLI stderr 回显）", async () => {
     const logDir = path.join(tmpDir, "logs");
     const logger = createLogger({ logDir, stderr: false });
@@ -232,6 +300,27 @@ describe("Codex：thread config.mcp_servers", () => {
     await plain.startTurn("hello");
     await waitUntil(() => received(logFile).filter((m) => m.method === "thread/start").length === 3);
     expect(received(logFile).filter((m) => m.method === "thread/start")[2]!.params!.config).toBeUndefined();
+  });
+
+  test("Computer Use：agentdeck_cua 在所有模式都自动批准（审批由 sidecar 发起），只开 Computer Use 时也注入", async () => {
+    const EXPECTED_CU = {
+      url: "http://localhost:45678/mcp/cua",
+      http_headers: { Authorization: EXPECTED_BEARER },
+      tool_timeout_sec: 3700,
+      default_tools_approval_mode: "approve",
+    };
+    expect(codexInteropConfig(ENDPOINT, { fullAccess: false, computerUse: CU_ENDPOINT })).toEqual({
+      mcp_servers: { agentdeck: EXPECTED_SERVER, agentdeck_cua: EXPECTED_CU },
+    });
+    const { client, logFile } = makeClient();
+    const session = await client.createSession({ cwd: tmpDir, computerUse: CU_ENDPOINT });
+    sessions.push(session);
+    await session.startTurn("hello");
+    await waitUntil(() => received(logFile).some((m) => m.method === "thread/start"));
+    expect(received(logFile).find((m) => m.method === "thread/start")!.params!.config).toEqual({
+      mcp_servers: { agentdeck_cua: EXPECTED_CU },
+    });
+    expect(session.cliApprovesMcpTools?.() ?? false).toBe(false);
   });
 
   test("thread/resume 与 thread/fork 同样注入，并与自定义中转的 threadConfig 合并", async () => {

@@ -45,7 +45,7 @@ import type {
 } from "../../agent/types.js";
 import type { Logger } from "../../logger.js";
 import { redactInteropTokens } from "../../utils/redact-interop.js";
-import { claudeInteropArgs } from "../shared/interop.js";
+import { CLAUDE_COMPUTER_USE_TOOL_PREFIX, claudeInteropArgs } from "../shared/interop.js";
 import { OutputSpeedTracker } from "../shared/output-speed.js";
 import { DATA_DIR_ENV, readConfiguredAgentPath } from "../../utils/coding-agent-paths.js";
 import { createExternalProcessEnv } from "../../utils/process-env.js";
@@ -165,6 +165,8 @@ export const CLAUDE_MODES: AgentMode[] = [
 
 /** 跟随设置时批准计划后切回基础模式；基础模式未知或本身就是 plan 时用它 */
 const PLAN_EXIT_FALLBACK_MODE: ClaudePermissionMode = "default";
+/** 这些模式下 CLI 会自己审批 MCP 工具调用：前三个问用户，auto 由分类器模型审批（design.md 4.37） */
+const CLI_GATED_MCP_MODES: ReadonlySet<string> = new Set(["default", "acceptEdits", "plan", "auto"]);
 const INTERRUPT_TIMEOUT_MS = 3_000;
 const AVAILABILITY_CACHE_MS = 60_000;
 /** 模型列表来自 claude 的 initialize 应答，成功结果缓存 10 分钟 */
@@ -405,7 +407,11 @@ export class ClaudeAgentClient implements AgentClient {
       throw new Error("恢复 Claude 会话需要 sessionId");
     }
     return this.openSession(
-      { cwd: cfg.cwd, ...(cfg.interop ? { interop: cfg.interop } : {}) },
+      {
+        cwd: cfg.cwd,
+        ...(cfg.interop ? { interop: cfg.interop } : {}),
+        ...(cfg.computerUse ? { computerUse: cfg.computerUse } : {}),
+      },
       handle.sessionId,
     );
   }
@@ -445,8 +451,8 @@ export class ClaudeAgentClient implements AgentClient {
     if (!resolution.available) {
       throw new Error(resolution.reason);
     }
-    // 会话互通（design.md 4.26）：每次拉起 / 恢复 / 分叉都注入当前端口与 token（内联 JSON，shell:false 传参）
-    const extraArgs = [...this.extraArgs, ...(cfg.interop ? claudeInteropArgs(cfg.interop) : [])];
+    // 会话互通（design.md 4.26）与 Computer Use（4.37）：每次拉起 / 恢复 / 分叉都注入当前端口与 token（内联 JSON，shell:false 传参）
+    const extraArgs = [...this.extraArgs, ...claudeInteropArgs(cfg.interop, cfg.computerUse)];
     return new ClaudeAgentSession({
       logger: this.logger,
       env: this.childEnv,
@@ -760,6 +766,12 @@ export class ClaudeAgentSession implements AgentSession {
 
   getPendingPermissions(): AgentPermissionRequest[] {
     return Array.from(this.pendingPermissions.values(), (pending) => pending.request);
+  }
+
+  /** 生效模式：显式选的模式，否则 initialize 报告的用户默认模式（design.md 4.37） */
+  cliApprovesMcpTools(): boolean {
+    const mode = this.mode ?? this.baseMode;
+    return mode !== null && CLI_GATED_MCP_MODES.has(mode);
   }
 
   async respondToPermission(requestId: string, response: AgentPermissionResponse): Promise<void> {
@@ -1809,9 +1821,13 @@ export class ClaudeAgentSession implements AgentSession {
         : kind === "question"
           ? "Claude 有问题需要你回答"
           : (options.title ?? `允许使用 ${options.displayName ?? toolName}？`);
-    // 「始终允许」只给普通工具审批，且 CLI 明确要求不得提供时（suppress_always_allow_rule）不显示
+    // 「始终允许」只给普通工具审批，且 CLI 明确要求不得提供时（suppress_always_allow_rule）不显示；
+    // Computer Use 工具必须逐次审批，同样不提供（design.md 4.37）
     const suggestions =
-      kind === "tool" && toolName !== CLAUDE_ASK_USER_QUESTION_TOOL && !options.suppressAlwaysAllowRule
+      kind === "tool" &&
+      toolName !== CLAUDE_ASK_USER_QUESTION_TOOL &&
+      !toolName.startsWith(CLAUDE_COMPUTER_USE_TOOL_PREFIX) &&
+      !options.suppressAlwaysAllowRule
         ? parsePermissionSuggestions(options.suggestions)
         : [];
     const actions =

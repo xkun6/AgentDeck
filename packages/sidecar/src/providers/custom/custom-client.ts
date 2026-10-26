@@ -334,6 +334,7 @@ class RedactingSession implements AgentSession {
   listBackgroundTasks?: () => AgentBackgroundTask[];
   stopBackgroundTask?: (taskId: string) => Promise<void>;
   readBackgroundTaskOutput?: (taskId: string, maxBytes: number) => Promise<AgentBackgroundTaskOutput>;
+  cliApprovesMcpTools?: () => boolean;
 
   constructor(
     private readonly inner: AgentSession,
@@ -391,6 +392,9 @@ class RedactingSession implements AgentSession {
           const output = await inner.readBackgroundTaskOutput!(taskId, maxBytes);
           return { ...output, text: redactText(output.text, secrets) };
         });
+    }
+    if (inner.cliApprovesMcpTools) {
+      this.cliApprovesMcpTools = () => inner.cliApprovesMcpTools!();
     }
   }
 

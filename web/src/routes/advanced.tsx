@@ -7,11 +7,13 @@ import { SnapshotSettingsSection } from "./snapshot-settings";
 import { InteropSettingsSection } from "./interop-settings";
 import { RemoteSettingsSection } from "./remote-settings";
 import { TranslationSettingsSection } from "./translation-settings";
+import { ComputerUseSettingsSection } from "./computer-use-settings";
 
 type AdvancedSection =
   | "general"
   | "notifications"
   | "env"
+  | "computerUse"
   | "snapshots"
   | "interop"
   | "remote"
@@ -23,6 +25,7 @@ const SECTION_PATHS: Record<AdvancedSection, string> = {
   general: "/common",
   notifications: "/notifications",
   env: "/env",
+  computerUse: "/computer-use",
   snapshots: "/snapshots",
   interop: "/interop",
   remote: "/remote",
@@ -46,6 +49,7 @@ const SECTION_META: Record<AdvancedSection, { title: string; sub: string }> = {
   general: { title: "常规", sub: "调整会话显示与输入偏好。" },
   notifications: { title: "通知", sub: "控制任务完成与权限确认的系统通知、提示音。" },
   env: { title: "环境", sub: "检查本机 CLI 与可选工具能力。" },
+  computerUse: { title: "Computer Use", sub: "让 Agent 截图、读取窗口并操作本机桌面（cua-driver，仅 Windows）。" },
   snapshots: { title: "文件快照", sub: "按回合自动记录工作目录的文件状态，用于查看回合改动与回滚。" },
   interop: { title: "会话互通", sub: "让会话之间互相委派任务、读取与转发消息（本机 MCP 服务）。" },
   remote: { title: "手机连接", sub: "让安卓手机经局域网或 Tailscale 扫码配对，远程查看会话并审批（端到端加密）。" },
@@ -84,6 +88,7 @@ export function AdvancedRoute() {
       {section === "general" && <GeneralSection showHeading={false} />}
       {section === "notifications" && <NotificationSection showHeading={false} />}
       {section === "env" && <EnvironmentSection showHeading={false} />}
+      {section === "computerUse" && <ComputerUseSettingsSection />}
       {section === "snapshots" && <SnapshotSettingsSection showHeading={false} />}
       {section === "interop" && <InteropSettingsSection showHeading={false} />}
       {section === "remote" && <RemoteSettingsSection showHeading={false} />}

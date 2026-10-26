@@ -30,6 +30,15 @@ AgentDeck 的 Agent 适配层（`packages/sidecar` 中的 provider、会话管�
 - Copyright (c) 2025 Nous Research
 - 许可全文：`legal/hermes-agent-upstream.MIT.txt`
 
+## LiveAgent（Computer Use 防自指与驱动接入）
+
+`packages/sidecar/src/computer-use/` 中的防自指检查与 cua-driver 定位 / 安装流程借鉴并改写自 LiveAgent，遵循 **MIT License**：
+
+- Copyright (c) 2026 Stack-Cairn
+- 许可全文：`legal/liveagent.MIT.txt`
+
+Computer Use 使用的 `cua-driver`（trycua/cua）由用户确认后从其官方安装脚本安装到本机，AgentDeck **不包含也不分发**它。
+
 ## 随包分发的第三方组件
 
 Windows 安装包除 AgentDeck 自身代码外，还包含下列第三方组件。安装包会把本文件、`LICENSE` 与下列许可文件一并放进安装目录。

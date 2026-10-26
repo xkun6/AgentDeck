@@ -98,8 +98,14 @@ export interface AgentManagerOptions {
   usage?: UsageLedger;
   /** 按回合文件快照（design.md 4.24）；不传则不拍快照 */
   snapshots?: SnapshotService;
-  /** 会话互通（design.md 4.26）：返回该会话当前应注入的 MCP 端点，互通关闭时返回 undefined */
-  interop?: { endpointFor(agentId: string): InteropEndpoint | undefined };
+  /**
+   * 会话互通（design.md 4.26）：返回该会话当前应注入的 MCP 端点，互通关闭时返回 undefined；
+   * computerUseEndpointFor 返回 Computer Use 代理端点（design.md 4.37），未启用时返回 undefined
+   */
+  interop?: {
+    endpointFor(agentId: string): InteropEndpoint | undefined;
+    computerUseEndpointFor?(agentId: string): InteropEndpoint | undefined;
+  };
   /** 空闲回收设置（design.md 4.34）：每次扫描时读取；不传则不自动回收 */
   idleReclaim?: () => { enabled: boolean; idleMinutes: number };
   /** 翻译（design.md 4.35）：开启翻译的会话发出用户消息前调用；失败抛错即不发送。不传则不翻译 */
@@ -199,6 +205,11 @@ export class AgentManager {
   readonly epoch: string;
 
   private readonly agents = new Map<string, ManagedAgent>();
+  /** sidecar 自己发起的审批（Computer Use 代理，design.md 4.37）：requestId → 等待方 */
+  private readonly hostPermissions = new Map<
+    string,
+    { agentId: string; settle: (response: AgentPermissionResponse) => void }
+  >();
   private readonly listeners = new Set<AgentManagerListener>();
   private readonly registry: AgentClientLookup;
   private readonly logger: Logger;
@@ -288,12 +299,14 @@ export class AgentManager {
     const thinkingOptionId = params.thinkingOptionId ?? null;
     const id = params.id ?? randomUUID();
     const interop = this.interop?.endpointFor(id);
+    const computerUse = this.interop?.computerUseEndpointFor?.(id);
     const session = await client.createSession({
       cwd: params.cwd,
       ...(params.model !== undefined ? { model: params.model } : {}),
       ...(params.modeId !== undefined ? { modeId: params.modeId } : {}),
       ...(thinkingOptionId !== null ? { thinkingOptionId } : {}),
       ...(interop ? { interop } : {}),
+      ...(computerUse ? { computerUse } : {}),
     });
 
     // ACP 等 provider 的模式要建会话后才可得：建会话前为空时再取一次（失败只记日志）。
@@ -760,9 +773,11 @@ export class AgentManager {
     const originSnapshot = origin.snapshot;
     const id = randomUUID();
     const forkInterop = this.interop?.endpointFor(id);
+    const forkComputerUse = this.interop?.computerUseEndpointFor?.(id);
     const cfg: AgentSessionConfig = {
       cwd: originSnapshot.cwd,
       ...(forkInterop ? { interop: forkInterop } : {}),
+      ...(forkComputerUse ? { computerUse: forkComputerUse } : {}),
       ...(originSnapshot.model != null ? { model: originSnapshot.model } : {}),
       ...(originSnapshot.modeId != null ? { modeId: originSnapshot.modeId } : {}),
       ...(originSnapshot.thinkingOptionId != null
@@ -873,6 +888,17 @@ export class AgentManager {
     requestId: string,
     response: AgentPermissionResponse,
   ): Promise<void> {
+    const host = this.hostPermissions.get(requestId);
+    if (host && host.agentId === agentId) {
+      // sidecar 发起的审批：直接交给等待方，不经 provider
+      const agent = this.requireAgent(agentId);
+      this.hostPermissions.delete(requestId);
+      agent.truncatedPermissions.delete(requestId);
+      host.settle(response);
+      this.enqueueEvent(agent, { type: "permission_resolved", requestId, response });
+      await agent.tail;
+      return;
+    }
     const agent = this.requireOpenAgent(agentId);
     const request = agent.snapshot.pendingPermissions.find((item) => item.id === requestId);
     if (!request) {
@@ -891,6 +917,60 @@ export class AgentManager {
     // 兜底：session 未发 permission_resolved 时补发（已解决的会在处理时被去重丢弃）
     this.enqueueEvent(agent, { type: "permission_resolved", requestId, response });
     await agent.tail;
+  }
+
+  /** 当前模式下 CLI 是否自己审批 MCP 工具调用（design.md 4.37）；会话未加载或不支持判断时为 false */
+  cliApprovesMcpTools(agentId: string): boolean {
+    return this.agents.get(agentId)?.session?.cliApprovesMcpTools?.() ?? false;
+  }
+
+  /**
+   * sidecar 自己发起的工具审批（Computer Use 代理，design.md 4.37）：在该会话发出 permission_requested，
+   * 等用户经 agent.permission.respond 应答。回合结束 / 会话关闭视为拒绝；signal 中断时撤回请求。
+   */
+  requestHostPermission(
+    agentId: string,
+    request: Omit<AgentPermissionRequest, "id" | "provider">,
+    signal?: AbortSignal,
+  ): Promise<AgentPermissionResponse> {
+    const agent = this.requireOpenAgent(agentId);
+    const id = `cu-${randomUUID()}`;
+    return new Promise((resolve) => {
+      const onAbort = () => {
+        if (!this.hostPermissions.delete(id)) {
+          return;
+        }
+        const response: AgentPermissionResponse = { behavior: "deny", message: "权限请求已取消" };
+        this.enqueueEvent(agent, { type: "permission_resolved", requestId: id, response });
+        resolve(response);
+      };
+      this.hostPermissions.set(id, {
+        agentId,
+        settle: (response) => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve(response);
+        },
+      });
+      this.enqueueEvent(agent, {
+        type: "permission_requested",
+        request: { ...request, id, provider: agent.snapshot.provider },
+      });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /** 结束该会话所有 sidecar 发起的审批（视为拒绝）；快照里的 pendingPermissions 由调用方清空 */
+  private denyHostPermissions(agentId: string, message: string): void {
+    for (const [id, pending] of this.hostPermissions) {
+      if (pending.agentId === agentId) {
+        this.hostPermissions.delete(id);
+        pending.settle({ behavior: "deny", message });
+      }
+    }
   }
 
   /**
@@ -1368,6 +1448,7 @@ export class AgentManager {
     agent.snapshot.status = finalStatus;
     agent.snapshot.activeTurnId = null;
     agent.snapshot.pendingPermissions = [];
+    this.denyHostPermissions(agent.id, "会话已关闭");
     delete agent.snapshot.backgroundActive;
     this.touch(agent);
     await this.persistNow(agent);
@@ -1463,12 +1544,14 @@ export class AgentManager {
       }
       // 会话进程每次拉起都重新注入当前端口与 token（design.md 4.26）
       const interop = this.interop?.endpointFor(agent.id);
+      const computerUse = this.interop?.computerUseEndpointFor?.(agent.id);
       if (pendingFork && !persistence?.sessionId) {
         // 分叉会话在拿到自己的原生 id 前被关闭 / 重启：按原分叉参数重新派生（design.md 4.23）
         const { model, modeId, thinkingOptionId } = agent.snapshot;
         session = await client.forkSession!(structuredClone(pendingFork.handle), {
           cwd: agent.snapshot.cwd,
           ...(interop ? { interop } : {}),
+          ...(computerUse ? { computerUse } : {}),
           ...(model != null ? { model } : {}),
           ...(modeId != null ? { modeId } : {}),
           ...(thinkingOptionId != null ? { thinkingOptionId } : {}),
@@ -1478,6 +1561,7 @@ export class AgentManager {
         session = await client.resumeSession!(structuredClone(persistence!), {
           cwd: agent.snapshot.cwd,
           ...(interop ? { interop } : {}),
+          ...(computerUse ? { computerUse } : {}),
         });
       }
     } catch (error) {
@@ -1857,6 +1941,7 @@ export class AgentManager {
     }
     snapshot.activeTurnId = null;
     snapshot.pendingPermissions = [];
+    this.denyHostPermissions(agent.id, "回合已结束");
     if (!agent.closed) {
       snapshot.status = "idle";
     }

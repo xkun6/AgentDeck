@@ -1376,6 +1376,47 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 
 **前端**：会话右键菜单（与「⋯」菜单共用）对 Claude 类会话显示「缓存保活」，开启时图标为勾选；失败用应用内提示框反馈。
 
+### 4.37 Computer Use（仅 Windows；sidecar 代理 cua-driver）
+
+借鉴 LiveAgent（MIT）：桌面操作能力来自 trycua/cua 的 `cua-driver`（`cua-driver mcp` 是标准 stdio MCP server，Windows 上在 MCP 进程内直接运行，不需要守护进程）。AgentDeck 不把它直接注入给 CLI——那样宿主看不到入参 / 出参，也挡不住危险模式下的自动执行；而是由 **sidecar 作为 MCP client 拉起驱动**，在 `POST /mcp/cua` 上把工具原样转发给 CLI，转发时做防自指检查与审批。
+
+**平台**：只支持 win32。其它平台 `computerUse.status` 返回 `supported: false`，不注入，设置页显示「仅支持 Windows」。
+
+**设置**：`SidecarSettings.computerUse: { enabled: boolean /* 默认 false */; allowSelfTargeting: boolean /* 默认 false */ }`，经 `settings.set` 修改（与 4.26 的「会话互通」开关无关）。
+
+**驱动定位**（每次 `computerUse.status` / 拉起驱动时重新查找，安装后不必重启 sidecar）：PATH 上的 `cua-driver.exe` → `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`（官方安装脚本的落点）→ `%USERPROFILE%\.cua-driver\packages\current\cua-driver.exe`。找到后跑 `cua-driver manifest`（15 秒超时）：版本取 `binary_version`，MCP 启动方式取 `mcp_invocation.{command,args}`，缺失时回退 `<路径> mcp`。
+
+**RPC**：
+- `computerUse.status` → `ComputerUseStatus { supported, installed, path?, version?, error?, running }`（`running` = 驱动进程是否在运行；未安装不是错误，`error` 只放探测失败原因）。
+- `computerUse.installCommand` → `ComputerUseInstallCommand { program, args, display, sourceUrl }`：**只描述不执行**。PATH 上有 `pwsh.exe` 用它，否则 `powershell.exe`；参数 `-NoProfile -Command "irm https://cua.ai/driver/install.ps1 | iex"`；`display` 为可直接粘进终端的完整命令行，`sourceUrl` 为脚本地址。
+- `computerUse.install` → `ComputerUseInstallResult { ok, exitCode, output }`：执行与 `installCommand` 相同的命令（`shell:false`、`windowsHide`、stdin 关闭）；stdout / stderr 每行经通知 `computerUse.installProgress { stream: "stdout" | "stderr", line }` 发给本机客户端；15 分钟超时结束整棵进程树；同时只允许一个安装（忙时直接返回 `ok: false`，`output` 为「已有安装任务在进行」）；`output` 为输出末尾最多 4000 字。上游脚本默认注册开机自启计划任务（RunLevel=Highest），会弹 UAC，属预期。远程客户端调用返回 -32601（4.31）。
+
+**注入**（`computerUse.enabled` 且 win32 时，会话进程每次拉起 / 恢复 / 分叉都注入；开关变化对之后拉起的会话生效，关闭后端点立即返回 404 并结束驱动进程）：MCP server 名 `agentdeck_cua`，工具名 Claude 为 `mcp__agentdeck_cua__<tool>`、Codex 为 `agentdeck_cua.<tool>`；鉴权复用 4.26 的会话 token（`Authorization: Bearer <token>`，不论互通开关是否开启都会签发）。
+- Claude：与 `agentdeck` 合在同一个 `--mcp-config` 内联 JSON 的 `mcpServers.agentdeck_cua`（`type: "http"`）。
+- Codex：`config.mcp_servers.agentdeck_cua = { url（主机写 localhost）, http_headers, tool_timeout_sec: 3700, default_tools_approval_mode: "approve" }`，**所有模式**都让 Codex 放行，审批统一由 sidecar 做（否则 full-access 模式下 Codex 会直接拒绝需要审批的 MCP 调用）。
+- ACP：不注入。
+
+**审批（Computer Use 工具调用必须审批）**：
+- **由 CLI 审批**：Claude 会话当前生效模式（显式选了模式就用它，否则用 initialize 报告的用户默认模式）为 `default` / `acceptEdits` / `plan` 时，CLI 照常发 `can_use_tool`，由用户审批；为 `auto` 时由 Claude 的分类器模型审批。CLI 发来的 Computer Use 工具审批**不提供「始终允许」**（忽略 permission_suggestions）。
+- **由 sidecar 审批**：其它情况（Claude 的 `bypassPermissions` / `dontAsk` / 模式未知；Codex 全部模式；会话不支持判断）。代理在转发前经 `AgentManager.requestHostPermission` 在该会话发出 `permission_requested`：id `cu-<uuid>`、kind `tool`、name `agentdeck_cua.<tool>`、title「允许 Computer Use：<tool>？」、input 为调用参数、actions 只有 `allow`「允许一次」/ `deny`「拒绝」。用户经 `agent.permission.respond` 应答时由 AgentManager 直接完成，不经 provider。拒绝 → 工具错误「用户拒绝了这次 Computer Use 操作」（附理由）；回合结束、会话关闭时视为拒绝（快照的 `pendingPermissions` 随回合 / 会话一并清空，不另发事件）；MCP 请求被中断（CLI 取消调用）时视为拒绝并补发 `permission_resolved`。
+- 判断接口：`AgentSession.cliApprovesMcpTools?(): boolean`（未实现视为 false，即由 sidecar 审批）。
+
+**防自指**（`allowSelfTargeting` 为 true 时整体关闭）：让模型操作 AgentDeck 自己的窗口，可以点掉审批弹窗、改设置或关闭应用。自身进程 = `AGENTDECK_PARENT_PID`（Tauri 主进程，窗口归它）+ sidecar 自身 pid；自身窗口 = 驱动 `list_windows`（不过滤，缓存 400 毫秒，入参检查与桌面坐标检查共用）中 pid 属于自身进程的窗口（Windows 上 `window_id` 即 HWND）；驱动未返回窗口列表时，凡涉及 `window_id` 或桌面坐标的调用一律拒绝。
+1. **入参寻址**：递归扫描整个参数（深度上限 12，超限一律拒绝）；`pid` / `process_id` / `processId` / `owner_pid` / `ownerPid` 命中自身进程，或 `window_id` / `windowId` 命中自身窗口 → 拒绝。
+2. **无目标键盘输入**：工具名为 `type_text` / `press_key` / `hotkey`，或参数里有字符串 `key` / 字符串数组 `keys`，且参数里**没有任何** pid / window_id → 一律拒绝（sidecar 无法判断前台窗口；Windows 驱动带 pid 时经 PostMessage 投递、不需要前台，能力不丢）。
+3. **桌面坐标**：参数里没有 pid / window_id 且 `target.kind` 不是 `window` 时，所有坐标对（键名形如 `<前缀>x<后缀>` 与 `<前缀>y<后缀>` 且都是数字：`x/y`、`from_x/from_y`、`to_x/to_y`、`x1/y1` …）按桌面物理像素判断：取驱动 `list_windows`（不过滤，缓存 400 毫秒）中包含该点、在屏且未最小化、`z_index` 最大的窗口，属于自身 → 拒绝；`z_index` 缺失时任一自身窗口包含该点即拒绝。最近一次 `get_desktop_state` 结果带 `screenshot_original_width`（截图被缩放）时，按缩放比还原后的坐标再判一次。
+4. **出参**：文本块里的 JSON 片段与 `structuredContent` 递归剔除 pid 为自身进程的数组元素。
+5. 由 sidecar 审批时，审批通过后再检查一次（等待期间窗口可能移动）。
+
+残留面（已知并接受）：整屏截图里仍能看到 AgentDeck，但看到不等于能操作；CLI 自身的 shell 等工具不受此约束。
+
+**驱动进程**：整个 sidecar 共享一个驱动子进程（`spawnProcess`：`shell:false`、`windowsHide`），首次 `tools/list` / `tools/call` 时懒启动，工具列表缓存到进程退出；进程退出后下次调用重新拉起；关闭开关或 sidecar 退出时 tree-kill。单次转发调用超时 120 秒；stderr 写入 sidecar 日志。模块：`computer-use/driver.ts`（定位、manifest、安装）、`computer-use/self-guard.ts`（防自指，纯函数）、`computer-use/proxy.ts`（驱动连接与 `/mcp/cua` 端点）。
+
+**前端**：设置「Agent」组新增「Computer Use」（`/computer-use`）：
+- 驱动状态（已安装 / 未安装、版本、路径、「重新检测」）；未安装时「安装驱动」→ 确认对话框：标题「安装驱动」、副标题「安装驱动 → 启用。完成当前步骤后继续下一步。」、说明「将从 <sourceUrl> 下载并执行官方安装脚本，请确认命令内容（也可复制到终端手动运行）：」、命令全文 + 复制按钮、「确认运行」；运行中对话框显示滚动日志（最多 200 行），结束后显示成功 / 失败（退出码）并重新检测。
+- 「启用 Computer Use」开关（未安装时禁用）；「允许操作 AgentDeck 自身」开关（默认关闭，开启时提示风险）；审批规则说明；「设置对之后启动或恢复的会话生效」。
+- 时间线：`agentdeck_cua` 的工具卡片标题显示为「Computer Use · <tool>」。
+
 ## 5. sidecar 内部结构（packages/sidecar）
 
 ```

@@ -23,6 +23,8 @@ import { z } from "zod";
 
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentInvalidParamsError, AgentRpcError } from "../agent/errors.js";
+import { COMPUTER_USE_SUPPORTED, installCommand, runInstall } from "../computer-use/driver.js";
+import type { ComputerUseProxy } from "../computer-use/proxy.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import {
   createProviderProfilesSchema,
@@ -46,7 +48,7 @@ import { scheduleDraftSchema } from "../scheduler/schema.js";
 import { UsageLedger } from "../usage/ledger.js";
 import { summarizeUsage } from "../usage/summary.js";
 import type { RpcClientConnection } from "./client-connection.js";
-import { MCP_PATH } from "./interop-service.js";
+import { COMPUTER_USE_MCP_PATH, MCP_PATH } from "./interop-service.js";
 import type { McpInteropEndpoint } from "./mcp-interop.js";
 
 export const RPC_PATH = "/rpc";
@@ -54,11 +56,13 @@ export const RPC_PATH = "/rpc";
 /**
  * 远程客户端（手机）不可调用的方法，一律按「方法不存在」处理（design.md 4.31）：
  * `remote.*`、`settings.set`，以及会把明文密钥交出去的 `provider.config.get` / `provider.config.set`、
- * `translation.endpoint.get` / `translation.endpoint.set`（design.md 4.35）
+ * `translation.endpoint.get` / `translation.endpoint.set`（design.md 4.35），以及会在本机执行安装脚本的
+ * `computerUse.install`（design.md 4.37）
  */
 function isRemoteForbiddenMethod(method: string): boolean {
   return (
     method.startsWith("remote.") ||
+    method === "computerUse.install" ||
     method === "settings.set" ||
     method === "provider.config.get" ||
     method === "provider.config.set" ||
@@ -130,6 +134,8 @@ export interface RpcServerOptions {
   remote?: RemoteController;
   /** 翻译（design.md 4.35）；不传时 translation.* 返回 NOT_SUPPORTED */
   translation?: TranslationService;
+  /** Computer Use 代理（design.md 4.37）；不传时 /mcp/cua 返回 404，computerUse.status 返回不支持 */
+  computerUse?: ComputerUseProxy;
   logger?: Logger;
 }
 
@@ -887,6 +893,33 @@ export class RpcServer {
       ),
       ...this.createProviderConfigMethods(),
       ...this.createRemoteMethods(),
+      ...this.createComputerUseMethods(),
+    ];
+  }
+
+  /** 4.37：computerUse.*（install 对远程客户端在 dispatch 里统一拦截为 -32601） */
+  private createComputerUseMethods(): Array<[string, RegisteredMethod]> {
+    const requireSupported = () => {
+      if (!COMPUTER_USE_SUPPORTED) {
+        throw new AgentRpcError("NOT_SUPPORTED", "Computer Use 仅支持 Windows");
+      }
+    };
+    return [
+      defineMethod(AGENT_RPC_METHODS.computerUseStatus, emptyParams, () =>
+        this.options.computerUse
+          ? this.options.computerUse.status()
+          : { supported: false, installed: false, running: false },
+      ),
+      defineMethod(AGENT_RPC_METHODS.computerUseInstallCommand, emptyParams, () => {
+        requireSupported();
+        return installCommand();
+      }),
+      defineMethod(AGENT_RPC_METHODS.computerUseInstall, emptyParams, () => {
+        requireSupported();
+        return runInstall((stream, line) =>
+          this.broadcast(AGENT_RPC_NOTIFICATIONS.computerUseInstallProgress, { stream, line }, "local"),
+        );
+      }),
     ];
   }
 
@@ -949,6 +982,19 @@ export class RpcServer {
 
   private handleHttp(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === COMPUTER_USE_MCP_PATH) {
+      if (!this.options.computerUse) {
+        this.sendJson(res, 404, { ok: false, error: "not found" });
+        return;
+      }
+      this.options.computerUse.handle(req, res).catch((error: unknown) => {
+        this.logger.error("Computer Use 端点异常：%s", error instanceof Error ? error.message : String(error));
+        if (!res.headersSent) {
+          this.sendJson(res, 500, { ok: false, error: "internal error" });
+        }
+      });
+      return;
+    }
     if (this.options.mcp && url.pathname === MCP_PATH) {
       this.options.mcp.handle(req, res).catch((error: unknown) => {
         this.logger.error("MCP 端点异常：%s", error instanceof Error ? error.message : String(error));

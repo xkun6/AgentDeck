@@ -199,7 +199,7 @@ export function buildReadTranscript(entries: AgentStreamEnvelope[], lastMessages
     : text;
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -214,7 +214,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return text ? JSON.parse(text) : undefined;
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+export function sendJson(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
