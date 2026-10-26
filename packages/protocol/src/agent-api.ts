@@ -862,6 +862,8 @@ export interface SidecarSettings {
     userLanguage: string;
     agentLanguage: string;
     translateReasoning: boolean;
+    /** 用户消息与审批回答先翻成 Agent 语言再发送；关闭则原样发送、只翻译回复显示 */
+    translateInput: boolean;
     enabledByDefault: boolean;
   };
   /**

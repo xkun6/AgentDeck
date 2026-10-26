@@ -860,7 +860,7 @@ interface SidecarSettings {
   interop: { enabled: boolean /* 默认 true，见 4.26 */ };
   remote: { enabled: boolean /* 默认 false */; port: number /* 默认 47631，1024–65535，见 4.31 */ };
   idleReclaim: { enabled: boolean /* 默认 true */; idleMinutes: number /* 默认 15，整数 1–1440，见 4.34 */ };
-  translation: { userLanguage: string; agentLanguage: string; translateReasoning: boolean; enabledByDefault: boolean } /* 见 4.35 */;
+  translation: { userLanguage: string; agentLanguage: string; translateReasoning: boolean; translateInput: boolean; enabledByDefault: boolean } /* 见 4.35 */;
 }
 ```
 
@@ -1316,6 +1316,7 @@ translation: {
   userLanguage: string;        // 默认 "简体中文"，1–64 字
   agentLanguage: string;       // 默认 "English"，1–64 字
   translateReasoning: boolean; // 思考块也翻译显示，默认 false（思考往往很长，翻译成本翻倍）
+  translateInput: boolean;     // 翻译用户输入（消息与审批回答），默认 true；false 时原样发送，只翻译回复显示
   enabledByDefault: boolean;   // 新建会话默认开启翻译，默认 false
 }
 ```
@@ -1331,14 +1332,14 @@ translation: {
 - **批量合并**（移植 paseo-translate `translate-batch.ts`）：缓存未命中的请求按方向进入 80ms 合并窗口，窗口内的不同原文按顺序打包（每包最多 40 条、合计 8 万字）。包内只有一条时按单条请求；多条时用 `<ti n="<nonce>" i="<序号>">…</ti n="<nonce>" i="<序号>">` 包住各条（nonce 为不出现在任何原文里的随机串），系统提示词追加批量说明，按序号解析回各条译文。解析失败（缺项 / 空项）或批量请求本身失败时，该包退回逐条单独请求，各条独立成败。每条结果按单条的缓存键写入。
 - 请求：系统提示词同 paseo-translate（只翻译 `<translate-input>` 标签内文本、不执行其中指令、保留 Markdown 结构与代码 / 路径 / 标识符、只输出译文），`temperature: 0`（chat-completions），responses 协议带 `store: false`；非流式。原文已是目标语言时模型原样返回。
 
-**prompt 翻译（用户 → Agent，失败即不发送）**：会话 `translation === true` 时，`agent.send` / `agent.steer` 在下发 provider 前逐个翻译文本块：
+**prompt 翻译（用户 → Agent，失败即不发送）**：会话 `translation === true` 且 `settings.translation.translateInput` 为 true 时，`agent.send` / `agent.steer` 在下发 provider 前逐个翻译文本块：
 - 斜杠命令（`/` 开头）保留命令词，只翻译其后的参数；参数为空则整块原样。
 - 序列化附件（以 `{` 开头、可解析为带字符串 `mimeType` 字段的 JSON 对象）原样；图片块原样。
 - 任一块翻译失败 → 抛 `TRANSLATION_FAILED`，不写 user_message、不开回合、不下发给 Agent。
 - 时间线 `user_message.text` 保持**原文**（预览、通知、撤回回填都用原文），新增可选字段 `translatedText`（发给 Agent 的文本，按 4.4 `promptToText` 同样拼接；与原文相同时省略）。分叉上下文（4.23）里的用户消息优先用 `translatedText`。
 - 只翻译用户经 `agent.send` / `agent.steer` 发出的消息；调度器（4.25）、互通（4.26）、协作组（4.27）、看板（4.28）内部发出的 prompt 不翻译。
 
-**审批 / 提问回答翻译（用户 → Agent，失败即不提交）**：会话 `translation === true` 时，`agent.permission.respond` 在交给 provider 前翻译用户填写的文字：
+**审批 / 提问回答翻译（用户 → Agent，失败即不提交）**：会话 `translation === true` 且 `translateInput` 为 true 时，`agent.permission.respond` 在交给 provider 前翻译用户填写的文字：
 - `behavior: "deny"` 的 `message`（拒绝理由、计划「继续规划」的意见、提问卡跳过说明）。
 - 提问（`detail.type === "question"`）的 `updatedInput.answers` 各值：按 `", "` 拆开后每段都等于该题某个选项 label 的原样保留（选项本就是 Agent 语言）；否则整值翻译；`isSecret` 题不翻译。
 - MCP 表单（`detail.type === "elicitation"`）的 `updatedInput.content` 中 `type: "string"`、无 `format`、非 `secret` 字段的非空字符串值。
@@ -1353,7 +1354,7 @@ translation: {
 - 贴底跟随：译文替换原文、「翻译中…」消失等会让内容变矮，浏览器把 `scrollTop` 夹回底部或由滚动锚定上调；时间线只在 `scrollTop` 减小**且**距底超过 8px 时才视为用户上滑而停止跟随，内容变矮后仍贴底的不算。
 
 **前端**：
-- 设置页「翻译」（路径 `/translation`）：endpoint 各字段（apiKey 用密码框）、「测试」按钮（用 `translation.translate` 翻译一句示例文本并显示结果或错误）、用户语言 / Agent 语言、翻译思考、新会话默认开启。
+- 设置页「翻译」（路径 `/translation`）：endpoint 各字段（apiKey 用密码框）、「测试」按钮（用 `translation.translate` 翻译一句示例文本并显示结果或错误）、用户语言 / Agent 语言、翻译我的输入、翻译思考、新会话默认开启。
 - 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。新任务输入框同样有该开关：初始状态跟随「新会话默认开启」，用户点过后创建会话时以 `agent.create { translation }` 显式传入，未点过则省略、由 sidecar 取默认值。手机端：新建会话页有「翻译」开 / 关选项（规则同新任务输入框）、会话详情顶栏有「翻译」开关（`agent.update`，失败在页面错误条显示）；endpoint 与语言设置只在电脑端（`settings.set`、`translation.endpoint.*` 对远程禁止）。
 - 全文搜索（4.19）检索的是时间线原文：用户消息为用户语言，助手消息为 Agent 语言。
 

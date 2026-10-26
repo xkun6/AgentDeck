@@ -282,7 +282,7 @@ afterEach(async () => {
   manager = null;
 });
 
-function createManager(options: { fail?: boolean; defaultOn?: boolean } = {}) {
+function createManager(options: { fail?: boolean; defaultOn?: boolean; translateInput?: boolean } = {}) {
   const sessions: FakeSession[] = [];
   const client: AgentClient = {
     provider: "fake",
@@ -309,6 +309,7 @@ function createManager(options: { fail?: boolean; defaultOn?: boolean } = {}) {
     translatePrompt,
     translateToAgent,
     translationDefault: () => options.defaultOn ?? false,
+    translateInput: () => options.translateInput ?? true,
   });
   const streams: AgentStreamEnvelope[] = [];
   manager.subscribe({ onStream: (envelope) => streams.push(envelope), onState: () => undefined });
@@ -468,6 +469,28 @@ describe("AgentManager 翻译接入（design.md 4.35）", () => {
     await h.manager.respondToPermission(agent.id, "p1", { behavior: "deny", message: "不行" });
     expect(session.responses).toEqual([{ id: "p1", response: { behavior: "deny", message: "不行" } }]);
     expect(h.translateToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  test("关闭「翻译我的输入」：消息、插话与审批回答原样发送，不调用翻译", async () => {
+    const h = createManager({ translateInput: false });
+    const agent = await h.manager.createAgent({ provider: "fake", cwd: "/work", translation: true });
+    await h.manager.sendPrompt(agent.id, "修复登录", "cm-1", { translate: true });
+    await h.manager.steer(agent.id, "顺便加测试", "cm-2", { translate: true });
+    const session = h.sessions[0]!;
+    expect(session.prompts).toEqual(["修复登录"]);
+    expect(session.steers).toEqual(["顺便加测试"]);
+    expect(userItems(h.streams).every((item) => !("translatedText" in item))).toBe(true);
+
+    session.emit({
+      type: "permission_requested",
+      turnId: "turn-1",
+      request: { id: "p1", provider: "fake", name: "Bash", kind: "tool" },
+    });
+    await vi.waitFor(() => expect(h.manager.getAgent(agent.id).pendingPermissions.map((p) => p.id)).toEqual(["p1"]));
+    await h.manager.respondToPermission(agent.id, "p1", { behavior: "deny", message: "不行" });
+    expect(session.responses).toEqual([{ id: "p1", response: { behavior: "deny", message: "不行" } }]);
+    expect(h.translatePrompt).not.toHaveBeenCalled();
+    expect(h.translateToAgent).not.toHaveBeenCalled();
   });
 
   test("enabledByDefault 只作用于用户新建的会话", async () => {

@@ -18,6 +18,7 @@ export const DEFAULT_SIDECAR_SETTINGS: SidecarSettings = {
     userLanguage: "简体中文",
     agentLanguage: "English",
     translateReasoning: false,
+    translateInput: true,
     enabledByDefault: false,
   },
   computerUse: { enabled: false, allowSelfTargeting: false, approval: "ask", callTimeoutSec: 120 },
@@ -48,6 +49,7 @@ export const settingsPatchSchema = z
         userLanguage: z.string().trim().min(1).max(64),
         agentLanguage: z.string().trim().min(1).max(64),
         translateReasoning: z.boolean(),
+        translateInput: z.boolean(),
         enabledByDefault: z.boolean(),
       })
       .partial()

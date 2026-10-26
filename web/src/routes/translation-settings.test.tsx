@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Provider as JotaiProvider, createStore } from "jotai";
 import type { SidecarSettings, TranslationEndpoint } from "@agentdeck/protocol";
@@ -34,7 +34,7 @@ const SETTINGS: SidecarSettings = {
   interop: { enabled: true },
   remote: { enabled: false, port: 47_631 },
   idleReclaim: { enabled: true, idleMinutes: 15 },
-  translation: { userLanguage: "简体中文", agentLanguage: "English", translateReasoning: false, enabledByDefault: false },
+  translation: { userLanguage: "简体中文", agentLanguage: "English", translateReasoning: false, translateInput: true, enabledByDefault: false },
   computerUse: { enabled: false, allowSelfTargeting: false, approval: "ask", callTimeoutSec: 120 },
 };
 
@@ -86,6 +86,21 @@ describe("TranslationSettingsSection（design.md 4.35）", () => {
     fireEvent.blur(agentLanguage);
     await waitFor(() =>
       expect(setSidecarSettings).toHaveBeenCalledWith({ translation: { agentLanguage: "日本語" } }),
+    );
+  });
+
+  it("「翻译我的输入」开关写入 settings.translation.translateInput", async () => {
+    getSidecarSettings.mockResolvedValue(SETTINGS);
+    getTranslationEndpoint.mockResolvedValue(ENDPOINT);
+    setSidecarSettings.mockImplementation(async (patch) => ({
+      ...SETTINGS,
+      translation: { ...SETTINGS.translation, ...patch.translation },
+    }));
+    renderPage();
+    const row = (await screen.findByText("翻译我的输入")).parentElement!.parentElement!;
+    fireEvent.click(within(row).getByRole("button", { name: "关闭" }));
+    await waitFor(() =>
+      expect(setSidecarSettings).toHaveBeenCalledWith({ translation: { translateInput: false } }),
     );
   });
 

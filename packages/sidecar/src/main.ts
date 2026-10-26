@@ -259,6 +259,7 @@ async function main(): Promise<void> {
     translatePrompt: (prompt) => translation.translatePrompt(prompt),
     translateToAgent: (text) => translation.translate("user-to-agent", text),
     translationDefault: () => settings.get().translation.enabledByDefault,
+    translateInput: () => settings.get().translation.translateInput,
     ...(store ? { store } : {}),
   });
   manager.subscribe({ onRemoved: (agentId) => interop.forget(agentId) });

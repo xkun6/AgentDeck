@@ -118,6 +118,8 @@ export interface AgentManagerOptions {
   translateToAgent?: (text: string) => Promise<string>;
   /** 用户新建会话是否默认开启翻译（design.md 4.35）；不传视为 false */
   translationDefault?: () => boolean;
+  /** 是否翻译用户输入（消息与审批回答，design.md 4.35）；不传视为 true */
+  translateInput?: () => boolean;
 }
 
 export interface CreateAgentParams {
@@ -229,6 +231,7 @@ export class AgentManager {
   private readonly translatePrompt: AgentManagerOptions["translatePrompt"];
   private readonly translateToAgent: AgentManagerOptions["translateToAgent"];
   private readonly translationDefault: AgentManagerOptions["translationDefault"];
+  private readonly translateInput: AgentManagerOptions["translateInput"];
   private idleReclaimTimer: NodeJS.Timeout | null = null;
   /** 每个会话的回合账本折叠器（只在内存） */
   private readonly usageTrackers = new Map<string, UsageTurnTracker>();
@@ -245,6 +248,7 @@ export class AgentManager {
     this.translatePrompt = options.translatePrompt;
     this.translateToAgent = options.translateToAgent;
     this.translationDefault = options.translationDefault;
+    this.translateInput = options.translateInput;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
     this.epoch = options.epoch ?? randomBytes(8).toString("hex");
@@ -411,9 +415,9 @@ export class AgentManager {
     return cloneSnapshot(this.requireAgent(agentId).snapshot);
   }
 
-  /** 会话开启翻译时把用户 prompt 翻成 Agent 语言（design.md 4.35）；未开启原样返回 */
+  /** 会话开启翻译且翻译输入时把用户 prompt 翻成 Agent 语言（design.md 4.35）；否则原样返回 */
   private async translateForAgent(agent: ManagedAgent, prompt: AgentPromptInput): Promise<AgentPromptInput> {
-    if (!agent.snapshot.translation || !this.translatePrompt) {
+    if (!agent.snapshot.translation || !this.translatePrompt || this.translateInput?.() === false) {
       return prompt;
     }
     return this.translatePrompt(prompt);
@@ -1002,7 +1006,7 @@ export class AgentManager {
   }
 
   /**
-   * design.md 4.35：会话开启翻译时，把用户填写的文字翻成 Agent 语言——拒绝理由、提问回答（整值都是选项
+   * design.md 4.35：会话开启翻译且翻译输入时，把用户填写的文字翻成 Agent 语言——拒绝理由、提问回答（整值都是选项
    * label 的原样保留，isSecret 题不翻）、MCP 表单里无 format 的非 secret 文本字段。
    */
   private async translatePermissionResponse(
@@ -1011,7 +1015,7 @@ export class AgentManager {
     response: AgentPermissionResponse,
   ): Promise<AgentPermissionResponse> {
     const translate = this.translateToAgent;
-    if (!agent.snapshot.translation || !translate) {
+    if (!agent.snapshot.translation || !translate || this.translateInput?.() === false) {
       return response;
     }
     if (response.behavior === "deny") {

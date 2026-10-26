@@ -298,6 +298,17 @@ export function TranslationSettingsSection() {
             }
           />
           <Row
+            label="翻译我的输入"
+            sub="消息与审批回答先翻成 Agent 语言再发送；关闭后原样发送，只翻译回复"
+            right={
+              <Choice
+                options={[...toggleOptions]}
+                value={current.translateInput ? "on" : "off"}
+                onChange={(value) => saveSettings.mutate({ translation: { translateInput: value === "on" } })}
+              />
+            }
+          />
+          <Row
             label="翻译思考过程"
             sub="展开思考块时也显示译文；思考往往很长，会明显增加翻译费用"
             right={
