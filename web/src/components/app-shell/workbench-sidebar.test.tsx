@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 侧栏会话列表：不显示归档、置顶在前；右键菜单的重命名 / 置顶 / 归档 / 导出（design.md 4.17）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Provider, createStore } from "jotai";
 import type { AgentSnapshot } from "@agentdeck/protocol";
@@ -10,6 +10,7 @@ import { stubRadixGlobals } from "@/test-utils/radix";
 import { ConfirmProvider } from "@/lib/use-confirm";
 import { replaceAgentSnapshotsAtom } from "@/stores/agents";
 import { __resetUiStoreForTests } from "@/lib/ui-store";
+import { GeneralSection } from "@/routes/settings";
 import { WorkbenchSidebar } from "./workbench-sidebar";
 
 stubRadixGlobals();
@@ -25,6 +26,7 @@ vi.mock("@/hooks/use-agent-session", () => ({
     agent?.status === "dormant" || agent?.status === "closed",
 }));
 vi.mock("@/hooks/use-agent-catalog", () => ({ useAgentProviders: () => ({ data: undefined }) }));
+vi.mock("@/routes/idle-reclaim-settings", () => ({ IdleReclaimSettingsSection: () => null }));
 
 function agent(id: string, patch: Partial<AgentSnapshot> = {}): AgentSnapshot {
   return {
@@ -321,5 +323,33 @@ describe("会话右键菜单（4.17）", () => {
     fireEvent.contextMenu(screen.getByText("会话-a"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "导出为 JSON" }));
     expect(await screen.findByText("拒绝访问")).toBeTruthy();
+  });
+});
+
+describe("侧栏快捷入口开关", () => {
+  it("设置里关掉的入口从侧栏消失、再打开恢复；「新建对话」不可关", () => {
+    const store = createStore();
+    render(
+      <Provider store={store}>
+        <ConfirmProvider>
+          <MemoryRouter>
+            <WorkbenchSidebar />
+            <GeneralSection />
+          </MemoryRouter>
+        </ConfirmProvider>
+      </Provider>,
+    );
+    const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+    const toggle = (name: string) => screen.getByRole("button", { name, pressed: true });
+    expect(nav.getByRole("button", { name: "终端" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建对话", pressed: true })).toBeNull();
+
+    fireEvent.click(toggle("终端"));
+    expect(nav.queryByRole("button", { name: "终端" })).toBeNull();
+    expect(nav.getByRole("button", { name: "新建对话" })).toBeTruthy();
+    expect(nav.getByRole("button", { name: "对话历史" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "终端", pressed: false }));
+    expect(nav.getByRole("button", { name: "终端" })).toBeTruthy();
   });
 });

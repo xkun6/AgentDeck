@@ -89,6 +89,23 @@ export const appSidebarVisibleAtom = atom(
   },
 );
 
+// 侧栏快捷入口（「新建对话」除外）中被关掉的入口路径；存「隐藏」而非「显示」，以后新增的入口默认可见。
+const SIDEBAR_HIDDEN_ENTRIES_KEY = "agentdeck.sidebar-hidden-entries";
+function normalizeSidebarHiddenEntries(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+const sidebarHiddenEntriesBaseAtom = persistedUiBaseAtom<string[]>(
+  () => normalizeSidebarHiddenEntries(readUiValue<unknown>(SIDEBAR_HIDDEN_ENTRIES_KEY, [])),
+);
+export const sidebarHiddenEntriesAtom = atom(
+  (get) => get(sidebarHiddenEntriesBaseAtom),
+  (_get, set, next: string[]) => {
+    const value = normalizeSidebarHiddenEntries(next);
+    set(sidebarHiddenEntriesBaseAtom, value);
+    writeUiValue(SIDEBAR_HIDDEN_ENTRIES_KEY, value);
+  },
+);
+
 export const CONVERSATION_WIDTH_OPTIONS = [
   // 档位整体上调一档（用户反馈原「小/中」过窄）：大 = 960 + 头像列
   // 46px（36px 头像 + 10px gap），正文有效宽度与原「大」一致。

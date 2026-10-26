@@ -15,6 +15,7 @@ import {
   notifySoundAtom,
   notifySystemAtom,
   showReasoningAtom,
+  sidebarHiddenEntriesAtom,
   normalizeAssistantDisplayName,
   type ConversationFontSizeMode,
 } from "@/stores/ui";
@@ -22,6 +23,7 @@ import { playChime, shouldPlayFallbackSound } from "@/lib/notifications";
 import { detectHostOS } from "@/lib/runtime";
 import { BUILD_COMMIT, BUILD_DATE, DESKTOP_VERSION, versionLabel } from "@/lib/build-info";
 import type { ComposerSubmitShortcut } from "@/lib/composer-submit-shortcut";
+import { SIDEBAR_NAV_ENTRIES } from "@/components/app-shell/workbench-sidebar";
 import { IdleReclaimSettingsSection } from "./idle-reclaim-settings";
 import noticeText from "../../../NOTICE.md?raw";
 import s from "./settings.module.css";
@@ -37,6 +39,7 @@ export function GeneralSection({ showHeading = true }: SettingsSectionProps) {
   const [composerSubmitShortcut, setComposerSubmitShortcut] = useAtom(composerSubmitShortcutAtom);
   const [assistantDisplayName, setAssistantDisplayName] = useAtom(assistantDisplayNameAtom);
   const [assistantAvatarDataUrl, setAssistantAvatarDataUrl] = useAtom(assistantAvatarDataUrlAtom);
+  const [sidebarHiddenEntries, setSidebarHiddenEntries] = useAtom(sidebarHiddenEntriesAtom);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [assistantProfileError, setAssistantProfileError] = useState("");
 
@@ -131,6 +134,31 @@ export function GeneralSection({ showHeading = true }: SettingsSectionProps) {
         </div>
       } />
       {assistantProfileError ? <p className={s.assistantProfileError}>{assistantProfileError}</p> : null}
+      <Row label="侧栏快捷入口" sub="点亮的入口显示在侧栏「新建对话」下方；「新建对话」始终显示。" right={
+        <div className={s.radioGroup}>
+          {SIDEBAR_NAV_ENTRIES.map((entry) => {
+            const visible = !sidebarHiddenEntries.includes(entry.path);
+            return (
+              <button
+                key={entry.path}
+                type="button"
+                className={s.radioBtn}
+                data-active={visible}
+                aria-pressed={visible}
+                onClick={() =>
+                  setSidebarHiddenEntries(
+                    visible
+                      ? [...sidebarHiddenEntries, entry.path]
+                      : sidebarHiddenEntries.filter((path) => path !== entry.path),
+                  )
+                }
+              >
+                {entry.label}
+              </button>
+            );
+          })}
+        </div>
+      } />
       <IdleReclaimSettingsSection />
     </div>
   );

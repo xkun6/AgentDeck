@@ -25,7 +25,7 @@ import {
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { agentListAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { groupListAtom } from "@/stores/groups";
-import { appSidebarVisibleAtom } from "@/stores/ui";
+import { appSidebarVisibleAtom, sidebarHiddenEntriesAtom } from "@/stores/ui";
 import { GROUP_STATUS_LABELS } from "@/lib/group-display";
 import {
   buildSessionTree,
@@ -84,7 +84,8 @@ interface NavEntry {
   icon: LucideIcon;
 }
 
-const NAV_ENTRIES: readonly NavEntry[] = [
+/** 「新建对话」下方的快捷入口，可在设置 → 常规里逐个关闭。 */
+export const SIDEBAR_NAV_ENTRIES: readonly NavEntry[] = [
   { label: "对话历史", path: "/history", icon: History },
   { label: "工作空间", path: "/projects", icon: Folder },
   { label: "终端", path: "/console", icon: TerminalSquare },
@@ -335,6 +336,7 @@ export function WorkbenchSidebar() {
   const agents = useAtomValue(agentListAtom);
   const connection = useAtomValue(sidecarConnectionAtom);
   const setSidebarVisible = useSetAtom(appSidebarVisibleAtom);
+  const hiddenEntries = useAtomValue(sidebarHiddenEntriesAtom);
   const { openCommandPalette } = useCommandPalette();
   const { data: providers } = useAgentProviders();
   const deleteSession = useDeleteAgentSession();
@@ -618,7 +620,7 @@ export function WorkbenchSidebar() {
           </span>
           <span className={s.itemLabel}>新建对话</span>
         </button>
-        {NAV_ENTRIES.map((entry) => {
+        {SIDEBAR_NAV_ENTRIES.filter((entry) => !hiddenEntries.includes(entry.path)).map((entry) => {
           const Icon = entry.icon;
           return (
             <button
