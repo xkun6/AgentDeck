@@ -20,55 +20,48 @@
   gap: 16px;
 }
 
-.topActions {
+/* 终端卡标题行右侧的图标按钮：在外部终端打开 / 重新打开 / 关闭终端 */
+.terminalActions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: var(--h-hairline) solid var(--h-line);
 }
 
-.secondaryButton,
-.dangerButton {
-  height: var(--h-button-height-sm);
-  border: var(--h-hairline) solid var(--h-line);
+.iconButton {
+  width: 28px;
+  height: 28px;
+  border: none;
   border-radius: var(--h-radius-md);
-  padding: 0 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
   background: transparent;
-  color: var(--h-text-2);
-  font-family: var(--h-font-ui);
-  font-size: 13px;
-  font-weight: 500;
+  color: var(--h-text-3);
   cursor: pointer;
   transition:
     background var(--h-duration-fast) var(--h-ease-standard),
     color var(--h-duration-fast) var(--h-ease-standard);
 }
 
-.secondaryButton:hover:not(:disabled) {
+.iconButton:hover:not(:disabled) {
   color: var(--h-text);
   background: var(--h-bg-hover);
 }
 
-.dangerButton {
+.iconButton[data-tone="danger"]:hover:not(:disabled) {
   color: var(--h-err);
-}
-
-.dangerButton:hover:not(:disabled) {
-  color: var(--h-err);
-  border-color: var(--h-err-border);
   background: var(--h-err-soft);
 }
 
-.secondaryButton:focus-visible,
-.dangerButton:focus-visible {
+.iconButton:focus-visible {
   outline: var(--h-focus-outline);
   outline-offset: 2px;
 }
 
-.secondaryButton:disabled,
-.dangerButton:disabled {
+.iconButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
