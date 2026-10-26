@@ -6,7 +6,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--h-line);
+  border-left: var(--h-hairline) solid var(--h-line);
   background: var(--h-bg-app);
   overflow: hidden;
 }
@@ -17,7 +17,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .heading {
@@ -41,7 +41,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--h-text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -63,7 +63,7 @@
 
 .subtitle {
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .dot {
@@ -95,14 +95,14 @@
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-3);
   cursor: pointer;
 }
 
 .iconButton:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -111,23 +111,24 @@
   display: flex;
   justify-content: center;
   padding: 4px 12px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .olderButton {
-  height: 24px;
+  height: var(--h-button-height-sm);
   padding: 0 12px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-2);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .olderButton:hover:not(:disabled) {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 

@@ -5,18 +5,20 @@
 }
 
 .heading {
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--h-text);
   margin: 0;
 }
 
+/* 每个调试分区是一张浅填充圆角卡（同设置行），卡间靠 .page 的 gap 分隔 */
 .block {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--h-line-soft);
+  padding: 16px;
+  background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
 }
 
 .blockHead {
@@ -29,7 +31,7 @@
 
 .blockTitle {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--h-text);
 }
@@ -100,9 +102,10 @@
 
 .badge {
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-3);
   background: var(--h-bg-chip);
+  border-radius: var(--h-radius-pill);
 }
 
 .badge[data-ok="true"] {
@@ -117,7 +120,7 @@
 
 .muted {
   min-width: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-3);
   overflow-wrap: anywhere;
 }
@@ -125,14 +128,21 @@
 .select,
 .search {
   box-sizing: border-box;
-  padding: 4px 8px;
+  height: var(--h-control-height-sm);
+  padding: 0 8px;
   background: var(--h-bg-input);
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   color: var(--h-text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: var(--h-font-cn);
   outline: none;
+}
+
+.select:focus,
+.search:focus {
+  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .search {
@@ -153,14 +163,15 @@
   max-height: 320px;
   overflow: auto;
   padding: 8px 12px;
-  background: var(--h-bg-code);
-  border: 1px solid var(--h-line-soft);
+  background: var(--h-bg-app);
+  border: var(--h-hairline) solid var(--h-line-soft);
   color: var(--h-text);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  border-radius: var(--h-radius-md);
 }
 
 .eventLine[data-level="warn"] {

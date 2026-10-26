@@ -101,19 +101,3 @@ export function relativeTime(unixSec: number): string {
   });
 }
 
-const WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-
-export function formatHeroTimestamp(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const weekday = WEEKDAY_ZH[date.getDay()];
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mi = String(date.getMinutes()).padStart(2, "0");
-  const tzOffset = -date.getTimezoneOffset();
-  const tzAbbr =
-    tzOffset === 480
-      ? "CST"
-      : `UTC${tzOffset >= 0 ? "+" : ""}${Math.floor(tzOffset / 60)}`;
-  return `${yyyy}-${mm}-${dd} · ${weekday} · ${hh}:${mi} ${tzAbbr}`;
-}

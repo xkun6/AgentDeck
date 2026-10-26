@@ -333,11 +333,11 @@ fn apply_color_prompt_env(vars: &mut BTreeMap<String, String>, shell: &str) {
         .to_ascii_lowercase();
 
     if cfg!(target_os = "windows") {
-        vars.insert("PROMPT".to_string(), "$E[38;5;214m$P$E[0m$G ".to_string());
+        vars.insert("PROMPT".to_string(), "$E[38;5;75m$P$E[0m$G ".to_string());
     } else if shell_name.contains("zsh") {
         vars.insert(
             "PROMPT".to_string(),
-            "%F{244}%n@%m%f %F{214}%1~%f %# ".to_string(),
+            "%F{244}%n@%m%f %F{75}%1~%f %# ".to_string(),
         );
     } else if shell_name.contains("fish") {
         vars.insert("fish_color_cwd".to_string(), "yellow".to_string());
@@ -346,7 +346,7 @@ fn apply_color_prompt_env(vars: &mut BTreeMap<String, String>, shell: &str) {
     } else {
         vars.insert(
             "PS1".to_string(),
-            "\\[\x1b[38;5;244m\\]\\u@\\h\\[\x1b[0m\\] \\[\x1b[38;5;214m\\]\\W\\[\x1b[0m\\] \\\\$ "
+            "\\[\x1b[38;5;244m\\]\\u@\\h\\[\x1b[0m\\] \\[\x1b[38;5;75m\\]\\W\\[\x1b[0m\\] \\\\$ "
                 .to_string(),
         );
     }

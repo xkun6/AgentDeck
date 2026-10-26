@@ -1,14 +1,16 @@
+/* 对话宽度：细描边分段控件，选中项为浅填充 */
+
 .control {
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 4px;
+  gap: 2px;
   height: var(--h-button-height-sm);
-  padding: 4px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--h-bg-input) 82%, transparent);
+  padding: 2px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: transparent;
   color: var(--h-text-2);
   -webkit-app-region: no-drag;
 }
@@ -16,7 +18,7 @@
 .label {
   padding: 0 4px 0 8px;
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -25,45 +27,37 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--h-button-height-xs);
-  height: var(--h-segment-height);
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--h-radius-sm);
   background: transparent;
   color: var(--h-text-2);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
-  padding: 0 8px;
 }
 
 .option:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
 .option:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--h-accent) 65%, transparent);
+  outline: var(--h-focus-outline);
   outline-offset: 1px;
 }
 
-.option[data-active="true"] {
-  background: var(--h-accent);
-  color: var(--h-accent-contrast);
-}
-
+.option[data-active="true"],
 .option[data-active="true"]:hover {
-  background: var(--h-accent);
-  color: var(--h-accent-contrast);
+  background: var(--h-bg-selected);
+  color: var(--h-text);
+  font-weight: 500;
 }
 
 @media (max-width: 720px) {
   .label {
     display: none;
-  }
-
-  .option {
-    min-width: 24px;
-    padding: 0 4px;
   }
 }

@@ -533,14 +533,17 @@ export function DetailRoute() {
     || firstUserText(runtime.messages)
     || (providerLabel ? `${providerLabel} 会话` : "会话详情");
   const model = snapshot?.model ?? "";
-  const subText = snapshot
-    ? [providerLabel, model ? `模型 ${model}` : "", snapshot.cwd].filter(Boolean).join(" · ")
-    : undefined;
+  const subText = snapshot ? (
+    <>
+      {providerLabel ? <span>{providerLabel}</span> : null}
+      {model ? <span>{model}</span> : null}
+    </>
+  ) : undefined;
   // 由其它会话委派创建的子会话：顶部显示「由 <父会话> 委派」链接（design.md 4.26）
   const sub = snapshot?.parentAgentId ? (
     <>
       <DelegatedFromLink parentAgentId={snapshot.parentAgentId} />
-      {subText ? ` · ${subText}` : null}
+      {subText}
     </>
   ) : (
     subText
@@ -577,7 +580,7 @@ export function DetailRoute() {
   const composerTick = useComposerTimer(runtimeIsBusy, runtime.turnStartedAt);
   const stall = useStallWatchdog(runtime);
   const composerLoadingPlaceholder = runtimeIsBusy && runtime.turnStartedAt
-    ? `${assistantName} 思考中 · ${formatElapsedTimer(composerTick)}`
+    ? `${assistantName} 思考中 ${formatElapsedTimer(composerTick)}`
     : undefined;
   const timelineStatus =
     runtime.statusMessage ||
@@ -634,21 +637,21 @@ export function DetailRoute() {
             {taskId ? (
               <TopBarActionButton
                 onClick={copySessionId}
-                title={`复制会话 ID：${taskId}`}
-                aria-label={`复制会话 ID ${taskId}`}
-              >
-                {sessionIdCopyState === "copied" ? (
-                  <Check size={12} aria-hidden="true" />
-                ) : (
-                  <Copy size={12} aria-hidden="true" />
-                )}
-                <span>
-                  {sessionIdCopyState === "copied"
-                    ? "已复制"
+                title={
+                  sessionIdCopyState === "copied"
+                    ? "已复制会话 ID"
                     : sessionIdCopyState === "error"
                       ? "复制失败"
-                      : "复制会话 ID"}
-                </span>
+                      : `复制会话 ID：${taskId}`
+                }
+                aria-label={`复制会话 ID ${taskId}`}
+                data-icon-only="true"
+              >
+                {sessionIdCopyState === "copied" ? (
+                  <Check size={16} aria-hidden="true" />
+                ) : (
+                  <Copy size={16} aria-hidden="true" />
+                )}
               </TopBarActionButton>
             ) : null}
             <TopBarActionButton
@@ -657,9 +660,9 @@ export function DetailRoute() {
               title="预览面板（⌘B）"
               aria-label="预览面板"
               aria-pressed={rightRailVisible}
+              data-icon-only="true"
             >
-              <PanelRight size={12} aria-hidden="true" />
-              <span>预览</span>
+              <PanelRight size={16} aria-hidden="true" />
             </TopBarActionButton>
             <TopBarActions />
           </>

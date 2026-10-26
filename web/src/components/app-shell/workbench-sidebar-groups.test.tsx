@@ -106,10 +106,10 @@ describe("侧栏协作组节点", () => {
     agent("m2", { groupId: "g1", updatedAt: 3000 }),
   ];
 
-  it("同组会话聚在组节点下缩进显示；组节点显示标题与状态，点击进入协作视图", () => {
+  it("同组会话聚在组节点下缩进显示；组节点显示标题与成员数（状态在悬停提示），点击进入协作视图", () => {
     renderSidebar([...members, agent("solo", { updatedAt: 1000 })], [group({ status: "done" })]);
     expect(screen.getByText("排序对比")).toBeTruthy();
-    expect(screen.getByText(/协作组 · 已完成 · 2 个会话/)).toBeTruthy();
+    expect(screen.getByText("排序对比").closest("[title]")?.getAttribute("title")).toContain("协作组，已完成，2 个会话");
     expect(screen.getByText("会话-m1").closest("[data-depth]")?.getAttribute("data-depth")).toBe("1");
     expect(screen.getByText("会话-solo").closest("[data-depth]")).toBeNull();
     // 组节点在其成员之前
@@ -128,7 +128,7 @@ describe("侧栏协作组节点", () => {
     expect(screen.getByText("会话-m1")).toBeTruthy();
   });
 
-  it("组内任一会话在运行时整组进入进行中；子会话随其父成员一起进组", () => {
+  it("组内任一会话在运行时整组排在项目内前面；子会话随其父成员一起进组", () => {
     renderSidebar(
       [
         agent("m1", { groupId: "g1", status: "running", updatedAt: 5000 }),
@@ -139,7 +139,7 @@ describe("侧栏协作组节点", () => {
       [group()],
     );
     const labels = screen.getAllByText(/^(会话-|排序对比)/).map((node) => node.textContent);
-    // 进行中：组节点 + m1 + m2 + sub（sub 在 m2 下，深度 2）；最近：solo
+    // 运行中的块在前：组节点 + m1 + m2 + sub（sub 在 m2 下，深度 2）；其后 solo
     expect(labels).toEqual(["排序对比", "会话-m1", "会话-m2", "会话-sub", "会话-solo"]);
     expect(screen.getByText("会话-sub").closest("[data-depth]")?.getAttribute("data-depth")).toBe("2");
   });

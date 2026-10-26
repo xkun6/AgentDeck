@@ -1,6 +1,6 @@
 .panel {
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-lg);
   background: var(--h-bg-soft);
   margin-bottom: 8px;
   overflow: hidden;
@@ -17,7 +17,7 @@
   cursor: pointer;
   color: var(--h-text-2);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .head svg {
@@ -32,7 +32,7 @@
 }
 
 .chevron {
-  transition: transform 0.15s ease;
+  transition: transform var(--h-duration-fast) var(--h-ease-standard);
 }
 
 .chevron[data-collapsed] {
@@ -53,13 +53,13 @@
   align-items: center;
   gap: 8px;
   padding: 8px 8px;
-  border-radius: 0;
+  border-radius: calc(var(--h-radius-lg) - 8px);
   background: var(--h-bg-input);
-  border: 1px solid transparent;
+  border: var(--h-hairline) solid transparent;
 }
 
 .row[data-editing] {
-  border-color: var(--h-accent, #c2410c);
+  border-color: var(--h-accent-border);
 }
 
 .preview {
@@ -76,7 +76,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-2);
 }
 
@@ -94,7 +94,7 @@
 .action {
   width: var(--h-button-height-sm);
   height: var(--h-button-height-sm);
-  border-radius: 0;
+  border-radius: var(--h-radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -111,7 +111,7 @@
 }
 
 .action:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -121,5 +121,5 @@
 }
 
 .action[data-danger]:hover {
-  color: var(--h-color-danger-fg);
+  color: var(--h-err);
 }

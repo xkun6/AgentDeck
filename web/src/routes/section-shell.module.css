@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--h-bg-pane);
+  background: var(--h-bg-app);
   overflow: hidden;
 }
 
@@ -21,7 +21,27 @@
   min-width: 0;
   overflow-y: auto;
   scrollbar-gutter: stable both-edges;
-  padding: 20px var(--h-page-content-gutter-x) 48px;
+  padding: 16px var(--h-page-content-gutter-x) 64px;
+}
+
+/* 页面标题在正文顶部，标题行只放操作与窗口按钮 */
+.head {
+  margin-bottom: 24px;
+}
+
+.title {
+  margin: 0;
+  color: var(--h-text);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 32px;
+}
+
+.sub {
+  margin: 4px 0 0;
+  color: var(--h-text-3);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .content {
@@ -50,7 +70,7 @@
   min-height: 0;
   overflow: visible;
   padding: 0;
-  border-left: 1px solid var(--h-line-soft);
+  border-left: var(--h-hairline) solid var(--h-line-soft);
   background: var(--h-bg-soft);
 }
 
@@ -76,7 +96,7 @@
     width: 100%;
     overflow: visible;
     border-left: 0;
-    border-top: 1px solid var(--h-line-soft);
-    background: color-mix(in srgb, var(--h-bg-pane) 96%, transparent);
+    border-top: var(--h-hairline) solid var(--h-line-soft);
+    background: var(--h-bg-app);
   }
 }

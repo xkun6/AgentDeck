@@ -47,7 +47,7 @@ export function selectSubagentsAtLevel(
 }
 
 /**
- * 药丸文案：有运行中 / 失败时按「N 运行中 · M 失败」只列非零项；
+ * 药丸文案：有运行中 / 失败时按「N 运行中，M 失败」只列非零项；
  * 全部结束（只剩完成 / 取消）时显示总数「N 个子代理」。
  */
 export function subagentPillLabel(rows: readonly Pick<ProviderSubagentDescriptor, "status">[]): string {
@@ -56,7 +56,7 @@ export function subagentPillLabel(rows: readonly Pick<ProviderSubagentDescriptor
   const segments: string[] = [];
   if (running > 0) segments.push(`${running} 运行中`);
   if (failed > 0) segments.push(`${failed} 失败`);
-  return segments.length > 0 ? segments.join(" · ") : `${rows.length} 个子代理`;
+  return segments.length > 0 ? segments.join("，") : `${rows.length} 个子代理`;
 }
 
 /** 行标签：description 优先，其次 title，再次「子代理」。 */

@@ -38,7 +38,7 @@ export function UsageRoute() {
 
   return (
     <main className={s.page}>
-      <TopBar title="用量统计" sub="跨会话 tokens、费用与响应性能" />
+      <TopBar title="用量统计" />
       <div className={s.toolbar}>
         <div className={s.seg} role="tablist" aria-label="时间范围">
           {USAGE_RANGES.map((item) => (
@@ -107,7 +107,7 @@ function UsageContent({ summary, range }: { summary: UsageSummary; range: UsageR
           title="按模型"
           items={tokenShares(summary.byModel).map((item) => ({
             key: `${item.provider}/${item.model ?? ""}`,
-            label: `${modelLabel(item.model)} · ${item.provider}`,
+            label: `${modelLabel(item.model)}（${item.provider}）`,
             tokens: item.tokens,
             percent: item.percent,
             turns: item.turns,
@@ -154,7 +154,7 @@ function DayChart({ summary, range }: { summary: UsageSummary; range: UsageRange
           <div
             key={day.day}
             className={s.bar}
-            title={`${day.day}\n输入 ${formatTokens(day.inputTokens)} · 缓存 ${formatTokens(day.cachedInputTokens)} · 输出 ${formatTokens(day.outputTokens)}\n${day.turns} 个回合`}
+            title={`${day.day}\n输入 ${formatTokens(day.inputTokens)}，缓存 ${formatTokens(day.cachedInputTokens)}，输出 ${formatTokens(day.outputTokens)}\n${day.turns} 个回合`}
           >
             <div className={s.stack} style={{ height: pct(dayTotalTokens(day)) }}>
               <span className={s.stackOutput} style={{ flexGrow: day.outputTokens }} />
@@ -187,12 +187,12 @@ function ShareList({ title, items }: { title: string; items: ShareItem[] }) {
       <h2 className={s.panelTitle}>{title}</h2>
       <ul className={s.shareList}>
         {items.map((item) => (
-          <li key={item.key} className={s.shareRow} title={`${item.turns} 个回合 · ${formatCostUsd(item.costUsd)}`}>
+          <li key={item.key} className={s.shareRow} title={`${item.turns} 个回合，${formatCostUsd(item.costUsd)}`}>
             <span className={s.shareLabel}>{item.label}</span>
             <span className={s.shareTrack}>
               <span className={s.shareFill} style={{ width: `${item.percent}%` }} />
             </span>
-            <span className={s.shareValue}>{formatTokens(item.tokens)} · {item.percent}%</span>
+            <span className={s.shareValue}>{formatTokens(item.tokens)}（{item.percent}%）</span>
           </li>
         ))}
       </ul>

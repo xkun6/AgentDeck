@@ -86,7 +86,6 @@ export function PanelComposer() {
         onDraftChange={onDraftChange}
         placeholder={`描述你想完成的任务，${submitShortcutHint}…`}
         variant="big"
-        headerLabel="新任务"
         showMeta={false}
         loading={sending}
         toolbarExtra={
@@ -109,7 +108,7 @@ export function PanelComposer() {
       {!cwd ? (
         <p className={s.hint} role="note">
           <FolderOpen className={s.hintIcon} aria-hidden="true" />
-          <span>{WORKSPACE_REQUIRED_MESSAGE}（点击输入框工具栏中的工作区按钮选择）</span>
+          <span>{WORKSPACE_REQUIRED_MESSAGE}</span>
         </p>
       ) : null}
     </div>

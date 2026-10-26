@@ -48,15 +48,15 @@
 }
 
 .sizeSmall {
-  font-size: 0.86em;
+  font-size: max(12px, 0.86em);
 }
 
 .sizeTiny {
-  font-size: 0.78em;
+  font-size: max(12px, 0.78em);
 }
 
 .mark {
-  border-radius: 0;
+  border-radius: var(--h-radius-xs);
   background: var(--h-accent-soft);
   color: var(--h-accent);
   padding: 0 0.25em;
@@ -89,7 +89,7 @@
   width: var(--h-button-height-xs);
   height: var(--h-button-height-xs);
   border: 0;
-  border-radius: 0;
+  border-radius: var(--h-radius-sm);
   background: transparent;
   padding: 0;
   color: var(--h-text-3);

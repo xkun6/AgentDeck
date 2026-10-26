@@ -8,10 +8,11 @@
   max-height: 280px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-pane);
-  padding: 4px 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
+  padding: 4px;
 }
 
 .item {
@@ -19,23 +20,26 @@
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  padding: 8px 12px;
+  padding: 6px 8px;
+  /* 同心圆角：外层 lg − 4px 内边距 */
+  border-radius: var(--h-radius-md);
   color: var(--h-text-2);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   line-height: 1.5;
   cursor: pointer;
 }
 
 .item[aria-selected="true"] {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
 .name {
   flex-shrink: 0;
-  color: var(--h-accent);
+  color: var(--h-text);
   font-family: var(--h-font-mono);
+  font-weight: 500;
 }
 
 .argumentHint {
@@ -50,12 +54,13 @@
 
 .badge {
   flex-shrink: 0;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-pill);
+  background: var(--h-bg-chip);
   color: var(--h-text-3);
   font-size: var(--h-font-size-2xs);
-  line-height: 1.4;
-  padding: 0 4px;
+  line-height: 1.5;
+  padding: 0 8px;
 }
 
 .description {

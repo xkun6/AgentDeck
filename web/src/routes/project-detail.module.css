@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--h-bg-pane);
+  background: var(--h-bg-app);
   overflow: hidden;
 }
 
@@ -22,12 +22,17 @@
   cursor: pointer;
   font-size: 13px;
   padding: 0;
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
+  border-radius: var(--h-radius-sm);
 }
 
 .crumbLink:hover {
-  color: var(--h-text-2);
-  text-decoration: underline;
+  color: var(--h-text);
+}
+
+.crumbLink:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .crumbSep {
@@ -38,32 +43,39 @@
   font-weight: 600;
 }
 
+/* 下拉菜单（浮层） */
 .menu {
   min-width: 160px;
   padding: 4px;
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .menu button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  min-height: 32px;
+  padding: 0 8px;
   border: none;
   background: transparent;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--h-text);
   cursor: pointer;
   text-align: left;
-  border-radius: 0;
-  font-family: var(--h-font-cn);
+  border-radius: var(--h-radius-md);
+  font-family: var(--h-font-ui);
 }
 
-.menu button:hover {
-  background: var(--h-bg-soft);
+.menu button:hover,
+.menu button:focus-visible {
+  background: var(--h-bg-hover);
+  outline: none;
 }
 
 .menu button[data-tone="danger"] {
@@ -71,7 +83,7 @@
 }
 
 .menu button[data-tone="danger"]:hover {
-  background: color-mix(in srgb, var(--h-err) 12%, transparent);
+  background: var(--h-err-soft);
 }
 
 .scroll {
@@ -89,8 +101,8 @@
   align-items: center;
   gap: 16px;
   padding: 20px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: none;
+  border-radius: var(--h-radius-lg);
   background: var(--h-bg-soft);
 }
 
@@ -107,9 +119,9 @@
   justify-content: center;
   width: 44px;
   height: 44px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-chip);
-  color: var(--h-accent);
+  color: var(--h-text-2);
   flex-shrink: 0;
 }
 
@@ -119,7 +131,7 @@
 
 .heroMeta h2 {
   margin: 0 0 4px;
-  font-size: 18px;
+  font-size: 14px;
   color: var(--h-text);
   font-weight: 600;
   white-space: nowrap;
@@ -129,7 +141,7 @@
 
 .heroPath {
   font-family: var(--h-font-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-text-2);
   white-space: nowrap;
   overflow: hidden;
@@ -138,9 +150,9 @@
 
 .heroDates {
   margin-top: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* stats */
@@ -152,31 +164,35 @@
 }
 
 .statCard {
-  padding: 16px 16px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  padding: 16px;
+  border: none;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
 }
 
 .statLabel {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   margin-bottom: 8px;
 }
 
 .statValue {
-  font-size: 20px;
+  font-size: 22px;
+  line-height: 1.3;
   color: var(--h-text);
   font-weight: 600;
+  font-family: var(--h-font-ui);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .statSub {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-text-3);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -202,39 +218,37 @@
 }
 
 .secMeta {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .tableWrap {
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: transparent;
   overflow: hidden;
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .table thead th {
   text-align: left;
-  padding: 12px 12px;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  padding: 10px 12px;
+  font-size: 12px;
   color: var(--h-text-3);
-  background: var(--h-bg-soft);
-  border-bottom: 1px solid var(--h-line-soft);
+  background: transparent;
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
   font-weight: 500;
 }
 
 .table tbody td {
   padding: 12px 12px;
-  border-bottom: 1px solid var(--h-line-soft);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
   color: var(--h-text);
   vertical-align: middle;
 }
@@ -245,16 +259,16 @@
 
 .table tbody tr {
   cursor: pointer;
-  transition: background 0.08s;
+  transition: background var(--h-duration-fast) var(--h-ease-standard);
 }
 
 .table tbody tr:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
 }
 
 .cellId {
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-3);
 }
 
@@ -266,15 +280,16 @@
 }
 
 .cellTimestamp {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--h-text-3);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .mono {
   font-family: var(--h-font-mono);
   color: var(--h-text-2);
-  font-size: 11.5px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -286,22 +301,36 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Tokens 列是数字，不用等宽字体 */
+.mono.numeric {
+  font-family: var(--h-font-ui);
+}
+
+.meta {
+  color: var(--h-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tableFoot {
-  padding: 12px 16px;
-  font-size: 11.5px;
+  padding: 12px;
+  font-size: 12px;
   color: var(--h-text-3);
-  border-top: 1px solid var(--h-line-soft);
-  background: var(--h-bg-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
+  background: transparent;
 }
 
 .linkBtn {
   border: none;
   background: transparent;
-  color: var(--h-accent);
+  color: var(--h-highlight);
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: 12px;
   padding: 0;
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
+  border-radius: var(--h-radius-sm);
 }
 
 .linkBtn:hover {
@@ -313,9 +342,9 @@
   padding: 32px;
   text-align: center;
   color: var(--h-text-3);
-  font-size: 12.5px;
-  border: 1px dashed var(--h-line);
-  border-radius: 0;
+  font-size: 13px;
+  border: var(--h-hairline) dashed var(--h-line);
+  border-radius: var(--h-radius-lg);
 }
 
 .errorState {
@@ -330,16 +359,23 @@
 }
 
 .linkBack {
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-input);
+  height: var(--h-button-height-md);
+  border: var(--h-hairline) solid var(--h-line);
+  background: transparent;
   color: var(--h-text);
-  padding: 8px 16px;
-  border-radius: 0;
+  padding: 0 12px;
+  border-radius: var(--h-radius-md);
   cursor: pointer;
-  font-size: 12px;
-  font-family: var(--h-font-cn);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--h-font-ui);
 }
 
 .linkBack:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
+}
+
+.linkBack:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }

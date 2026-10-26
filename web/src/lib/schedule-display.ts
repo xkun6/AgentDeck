@@ -115,7 +115,7 @@ export function describeTarget(
   providerLabel: (provider: string) => string,
 ): string {
   if (target.type === "agent") return `会话「${agentTitle(target.agentId) ?? "已删除的会话"}」`;
-  return `新建 ${providerLabel(target.provider)} 会话 · ${target.cwd}`;
+  return `新建 ${providerLabel(target.provider)} 会话，${target.cwd}`;
 }
 
 // ── 表单 ──────────────────────────────────────────────────────────────
@@ -367,7 +367,7 @@ export function automationBarItems(schedules: Schedule[], agentId: string | null
         });
       }
     } else if (schedule.kind === "heartbeat" && schedule.agentId === agentId) {
-      const progress = schedule.maxRuns !== undefined ? ` · ${schedule.runs}/${schedule.maxRuns}` : "";
+      const progress = schedule.maxRuns !== undefined ? `，${schedule.runs}/${schedule.maxRuns}` : "";
       items.push(
         schedule.enabled
           ? {

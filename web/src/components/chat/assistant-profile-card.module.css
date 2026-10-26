@@ -3,10 +3,10 @@
 .card {
   width: 280px;
   padding: 20px 20px 12px;
-  border-radius: 0;
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-pane);
-  box-shadow: none;
+  border-radius: var(--h-radius-lg);
+  border: var(--h-hairline) solid var(--h-line);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
   z-index: 60;
 }
 
@@ -24,7 +24,7 @@
   padding: 0;
   border: 0;
   background: var(--h-color-bg-avatar);
-  border-radius: 0;
+  border-radius: 50%;
   line-height: 0;
   cursor: zoom-in;
   overflow: hidden;
@@ -34,8 +34,8 @@
   box-sizing: border-box;
   width: 64px;
   height: 64px;
-  border-radius: 0;
-  border: 1px solid var(--h-line);
+  border-radius: 50%;
+  border: var(--h-hairline) solid var(--h-line);
   background: var(--h-color-bg-avatar);
   object-fit: cover;
   display: block;
@@ -46,7 +46,7 @@
   flex: 0 0 auto;
   width: 64px;
   height: 64px;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
   background: var(--h-color-bg-avatar);
   color: var(--h-text-2);
   font-family: var(--h-font-ui);
@@ -56,6 +56,7 @@
   align-items: center;
   justify-content: center;
   user-select: none;
+  border-radius: 50%;
 }
 
 .avatarZoomOverlay {
@@ -65,7 +66,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 9, 8, 0.62);
+  background: var(--h-scrim);
   cursor: zoom-out;
 }
 
@@ -73,9 +74,9 @@
   width: min(440px, 80vw);
   max-height: 80vh;
   object-fit: contain;
-  border-radius: 0;
+  border-radius: var(--h-radius-lg);
   background: var(--h-color-bg-avatar);
-  box-shadow: none;
+  box-shadow: var(--h-shadow-lg);
 }
 
 .headText {
@@ -84,7 +85,7 @@
 
 .name {
   color: var(--h-text);
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.3;
   overflow: hidden;
@@ -107,7 +108,7 @@
 .infoRow {
   display: flex;
   gap: 12px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -141,10 +142,15 @@
   color: var(--h-accent);
   font-size: 12px;
   padding: 8px 8px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   cursor: pointer;
 }
 
 .action:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
+}
+
+.action:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }

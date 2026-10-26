@@ -116,15 +116,15 @@ export function AutomationRoute() {
 
   const rowMeta = (schedule: Schedule): string => {
     if (schedule.kind === "cron") {
-      return `${describeTrigger(schedule)} · ${describeTarget(schedule.target, agentTitle, providerLabel)}`;
+      return `${describeTrigger(schedule)}，${describeTarget(schedule.target, agentTitle, providerLabel)}`;
     }
     const target = `会话「${agentTitle(schedule.agentId) ?? "已删除的会话"}」`;
-    return schedule.kind === "goal" ? `${target} · ${schedule.goal}` : `${target} · ${schedule.prompt}`;
+    return schedule.kind === "goal" ? `${target}，${schedule.goal}` : `${target}，${schedule.prompt}`;
   };
 
   return (
     <main className={s.page}>
-      <TopBar title="自动化" sub="定时任务、心跳与目标循环" />
+      <TopBar title="自动化" />
       <div className={s.toolbar}>
         <label className={s.pauseLabel}>
           <Switch

@@ -5,13 +5,13 @@
   width: 100%;
   max-width: var(--conversation-max-width, 780px);
   margin: 0 auto 8px;
-  padding: 8px 12px;
-  border-radius: 0;
-  border: 1px solid var(--h-err-border);
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--h-radius-lg);
+  border: 0;
   background: var(--h-err-soft);
   color: var(--h-text-2);
-  font-family: var(--h-font-cn);
-  font-size: 12.5px;
+  font-family: var(--h-font-ui);
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -26,18 +26,26 @@
 
 .action {
   flex: 0 0 auto;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  box-sizing: border-box;
+  height: var(--h-button-height-sm);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: transparent;
   color: var(--h-text);
-  padding: 4px 12px;
-  font-family: var(--h-font-cn);
-  font-size: 12px;
+  padding: 0 12px;
+  font-family: var(--h-font-ui);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .action:hover:not(:disabled) {
-  border-color: var(--h-accent);
+  background: var(--h-bg-hover);
+}
+
+.action:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .action:disabled {

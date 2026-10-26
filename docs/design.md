@@ -5,7 +5,7 @@
 ## 1. 定位
 
 AgentDeck 是一个多 Agent 编排桌面工具：
-- **界面与框架**：派生自 Hermes-CN-Desktop（Tauri v2 + React + Vite + TanStack Query + Jotai + CSS Modules）。
+- **界面与框架**：派生自 Hermes-CN-Desktop（Tauri v2 + React + Vite + TanStack Query + Jotai + CSS Modules）。视觉已于 2026-10 重做，不再沿用 Hermes 外观：通高灰底侧栏（导航 + 按项目分组的会话，见 4.17）+ 主区标题行（页面标题经 `pageHeaderSlotAtom` 挂入，窗口按钮在右侧），无顶栏与状态栏；系统字体，字号 12 / 13 / 14 / 22；0.5px 细线、全部圆角（token `--h-radius-*`），阴影只用于浮层与输入框；亮 / 暗为主，Dracula / Catppuccin 映射到同一套 token（`packages/shared-ui/src/tokens/`）。
 - **调用方式**：借鉴 paseo（Apache-2.0），自己不直接调模型 API，而是驱动用户本机已安装的编程 Agent：
   - Claude Code：直接拉起用户本机 `claude` CLI，走 stream-json stdio 协议（长会话），不依赖 claude-agent-sdk
   - Codex：`codex app-server` 子进程，stdio 上的换行分隔 JSON-RPC
@@ -709,6 +709,7 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 **前端**：
 - 会话右键菜单（`use-context-actions.tsx`）在现有项之外增加：重命名（弹窗，带「恢复自动标题」）、置顶 / 取消置顶、归档 / 取消归档、导出为 JSON、导出为 Markdown。运行中的会话不提供「归档」。
 - 侧边栏会话列表：不显示归档的会话；置顶的会话排在最前（置顶组内仍按 `updatedAt` 倒序）。
+- 侧边栏按项目分组（「项目」区，取代原来的「进行中 / 置顶项目 / 最近对话」三段）：会话按 `agentInWorkspace` 同一口径（cwd，没有再看会话与工作区的关联；协作组整组取 `group.cwd`，子会话随父会话）归入已记住的项目；cwd 不是项目路径时按仓库归属——前端对每个已记住的项目调 `git_worktree_list`（仅在存在这类会话时查询），cwd 是某项目的非主 worktree（看板任务、委派、协作成员等，路径比较统一分隔符并忽略大小写）就归入该项目；仍找不到所属项目的会话（项目已删除、worktree 已移除、非仓库等）归入最后的「其他对话」。项目顺序：置顶项目在前，其余按最近活动（项目内会话的最新 `updatedAt` 与项目自身 `updatedAt` 取大）倒序；没有会话的项目也显示（「暂无对话」）。项目内运行中的块（含子会话 / 协作组）排在前面，其余保持会话列表顺序；默认最多显示 8 块，其余收进「显示更多（N）」，当前打开的会话始终可见。项目行点击折叠 / 展开（折叠状态存 ui_store kv `agentdeck-cn-ui.sidebarCollapsedProjects`），折叠时有运行中的会话显示状态点；悬停出现「新建对话」，右键为项目菜单；区标题的「+」选择目录添加项目并在其中新建对话（仅桌面端）。
 - 历史页：
   - 状态筛选旁增加视图切换「全部会话 / 已归档」，默认视图不含归档的会话。置顶的会话在最前，单列一个「置顶」分组。
   - 新增「选择」模式：每行复选框、「全选当前筛选结果」、底部批量操作栏（已选 N 个）：删除（确认弹窗写明数量；运行中的会话由 `agent.delete` 先关闭再删除）、归档 / 取消归档、置顶 / 取消置顶。批量操作在前端逐个调用 RPC，结束后汇总提示成功与失败数量。
@@ -981,7 +982,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 - `delegate`：`cwd` 相对路径按调用方 cwd 解析，目录必须存在；`worktree: true` 时 worktree 放 `<AGENTDECK_DATA_DIR>/worktrees/delegate-<agentId 前 8 位>`（要求设置了数据目录），失败 / 创建会话失败时回滚；`modeId` 除 `AgentMode.dangerous` 外，id 含 `bypass` / `full-access` / `dangerous` / `yolo` 或目录里查无此模式也拒绝；结果 JSON 为 `{ agentId, status: "completed" | "failed" | "canceled" | "running", reply?, error?, note?, worktree? }`，`reply` 超过 40k 字截断；`timeoutSec` 超过上限按上限处理。
 - `wait_agent` 额外拒绝等待自己的上级会话（会互相等待）；`cancel_agent` 与 `send_to_agent` 同样只允许子孙或 `interopTarget` 会话；`read_agent` 不限制目标。
 - `agent.update` 增加 `interopTarget?: boolean`（与 title / pinned / archived 至少给一个）。meta.json 持久化 `parentAgentId` / `origin` / `groupId` / `interopTarget`，加载时校验类型。
-- 前端：委派卡片按工具名（`mcp__agentdeck__` 或 `agentdeck.` 前缀的 delegate / send_to_agent / wait_agent / cancel_agent / read_agent）识别，信息在 reducer 中从 `detail.unknown` 的入参与输出解析；侧栏子会话按 `parentAgentId` 嵌套（父会话缺失或成环时退化为顶层，整组在任一成员运行时归入「进行中」）；「会话互通」设置页路径 `/interop`。
+- 前端：委派卡片按工具名（`mcp__agentdeck__` 或 `agentdeck.` 前缀的 delegate / send_to_agent / wait_agent / cancel_agent / read_agent）识别，信息在 reducer 中从 `detail.unknown` 的入参与输出解析；侧栏子会话按 `parentAgentId` 嵌套（父会话缺失或成环时退化为顶层，整组在任一成员运行时排在所属项目的前面）；「会话互通」设置页路径 `/interop`。
 
 ### 4.27 界面发起的并行协作（扇出 + 汇总）
 
@@ -1014,7 +1015,7 @@ interface AgentGroup {
 - 删除：`group.delete` 解除成员与汇总会话的 `groupId`（落盘），`removeWorktrees` 时先中断运行中的成员再 `removeWorktree`（删分支）；`agent.removed` 时该会话从组中移除（组保留，仅余成员全部结束时仍会触发汇总）；汇总会话被删则清除 `chair.agentId`，`chairing` 的组转 `failed`。
 - 重启恢复（`GroupService.start`，在会话恢复之后）：先剔除已不存在的成员 / 汇总会话；`running` 的组按各成员时间线的最后结局恢复，**没有结束回合的成员（重启时回合被打断，会话已是 dormant）记为失败**，全部有结局后继续推进（建汇总会话或完成）；`chairing` 的组：汇总会话尚未建出（`chair.agentId` 缺失）→ 重新建；汇总会话存在且时间线已有结束回合 → 按结局 `done` / `failed`；存在但没有结束回合 → 保持 `chairing` 等待它（用户在会话里手动续跑，其回合结束时据此收尾）。
 - 存储：`groups/<id>.json` 原子写入；加载时非法 JSON / 结构不合法的文件记日志后跳过（不改名）；未设置数据目录时只在内存。
-- 前端：`stores/groups.ts`（`bindGroupsToStore`：每次（重）连成功拉 `group.list`，之后 `group.changed` / `group.removed` 增量更新）；新建入口为首页「新任务」区右上角的「并行协作」按钮（`components/group/group-dialog.tsx`，每个成员复用 `AgentSessionPicker` 且各自拉取模型目录；是否 git 仓库复用 `useWorktrees(cwd).isRepo`，非仓库时「独立 worktree」禁用并提示）；协作视图路由 `/groups/:groupId`（`routes/group-view.tsx`，成员列复用 `MessageTimeline` 的 `compact` 密度，「查看 diff」复用预览栏的 `ReviewTab`，汇总区取 chair 会话最后一条助手消息经 `MessageText` 渲染）；侧栏用 `lib/session-list.ts` 的 `groupSessionRoots` 把同组根会话（连同其 4.26 子会话树）归入组节点，组内任一会话在运行则整组归入「进行中」，组节点折叠状态与子会话折叠共用同一集合（键 `group:<id>`）。历史页不改。
+- 前端：`stores/groups.ts`（`bindGroupsToStore`：每次（重）连成功拉 `group.list`，之后 `group.changed` / `group.removed` 增量更新）；新建入口为首页「新任务」区右上角的「并行协作」按钮（`components/group/group-dialog.tsx`，每个成员复用 `AgentSessionPicker` 且各自拉取模型目录；是否 git 仓库复用 `useWorktrees(cwd).isRepo`，非仓库时「独立 worktree」禁用并提示）；协作视图路由 `/groups/:groupId`（`routes/group-view.tsx`，成员列复用 `MessageTimeline` 的 `compact` 密度，「查看 diff」复用预览栏的 `ReviewTab`，汇总区取 chair 会话最后一条助手消息经 `MessageText` 渲染）；侧栏用 `lib/session-list.ts` 的 `groupSessionRoots` 把同组根会话（连同其 4.26 子会话树）归入组节点，整组按 `group.cwd` 归入项目，组内任一会话在运行则整组排在项目内前面，组节点折叠状态与子会话折叠共用同一集合（键 `group:<id>`）。历史页不改。
 
 ### 4.28 看板式任务分派
 
@@ -1555,6 +1556,5 @@ ode.exe \?<资源目录>sidecarundle.mjs`，`\?` 前缀来自 Tauri resource_di
 - Agent 适配层移植自 paseo：Apache-2.0，见 `legal/paseo.Apache-2.0.txt`；被移植/修改的文件头注明 `Derived from paseo <原路径> (Apache-2.0); modified for AgentDeck`。
 - 翻译核心（4.35）移植自 paseo-translate（theTd/paseo-translate，经许可使用）：被移植/修改的文件头注明 `Derived from paseo-translate <原路径>; modified for AgentDeck`。
 - 部分前端代码源自 Hermes Agent 上游（Nous Research，MIT），见 `legal/hermes-agent-upstream.MIT.txt`。
-- HarmonyOS Sans 字体许可见 `legal/HarmonyOS_Sans_LICENSE.txt`。
 - 随包分发的第三方组件（P7）：Node.js 运行时 → `legal/nodejs.LICENSE.txt`；sidecar bundle 内的 npm 包（以 `dist-sidecar/meta.json` 为准）→ `legal/sidecar-third-party.txt`；前端生产依赖 → `legal/web-third-party.txt`；汇总见 `NOTICE.md`。依赖或 Node 版本变化时需重新生成：先 `pnpm sidecar:build`，再 `pnpm legal:gen`（`scripts/gen-legal.mjs`，结果稳定可重复）；Node 版本变化还需重取 `legal/nodejs.LICENSE.txt`。
 - 不包含也不分发 Anthropic / OpenAI 的代码或可执行文件：Claude provider 自行实现 Claude Code CLI 的 stream-json 协议（未使用 claude-agent-sdk），Codex 走本机 `codex app-server`。

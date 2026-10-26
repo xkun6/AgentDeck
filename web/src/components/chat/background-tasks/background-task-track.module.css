@@ -16,10 +16,10 @@
   align-items: center;
   gap: 4px;
   height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-chip);
+  padding: 0 10px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-pill);
+  background: transparent;
   color: var(--h-text-2);
   font: inherit;
   font-size: 12px;
@@ -27,7 +27,7 @@
 }
 
 .pill:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -59,14 +59,15 @@
 .panel {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--h-line-soft);
-  background: var(--h-bg-app);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: transparent;
 }
 
 .panelHead {
   display: flex;
   justify-content: flex-end;
-  padding: 4px 8px 0;
+  padding: 4px 12px 0;
 }
 
 .clear {
@@ -75,8 +76,9 @@
   background: transparent;
   color: var(--h-text-3);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
+  border-radius: var(--h-radius-sm);
 }
 
 .clear:hover {
@@ -87,7 +89,7 @@
   display: flex;
   flex-direction: column;
   margin: 0;
-  padding: 4px 0;
+  padding: 4px;
   list-style: none;
   max-height: 240px;
   overflow-y: auto;
@@ -104,7 +106,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-right: 8px;
+  padding-right: 4px;
   min-width: 0;
 }
 
@@ -117,7 +119,8 @@
   min-width: 0;
   padding: 4px 8px;
   border: 0;
-  border-radius: 0;
+  /* 同心圆角：外框 lg − 列表内边距 4px */
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-2);
   font: inherit;
@@ -134,7 +137,7 @@
 
 .row:hover,
 .row[data-active="true"] {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -157,7 +160,7 @@
   align-items: center;
   gap: 4px;
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .row[data-status="running"] .status {
@@ -172,8 +175,9 @@
   flex: 0 0 auto;
   min-width: 48px;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -200,7 +204,7 @@
 
 .dot[data-status="stopped"] {
   box-sizing: border-box;
-  border: 1px solid var(--h-text-3);
+  border: var(--h-hairline) solid var(--h-text-3);
   background: transparent;
 }
 
@@ -208,7 +212,7 @@
   margin: 0;
   padding: 0 8px 4px;
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;

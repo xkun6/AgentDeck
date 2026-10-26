@@ -390,7 +390,7 @@ describe("decideScheduleNotification（design.md 4.25）", () => {
   it("目标完成 / 达到上限 / 失败给出不同标题", async () => {
     const { decideScheduleNotification } = await loadNotifications();
     expect(decideScheduleNotification(notice, settings())).toEqual({
-      kind: "complete", title: "目标循环已完成", body: "「修测试」 · 目标已完成",
+      kind: "complete", title: "目标循环已完成", body: "「修测试」：目标已完成",
     });
     expect(decideScheduleNotification({ ...notice, kind: "exhausted" }, settings())).toMatchObject({
       kind: "error", title: "目标循环已达最大轮数",
@@ -535,7 +535,7 @@ describe("notifyFromAgentEvent", () => {
     await flushAsync();
 
     expect(desktopNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "「重构登录」 · rm -rf build" }),
+      expect.objectContaining({ body: "「重构登录」：rm -rf build" }),
     );
   });
 });

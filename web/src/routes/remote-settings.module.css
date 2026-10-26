@@ -8,8 +8,8 @@
   width: 96px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-input);
   color: var(--h-text);
   font-family: var(--h-font-mono);
@@ -20,6 +20,7 @@
 .numberInput:focus {
   outline: none;
   border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .numberInput:disabled {
@@ -44,11 +45,11 @@
 .notice {
   margin: 12px 0 0;
   padding: 12px 16px;
-  border: 1px solid var(--h-accent-border);
-  background: var(--h-accent-soft);
+  background: var(--h-warn-soft);
   color: var(--h-text);
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.6;
+  border-radius: var(--h-radius-lg);
 }
 
 .subheading {
@@ -60,18 +61,23 @@
 
 .addressList,
 .deviceList {
+  display: grid;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* 列表行：浅填充圆角行卡（同设置行），行间留白代替分隔线 */
 .addressRow,
 .deviceRow {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--h-line-soft);
+  min-height: 44px;
+  padding: 8px 16px;
+  background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
 }
 
 .address {
@@ -91,10 +97,11 @@
   align-items: center;
   min-height: 24px;
   padding: 0 12px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-2);
   background: var(--h-bg-chip);
   white-space: nowrap;
+  border-radius: var(--h-radius-pill);
 }
 
 .addressRow[data-public="true"] .address {
@@ -102,7 +109,8 @@
 }
 
 .tag[data-tone="danger"] {
-  color: var(--h-danger);
+  color: var(--h-err);
+  background: var(--h-err-soft);
 }
 
 .tag[data-on="true"] {
@@ -132,7 +140,8 @@
   /* 二维码必须是白底黑码才能被手机稳定识别，不随主题变色 */
   background: #fff;
   color: #000;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
 }
 
 .qrBox[data-expired="true"] {
@@ -154,8 +163,9 @@
 }
 
 .countdown {
-  font-family: var(--h-font-mono);
-  font-size: 20px;
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--h-text);
 }
 
@@ -165,8 +175,8 @@
 
 .hint {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--h-text-2);
 }
 
@@ -177,6 +187,7 @@
 
 .deviceName {
   font-size: 13px;
+  font-weight: 500;
   color: var(--h-text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -184,7 +195,8 @@
 }
 
 .deviceMeta {
-  margin-top: 4px;
-  font-size: 11px;
+  margin-top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--h-text-3);
 }

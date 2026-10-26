@@ -254,7 +254,7 @@ describe("useAttentionNotice 与后台处理器联动", () => {
     const { client, emit } = fakeClient();
     render(<Harness client={client} route={{ name: "sessions" }} foreground />);
     emit(notice({ id: "k1", kind: "permission", permissionKind: "question" }));
-    expect(screen.getByRole("status").textContent).toContain("重构登录 · 待回答");
+    expect(screen.getByRole("status").textContent).toContain("重构登录：待回答");
     emit(notice({ id: "k2", kind: "permission", permissionKind: "plan" }));
     expect(screen.getByRole("status").textContent).toContain("待确认计划");
     emit(notice({ id: "k3", kind: "permission", permissionKind: "tool" }));

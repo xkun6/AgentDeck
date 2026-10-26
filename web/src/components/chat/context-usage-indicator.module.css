@@ -6,7 +6,7 @@
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   color: var(--h-text-3);
   cursor: default;
 }
@@ -29,6 +29,7 @@
 
 .ringButton:focus-visible {
   outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .ring {
@@ -60,14 +61,16 @@
   gap: 8px;
   width: max-content;
   max-width: 240px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
   color: var(--h-text-2);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-xs);
+  font-variant-numeric: tabular-nums;
   line-height: 1.5;
-  padding: 8px 12px;
+  padding: 12px;
   pointer-events: auto;
 }
 
@@ -103,23 +106,27 @@
 
 .compactButton {
   align-self: flex-start;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  box-sizing: border-box;
+  height: var(--h-button-height-sm);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text);
   cursor: pointer;
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-button-font-size-sm);
-  line-height: 1.4;
-  padding: 4px 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 12px;
 }
 
 .compactButton:hover:not(:disabled) {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
 
 .compactButton:focus-visible {
   outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .compactButton:disabled {

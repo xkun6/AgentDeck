@@ -88,7 +88,7 @@ describe("子会话嵌套", () => {
     expect(screen.getByText("会话-child1")).toBeTruthy();
   });
 
-  it("子会话在运行时整组归入进行中；父会话已归档的子会话当作顶层显示", () => {
+  it("子会话在运行时整块排在前面；父会话已归档的子会话当作顶层显示", () => {
     renderSidebar([
       agent("parent", { updatedAt: 3000 }),
       agent("child", { parentAgentId: "parent", status: "running", updatedAt: 2000 }),
@@ -96,7 +96,7 @@ describe("子会话嵌套", () => {
       agent("gone", { archived: true }),
     ]);
     const labels = screen.getAllByText(/^会话-/).map((node) => node.textContent);
-    // 进行中分组：parent + child；最近对话：orphan（父会话已归档，退化为顶层）
+    // 运行中的块：parent + child；其后 orphan（父会话已归档，退化为顶层）
     expect(labels).toEqual(["会话-parent", "会话-child", "会话-orphan"]);
     expect(screen.getByText("会话-orphan").closest("[data-depth]")).toBeNull();
     expect(screen.queryByText("会话-gone")).toBeNull();

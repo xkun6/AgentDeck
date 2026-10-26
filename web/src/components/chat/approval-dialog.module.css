@@ -1,23 +1,25 @@
+/* 内联审批卡：细线圆角卡，不用警示色描边；代码块用 bg-code 区分层次 */
 .card {
   margin: 16px 0 0;
-  border: 1px solid var(--h-warn);
-  border-radius: 0;
-  background: var(--h-bg-input);
-  box-shadow: none;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: transparent;
   padding: 16px;
 }
 
 .header {
   margin-bottom: 8px;
-  color: var(--h-warn);
-  font-size: var(--h-button-font-size-md);
+  color: var(--h-text);
+  font-size: 14px;
   font-weight: 600;
+  line-height: 1.4;
 }
 
 .queue {
   margin-bottom: 8px;
-  color: var(--h-text-2);
-  font-size: var(--h-button-font-size-sm);
+  color: var(--h-text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .description {
@@ -30,21 +32,21 @@
 
 .meta {
   margin-bottom: 8px;
-  color: var(--h-text-2);
+  color: var(--h-text-3);
   font-family: var(--h-font-mono);
-  font-size: var(--h-button-font-size-sm);
+  font-size: 12px;
   word-break: break-all;
 }
 
 .command,
 .diff {
   margin: 0 0 8px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-code);
   color: var(--h-text);
   font-family: var(--h-font-mono);
-  font-size: var(--h-button-font-size-sm);
+  font-size: 12px;
   line-height: 1.6;
   padding: 8px 12px;
   white-space: pre-wrap;
@@ -59,8 +61,8 @@
 /* 计划用 Markdown 渲染，保留最高 320px 可滚动 */
 .plan {
   margin: 0 0 8px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-code);
   color: var(--h-text);
   font-family: var(--h-font-cn);
@@ -88,8 +90,9 @@
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 12px;
 }
 
 .allow,
@@ -97,22 +100,39 @@
 .allowAlways,
 .allowNeutral,
 .denyPrimary {
-  border-radius: 0;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--h-button-height-md);
+  border-radius: var(--h-radius-md);
   cursor: pointer;
-  font-family: var(--h-font-cn);
-  font-size: var(--h-button-font-size-sm);
-  padding: 8px 16px;
+  font-family: var(--h-font-ui);
+  font-size: var(--h-button-font-size-md);
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 var(--h-button-padding-x-md);
+  transition:
+    background-color var(--h-duration-fast) var(--h-ease-standard),
+    color var(--h-duration-fast) var(--h-ease-standard);
 }
 
 .reasonToggle {
+  box-sizing: border-box;
+  height: var(--h-button-height-md);
   border: 0;
   background: transparent;
-  color: var(--h-text-2);
+  color: var(--h-text-3);
   cursor: pointer;
-  font-family: var(--h-font-cn);
-  font-size: var(--h-button-font-size-sm);
-  padding: 8px;
-  text-decoration: underline;
+  font-family: var(--h-font-ui);
+  font-size: var(--h-button-font-size-md);
+  padding: 0 var(--h-button-padding-x-sm);
+  border-radius: var(--h-radius-md);
+}
+
+.reasonToggle:hover:not(:disabled) {
+  background: var(--h-bg-hover);
+  color: var(--h-text);
 }
 
 .reasonToggle:disabled {
@@ -128,17 +148,19 @@
   box-sizing: border-box;
   width: 100%;
   margin-top: 8px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-input);
   color: var(--h-text);
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
   font-size: var(--h-font-size-sm);
   padding: 8px 12px;
 }
 
 .reasonInput:focus-visible {
-  outline: var(--h-focus-outline);
+  outline: none;
+  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .allow:disabled,
@@ -150,37 +172,32 @@
   opacity: 0.65;
 }
 
-.allow {
-  border: 1px solid var(--h-ok);
-  background: var(--h-ok);
+/* 主按钮（允许一次 / defaultDeny 下的拒绝）：accent 实底；其余细线 ghost */
+.allow,
+.denyPrimary {
+  border: var(--h-hairline) solid var(--h-accent);
+  background: var(--h-accent);
   color: var(--h-accent-contrast);
 }
 
-.deny {
-  border: 1px solid var(--h-line);
-  background: transparent;
-  color: var(--h-text);
+.allow:hover:not(:disabled),
+.denyPrimary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--h-accent) 86%, var(--h-bg-app));
 }
 
-/* 「始终允许」类：次要样式（描边、不填充），避免与「允许一次」混淆 */
-.allowAlways {
-  border: 1px dashed var(--h-ok);
-  background: transparent;
-  color: var(--h-text);
-}
-
-/* defaultDeny：允许类不抢眼，拒绝为主按钮 */
+/* 「始终允许」类与拒绝同为次要样式（描边、不填充），避免与「允许一次」混淆 */
+.deny,
+.allowAlways,
 .allowNeutral {
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
   background: transparent;
   color: var(--h-text);
 }
 
-.denyPrimary {
-  border: 1px solid var(--h-text);
-  background: var(--h-bg-chip);
-  color: var(--h-text);
-  font-weight: 600;
+.deny:hover:not(:disabled),
+.allowAlways:hover:not(:disabled),
+.allowNeutral:hover:not(:disabled) {
+  background: var(--h-bg-hover);
 }
 
 .allow:focus-visible,
@@ -189,6 +206,7 @@
 .allowNeutral:focus-visible,
 .denyPrimary:focus-visible {
   outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 /* 动作说明（永久规则内容与写入位置等） */
@@ -196,14 +214,15 @@
   margin: 8px 0 0;
   padding: 0;
   list-style: none;
-  color: var(--h-text-2);
-  font-size: var(--h-button-font-size-sm);
+  color: var(--h-text-3);
+  font-size: 12px;
   line-height: 1.6;
   word-break: break-word;
 }
 
 .hintLabel {
-  color: var(--h-text);
+  color: var(--h-text-2);
+  font-weight: 500;
 }
 
 /* 手机 / 触屏：按钮换行铺开，触控区 >= 44px */
@@ -227,5 +246,6 @@
   .allowNeutral,
   .denyPrimary {
     flex: 1 1 40%;
+    border-radius: var(--h-radius-md);
   }
 }

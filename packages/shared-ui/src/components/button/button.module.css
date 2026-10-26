@@ -14,13 +14,13 @@
   align-items: center;
   justify-content: center;
   gap: var(--h-button-gap);
-  border: 1px solid transparent;
-  border-radius: 0;
+  border: var(--h-hairline) solid transparent;
+  border-radius: var(--h-button-radius);
   background: transparent;
   color: var(--h-color-fg-default);
   font-family: var(--h-font-ui);
   font-size: var(--h-button-font-size-md);
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
@@ -74,19 +74,18 @@
 }
 
 .button[data-variant="solid"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--h-button-tone-bg) 88%, var(--h-color-bg-surface));
-  border-color: color-mix(in srgb, var(--h-button-tone-bg) 88%, var(--h-color-bg-surface));
+  background: color-mix(in srgb, var(--h-button-tone-bg) 86%, var(--h-color-bg-app));
+  border-color: color-mix(in srgb, var(--h-button-tone-bg) 86%, var(--h-color-bg-app));
 }
 
 .button[data-variant="soft"] {
   color: var(--h-button-tone-fg);
   background: var(--h-button-tone-bg-soft);
-  border-color: color-mix(in srgb, var(--h-button-tone-border) 70%, transparent);
+  border-color: transparent;
 }
 
 .button[data-variant="soft"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--h-button-tone-bg-soft) 76%, var(--h-button-tone-bg));
-  border-color: var(--h-button-tone-border);
+  background: color-mix(in srgb, var(--h-button-tone-bg-soft) 84%, var(--h-button-tone-bg));
 }
 
 .button[data-variant="outline"] {
@@ -97,8 +96,7 @@
 
 .button[data-variant="outline"]:hover:not(:disabled) {
   color: var(--h-color-fg-default);
-  background: var(--h-color-bg-subtle);
-  border-color: color-mix(in srgb, var(--h-button-tone-border) 72%, var(--h-color-fg-subtle));
+  background: var(--h-color-bg-hover);
 }
 
 .button[data-variant="ghost"] {
@@ -108,8 +106,11 @@
 }
 
 .button[data-variant="ghost"]:hover:not(:disabled) {
-  background: var(--h-button-tone-bg-soft);
-  border-color: color-mix(in srgb, var(--h-button-tone-border) 44%, transparent);
+  background: var(--h-color-bg-hover);
+}
+
+.button[data-variant="ghost"][data-tone="danger"]:hover:not(:disabled) {
+  background: var(--h-color-danger-bg);
 }
 
 .button:where([data-variant="plain"]) {
@@ -117,7 +118,7 @@
   min-height: auto;
   padding: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--h-radius-xs);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -182,7 +183,7 @@
 }
 
 .button:active:not(:disabled):not([data-variant="plain"]) {
-  transform: translateY(4px);
+  transform: scale(0.98);
 }
 
 .button:disabled,

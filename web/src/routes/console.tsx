@@ -92,50 +92,17 @@ export function ConsoleRoute() {
   };
 
   return (
-    <SectionShell
-      title="终端"
-      sub={statusText}
-      right={
-        <div className={s.topActions}>
-          <button
-            type="button"
-            className={s.secondaryButton}
-            onClick={openExternalTerminal}
-            disabled={!isExternalTerminalAvailable || externalOpening}
-          >
-            <ExternalLink size={12} />
-            {externalOpening ? "正在打开…" : "在外部终端打开"}
-          </button>
-          <button type="button" className={s.secondaryButton} onClick={restartTerminal}>
-            <RotateCcw size={12} />
-            重新打开
-          </button>
-          <button type="button" className={s.dangerButton} onClick={closeTerminal} disabled={status !== "ready"}>
-            <Power size={12} />
-            关闭终端
-          </button>
-        </div>
-      }
-    >
+    <SectionShell title="终端" sub={statusText}>
       <div className={s.layout}>
         <section className={s.mainColumn}>
-          <div className={s.summaryCard}>
+          <div className={s.summaryStats}>
             <div>
-              <div className={s.eyebrow}>本地命令环境</div>
-              <h2>在当前工作区直接运行命令。</h2>
-              <p>
-                终端在本机执行你输入的命令，适合安装或登录 Agent CLI、查看仓库状态等操作。
-              </p>
+              <span>Shell</span>
+              <strong title={session?.shell}>{session?.shell || "—"}</strong>
             </div>
-            <div className={s.summaryStats}>
-              <div>
-                <span>Shell</span>
-                <strong title={session?.shell}>{session?.shell || "—"}</strong>
-              </div>
-              <div>
-                <span>工作目录</span>
-                <strong title={session?.cwd}>{normalizePath(session?.cwd)}</strong>
-              </div>
+            <div>
+              <span>工作目录</span>
+              <strong title={session?.cwd}>{normalizePath(session?.cwd)}</strong>
             </div>
           </div>
 
@@ -150,6 +117,38 @@ export function ConsoleRoute() {
                   tone={status === "ready" ? "success" : status === "starting" ? "warning" : "danger"}
                 />
                 {statusText}
+                <span className={s.terminalActions}>
+                  <button
+                    type="button"
+                    className={s.iconButton}
+                    onClick={openExternalTerminal}
+                    disabled={!isExternalTerminalAvailable || externalOpening}
+                    title={externalOpening ? "正在打开…" : "在外部终端打开"}
+                    aria-label="在外部终端打开"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className={s.iconButton}
+                    onClick={restartTerminal}
+                    title="重新打开"
+                    aria-label="重新打开"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className={s.iconButton}
+                    data-tone="danger"
+                    onClick={closeTerminal}
+                    disabled={status !== "ready"}
+                    title="关闭终端"
+                    aria-label="关闭终端"
+                  >
+                    <Power size={14} />
+                  </button>
+                </span>
               </div>
             </div>
             <EmbeddedTerminal

@@ -9,8 +9,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--h-line-soft);
+  padding: 20px 20px 8px;
 }
 
 .dialogTitle {
@@ -24,23 +23,23 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px 20px;
+  padding: 8px 20px 16px;
   overflow-y: auto;
 }
 
 .dialogMessage {
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--h-text-2);
   word-break: break-word;
 }
 
 .dialogMessage code {
   font-family: var(--h-font-mono);
-  font-size: 11px;
-  background: var(--h-bg-soft);
-  border: 1px solid var(--h-line-soft);
+  font-size: 12px;
+  background: var(--h-bg-code);
   padding: 0 4px;
+  border-radius: var(--h-radius-xs);
 }
 
 .inputField {
@@ -55,17 +54,21 @@
 }
 
 .input {
+  box-sizing: border-box;
+  height: var(--h-input-height-md);
+  font-family: var(--h-font-ui);
   font-size: 13px;
-  padding: 8px 12px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  padding: 0 12px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: var(--h-bg-input);
   color: var(--h-text);
   outline: none;
 }
 
 .input:focus {
-  border-color: var(--h-accent);
+  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .footLead {
@@ -76,6 +79,5 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 20px 16px;
-  border-top: 1px solid var(--h-line-soft);
+  padding: 8px 20px 20px;
 }

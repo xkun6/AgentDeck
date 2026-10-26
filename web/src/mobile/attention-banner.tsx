@@ -96,7 +96,7 @@ export function AttentionBanner({
         }}
       >
         <span className={s.attentionTitle}>
-          {notice.title} · {attentionLabel(notice)}
+          {notice.title}：{attentionLabel(notice)}
         </span>
         <span className={s.attentionBody}>{notice.body}</span>
       </button>

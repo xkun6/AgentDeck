@@ -1,8 +1,7 @@
 /* AgentDeck Design Tokens — Component sizing */
 
 :root {
-  /* Fixed button contract. Density may change surrounding layout and inputs,
-     but it must never create a second set of button heights. */
+  /* 按钮高度只有这一套，密度只影响周边布局与输入框 */
   --h-button-height-xs: 24px;
   --h-button-height-sm: 28px;
   --h-button-height-md: 32px;
@@ -11,25 +10,23 @@
   --h-button-padding-x-sm: 8px;
   --h-button-padding-x-md: 12px;
   --h-button-padding-x-lg: 16px;
-  --h-button-font-size-xs: 11px;
-  --h-button-font-size-sm: 11.5px;
-  --h-button-font-size-md: 12px;
-  --h-button-font-size-lg: 13px;
-  --h-button-radius: var(--h-radius-sm);
+  --h-button-font-size-xs: 12px;
+  --h-button-font-size-sm: 13px;
+  --h-button-font-size-md: 13px;
+  --h-button-font-size-lg: 14px;
+  --h-button-radius: var(--h-radius-md);
   --h-button-gap: 8px;
 
-  /* Button-shaped controls with distinct semantics. */
-  --h-segment-height: 24px;
+  --h-segment-height: 28px;
   --h-tab-height: 40px;
-  --h-switch-width: 32px;
+  --h-switch-width: 36px;
   --h-switch-height: 20px;
-  --h-switch-thumb-size: 12px;
+  --h-switch-thumb-size: 16px;
   --h-status-dot-size: 8px;
 }
 
 :root,
 [data-density="comfortable"] {
-  --h-control-height-xs: 24px;
   --h-control-height-sm: 28px;
   --h-control-height-md: 32px;
   --h-control-height-lg: 36px;
@@ -38,20 +35,16 @@
   --h-input-height-md: var(--h-control-height-md);
   --h-input-height-lg: var(--h-control-height-lg);
   --h-input-padding-x: 12px;
-  --h-input-radius: var(--h-radius-sm);
-  --h-input-font-size: 12px;
+  --h-input-radius: var(--h-radius-md);
+  --h-input-font-size: 14px;
 
-  --h-card-radius: var(--h-radius-md);
+  --h-card-radius: var(--h-radius-lg);
   --h-card-padding-sm: 12px;
   --h-card-padding-md: 16px;
   --h-card-padding-lg: 20px;
-
-  --h-table-row-height: 36px;
-  --h-dialog-width-md: 560px;
 }
 
 [data-density="compact"] {
-  --h-control-height-xs: 20px;
   --h-control-height-sm: 24px;
   --h-control-height-md: 28px;
   --h-control-height-lg: 32px;
@@ -59,5 +52,4 @@
   --h-card-padding-sm: 8px;
   --h-card-padding-md: 12px;
   --h-card-padding-lg: 16px;
-  --h-table-row-height: 32px;
 }

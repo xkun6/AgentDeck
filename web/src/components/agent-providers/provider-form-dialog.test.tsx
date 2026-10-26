@@ -88,7 +88,7 @@ describe("ProviderFormDialog", () => {
     expect(input("API Key").type).toBe("password");
 
     fireEvent.click(screen.getByRole("button", { name: /测试连接/ }));
-    await screen.findByText("连接成功 · HTTP 200 · 12 ms · 拉取到 2 个模型");
+    await screen.findByText("连接成功，HTTP 200，12 ms，拉取到 2 个模型");
     expect(request).toHaveBeenCalledWith(
       "provider.test",
       {

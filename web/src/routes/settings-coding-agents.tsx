@@ -346,7 +346,6 @@ export function CodingAgentsSection({ showHeading = true }: { showHeading?: bool
           <SquareTerminal size={24} />
         </div>
         <div className={s.aboutHeroBody}>
-          <div className={s.aboutEyebrow}>多 Agent 编排 · 本机 CLI</div>
           <h3>
             {data
               ? allReady

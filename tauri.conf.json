@@ -44,7 +44,6 @@
       "legal/nodejs.LICENSE.txt": "nodejs.LICENSE.txt",
       "legal/sidecar-third-party.txt": "sidecar-third-party.txt",
       "legal/web-third-party.txt": "web-third-party.txt",
-      "legal/HarmonyOS_Sans_LICENSE.txt": "HarmonyOS_Sans_LICENSE.txt",
       "dist-sidecar/bundle.mjs": "sidecar/bundle.mjs"
     },
     "windows": {

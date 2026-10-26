@@ -1,20 +1,9 @@
-.topBar {
-  width: 100%;
-  height: 44px;
-  background: var(--h-bg-pane);
-  border-bottom: 1px solid var(--h-line);
-  font-family: var(--h-font-cn);
-  -webkit-app-region: drag;
-  -webkit-user-select: none;
-  flex-shrink: 0;
-  user-select: none;
-}
+/* 页面标题行内容：左侧标题 + 副标题，右侧页面操作；高度与拖动区由外壳标题行提供。 */
 
-.inner {
-  width: calc(100% - var(--h-page-content-gutter-x) - var(--h-page-content-gutter-x));
-  max-width: var(--h-page-content-max-width);
+.topBar {
+  flex: 1;
+  min-width: 0;
   height: 100%;
-  margin-inline: auto;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -23,50 +12,46 @@
 .titleGroup {
   display: inline-flex;
   align-items: baseline;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .title {
   margin: 0;
-  font-size: 13px;
+  overflow: hidden;
+  font-size: 14px;
   font-weight: 600;
+  line-height: 20px;
   color: var(--h-text);
-  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .sub {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 20px;
   color: var(--h-text-3);
-  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .spacer {
   flex: 1;
+  align-self: stretch;
 }
 
 .actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  align-self: center;
+  gap: 4px;
+  flex: 0 0 auto;
   -webkit-app-region: no-drag;
-}
-
-.actions button {
-  box-sizing: border-box;
-  height: var(--h-button-height-sm);
-  min-height: var(--h-button-height-sm);
-  padding-block: 0;
-  padding-inline: var(--h-button-padding-x-sm);
-  font-family: var(--h-font-ui);
-  font-size: var(--h-button-font-size-sm);
-  line-height: 1;
-}
-
-.actions button[data-icon-only="true"] {
-  width: var(--h-button-height-sm);
-  padding-inline: 0;
 }
 
 .actions button > svg {
@@ -78,22 +63,33 @@
 .chip {
   height: var(--h-button-height-sm);
   min-height: var(--h-button-height-sm);
-  font-size: var(--h-button-font-size-sm);
-  color: var(--h-text-2);
   padding: 0 var(--h-button-padding-x-sm);
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  cursor: pointer;
-  background: transparent;
   display: flex;
   align-items: center;
-  gap: var(--h-button-gap);
+  gap: 4px;
+  border: 0;
+  border-radius: var(--h-radius-md);
+  background: transparent;
+  color: var(--h-text-2);
+  font-size: var(--h-button-font-size-sm);
+  cursor: pointer;
+  transition:
+    background var(--h-duration-fast) var(--h-ease-standard),
+    color var(--h-duration-fast) var(--h-ease-standard);
 }
-.chip[data-active="true"] {
-  color: var(--h-text);
-  background: var(--h-bg-chip);
-  border-color: var(--h-accent-border);
-}
+
 .chip:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
+  color: var(--h-text);
+}
+
+.chip[data-icon-only="true"] {
+  width: var(--h-button-height-sm);
+  padding: 0;
+  justify-content: center;
+}
+
+.chip[data-active="true"] {
+  background: var(--h-bg-selected);
+  color: var(--h-text);
 }

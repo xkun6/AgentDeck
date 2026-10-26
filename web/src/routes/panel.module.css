@@ -1,119 +1,43 @@
-/* Workbench main page — restored to prototypes/01-workbench layout.
-   Structure: .pageWrap (scroll) > .pageContent > .hero / .composeStrip / .section[] */
+/* 新建对话首页：问候 + 输入框 + 快速起手，整体在可视区内垂直居中；有运行中任务时追加卡片。 */
 
 .pageWrap {
   flex: 1;
-  overflow-y: auto;
   min-height: 0;
-  background-color: var(--h-color-bg-page-canvas);
-  background-image: var(--h-texture-pinhole-grid);
-  background-repeat: repeat;
-  background-position: 0 0;
+  overflow-y: auto;
+  background: var(--h-bg-app);
 }
 
 .pageContent {
-  max-width: var(--h-page-content-max-width);
+  width: min(760px, 100% - 64px);
+  min-height: calc(100% - 48px);
   margin: 0 auto;
-  padding: 32px 40px 96px;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* Section heading — grid with left num column + title + right meta. */
-.section {
-  display: grid;
-  grid-template-columns: 64px 1fr;
+  padding: 48px 0 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   gap: 16px;
-  align-items: start;
-  padding: 24px 0 12px;
 }
 
-.sectionNum {
-  font-family: var(--h-font-mono);
-  font-size: 9.5px;
-  line-height: 1.2;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--h-text-3);
-  padding-top: 8px;
-}
-
-.sectionBody {
-  min-width: 0;
-}
-
-.sectionHead {
+.starters {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.sectionLh {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.sectionTag {
-  font-family: var(--h-font-mono);
-  font-size: 10px;
-  line-height: 1.2;
-  letter-spacing: 0.08em;
-  color: var(--h-text-3);
-  text-transform: uppercase;
+.section {
+  margin-top: 32px;
 }
 
 .sectionTitle {
-  margin: 0;
-  font-family: var(--h-font-ui);
-  font-style: normal;
-  font-weight: 650;
-  font-size: 20px;
-  line-height: 1.2;
-  color: var(--h-text);
-  letter-spacing: 0;
-}
-
-.sectionMeta {
-  font-family: var(--h-font-mono);
-  font-size: 11px;
+  margin: 0 0 12px;
   color: var(--h-text-3);
-}
-
-.sectionMeta a {
-  color: var(--h-accent);
-  text-decoration: none;
-}
-
-.sectionMeta a:hover {
-  text-decoration: underline;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .taskGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-@media (max-width: 900px) {
-  .pageContent {
-    padding: 24px 20px 80px;
-  }
-  .section {
-    grid-template-columns: 48px 1fr;
-    gap: 12px;
-  }
-  .taskGrid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.loading {
-  padding: 36px 0;
-  text-align: center;
-  color: var(--h-text-3);
-  font-size: 13px;
-  font-family: var(--h-font-mono);
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
 }

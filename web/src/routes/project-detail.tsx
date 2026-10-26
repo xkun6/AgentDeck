@@ -250,7 +250,7 @@ export function ProjectDetailRoute() {
               <h2>{project.name}</h2>
               <div className={s.heroPath}>{project.path}</div>
               <div className={s.heroDates}>
-                创建于 {formatTimestampDate(project.createdAt / 1000)} · 更新于{" "}
+                创建于 {formatTimestampDate(project.createdAt / 1000)}，更新于{" "}
                 {formatTimestampDate(project.updatedAt / 1000)}
               </div>
             </div>
@@ -349,7 +349,7 @@ export function ProjectDetailRoute() {
                         <td className={s.titleCell}>
                           {agentDisplayTitle(session, runtimeBySession[session.id], providers)}
                         </td>
-                        <td className={s.mono}>{agentProviderLabel(session.provider, providers)}</td>
+                        <td className={s.meta}>{agentProviderLabel(session.provider, providers)}</td>
                         <td className={s.mono}>{session.model || "—"}</td>
                         <td className={s.cellTimestamp}>
                           {relativeTime(lastActivitySec(session))}
@@ -364,7 +364,7 @@ export function ProjectDetailRoute() {
               </table>
               {projectSessions.length > 50 ? (
                 <div className={s.tableFoot}>
-                  仅展示前 50 条 · 共 {projectSessions.length} 条 ·{" "}
+                  仅展示前 50 条，共 {projectSessions.length} 条，
                   <button
                     type="button"
                     className={s.linkBtn}

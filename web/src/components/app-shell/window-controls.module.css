@@ -1,4 +1,4 @@
-/* 仿 Windows 11 标题栏按钮：与顶栏等高，细线图标；关闭按钮悬停为 danger 底 + 白色图标。 */
+/* 仿 Windows 11 标题栏按钮：与标题行等高，细线图标；关闭按钮悬停为 danger 底 + 白色图标。 */
 
 .controls {
   display: flex;
@@ -24,17 +24,17 @@
 }
 
 .button:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
 .button:active {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-selected);
 }
 
 .button[data-kind="close"]:hover,
 .button[data-kind="close"]:active {
-  background: var(--h-danger);
+  background: var(--h-color-window-close);
   color: var(--h-color-fg-on-danger);
 }
 

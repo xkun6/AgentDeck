@@ -540,8 +540,8 @@ function FileViewer({
           {basename(path)}
         </span>
         {preview ? <span>{formatBytes(preview.byteSize)}</span> : null}
-        {preview?.truncated ? <span>· 已截断预览</span> : null}
-        {preview?.lossyUtf8 ? <span>· 非 UTF-8 编码，暂不支持就地编辑</span> : null}
+        {preview?.truncated ? <span>已截断预览</span> : null}
+        {preview?.lossyUtf8 ? <span>非 UTF-8 编码，暂不支持就地编辑</span> : null}
         {editing && dirty ? <span className={s.dirtyBadge}>● 未保存</span> : null}
         {loading && !editing ? <RefreshCw size={12} aria-hidden /> : null}
         {editing ? (

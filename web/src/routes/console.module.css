@@ -20,96 +20,89 @@
   gap: 16px;
 }
 
-.topActions {
+/* 终端卡标题行右侧的图标按钮：在外部终端打开 / 重新打开 / 关闭终端 */
+.terminalActions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: var(--h-hairline) solid var(--h-line);
 }
 
-.secondaryButton,
-.dangerButton {
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  padding: 8px 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--h-bg-chip);
-  color: var(--h-text-2);
-  font-size: 12px;
+.iconButton {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--h-radius-md);
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  color: var(--h-text-3);
   cursor: pointer;
+  transition:
+    background var(--h-duration-fast) var(--h-ease-standard),
+    color var(--h-duration-fast) var(--h-ease-standard);
 }
 
-.secondaryButton:hover,
-.dangerButton:hover:not(:disabled) {
+.iconButton:hover:not(:disabled) {
   color: var(--h-text);
-  border-color: rgba(255, 122, 61, 0.42);
+  background: var(--h-bg-hover);
 }
 
-.dangerButton:disabled {
+.iconButton[data-tone="danger"]:hover:not(:disabled) {
+  color: var(--h-err);
+  background: var(--h-err-soft);
+}
+
+.iconButton:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
+}
+
+.iconButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
-.summaryCard,
-.terminalCard,
-.panel,
+/* 摘要卡与侧栏面板：浅填充、无边框；终端卡：hairline 描边 */
+.panel {
+  border: none;
+  background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
+}
+
+.terminalCard {
+  border: var(--h-hairline) solid var(--h-line);
+  background: transparent;
+  border-radius: var(--h-radius-lg);
+}
+
 .infoBox,
 .errorBox {
-  border: 1px solid var(--h-line);
-  background: var(--h-bg-surface);
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.summaryCard {
-  padding: 20px;
-  display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(360px, 1.05fr);
-  gap: 28px;
-  align-items: start;
-}
-
-.eyebrow {
-  font-family: var(--h-font-mono);
-  font-size: 10px;
-  color: var(--h-accent);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-}
-
-.summaryCard h2 {
-  margin: 0 0 8px;
-  font-size: 22px;
-  letter-spacing: -0.03em;
-  color: var(--h-text);
-}
-
-.summaryCard p {
-  margin: 0;
-  max-width: 640px;
-  color: var(--h-text-2);
-  line-height: 1.65;
-  font-size: 13px;
+  border: none;
+  border-radius: var(--h-radius-lg);
 }
 
 .summaryStats {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .summaryStats div {
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
-  padding: 12px 12px;
+  min-width: 0;
+  border: none;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
+  padding: 12px 16px;
 }
 
 .summaryStats span {
   display: block;
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
   margin-bottom: 4px;
 }
 
@@ -137,8 +130,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--h-line);
-  background: var(--h-bg-pane);
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
+  background: transparent;
 }
 
 .terminalTitle,
@@ -152,6 +145,7 @@
 
 .terminalTitle {
   color: var(--h-text);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -163,7 +157,8 @@
   height: 0;
   overflow: hidden;
   box-sizing: border-box;
-  background: #080807;
+  /* 与 embedded-terminal.tsx 里 xterm theme.background 保持一致（该色在 TSX 中硬编码） */
+  background: #121212;
   padding: 12px;
 }
 
@@ -194,8 +189,8 @@
 
 .panelTitle {
   color: var(--h-text);
-  font-weight: 650;
-  font-size: 13px;
+  font-weight: 600;
+  font-size: 14px;
   margin-bottom: 12px;
 }
 
@@ -206,22 +201,32 @@
 }
 
 .commandCard {
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
+  background: transparent;
   color: var(--h-text-2);
+  font-family: var(--h-font-ui);
   padding: 12px;
   text-align: left;
   cursor: pointer;
   display: grid;
   gap: 8px;
+  transition: background var(--h-duration-fast) var(--h-ease-standard);
 }
 
-.commandCard:hover:not(:disabled),
-.commandCard[data-active="true"] {
-  border-color: rgba(255, 122, 61, 0.42);
-  background: var(--h-bg-chip);
+.commandCard:hover:not(:disabled) {
+  background: var(--h-bg-hover);
   color: var(--h-text);
+}
+
+.commandCard[data-active="true"] {
+  background: var(--h-bg-selected);
+  color: var(--h-text);
+}
+
+.commandCard:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .commandCard:disabled {
@@ -234,24 +239,23 @@
   align-items: center;
   gap: 8px;
   color: var(--h-text);
-  font-weight: 650;
-  font-size: 12.5px;
+  font-weight: 500;
+  font-size: 13px;
 }
 
 .commandCard code,
 .helpText code {
   font-family: var(--h-font-mono);
-  color: var(--h-accent);
-  background: rgba(255, 122, 61, 0.1);
-  border: 1px solid rgba(255, 122, 61, 0.16);
-  border-radius: 0;
-  padding: 4px 4px;
+  color: var(--h-text);
+  background: var(--h-bg-chip);
+  border-radius: var(--h-radius-xs);
+  padding: 2px 4px;
 }
 
 .commandCard code {
   display: inline-block;
   width: fit-content;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .commandCard span:last-child,
@@ -270,16 +274,14 @@
   padding: 12px 16px;
   color: var(--h-err);
   background: var(--h-err-soft);
-  border-color: var(--h-err-border);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .infoBox {
   padding: 12px 16px;
   color: var(--h-text);
   background: var(--h-ok-soft);
-  border-color: color-mix(in srgb, var(--h-ok) 38%, var(--h-line));
-  font-size: 12px;
+  font-size: 13px;
 }
 
 @media (max-width: 1320px) {
@@ -290,7 +292,6 @@
 
 @media (max-width: 1180px) {
   .layout,
-  .summaryCard,
   .sideColumn {
     grid-template-columns: 1fr;
   }

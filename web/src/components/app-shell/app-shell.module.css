@@ -1,13 +1,11 @@
-/* App shell — CSS Grid: topbar / [sidebar + main] / statusbar
-   Mirrors prototypes' `.app .app--two` layout. */
+/* 外壳：左侧通高侧栏（灰底）+ 右侧主区（画布底）。侧栏收起时列宽过渡到 0。 */
 
 .shell {
   width: 100vw;
   height: 100vh;
   position: relative;
   display: grid;
-  grid-template-rows: calc(var(--h-topbar-h) + var(--h-window-control-safe-top, 0px)) 1fr var(--h-statusbar-h);
-  grid-template-columns: var(--h-sidebar-w) 1fr;
+  grid-template-columns: var(--h-sidebar-w) minmax(0, 1fr);
   overflow: hidden;
   background: var(--h-bg-app);
   color: var(--h-text);
@@ -16,21 +14,15 @@
 }
 
 .shell[data-sidebar-visible="false"] {
-  grid-template-columns: 0 1fr;
-}
-
-.topbarSlot {
-  grid-column: 1 / -1;
-  grid-row: 1;
+  grid-template-columns: 0 minmax(0, 1fr);
 }
 
 .sidebarSlot {
-  grid-column: 1;
-  grid-row: 2;
   width: var(--h-sidebar-w);
   min-height: 0;
   overflow: hidden;
   position: relative;
+  background: var(--h-bg-sidebar);
   opacity: 1;
   visibility: visible;
   transform: translateX(0);
@@ -51,70 +43,30 @@
     visibility 0s linear var(--h-duration-normal);
 }
 
-.sidebarSlot > aside {
-  padding-bottom: 32px;
-}
-
-.sidebarToggle,
-.sidebarRestoreButton {
-  position: absolute;
-  z-index: 20;
-  background: var(--h-bg-pane);
-}
-
-.sidebarToggle {
-  right: 4px;
-  bottom: 4px;
-}
-
-.sidebarRestoreButton {
-  left: 4px;
-  bottom: calc(var(--h-statusbar-h) + 4px);
-  opacity: 0;
-  visibility: hidden;
-  translate: -8px 0;
-  pointer-events: none;
-  transition:
-    opacity var(--h-duration-fast) var(--h-ease-standard),
-    translate var(--h-duration-normal) var(--h-ease-standard),
-    transform var(--h-duration-fast) var(--h-ease-standard),
-    visibility 0s linear var(--h-duration-normal);
-}
-
-.sidebarRestoreButton[data-visible="true"] {
-  opacity: 1;
-  visibility: visible;
-  translate: 0 0;
-  pointer-events: auto;
-  transition-delay: var(--h-duration-fast), var(--h-duration-fast), 0s, 0s;
-}
-
-.sidebarRestoreButton[data-visible="true"]:active:not(:disabled) {
-  transform: translateY(4px);
-}
-
 .mainSlot {
-  grid-column: 2;
-  grid-row: 2;
   position: relative;
-  min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--h-bg-app);
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .shell,
-  .sidebarSlot,
-  .sidebarRestoreButton {
+  .sidebarSlot {
     transition-duration: 0.01ms;
     transition-delay: 0s;
   }
-}
-
-.statusbarSlot {
-  grid-column: 1 / -1;
-  grid-row: 3;
 }

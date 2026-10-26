@@ -1,9 +1,10 @@
 .content {
   z-index: var(--h-z-popover);
-  background: var(--h-bg-pane);
+  background: var(--h-bg-elevated);
   color: var(--h-text);
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  box-shadow: var(--h-shadow-lg);
   outline: none;
   overflow: hidden;
   animation: agentdeckPopoverIn 120ms ease-out;
@@ -14,7 +15,7 @@
 }
 
 .arrow {
-  fill: var(--h-bg-pane);
+  fill: var(--h-bg-elevated);
   stroke: var(--h-line);
   stroke-width: 1px;
 }

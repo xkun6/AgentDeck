@@ -10,7 +10,8 @@
 .chips {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px;
   min-width: 0;
   min-height: var(--h-button-height-md);
 }
@@ -20,21 +21,22 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-size: var(--h-button-font-size-sm);
+  padding: 0 8px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .notice[data-tone="danger"] {
-  color: var(--h-color-danger-fg);
-  font-weight: 600;
+  color: var(--h-err);
+  font-weight: 500;
 }
 
 .notice[data-tone="error"] {
-  color: var(--h-color-danger-fg);
+  color: var(--h-err);
 }
 
 .notice[data-tone="info"] {
-  color: var(--h-color-fg-muted);
+  color: var(--h-text-3);
 }
 
 .noticeIcon {

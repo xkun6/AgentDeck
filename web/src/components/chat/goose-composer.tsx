@@ -101,11 +101,8 @@ interface GooseComposerProps {
   compact?: boolean;
   /** Remove the lower corner radius when the composer sits flush with a page edge. */
   flushBottom?: boolean;
-  /** "big" makes the composer the page hero: shows a header bar (label + char count);
-   * textarea is taller. */
+  /** "big"：首页大输入框，输入区更高。 */
   variant?: "default" | "big";
-  /** Label shown on the left of the big-variant header bar. Default "新任务". */
-  headerLabel?: string;
   /** Empty-state hints shown when the textarea is empty. */
   hints?: ComposerHint[];
   /** Keyboard shortcut for submitting; defaults to the global composer setting. */
@@ -155,7 +152,6 @@ export function GooseComposer({
   compact = false,
   flushBottom = false,
   variant = "default",
-  headerLabel = "新任务",
   loadingPlaceholder,
   hints,
   submitShortcut,
@@ -170,7 +166,6 @@ export function GooseComposer({
   const configuredSubmitShortcut = useAtomValue(composerSubmitShortcutAtom);
   const effectiveSubmitShortcut = submitShortcut ?? configuredSubmitShortcut;
   const submitHint = composerSubmitShortcutHint(effectiveSubmitShortcut);
-  const isBig = variant === "big";
   const [value, setValue] = useState(initial);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [workspacePath, setWorkspacePath] = useState(
@@ -192,7 +187,6 @@ export function GooseComposer({
   const hasProcessingAttachment = attachments.some(isAttachmentBusy);
   const controlsDisabled = disabled || loading;
   const submitText = value.trim();
-  const displayedTextLength = value.length;
   // 运行中（loading）也可提交：onSend 排队、onSteer 插话（design.md 4.22）
   const canSend =
     (submitText.length > 0 || attachments.length > 0) &&
@@ -709,18 +703,6 @@ export function GooseComposer({
           />
         ) : null}
 
-        {isBig ? (
-          <div className={s.bigHeader}>
-            <span className={s.bigHeaderLabel}>
-              <span className={s.bigHeaderDot} aria-hidden="true" />
-              {headerLabel}
-            </span>
-            <span className={s.bigHeaderRight}>
-              <span className={s.bigHeaderChars}>{displayedTextLength} 字</span>
-            </span>
-          </div>
-        ) : null}
-
         <AttachmentTray attachments={attachments} onRemove={removeAttachment} />
 
         <textarea
@@ -786,39 +768,8 @@ export function GooseComposer({
             >
               <ImagePlus className={s.toolIcon} aria-hidden="true" />
             </button>
-            <button
-              className={s.toolButton}
-              type="button"
-              onClick={() => void pickWorkspace()}
-              disabled={controlsDisabled}
-              data-active={Boolean(workspacePath)}
-              title={workspacePath ? `工作区：${workspacePath}` : "选择工作区"}
-              aria-label={workspacePath ? `工作区：${workspacePath}` : "选择工作区"}
-            >
-              <Folder className={s.toolIcon} aria-hidden="true" />
-              <span>{workspacePath ? fileNameFromPath(workspacePath) : "工作区"}</span>
-            </button>
-            {workspacePath ? (
-              <button
-                className={s.workspaceClearButton}
-                type="button"
-                onClick={clearWorkspacePath}
-                disabled={controlsDisabled}
-                title="不指定默认工作区"
-                aria-label={`不指定默认工作区：${workspacePath}`}
-              >
-                <X aria-hidden="true" />
-              </button>
-            ) : null}
             {showMeta && <span className={s.pill}>本地模式</span>}
           </div>
-
-          {toolbarExtra ? (
-            <>
-              <span className={s.toolbarDivider} aria-hidden="true" />
-              <div className={s.toolbarExtra}>{toolbarExtra}</div>
-            </>
-          ) : null}
 
           <div className={s.rightTools}>
             {toolbarTrailing}
@@ -826,7 +777,7 @@ export function GooseComposer({
             {loading && queueWhileLoading && onSend ? (
               <>
                 <button
-                  className={s.sendButton}
+                  className={s.textButton}
                   type="button"
                   data-ready={canSend}
                   onClick={() => void send()}
@@ -838,7 +789,7 @@ export function GooseComposer({
                 </button>
                 {onSteer ? (
                   <button
-                    className={s.sendButton}
+                    className={s.textButton}
                     type="button"
                     data-ready={canSteer}
                     onClick={() => void steer()}
@@ -874,11 +825,37 @@ export function GooseComposer({
                 title={`发送消息（${submitHint}）`}
               >
                 <SendIcon />
-                <span>发送</span>
               </button>
             )}
           </div>
         </div>
+      </div>
+      <div className={s.tray}>
+        <button
+          className={s.toolButton}
+          type="button"
+          onClick={() => void pickWorkspace()}
+          disabled={controlsDisabled}
+          data-active={Boolean(workspacePath)}
+          title={workspacePath ? `工作区：${workspacePath}` : "选择工作区"}
+          aria-label={workspacePath ? `工作区：${workspacePath}` : "选择工作区"}
+        >
+          <Folder className={s.toolIcon} aria-hidden="true" />
+          <span>{workspacePath ? fileNameFromPath(workspacePath) : "选择工作区"}</span>
+        </button>
+        {workspacePath ? (
+          <button
+            className={s.workspaceClearButton}
+            type="button"
+            onClick={clearWorkspacePath}
+            disabled={controlsDisabled}
+            title="不指定默认工作区"
+            aria-label={`不指定默认工作区：${workspacePath}`}
+          >
+            <X aria-hidden="true" />
+          </button>
+        ) : null}
+        {toolbarExtra ? <div className={s.toolbarExtra}>{toolbarExtra}</div> : null}
       </div>
       {workspacePickerOpen ? (
         <WorkspacePickerModal

@@ -8,18 +8,19 @@
   width: 96px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-input);
   color: var(--h-text);
-  font-family: var(--h-font-mono);
-  font-size: 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
 .numberInput:focus {
   outline: none;
   border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .unit {
@@ -46,17 +47,22 @@
 }
 
 .storageList {
+  display: grid;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* 列表行：浅填充圆角行卡（同设置行），行间留白代替分隔线 */
 .storageRow {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--h-line-soft);
+  min-height: 44px;
+  padding: 8px 16px;
+  background: var(--h-bg-soft);
+  border-radius: var(--h-radius-lg);
 }
 
 .storagePath {
@@ -73,5 +79,6 @@
 .storageSize {
   flex: 0 0 auto;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--h-text-3);
 }

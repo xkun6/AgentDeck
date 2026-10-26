@@ -69,28 +69,23 @@ export const RECIPES_NEW_TASK: Recipe[] = [
 
 interface QuickStartProps {
   recipes?: Recipe[];
-  columns?: number;
 }
 
-export function QuickStart({ recipes = RECIPES_PANEL, columns }: QuickStartProps) {
+/** 快速起手：一排胶囊按钮，点击把模板预填进首页输入框；说明放在悬停提示里。 */
+export function QuickStart({ recipes = RECIPES_PANEL }: QuickStartProps) {
   const setPrefill = useSetAtom(composerPrefillAtom);
-  const gridStyle = columns
-    ? ({ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` } as React.CSSProperties)
-    : undefined;
 
   return (
-    <div className={s.grid} style={gridStyle}>
+    <div className={s.list}>
       {recipes.map((recipe) => (
         <button
           key={recipe.num}
           type="button"
-          className={s.card}
+          className={s.chip}
           onClick={() => setPrefill({ text: recipe.prompt, nonce: Date.now() })}
-          title="点击填入输入框"
+          title={recipe.desc}
         >
-          <div className={s.num}>{recipe.num}</div>
-          <div className={s.title}>{recipe.title}</div>
-          <div className={s.desc}>{recipe.desc}</div>
+          {recipe.title}
         </button>
       ))}
     </div>

@@ -138,7 +138,7 @@ export function __resetNotificationsForTests(): void {
 function bodyWithSessionTitle(body: string, sessionTitle: string | undefined): string {
   const title = sessionTitle?.trim();
   if (!title) return body;
-  return `「${truncate(title, SESSION_TITLE_CHARS)}」${body ? ` · ${body}` : ""}`;
+  return `「${truncate(title, SESSION_TITLE_CHARS)}」${body ? `：${body}` : ""}`;
 }
 
 // ── 提示音兜底 ──────────────────────────────────────────────────────────
@@ -269,7 +269,7 @@ export function decideScheduleNotification(
   if (!settings.onComplete) return null;
   const name = truncate(notice.name, SESSION_TITLE_CHARS);
   const body = truncate(notice.message, MAX_BODY_CHARS);
-  const detail = `「${name}」${body ? ` · ${body}` : ""}`;
+  const detail = `「${name}」${body ? `：${body}` : ""}`;
   switch (notice.kind) {
     case "done":
       return { kind: "complete", title: "目标循环已完成", body: detail };

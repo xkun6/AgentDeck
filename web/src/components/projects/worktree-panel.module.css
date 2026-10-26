@@ -3,9 +3,9 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px 16px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: 0;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
 }
 
 .head {
@@ -28,11 +28,11 @@
   display: inline-flex;
   align-items: center;
   padding: 4px 8px;
-  border-radius: 0;
+  border-radius: var(--h-radius-pill);
   background: var(--h-accent-soft);
   color: var(--h-accent);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .branchChip[data-tone="muted"] {
@@ -44,8 +44,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--h-text-3);
 }
 
@@ -53,7 +54,7 @@
   color: var(--h-ok);
 }
 .statusSummary .del {
-  color: var(--h-danger);
+  color: var(--h-err);
 }
 .statusSummary .clean {
   color: var(--h-text-4);
@@ -66,14 +67,14 @@
   width: var(--h-button-height-sm);
   height: var(--h-button-height-sm);
   border: 0;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-3);
   cursor: pointer;
 }
 
 .iconBtn:hover:not(:disabled) {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -83,7 +84,7 @@
 }
 
 .iconBtn[data-tone="danger"]:hover:not(:disabled) {
-  color: var(--h-danger);
+  color: var(--h-err);
 }
 
 .head .iconBtn {
@@ -95,7 +96,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 8px 12px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-warn-soft);
   color: var(--h-text);
   font-size: 12px;
@@ -116,6 +117,7 @@
   cursor: pointer;
   padding: 0;
   display: inline-flex;
+  border-radius: var(--h-radius-sm);
 }
 
 .hint {
@@ -139,11 +141,11 @@
   align-items: center;
   gap: 12px;
   padding: 8px 8px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
 }
 
 .row:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
 }
 
 .rowMain {
@@ -159,7 +161,7 @@
   align-items: center;
   gap: 8px;
   font-family: var(--h-font-mono);
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--h-text);
 }
 
@@ -167,7 +169,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--h-text-4);
 }
 
@@ -176,11 +178,11 @@
   align-items: center;
   padding: 0 8px;
   height: 16px;
-  border-radius: 0;
+  border-radius: var(--h-radius-pill);
   background: var(--h-accent-soft);
   color: var(--h-accent);
-  font-family: var(--h-font-cn);
-  font-size: 10px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
 }
 
 .badge[data-tone="muted"] {
@@ -204,18 +206,18 @@
   flex: 1;
   min-width: 0;
   height: 32px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   padding: 0 12px;
   background: var(--h-bg-input);
   color: var(--h-text);
-  font-family: var(--h-font-cn);
-  font-size: 12.5px;
+  font-family: var(--h-font-ui);
+  font-size: 13px;
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--h-accent-border);
+  box-shadow: var(--h-focus-ring);
 }
 
 .createBtn {
@@ -225,12 +227,12 @@
   gap: 4px;
   padding: 0 12px;
   height: 32px;
-  border: 1px solid var(--h-accent-border);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-accent);
   color: var(--h-accent-contrast);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -244,7 +246,7 @@
 }
 
 .branches {
-  border-top: 1px solid var(--h-line-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
   padding-top: 8px;
 }
 
@@ -269,11 +271,11 @@
   align-items: center;
   gap: 12px;
   padding: 4px 8px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
 }
 
 .branchRow:hover {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
 }
 
 .branchName {
@@ -292,17 +294,19 @@
 
 .miniBtn {
   flex: 0 0 auto;
-  padding: 4px 8px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
+  height: var(--h-button-height-xs);
+  padding: 0 8px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-2);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .miniBtn:hover:not(:disabled) {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 

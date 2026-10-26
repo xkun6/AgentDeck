@@ -1,20 +1,19 @@
-/* chip 式下拉：统一高度 28px，图标 + 当前值 + 箭头；菜单为 shared-ui Popover。 */
+/* chip 式下拉：高度 28px 的无边框按钮，图标 + 当前值 + 箭头；菜单为 shared-ui Popover。 */
 
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: 0 1 auto;
-  min-width: 64px;
-  max-width: 176px;
+  max-width: 200px;
   height: var(--h-button-height-sm);
   padding: 0 4px 0 8px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-input);
-  color: var(--h-text);
-  font-family: var(--h-font-cn);
-  font-size: var(--h-button-font-size-md);
+  border: 0;
+  border-radius: var(--h-radius-md);
+  background: transparent;
+  color: var(--h-text-2);
+  font-family: var(--h-font-ui);
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
   transition:
@@ -25,8 +24,8 @@
 
 .chip:hover:not(:disabled),
 .chip[data-state="open"] {
-  border-color: var(--h-color-border-strong);
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
+  color: var(--h-text);
 }
 
 .chip:focus-visible {
@@ -34,9 +33,8 @@
   outline-offset: 1px;
 }
 
-/* 禁用（会话休眠 / 不可恢复 / 忙碌）：去底色、虚线边框、弱化文字。 */
+/* 禁用（会话休眠 / 不可恢复 / 忙碌）：弱化文字。 */
 .chip:disabled {
-  border-style: dashed;
   background: transparent;
   color: var(--h-text-4);
   cursor: not-allowed;
@@ -45,9 +43,8 @@
 .chip[data-danger="true"],
 .chip[data-danger="true"]:hover:not(:disabled),
 .chip[data-danger="true"][data-state="open"] {
-  border-color: var(--h-color-danger-border);
-  background: var(--h-color-danger-bg);
-  color: var(--h-color-danger-fg);
+  background: var(--h-err-soft);
+  color: var(--h-err);
 }
 
 .icon {
@@ -62,8 +59,8 @@
 }
 
 .icon svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
 }
 
 .value {
@@ -101,16 +98,15 @@
   max-width: 320px;
   max-height: min(360px, var(--radix-popover-content-available-height));
   padding: 4px;
-  font-family: var(--h-font-cn);
+  font-family: var(--h-font-ui);
 }
 
 .menuTitle {
   flex: 0 0 auto;
   padding: 4px 8px 8px;
   color: var(--h-text-3);
-  font-size: var(--h-button-font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 12px;
+  font-weight: 500;
   user-select: none;
 }
 
@@ -125,16 +121,15 @@
 /* 分组标题（Agent 菜单的「内置」/「中转」）：非选项，键盘导航跳过。 */
 .groupTitle {
   padding: 8px 8px 4px 28px;
-  color: var(--h-text-4);
-  font-size: var(--h-font-size-2xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  color: var(--h-text-3);
+  font-size: 12px;
+  font-weight: 500;
   user-select: none;
 }
 
 .groupTitle:not(:first-child) {
   margin-top: 4px;
-  border-top: 1px solid var(--h-line-soft);
+  border-top: var(--h-hairline) solid var(--h-line-soft);
 }
 
 .option {
@@ -143,20 +138,20 @@
   gap: 8px;
   min-height: var(--h-button-height-md);
   padding: 8px 8px 8px 4px;
-  border-radius: 0;
+  border-radius: var(--h-radius-md);
   color: var(--h-text);
-  font-size: var(--h-button-font-size-md);
+  font-size: 13px;
   line-height: 1.35;
   cursor: pointer;
   user-select: none;
 }
 
 .option[data-active="true"] {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
 
 .list:focus-visible .option[data-active="true"] {
-  box-shadow: inset 2px 0 0 var(--h-accent);
+  background: var(--h-bg-selected);
 }
 
 .option[aria-disabled="true"] {
@@ -165,11 +160,11 @@
 }
 
 .option[data-danger="true"] {
-  color: var(--h-color-danger-fg);
+  color: var(--h-err);
 }
 
 .option[data-danger="true"][data-active="true"] {
-  background: var(--h-color-danger-bg);
+  background: var(--h-err-soft);
 }
 
 .check {
@@ -210,20 +205,21 @@
 .badge {
   flex: 0 0 auto;
   padding: 0 4px;
-  border: 1px solid var(--h-line);
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-xs);
   color: var(--h-text-3);
-  font-size: var(--h-button-font-size-xs);
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .option[data-danger="true"] .badge {
-  border-color: var(--h-color-danger-border);
-  color: var(--h-color-danger-fg);
+  border-color: var(--h-err-border);
+  color: var(--h-err);
 }
 
 .optionDescription {
   color: var(--h-text-3);
-  font-size: var(--h-button-font-size-sm);
+  font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }

@@ -1,23 +1,11 @@
+/* 委派卡：填充圆角卡，无边框、无彩色左边条；状态只在 .status 小标签上体现 */
 .card {
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  border: 1px solid var(--h-line);
-  border-left-width: 2px;
+  border: 0;
   background: var(--h-bg-soft);
-}
-
-.card[data-tone="running"],
-.card[data-tone="ok"] {
-  border-left-color: var(--h-ok);
-}
-
-.card[data-tone="error"] {
-  border-left-color: var(--h-err);
-}
-
-.card[data-tone="idle"] {
-  border-left-color: var(--h-line);
+  border-radius: var(--h-radius-lg);
 }
 
 .header {
@@ -25,7 +13,7 @@
   align-items: center;
   gap: 8px;
   min-height: 32px;
-  padding: 4px 8px;
+  padding: 4px 8px 4px 12px;
   font-size: 12px;
   line-height: 1.45;
   color: var(--h-text-2);
@@ -53,19 +41,23 @@
 
 .status {
   flex: 0 0 auto;
-  padding: 0 4px;
+  padding: 0 8px;
   background: var(--h-bg-chip);
   color: var(--h-text-2);
-  font-family: var(--h-font-mono);
-  font-size: 10px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--h-radius-pill);
 }
 
 .status[data-tone="running"],
 .status[data-tone="ok"] {
+  background: var(--h-ok-soft);
   color: var(--h-ok);
 }
 
 .status[data-tone="error"] {
+  background: var(--h-err-soft);
   color: var(--h-err);
 }
 
@@ -81,8 +73,8 @@
   gap: 4px;
   height: var(--h-button-height-xs);
   padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 0;
+  border: var(--h-hairline) solid transparent;
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-2);
   font: inherit;
@@ -90,12 +82,12 @@
 }
 
 .action:hover {
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
 .action:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--h-accent) 45%, transparent);
+  outline: var(--h-focus-outline);
   outline-offset: -2px;
 }
 
@@ -103,8 +95,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px;
-  border-top: 1px solid var(--h-line-soft);
+  padding: 4px 12px 12px;
 }
 
 .request,
@@ -114,7 +105,7 @@
   overflow: auto;
   color: var(--h-text-2);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;

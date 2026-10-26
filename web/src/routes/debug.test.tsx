@@ -85,7 +85,7 @@ describe("DebugSection", () => {
     renderPage();
     expect(screen.getAllByText("Claude Code")).toHaveLength(1);
     expect(screen.getAllByText("Codex")).toHaveLength(1);
-    expect(screen.getByText("2.1.0 · C:/claude.exe")).toBeTruthy();
+    expect(screen.getByText("2.1.0，C:/claude.exe")).toBeTruthy();
     expect(screen.queryByText("已安装")).toBeNull();
   });
 

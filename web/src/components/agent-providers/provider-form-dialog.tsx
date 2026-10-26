@@ -80,9 +80,9 @@ function describeTestResult(result: ProviderTestResult, extendsValue: ProviderPr
     if (extendsValue !== "acp") {
       parts.push(result.models?.length ? `拉取到 ${result.models.length} 个模型` : "未解析到模型列表");
     }
-    return [extendsValue === "acp" ? "启动命令可用" : "连接成功", ...parts].join(" · ");
+    return [extendsValue === "acp" ? "启动命令可用" : "连接成功", ...parts].join("，");
   }
-  return [`连接失败：${result.error || "未知错误"}`, ...parts].join(" · ");
+  return [`连接失败：${result.error || "未知错误"}`, ...parts].join("，");
 }
 
 function SecretInput({

@@ -2,35 +2,21 @@
 
 :root,
 [data-density="comfortable"] {
-  --h-row-h: 32px;
-  --h-pad: 16px;
-  --h-fs: 12.5px;
-  --h-lh: 1.75;
-}
-
-[data-density="compact"] {
-  --h-row-h: 24px;
-  --h-pad: 12px;
-  --h-fs: 12px;
+  --h-fs: 14px;
   --h-lh: 1.6;
 }
 
-/* Square geometry aliases — every radius resolves to zero. */
-:root {
-  --h-r-sm: var(--h-radius-sm);
-  --h-r-md: var(--h-radius-md);
-  --h-r-lg: var(--h-radius-lg);
-  --h-r-pill: var(--h-radius-pill);
+[data-density="compact"] {
+  --h-fs: 13px;
+  --h-lh: 1.55;
 }
 
-/* App-shell layout sizing — aligned with prototypes' --topbar-h / --sidebar-w / --statusbar-h. */
+/* 外壳尺寸：侧栏通高，主区顶部一条 44px 标题行（页面标题 / 操作 / 窗口按钮） */
 :root {
-  --h-topbar-h: 48px;
-  /* 自绘标题栏窗口按钮宽度（Windows 11 为 46px，取最近的 4px 网格值）。 */
+  --h-topbar-h: 44px;
+  /* 自绘标题栏窗口按钮宽度（Windows 11 为 46px，取最近的 4px 网格值） */
   --h-window-control-w: 48px;
-  --h-statusbar-h: 28px;
-  --h-sidebar-w: 248px;
-  --h-tab-h: 36px;
-  --h-page-content-max-width: 1120px;
-  --h-page-content-gutter-x: 24px;
+  --h-sidebar-w: 260px;
+  --h-page-content-max-width: 920px;
+  --h-page-content-gutter-x: 32px;
 }

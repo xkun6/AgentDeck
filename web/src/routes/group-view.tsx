@@ -171,8 +171,8 @@ function ChairResult({ group }: { group: AgentGroup }) {
     <section className={s.chair} aria-label="汇总结果">
       <header className={s.chairHead}>
         <span className={s.chairTitle}>
-          汇总结果（{CHAIR_MODE_LABELS[chair.mode]} · {agentProviderLabel(chair.provider, providers)}
-          {chair.model ? ` · ${chair.model}` : ""}）
+          汇总结果（{CHAIR_MODE_LABELS[chair.mode]}，{agentProviderLabel(chair.provider, providers)}
+          {chair.model ? `，${chair.model}` : ""}）
         </span>
         {chairAgentId ? (
           <Button variant="ghost" onClick={() => openSession(chairAgentId)}>

@@ -300,9 +300,9 @@ describe("Agent 菜单分组", () => {
       ["中转", "custom:broken", true],
     ]);
     expect(entries[1]!.description).toBe("不可用：未安装");
-    expect(entries[2]!.description).toBe("基于 Claude Code · 127.0.0.1:8787");
-    expect(entries[3]!.description).toBe("已停用 · 基于 Codex · off.test");
-    expect(entries[4]!.description).toBe("不可用：找不到 codex · 基于 Codex");
+    expect(entries[2]!.description).toBe("基于 Claude Code，127.0.0.1:8787");
+    expect(entries[3]!.description).toBe("已停用，基于 Codex，off.test");
+    expect(entries[4]!.description).toBe("不可用：找不到 codex，基于 Codex");
   });
 
   it("配置未加载时按 provider.list 列出中转", () => {

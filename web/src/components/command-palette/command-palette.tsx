@@ -137,7 +137,7 @@ export function CommandPalette() {
     () => agents.filter((agent) => !isHiddenAgent(agent)).map((agent) => ({
       id: agent.id,
       title: agentDisplayTitle(agent, runtimes[agent.id], providersQuery.data),
-      subtitle: [agentProviderLabel(agent.provider, providersQuery.data), agent.cwd].filter(Boolean).join(" · "),
+      subtitle: [agentProviderLabel(agent.provider, providersQuery.data), agent.cwd].filter(Boolean).join("，"),
       preview: agent.preview,
       updatedAt: agent.updatedAt,
     })),
@@ -284,7 +284,7 @@ export function CommandPalette() {
               )}
             </Command.List>
             <div className={s.footer}>
-              <span>↑↓ 选择 · Enter 打开 · ⌘K / Ctrl+K 切换</span>
+              <span>↑↓ 选择，Enter 打开，Ctrl+K 切换</span>
               {loadingLabel ? <span>正在同步 {loadingLabel}</span> : <span>{items.length} 个候选</span>}
             </div>
           </Command>

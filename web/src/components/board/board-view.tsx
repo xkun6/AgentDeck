@@ -119,7 +119,7 @@ export function BoardView({ projectPath }: BoardViewProps) {
       <div className={s.toolbar}>
         <span className={s.summary}>
           共 {board.tasks.length} 个任务
-          {board.settings.autoDispatch ? " · 自动派发已开启" : ""}
+          {board.settings.autoDispatch ? "，自动派发已开启" : ""}
         </span>
         <div className={s.toolbarActions}>
           <Button size="sm" leadingIcon={<Settings size={12} />} onClick={() => setSettingsOpen(true)}>
@@ -185,7 +185,7 @@ export function BoardView({ projectPath }: BoardViewProps) {
                     <div className={s.cardMeta}>
                       <span className={s.agent}>
                         {agentProviderLabel(assignee.provider, providers)}
-                        {assignee.model ? ` · ${assignee.model}` : ""}
+                        {assignee.model ? `（${assignee.model}）` : ""}
                       </span>
                       {badge ? (
                         <span className={s.badge} data-tone={badge.tone}>

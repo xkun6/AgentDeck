@@ -28,46 +28,43 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   transform: translateY(-50%);
-  border: 1px solid transparent;
-  border-radius: 0;
-  background: color-mix(in srgb, var(--h-bg-pane) 72%, transparent);
+  border: 0;
+  border-radius: var(--h-radius-md);
+  background: transparent;
   padding: 8px 4px;
-  opacity: 0.72;
+  opacity: 0.8;
   pointer-events: auto;
   transition: opacity 0.14s ease, background-color 0.14s ease, border-color 0.14s ease;
 }
 
 .turnRail:hover {
-  border-color: var(--h-line-soft);
-  background: color-mix(in srgb, var(--h-bg-pane) 92%, transparent);
+  background: var(--h-bg-hover);
   opacity: 1;
 }
 
 .turnDot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
-  aspect-ratio: 1;
-  border: 1px solid color-mix(in srgb, var(--h-text-3) 55%, transparent);
-  border-radius: 50%;
+  width: 12px;
+  height: 2px;
+  flex: 0 0 2px;
+  border: 0;
+  border-radius: var(--h-radius-pill);
   background: var(--h-text-3);
   padding: 0;
   cursor: pointer;
-  opacity: 0.46;
-  transition: opacity 0.14s ease, background-color 0.14s ease, transform 0.14s ease;
+  opacity: 0.45;
+  transition: opacity 0.14s ease, background-color 0.14s ease, width 0.14s ease;
 }
 
 .turnDot:hover {
-  background: var(--h-text-2);
-  opacity: 0.86;
-  transform: scale(1.16);
+  width: 16px;
+  opacity: 0.9;
 }
 
 .turnDot[data-active="true"] {
-  border-color: var(--h-accent);
-  background: var(--h-accent);
+  width: 16px;
+  background: var(--h-text);
   opacity: 1;
 }
 
@@ -75,56 +72,35 @@
   width: 100%;
   max-width: var(--conversation-max-width, 780px);
   margin: 0 auto;
-  padding: 20px 28px 24px;
+  padding: 16px 0 24px;
 }
 
 .dateSeparator {
   display: flex;
   justify-content: center;
-  margin: 20px 0 12px;
+  margin: 24px 0 12px;
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .messageRow {
   display: flex;
   width: 100%;
-  margin: 12px 0;
-  gap: 12px;
+  margin: 16px 0;
   animation: fadeIn 0.18s ease-out;
 }
 
-/* IM 式头像列：头像独立在气泡左侧；无头像的行（工具行）用同宽占位
-   保持左缘对齐。 */
-.avatarCol {
-  flex: 0 0 36px;
-  width: 36px;
-}
-
-.avatarButton {
-  box-sizing: border-box;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 0;
-  background: var(--h-color-bg-avatar);
-  cursor: pointer;
-  display: block;
-  border-radius: 0;
-  overflow: hidden;
-}
-
-.avatarButton:hover .rowAvatar {
+.rowAvatar {
   filter: brightness(0.96);
 }
 
 .rowAvatar {
   box-sizing: border-box;
-  width: 36px;
-  height: 36px;
-  border-radius: 0;
-  border: 1px solid var(--h-line);
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 50%;
   background: var(--h-color-bg-avatar);
   object-fit: cover;
   display: block;
@@ -132,13 +108,14 @@
 
 .rowAvatarInitial {
   box-sizing: border-box;
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--h-line);
-  background: var(--h-color-bg-avatar);
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--h-bg-chip);
   color: var(--h-text-2);
   font-family: var(--h-font-ui);
-  font-size: var(--h-font-size-md);
+  font-size: 12px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -146,12 +123,7 @@
   user-select: none;
 }
 
-.avatarButton:hover .rowAvatarInitial {
-  filter: brightness(0.96);
-}
-
-/* IM 式（微信参考）：assistant 靠左（头像列在左），user 靠右——
-   row-reverse 把头像列翻到右侧，气泡按内容收缩右贴。 */
+/* 助手正文通栏靠左，用户气泡按内容收缩右贴。 */
 .messageRow[data-role="user"] {
   flex-direction: row-reverse;
 }
@@ -174,7 +146,7 @@
   max-width: 672px;
   color: var(--h-text-3);
   font-family: var(--h-font-cn);
-  font-size: var(--h-font-size-xs);
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -183,7 +155,7 @@
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--h-line);
+  background: var(--h-line-soft);
 }
 
 .dividerNoticeText {
@@ -202,16 +174,15 @@
   width: 100%;
   max-width: 672px;
   padding: 12px 16px;
-  border-radius: 0;
-  background: var(--h-bg-pane);
-  border: 1px solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
+  border: 0;
   color: var(--h-text-2);
   font-family: var(--h-font-cn);
 }
 
 .systemNotice[data-error="true"] {
   background: var(--h-err-soft);
-  border-color: var(--h-err-border);
 }
 
 .systemNoticeIcon {
@@ -237,12 +208,11 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--h-text);
-  letter-spacing: 0.005em;
   line-height: 1.4;
 }
 
 .systemNoticeText {
-  font-size: var(--conversation-font-size, 12.5px);
+  font-size: var(--conversation-font-size, 13px);
   color: var(--h-text-2);
   line-height: var(--conversation-line-height, 1.6);
   white-space: pre-wrap;
@@ -257,8 +227,9 @@
   padding: 0;
   background: transparent;
   color: var(--h-text-3);
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
+  border-radius: var(--h-radius-sm);
 }
 
 .systemNoticeToggle:hover {
@@ -269,34 +240,29 @@
   position: relative;
   width: 100%;
   min-width: 0;
-  padding-bottom: 24px;
+  padding-bottom: 28px;
 }
 
+/* 助手名行：小头像 + 名字，点击弹资料卡 */
 .assistantName {
-  margin: 0 0 4px 4px;
-  color: var(--h-text-2);
-  font-size: 12px;
-}
-
-.assistantIdentity {
+  margin: 0 0 8px;
+  padding: 2px 8px 2px 2px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 8px 0;
+  border: 0;
+  border-radius: var(--h-radius-pill);
+  background: transparent;
   color: var(--h-text-2);
-  font-size: 12px;
-  font-weight: 550;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
 }
 
-.assistantAvatar {
-  box-sizing: border-box;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 auto;
-  border-radius: 0;
-  border: 1px solid var(--h-line);
-  background: var(--h-color-bg-avatar);
-  object-fit: cover;
+.assistantName:hover {
+  background: var(--h-bg-hover);
+  color: var(--h-text);
 }
 
 .bubble {
@@ -308,11 +274,16 @@
 
 .bubble[data-role="user"] {
   width: fit-content;
-  max-width: 100%;
+  max-width: min(100%, 640px);
   margin-left: auto;
-  padding: 12px 16px;
-  border-radius: 0;
+  padding: 8px 16px;
+  border-radius: var(--h-radius-xl);
   background: var(--h-bg-chip);
+}
+
+/* 用户输入里的单个换行在 Markdown 中是软换行（渲染成空格），用户气泡按原样保留换行。 */
+.bubble[data-role="user"] .messageText p {
+  white-space: pre-wrap;
 }
 
 .messageText {
@@ -358,11 +329,11 @@
 }
 
 .messageText h1 {
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .messageText h2 {
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .messageText h3,
@@ -387,35 +358,51 @@
 
 .messageText blockquote {
   margin: 12px 0;
-  border-left: 1px solid var(--h-line);
+  border-left: 2px solid var(--h-line);
   padding-left: 12px;
   color: var(--h-text-2);
 }
 
 .messageText table {
   display: block;
+  width: fit-content;
   max-width: 100%;
   overflow-x: auto;
   margin: 12px 0;
-  border-collapse: collapse;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
 }
 
+/* 表格：外框 hairline + 圆角，行间细线，表头无底色 */
 .messageText th,
 .messageText td {
-  border: 1px solid var(--h-line-soft);
-  padding: 4px 8px;
+  border: 0;
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
+  padding: 6px 12px;
+  text-align: left;
   vertical-align: top;
 }
 
+.messageText tr:last-child > td {
+  border-bottom: 0;
+}
+
 .messageText th {
-  background: var(--h-bg-soft);
-  color: var(--h-text);
-  font-weight: 600;
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.messageText tbody tr:hover {
+  background: var(--h-bg-hover);
 }
 
 .messageText a {
-  color: var(--h-accent);
+  color: var(--h-color-fg-link);
   text-decoration: none;
 }
 
@@ -441,8 +428,8 @@
   max-width: min(100%, 520px);
   max-height: 360px;
   overflow: hidden;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
   background: var(--h-bg-pane);
   color: inherit;
   text-decoration: none;
@@ -451,7 +438,7 @@
 }
 
 .imageFrame:hover {
-  border-color: color-mix(in srgb, var(--h-accent) 40%, var(--h-line-soft));
+  border-color: var(--h-color-border-strong);
   text-decoration: none;
 }
 
@@ -469,9 +456,9 @@
   align-items: start;
   max-width: min(100%, 520px);
   padding: 12px 16px;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
-  background: var(--h-bg-pane);
+  border: 0;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
   color: var(--h-text-2);
   line-height: 1.45;
 }
@@ -503,12 +490,12 @@
   align-self: flex-start;
   max-width: 100%;
   overflow: hidden;
-  border-radius: 0;
+  border-radius: var(--h-radius-xs);
   background: var(--h-bg-code);
   padding: 4px 8px;
   color: var(--h-text-3);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -557,11 +544,11 @@
 }
 
 .messageText code {
-  border-radius: 0;
+  border-radius: var(--h-radius-xs);
   background: var(--h-bg-code);
-  padding: 4px 4px;
+  padding: 2px 4px;
   font-family: var(--h-font-mono);
-  font-size: 0.9em;
+  font-size: max(12px, 0.9em);
   line-break: auto;
   text-autospace: no-autospace;
   text-spacing-trim: normal;
@@ -570,25 +557,24 @@
 
 .messageText :global([data-streamdown="code-block"]) {
   overflow: hidden;
-  margin: 8px 0;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  margin: 12px 0;
+  border: 0;
+  border-radius: var(--h-radius-lg);
   background: var(--h-bg-code);
   color: var(--h-text-2);
 }
 
 .messageText :global([data-streamdown="code-block-header"]) {
-  border-bottom: 1px solid var(--h-line-soft);
-  padding: 4px 12px;
+  padding: 8px 16px 0;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .messageText :global([data-streamdown="code-block-body"]) {
   overflow-x: auto;
-  padding: 12px 12px;
+  padding: 12px 16px 16px;
 }
 
 .messageText :global([data-streamdown="code-block-body"] pre) {
@@ -627,24 +613,26 @@
 .messageText :global([data-streamdown="mermaid-block"]) {
   overflow: hidden;
   margin: 12px 0;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-lg);
   background: var(--h-bg-code);
 }
 
 .messageText :global([data-streamdown="mermaid-block"] > div:first-child) {
-  border-bottom: 1px solid var(--h-line-soft);
-  padding: 8px 12px;
+  padding: 8px 16px;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .messageText :global([data-streamdown="mermaid-block"] > div:last-child) {
   overflow-x: auto;
+  margin: 0 4px 4px;
   background: var(--h-bg-pane);
   padding: 12px;
+  /* 同心圆角：外层 lg − 4px 留边 */
+  border-radius: calc(var(--h-radius-lg) - 4px);
 }
 
 .messageText :global([data-streamdown="mermaid"]) {
@@ -667,8 +655,8 @@
 .toolBody pre {
   overflow-x: auto;
   margin: 8px 0;
-  border: 1px solid var(--h-line-soft);
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-code);
   color: var(--h-text-2);
   font-family: var(--h-font-mono);
@@ -695,7 +683,7 @@
 }
 
 .codeBlock {
-  padding: 12px 12px;
+  padding: 12px 16px;
 }
 
 .messageText :global(.shiki) {
@@ -733,9 +721,16 @@
   bottom: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   color: var(--h-text-3);
-  font-size: 10px;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity var(--h-duration-fast) var(--h-ease-standard);
+}
+
+.messageRow:hover .messageActions,
+.messageActions:focus-within {
+  opacity: 1;
 }
 
 .messageRow[data-role="user"] .messageActions {
@@ -749,7 +744,7 @@
 .messageActionsControls {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -760,8 +755,9 @@
   background: transparent;
   color: var(--h-text-3);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
   padding: 0;
+  border-radius: var(--h-radius-sm);
 }
 
 .messageActions .retractButton {
@@ -799,18 +795,11 @@
 .messageStatsInline {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .messageStatsInline > span {
   white-space: nowrap;
-}
-
-.messageStatsInline > span + span::before {
-  content: "·";
-  margin-right: 8px;
-  color: var(--h-text-3);
-  opacity: 0.6;
 }
 
 .messageStats[data-risk="warn"] {
@@ -827,13 +816,13 @@
   justify-content: center;
   width: var(--h-button-height-xs);
   height: var(--h-button-height-xs);
-  border-radius: 0;
+  border-radius: var(--h-radius-sm);
   color: var(--h-text-3);
 }
 
 .messageStatsToggle:hover,
 .messageStatsToggle[aria-expanded="true"] {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
   color: var(--h-text);
 }
 
@@ -843,13 +832,13 @@
   bottom: calc(100% + 8px);
   left: 0;
   min-width: 200px;
-  border: 1px solid var(--h-line);
-  border-radius: 0;
-  background: var(--h-bg-input);
-  box-shadow: none;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-elevated);
+  box-shadow: var(--h-shadow-md);
   color: var(--h-text);
-  padding: 12px 12px;
-  font-size: 11px;
+  padding: 12px;
+  font-size: 12px;
   text-align: left;
 }
 
@@ -882,7 +871,7 @@
 
 .messageStatsModel {
   font-family: var(--h-font-mono);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .reasoning {
@@ -899,6 +888,7 @@
   cursor: pointer;
   font-size: 12px;
   padding: 0;
+  border-radius: var(--h-radius-sm);
 }
 
 .chevron {
@@ -911,8 +901,7 @@
 }
 
 .reasoningBody {
-  padding: 8px 0 8px 20px;
-  border-left: 1px solid var(--h-line);
+  padding: 4px 0 4px 16px;
 }
 
 .progressBlock {
@@ -952,7 +941,7 @@
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  font-family: var(--h-font-mono);
+  font-family: var(--h-font-ui);
   font-size: 12px;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
@@ -962,18 +951,15 @@
 
 .thinkingModel {
   max-width: 160px;
+  font-family: var(--h-font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.thinkingSep {
-  opacity: 0.6;
-}
-
 .thinkingTimer {
   margin-left: auto;
-  font-family: var(--h-font-mono);
+  font-family: var(--h-font-ui);
   font-size: 12px;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
@@ -1010,6 +996,7 @@
   line-height: 1.45;
   padding: 0;
   text-align: left;
+  border-radius: var(--h-radius-sm);
 }
 
 .toolActivitySummary:hover .toolActivityLabel,
@@ -1018,9 +1005,9 @@
 }
 
 .toolActivitySummary:focus-visible {
-  border-radius: 0;
-  outline: 2px solid color-mix(in srgb, var(--h-accent), transparent 55%);
-  outline-offset: 3px;
+  border-radius: var(--h-radius-xs);
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .toolActivityChevron {
@@ -1056,7 +1043,7 @@
   overflow: hidden;
   color: var(--h-text-3);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1068,7 +1055,7 @@
   overflow-wrap: anywhere;
   color: var(--h-err);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -1093,12 +1080,12 @@
   max-width: 100%;
   gap: 8px;
   min-height: 24px;
-  border: 1px solid transparent;
-  border-radius: 0;
+  border: 0;
+  border-radius: var(--h-radius-sm);
   background: transparent;
   color: var(--h-text-2);
   cursor: pointer;
-  padding: 4px 4px;
+  padding: 4px 8px;
   font-size: 12px;
   line-height: 1.45;
   text-align: left;
@@ -1110,7 +1097,7 @@
 
 .toolHeader:not(:disabled):hover,
 .toolHeader[data-open="true"] {
-  background: var(--h-bg-soft);
+  background: var(--h-bg-hover);
 }
 
 .toolStatusDot {
@@ -1157,15 +1144,15 @@
   white-space: nowrap;
   color: var(--h-text-3);
   font-family: var(--h-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: inherit;
 }
 
 .toolElapsed {
   flex: 0 0 auto;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
-  font-size: 10px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
   line-height: inherit;
   font-variant-numeric: tabular-nums;
 }
@@ -1173,13 +1160,13 @@
 .toolBadge {
   flex: 0 0 auto;
   color: var(--h-text-3);
-  font-family: var(--h-font-mono);
-  font-size: 10px;
+  font-family: var(--h-font-ui);
+  font-size: 12px;
   line-height: inherit;
   font-variant-numeric: tabular-nums;
-  padding: 0 4px;
-  border-radius: 0;
-  background: var(--h-bg-soft);
+  padding: 0 6px;
+  border-radius: var(--h-radius-pill);
+  background: var(--h-bg-chip);
 }
 
 .toolGroupBody {
@@ -1188,7 +1175,6 @@
   gap: 4px;
   margin: 4px 0 8px 16px;
   padding-left: 8px;
-  border-left: 1px solid var(--h-line-soft);
 }
 
 .toolBody {
@@ -1199,13 +1185,12 @@
 .toolBody pre {
   max-width: 100%;
   margin: 4px 0;
-  border-radius: 0;
-  padding: 8px 8px;
-  font-size: 11px;
+  padding: 8px 12px;
+  font-size: 12px;
 }
 
 .toolBody pre[data-error="true"] {
-  border-color: color-mix(in srgb, var(--h-err), transparent 55%);
+  background: var(--h-err-soft);
   color: var(--h-err);
 }
 
@@ -1228,13 +1213,13 @@
 
 .emptyTitle {
   color: var(--h-text-2);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 500;
 }
 
 .emptySub {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* 紧凑密度（子代理面板等窄容器）：头像列、助手名与轮次导航在 TSX 中不渲染；
@@ -1246,10 +1231,6 @@
 .scroll[data-density="compact"] .messages {
   max-width: none;
   padding: 12px 4px 16px;
-}
-
-.scroll[data-density="compact"] .messageRow {
-  gap: 0;
 }
 
 .scroll[data-density="compact"] .toolActivityDetails {
@@ -1324,10 +1305,11 @@
 .commandOutput {
   box-sizing: border-box;
   margin: 0;
-  border: 1px solid var(--h-line);
+  border: 0;
+  border-radius: var(--h-radius-md);
   background: var(--h-bg-code);
   padding: 8px 12px;
-  color: var(--h-text-1);
+  color: var(--h-text);
   font-family: var(--h-font-mono);
   font-size: 12px;
   line-height: 20px;
@@ -1340,18 +1322,21 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 28px;
   margin-top: 4px;
-  padding: 4px 12px;
-  border: 1px solid var(--h-line);
+  padding: 0 12px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-md);
   background: transparent;
   color: var(--h-text-2);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .retryButton:hover:not(:disabled) {
   color: var(--h-text);
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
 
 .retryButton:disabled {
@@ -1367,7 +1352,8 @@
   width: fit-content;
   max-width: 100%;
   margin: 8px 0 8px auto;
-  padding: 8px 12px;
+  padding: 8px 16px;
+  border-radius: var(--h-radius-xl);
   background: var(--h-bg-chip);
   color: var(--h-text);
 }
@@ -1375,7 +1361,7 @@
 .steerLabel {
   flex-shrink: 0;
   color: var(--h-text-3);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .steerText {
@@ -1392,35 +1378,34 @@
 @keyframes focusFlash {
   0%,
   60% {
-    background: var(--h-accent-soft);
+    background: var(--h-highlight-soft);
   }
   100% {
     background: transparent;
   }
 }
 
-/* 回合末尾「本回合修改了 N 个文件」小条（design.md 4.24）：与助手气泡左缘对齐（头像列 36px + 间距 12px） */
+/* 回合末尾「本回合修改了 N 个文件」小条（design.md 4.24）：与助手正文左缘对齐 */
 .snapshotBar {
-  margin: -4px 0 12px 48px;
-}
-
-.snapshotBar[data-compact="true"] {
-  margin-left: 0;
+  margin: -4px 0 12px;
 }
 
 .snapshotBarButton {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: 1px solid var(--h-line);
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border: var(--h-hairline) solid var(--h-line);
+  border-radius: var(--h-radius-pill);
   background: transparent;
-  color: var(--h-text-3);
+  color: var(--h-text-2);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 
 .snapshotBarButton:hover {
   color: var(--h-text);
-  background: var(--h-bg-chip);
+  background: var(--h-bg-hover);
 }
