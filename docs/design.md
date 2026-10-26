@@ -1546,7 +1546,7 @@ ACP：
 - **node 运行时**：`scripts/fetch-node.mjs` 下载固定版本的官方 Node 24 LTS（Windows x64 zip，优先 npmmirror 镜像，失败回退 nodejs.org），用同源的 `SHASUMS256.txt` 校验后取出 `node.exe`，放到 `binaries/node-x86_64-pc-windows-msvc.exe`（`binaries/` 加入 .gitignore）；已存在且校验通过则跳过。`tauri.conf.json` 的 `bundle.externalBin` 配置 `binaries/node`，打包后位于主程序同目录的 `node.exe`，对应 3.1 的第 2 个候选。
 - **sidecar 代码**：`scripts/build-sidecar.mjs` 用 esbuild 把 `packages/sidecar/src/main.ts` 打成单文件 `dist-sidecar/bundle.mjs`（`--format=esm --platform=node --target=node24`，banner 注入 `createRequire`，`bufferutil` / `utf-8-validate` 设为 external），`tauri.conf.json` 的 `bundle.resources` 把它映射为资源目录下的 `sidecar/bundle.mjs`，对应 3.1 的第 2 个入口候选。bundle 中不含任何 Anthropic / OpenAI 代码，Claude Code 与 Codex 均运行用户本机安装的 CLI。
 - **构建命令**：`pnpm tauri:build` 的 `beforeBuildCommand` 依次执行 fetch-node、build-sidecar、web build。`pnpm tauri:dev` 仍以 `node --import tsx` 运行源码，但 externalBin 在 dev 时也必须存在，所以 dev 前也执行 fetch-node。
-- **安装包**：NSIS（per-user 安装）；`installer/nsis/hooks.nsh` 卸载时询问是否删除数据目录（`%APPDATA%\local.agentdeck.desktop`）。
+- **安装包**：NSIS（per-user 安装）；卸载是否删除数据目录（`%APPDATA%\local.agentdeck.desktop` 与 `%LOCALAPPDATA%\local.agentdeck.desktop`）只由 Tauri 卸载确认页自带的「删除应用数据」复选框决定：未勾选即保留，覆盖安装 / 更新时不删；不另加卸载弹窗。
 - **验收**：release 构建后直接运行 `target/release/agentdeck.exe`（旁边有 node.exe 与资源），确认 sidecar 以 bundle 方式启动（命令行为 `<资源目录>
 ode.exe \?<资源目录>sidecarundle.mjs`，`\?` 前缀来自 Tauri resource_dir，node 可正常处理）、mock 会话可跑通、退出无残留（关闭主窗口只隐藏到托盘，真正退出走托盘「退出 AgentDeck」，sidecar 收到 stdin EOF 后以 code 0 退出）；NSIS 安装包能生成。在干净机器上的安装测试由用户执行。
 

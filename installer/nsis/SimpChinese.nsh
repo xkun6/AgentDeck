@@ -24,4 +24,4 @@ LangString webview2DownloadSuccess ${LANG_SIMPCHINESE} "WebView2 bootstrapper �
 LangString webview2Downloading ${LANG_SIMPCHINESE} "正在下载 WebView2 bootstrapper..."
 LangString webview2InstallError ${LANG_SIMPCHINESE} "错误：WebView2 安装失败，退出码 $1"
 LangString webview2InstallSuccess ${LANG_SIMPCHINESE} "WebView2 安装完成"
-LangString deleteAppData ${LANG_SIMPCHINESE} "删除应用数据"
+LangString deleteAppData ${LANG_SIMPCHINESE} "同时删除个人数据（会话记录 / 设置 / 日志）"
