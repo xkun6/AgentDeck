@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agentInWorkspace,
+  ensureWorkspaceProject,
   normalizeWorkspacePath,
   readPinnedWorkspaceProjectPaths,
   readSessionWorkspaceMap,
@@ -67,6 +68,26 @@ describe("workspace persistence helpers", () => {
     });
   });
 
+  it("ensureWorkspaceProject only registers missing projects and never bumps existing ones", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      rememberWorkspaceProject("/Users/claw/A");
+      vi.setSystemTime(2_000);
+      rememberWorkspaceProject("/Users/claw/B");
+      vi.setSystemTime(3_000);
+      ensureWorkspaceProject("/Users/claw/A/");
+      expect(readWorkspaceProjects().map((p) => [p.path, p.updatedAt])).toEqual([
+        ["/Users/claw/B", 2_000],
+        ["/Users/claw/A", 1_000],
+      ]);
+
+      ensureWorkspaceProject("/Users/claw/C");
+      expect(readWorkspaceProjects().map((p) => p.path)).toEqual(["/Users/claw/C", "/Users/claw/B", "/Users/claw/A"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("stores workspace projects without duplicating equivalent paths", () => {
     rememberWorkspaceProject("/Users/claw/Project/");
     rememberWorkspaceProject("/Users/claw/Project", "Renamed");

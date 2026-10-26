@@ -22,6 +22,7 @@ import {
 } from "@/lib/composer-submit-shortcut";
 import { composerSubmitShortcutAtom } from "@/stores/ui";
 import {
+  ensureWorkspaceProject,
   normalizeWorkspacePath,
   readWorkspacePath,
   rememberWorkspaceProject,
@@ -274,7 +275,8 @@ export function GooseComposer({
     if (!nextPath) return;
     setWorkspacePath(nextPath);
     writeWorkspacePath(nextPath);
-    rememberWorkspaceProject(nextPath);
+    // 会话页传入的是会话自身的 cwd：只登记、不刷新项目活动时间，否则一打开会话项目就跳到侧栏最前
+    ensureWorkspaceProject(nextPath);
   }, [initialWorkspacePath]);
 
   useEffect(() => {

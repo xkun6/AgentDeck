@@ -125,6 +125,16 @@ export function rememberWorkspaceProject(path: string, name?: string): Workspace
   return nextProject;
 }
 
+/**
+ * 打开已有会话时登记其工作区：尚未记住才新增；已记住的项目原样保留（不刷新 updatedAt、不调整顺序），
+ * 避免仅查看会话就把项目排到侧栏最前（design.md 4.17）
+ */
+export function ensureWorkspaceProject(path: string): void {
+  const normalized = normalizeWorkspacePath(path);
+  if (!normalized || readWorkspaceProjects().some((item) => item.path === normalized)) return;
+  rememberWorkspaceProject(normalized);
+}
+
 export function readPinnedWorkspaceProjectPaths(): Set<string> {
   return new Set(
     normalizeWorkspacePathList(readJSON<unknown>(PINNED_WORKSPACE_PROJECTS_STORAGE_KEY, [])),
