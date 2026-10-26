@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { SidecarSettings } from "@agentdeck/protocol";
+import type { ComputerUseApproval, SidecarSettings } from "@agentdeck/protocol";
 
 import type { InteropEndpoint } from "../agent/types.js";
 import { INTEROP_TOKEN_PREFIX } from "../utils/redact-interop.js";
@@ -19,6 +19,8 @@ export interface InteropServiceOptions {
   settings: () => SidecarSettings["interop"];
   /** 是否注入 Computer Use 代理端点（design.md 4.37）；不传视为 false */
   computerUseEnabled?: () => boolean;
+  /** 当前 Computer Use 审批策略（design.md 4.37）；不传视为 ask */
+  computerUseApproval?: () => ComputerUseApproval;
 }
 
 /**
@@ -56,6 +58,11 @@ export class InteropService {
       return undefined;
     }
     return { url: `http://127.0.0.1:${this.port}${COMPUTER_USE_MCP_PATH}`, token: this.tokenFor(agentId) };
+  }
+
+  /** 当前 Computer Use 审批策略：AgentManager 据此代答 Claude CLI 的 Computer Use 工具审批 */
+  computerUseApproval(): ComputerUseApproval {
+    return this.options.computerUseApproval?.() ?? "ask";
   }
 
   private tokenFor(agentId: string): string {

@@ -1,17 +1,20 @@
-// 「Computer Use」设置页（design.md 4.37，Agent 分组）：驱动状态与安装、启用开关、允许操作 AgentDeck 自身。
+// 「Computer Use」设置页（design.md 4.37，Agent 分组）：驱动 / 安全与审批 / 运行时配置 / 能力概览。
 // 与 sidecar 通信只走 use-agent-session。
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
-import { Copy, X } from "lucide-react";
+import { Copy, ExternalLink, ShieldOff, X } from "lucide-react";
 import { Button, CopyButton, Dialog, IconButton } from "@agentdeck/shared-ui";
-import type {
-  ComputerUseInstallCommand,
-  ComputerUseInstallResult,
-  SidecarSettings,
-  SidecarSettingsPatch,
+import {
+  COMPUTER_USE_CALL_TIMEOUT_PRESETS,
+  type ComputerUseApproval,
+  type ComputerUseInstallCommand,
+  type ComputerUseInstallResult,
+  type SidecarSettings,
+  type SidecarSettingsPatch,
 } from "@agentdeck/protocol";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
+import { openExternalUrl } from "@/lib/external-links";
 import { sidecarConnectionAtom } from "@/stores/agents";
 import settingsStyles from "./settings.module.css";
 import s from "./computer-use-settings.module.css";
@@ -21,7 +24,7 @@ const STATUS_KEY = ["agentdeck", "computer-use-status"] as const;
 /** 安装日志最多保留的行数 */
 const MAX_LOG_LINES = 200;
 
-function Row({ label, sub, right }: { label: string; sub?: ReactNode; right: ReactNode }) {
+function Row({ label, sub, right }: { label: ReactNode; sub?: ReactNode; right: ReactNode }) {
   return (
     <div className={settingsStyles.row}>
       <div className={settingsStyles.rowLeft}>
@@ -33,20 +36,29 @@ function Row({ label, sub, right }: { label: string; sub?: ReactNode; right: Rea
   );
 }
 
-function Toggle({ value, disabled, onChange }: { value: boolean; disabled?: boolean; onChange: (next: boolean) => void }) {
+function Segmented<T extends string | number | boolean>({
+  value,
+  options,
+  disabled,
+  label,
+  onChange,
+}: {
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  disabled?: boolean;
+  label: string;
+  onChange: (next: T) => void;
+}) {
   return (
-    <div className={settingsStyles.radioGroup}>
-      {[
-        { on: false, label: "关闭" },
-        { on: true, label: "开启" },
-      ].map((option) => (
+    <div className={settingsStyles.radioGroup} role="group" aria-label={label}>
+      {options.map((option) => (
         <button
           key={option.label}
           type="button"
           className={settingsStyles.radioBtn}
-          data-active={option.on === value}
-          disabled={disabled && option.on !== value}
-          onClick={() => onChange(option.on)}
+          data-active={option.value === value}
+          disabled={disabled && option.value !== value}
+          onClick={() => onChange(option.value)}
         >
           {option.label}
         </button>
@@ -54,6 +66,29 @@ function Toggle({ value, disabled, onChange }: { value: boolean; disabled?: bool
     </div>
   );
 }
+
+const ON_OFF = [
+  { value: false, label: "关闭" },
+  { value: true, label: "开启" },
+] as const;
+
+const APPROVAL_OPTIONS: ReadonlyArray<{ value: ComputerUseApproval; label: string }> = [
+  { value: "allow", label: "允许" },
+  { value: "ask", label: "询问" },
+  { value: "deny", label: "拒绝" },
+];
+
+const APPROVAL_HINTS: Record<ComputerUseApproval, string> = {
+  allow: "不经人工审批：AgentDeck 不再询问，Claude 发来的 Computer Use 审批也自动放行。不会操作 AgentDeck 自身的限制仍然生效。",
+  ask: "每次调用都要审批：Claude 的逐项审批 / 自动接受编辑 / 计划模式由 Claude 询问你，自动模式交给 Claude 的分类器模型；其它情况（含「跳过所有审批」与 Codex 的所有模式）由 AgentDeck 逐次询问你。不提供「始终允许」。",
+  deny: "所有 Computer Use 调用直接拒绝，驱动不执行任何操作。不必关闭 Computer Use 即可临时禁用。",
+};
+
+const TIMEOUT_OPTIONS = COMPUTER_USE_CALL_TIMEOUT_PRESETS.map((value) => ({ value, label: `${value}s` }));
+
+const CAPABILITIES = ["窗口枚举与切换", "屏幕截图", "鼠标移动与点击", "键盘按键与输入", "原生系统菜单控制", "系统浏览器联动"];
+
+const CUA_REPO_URL = "https://github.com/trycua/cua";
 
 export function ComputerUseSettingsSection() {
   const actions = useAgentSession();
@@ -74,7 +109,7 @@ export function ComputerUseSettingsSection() {
     enabled: connected,
     retry: false,
   });
-  const save = useMutation({
+  const saveMutation = useMutation({
     mutationFn: (patch: SidecarSettingsPatch) => actions.setSidecarSettings(patch),
     onSuccess: (next: SidecarSettings) => {
       queryClient.setQueryData(SETTINGS_KEY, next);
@@ -113,8 +148,11 @@ export function ComputerUseSettingsSection() {
     "未安装。桌面操作能力由 trycua/cua 的 cua-driver 提供，安装后才能启用。"
   );
 
+  const save = (patch: Partial<SidecarSettings["computerUse"]>) => saveMutation.mutate({ computerUse: patch });
+
   return (
     <div>
+      <h3 className={s.groupTitle}>驱动</h3>
       <Row
         label="驱动（cua-driver）"
         sub={driverSub}
@@ -135,27 +173,77 @@ export function ComputerUseSettingsSection() {
         label="启用 Computer Use"
         sub="开启后，AgentDeck 会给 Claude Code / Codex 会话注入本机 MCP 服务（agentdeck_cua），Agent 可以截图、读取窗口、点击和输入。对之后启动或恢复的会话生效；关闭后立即停用。"
         right={
-          <Toggle
+          <Segmented
+            label="启用 Computer Use"
             value={current.enabled}
+            options={ON_OFF}
             disabled={!driver.installed}
-            onChange={(enabled) => save.mutate({ computerUse: { enabled } })}
+            onChange={(enabled) => save({ enabled })}
+          />
+        }
+      />
+
+      <h3 className={s.groupTitle}>安全与审批</h3>
+      <Row
+        label="工具审批策略"
+        sub={APPROVAL_HINTS[current.approval]}
+        right={
+          <Segmented
+            label="工具审批策略"
+            value={current.approval}
+            options={APPROVAL_OPTIONS}
+            onChange={(approval) => save({ approval })}
           />
         }
       />
       <Row
-        label="允许操作 AgentDeck 自身"
+        label={
+          <span className={s.labelWithIcon}>
+            <ShieldOff size={14} aria-hidden="true" />
+            允许操作 AgentDeck 自身
+          </span>
+        }
         sub="默认关闭：Agent 看不到也点不到 AgentDeck 自己的窗口，避免它点掉审批弹窗、改设置或关闭应用。仅在需要自动化测试 AgentDeck 本身时开启。"
         right={
-          <Toggle
+          <Segmented
+            label="允许操作 AgentDeck 自身"
             value={current.allowSelfTargeting}
-            onChange={(allowSelfTargeting) => save.mutate({ computerUse: { allowSelfTargeting } })}
+            options={ON_OFF}
+            onChange={(allowSelfTargeting) => save({ allowSelfTargeting })}
           />
         }
       />
-      <p className={s.note}>
-        每次 Computer Use 操作都需要审批：Claude 的「逐项审批 / 自动接受编辑 / 计划模式」由 Claude 询问你，「自动模式」交给 Claude
-        的分类器模型审批；其它情况（含「跳过所有审批」与 Codex 的所有模式）由 AgentDeck 逐次询问你。Computer Use 审批不提供「始终允许」。
-      </p>
+
+      <h3 className={s.groupTitle}>运行时配置</h3>
+      <Row
+        label="单次调用超时"
+        sub="驱动执行单次操作的最长等待时间，不含等待审批的时间。"
+        right={
+          <Segmented
+            label="单次调用超时"
+            value={current.callTimeoutSec}
+            options={TIMEOUT_OPTIONS}
+            onChange={(callTimeoutSec) => save({ callTimeoutSec })}
+          />
+        }
+      />
+
+      <h3 className={s.groupTitle}>能力概览</h3>
+      <ul className={s.capabilities}>
+        {CAPABILITIES.map((capability) => (
+          <li key={capability} className={s.capability}>
+            <span className={s.capabilityDot} aria-hidden="true" />
+            {capability}
+          </li>
+        ))}
+      </ul>
+      <div className={s.footnote}>
+        <span>操作直接作用于本机且不可撤销，常规任务建议保持「询问」。</span>
+        <button type="button" className={s.repoLink} onClick={() => void openExternalUrl(CUA_REPO_URL)}>
+          trycua/cua
+          <ExternalLink size={12} aria-hidden="true" />
+        </button>
+      </div>
       {message ? (
         <p className={s.message} data-tone="error" role="alert">
           {message}

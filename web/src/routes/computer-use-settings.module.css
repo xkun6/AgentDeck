@@ -13,11 +13,101 @@
   color: var(--h-warn);
 }
 
-.note {
-  margin: 8px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
+/* 分组标题：驱动 / 安全与审批 / 运行时配置 / 能力概览 */
+.groupTitle {
+  margin: 24px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--h-text);
+}
+
+.groupTitle:first-child {
+  margin-top: 0;
+}
+
+.labelWithIcon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.labelWithIcon svg {
+  flex-shrink: 0;
   color: var(--h-text-3);
+}
+
+/* 能力概览：行卡底色上的三列小块 */
+.capabilities {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 12px;
+  list-style: none;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
+}
+
+.capability {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--h-radius-md);
+  background: var(--h-bg-chip);
+  font-size: 12px;
+  color: var(--h-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.capabilityDot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--h-radius-pill);
+  background: var(--h-highlight);
+}
+
+.footnote {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--h-radius-lg);
+  background: var(--h-bg-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--h-text-3);
+}
+
+.repoLink {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--h-text-2);
+  cursor: pointer;
+}
+
+.repoLink:hover {
+  color: var(--h-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.repoLink:focus-visible {
+  outline: var(--h-focus-outline);
+  outline-offset: 2px;
 }
 
 .message {

@@ -48,7 +48,7 @@ const SETTINGS: SidecarSettings = {
   remote: { enabled: false, port: 47_631 },
   idleReclaim: { enabled: true, idleMinutes: 15 },
   translation: { userLanguage: "简体中文", agentLanguage: "English", translateReasoning: false, enabledByDefault: false },
-  computerUse: { enabled: false, allowSelfTargeting: false },
+  computerUse: { enabled: false, allowSelfTargeting: false, approval: "ask", callTimeoutSec: 120 },
 };
 
 const INSTALLED: ComputerUseStatus = {
@@ -79,10 +79,9 @@ function renderPage() {
   );
 }
 
-/** 某一设置行内的按钮 */
+/** 某个分段控件里的按钮 */
 function rowButton(label: string, button: string): HTMLElement {
-  const row = screen.getByText(label).parentElement!.parentElement!;
-  return within(row).getByRole("button", { name: button });
+  return within(screen.getByRole("group", { name: label })).getByRole("button", { name: button });
 }
 
 describe("ComputerUseSettingsSection", () => {
@@ -108,6 +107,29 @@ describe("ComputerUseSettingsSection", () => {
     fireEvent.click(rowButton("启用 Computer Use", "开启"));
     await waitFor(() => expect(setSidecarSettings).toHaveBeenCalledWith({ computerUse: { enabled: true } }));
     await waitFor(() => expect(rowButton("启用 Computer Use", "开启").getAttribute("data-active")).toBe("true"));
+  });
+
+  it("审批策略与超时：分段控件只提交对应字段，说明随策略变化", async () => {
+    getSidecarSettings.mockResolvedValue(SETTINGS);
+    getComputerUseStatus.mockResolvedValue(INSTALLED);
+    setSidecarSettings.mockImplementation(async (patch) => ({
+      ...SETTINGS,
+      computerUse: { ...SETTINGS.computerUse, ...patch.computerUse },
+    }));
+    renderPage();
+    await screen.findByText(INSTALLED.path!);
+    expect(rowButton("工具审批策略", "询问").getAttribute("data-active")).toBe("true");
+    expect(rowButton("单次调用超时", "120s").getAttribute("data-active")).toBe("true");
+    expect(screen.getByText(/每次调用都要审批/)).toBeTruthy();
+    for (const label of ["窗口枚举与切换", "系统浏览器联动"]) expect(screen.getByText(label)).toBeTruthy();
+
+    fireEvent.click(rowButton("工具审批策略", "拒绝"));
+    await waitFor(() => expect(setSidecarSettings).toHaveBeenCalledWith({ computerUse: { approval: "deny" } }));
+    expect(await screen.findByText(/所有 Computer Use 调用直接拒绝/)).toBeTruthy();
+
+    fireEvent.click(rowButton("单次调用超时", "30s"));
+    await waitFor(() => expect(setSidecarSettings).toHaveBeenCalledWith({ computerUse: { callTimeoutSec: 30 } }));
+    await waitFor(() => expect(rowButton("单次调用超时", "30s").getAttribute("data-active")).toBe("true"));
   });
 
   it("未安装：不能启用；安装先展示完整命令，确认后才执行并显示输出", async () => {

@@ -9,6 +9,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { ComputerUseProxy, desktopScaleOf, type DriverToolClient } from "../../src/computer-use/proxy.js";
+import { COMPUTER_USE_POLICY_DENIED } from "../../src/providers/shared/interop.js";
 import {
   KEYBOARD_REFUSAL,
   SELF_REGION_REFUSAL,
@@ -41,6 +42,7 @@ const NOTEPAD_WINDOW = {
 class FakeDriver implements DriverToolClient {
   running = false;
   calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  timeouts: Array<number | undefined> = [];
   stopped = 0;
   windows = [HOST_WINDOW, NOTEPAD_WINDOW];
 
@@ -49,9 +51,15 @@ class FakeDriver implements DriverToolClient {
     return [{ name: "click", inputSchema: { type: "object" } }, { name: "list_windows", inputSchema: { type: "object" } }];
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    _signal?: AbortSignal,
+    timeoutMs?: number,
+  ): Promise<CallToolResult> {
     this.running = true;
     this.calls.push({ name, args });
+    this.timeouts.push(timeoutMs);
     if (name === "list_windows") {
       const structured = { windows: this.windows };
       return { content: [{ type: "text", text: `✅ ${JSON.stringify(structured)}` }], structuredContent: structured };
@@ -80,7 +88,12 @@ interface Harness {
 
 function makeProxy(): Harness {
   const driver = new FakeDriver();
-  const settings = { enabled: true, allowSelfTargeting: false };
+  const settings: SidecarSettings["computerUse"] = {
+    enabled: true,
+    allowSelfTargeting: false,
+    approval: "ask",
+    callTimeoutSec: 120,
+  };
   const approvals: Harness["approvals"] = { cli: false, requests: [], answer: { behavior: "allow" } };
   const proxy = new ComputerUseProxy({
     settings: () => settings,
@@ -128,6 +141,30 @@ describe("callTool：防自指与审批", () => {
     await proxy.callTool(AGENT_ID, "get_screen_size", {});
     expect(approvals.requests).toHaveLength(0);
     expect(nonDriverCalls(driver)).toEqual([{ name: "get_screen_size", args: {} }]);
+  });
+
+  test("审批策略：允许时不再审批、拒绝时不调用驱动；转发超时取设置", async () => {
+    const { proxy, driver, settings, approvals } = makeProxy();
+    settings.approval = "allow";
+    settings.callTimeoutSec = 30;
+    await proxy.callTool(AGENT_ID, "get_screen_size", {});
+    expect(approvals.requests).toHaveLength(0);
+    expect(nonDriverCalls(driver)).toEqual([{ name: "get_screen_size", args: {} }]);
+    expect(driver.timeouts.at(-1)).toBe(30_000);
+    // 允许时防自指照常生效
+    expect((await proxy.callTool(AGENT_ID, "kill_app", { pid: HOST_PID })).content[0]).toEqual({
+      type: "text",
+      text: SELF_TARGET_REFUSAL,
+    });
+
+    settings.approval = "deny";
+    approvals.cli = true;
+    expect(await proxy.callTool(AGENT_ID, "get_screen_size", {})).toEqual({
+      isError: true,
+      content: [{ type: "text", text: COMPUTER_USE_POLICY_DENIED }],
+    });
+    expect(nonDriverCalls(driver)).toHaveLength(1);
+    expect(approvals.requests).toHaveLength(0);
   });
 
   test("以宿主 pid / 窗口为目标、无目标键盘、点在宿主窗口上：审批前直接拒绝", async () => {

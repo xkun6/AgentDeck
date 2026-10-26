@@ -27,7 +27,7 @@ import type {
 } from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
-import { COMPUTER_USE_SERVER_NAME } from "../providers/shared/interop.js";
+import { COMPUTER_USE_POLICY_DENIED, COMPUTER_USE_SERVER_NAME } from "../providers/shared/interop.js";
 import { readJsonBody, sendJson } from "../server/mcp-interop.js";
 import { COMPUTER_USE_MCP_PATH } from "../server/interop-service.js";
 import { spawnProcess } from "../utils/spawn.js";
@@ -47,7 +47,7 @@ import {
   type DriverWindow,
 } from "./self-guard.js";
 
-/** 单次转发调用超时 */
+/** tools/list 与未指定超时的转发调用的超时；tools/call 用设置里的 callTimeoutSec */
 const CALL_TIMEOUT_MS = 120_000;
 /** 防自指用的窗口列表缓存：一次 GUI 操作里可能反复问到，几百毫秒内复用不会让判断失真 */
 const WINDOWS_TTL_MS = 400;
@@ -61,7 +61,7 @@ const HOST_APPROVAL_ACTIONS: AgentPermissionAction[] = [
 export interface DriverToolClient {
   readonly running: boolean;
   listTools(): Promise<Tool[]>;
-  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult>;
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<CallToolResult>;
   stop(): Promise<void>;
 }
 
@@ -199,18 +199,22 @@ export class ComputerUseProxy {
     return server;
   }
 
-  /** 防自指 → 审批（CLI 不审批时）→ 审批后再检查一次 → 转发 → 过滤出参 */
+  /** 审批策略 → 防自指 → 审批（询问且 CLI 不审批时）→ 审批后再检查一次 → 转发 → 过滤出参 */
   async callTool(
     callerId: string,
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<CallToolResult> {
+    const { approval, callTimeoutSec } = this.options.settings();
+    if (approval === "deny") {
+      return errorResult(COMPUTER_USE_POLICY_DENIED);
+    }
     const refusal = await this.checkSelf(name, args);
     if (refusal) {
       return errorResult(refusal);
     }
-    if (!this.options.approvals.cliApprovesMcpTools(callerId)) {
+    if (approval === "ask" && !this.options.approvals.cliApprovesMcpTools(callerId)) {
       const response = await this.options.approvals.requestHostPermission(
         callerId,
         {
@@ -232,7 +236,7 @@ export class ComputerUseProxy {
         return errorResult(again);
       }
     }
-    const result = await this.driver.callTool(name, args, signal);
+    const result = await this.driver.callTool(name, args, signal, callTimeoutSec * 1000);
     return this.filterResult(name, result);
   }
 
@@ -469,10 +473,15 @@ export class CuaDriverConnection implements DriverToolClient {
     return tools;
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    timeoutMs = CALL_TIMEOUT_MS,
+  ): Promise<CallToolResult> {
     const client = await this.connect();
     return client.request({ method: "tools/call", params: { name, arguments: args } }, CallToolResultSchema, {
-      timeout: CALL_TIMEOUT_MS,
+      timeout: timeoutMs,
       ...(signal ? { signal } : {}),
     });
   }

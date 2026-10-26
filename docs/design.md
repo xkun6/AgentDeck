@@ -1382,7 +1382,7 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 
 **平台**：只支持 win32。其它平台 `computerUse.status` 返回 `supported: false`，不注入，设置页显示「仅支持 Windows」。
 
-**设置**：`SidecarSettings.computerUse: { enabled: boolean /* 默认 false */; allowSelfTargeting: boolean /* 默认 false */ }`，经 `settings.set` 修改（与 4.26 的「会话互通」开关无关）。
+**设置**：`SidecarSettings.computerUse: { enabled: boolean /* 默认 false */; allowSelfTargeting: boolean /* 默认 false */; approval: "allow" | "ask" | "deny" /* 默认 "ask" */; callTimeoutSec: 30 | 60 | 120 | 300 /* 默认 120 */ }`，经 `settings.set` 修改（与 4.26 的「会话互通」开关无关）；`approval` / `callTimeoutSec` 改动对之后的每次调用立即生效，不必重启会话。
 
 **驱动定位**（每次 `computerUse.status` / 拉起驱动时重新查找，安装后不必重启 sidecar）：PATH 上的 `cua-driver.exe` → `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`（官方安装脚本的落点）→ `%USERPROFILE%\.cua-driver\packages\current\cua-driver.exe`。找到后跑 `cua-driver manifest`（15 秒超时）：版本取 `binary_version`，MCP 启动方式取 `mcp_invocation.{command,args}`，缺失时回退 `<路径> mcp`。
 
@@ -1396,7 +1396,13 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 - Codex：`config.mcp_servers.agentdeck_cua = { url（主机写 localhost）, http_headers, tool_timeout_sec: 3700, default_tools_approval_mode: "approve" }`，**所有模式**都让 Codex 放行，审批统一由 sidecar 做（否则 full-access 模式下 Codex 会直接拒绝需要审批的 MCP 调用）。
 - ACP：不注入。
 
-**审批（Computer Use 工具调用必须审批）**：
+**审批策略**（`computerUse.approval`，设置页「工具审批策略」）：
+- `ask`（询问，默认）：按下面两条分流，每次调用都要审批。
+- `allow`（允许）：不经人工审批。代理不发 sidecar 审批；Claude CLI 发来的 Computer Use 工具审批（`permission_requested` 且 name 以 `mcp__agentdeck_cua__` 开头）由 AgentManager 直接以 allow 回给 provider，不下发、不进快照。防自指照常生效。
+- `deny`（拒绝）：代理对每次 `tools/call` 直接返回工具错误「Computer Use 已设为拒绝所有调用（设置 → Computer Use → 工具审批策略）」；Claude CLI 发来的 Computer Use 工具审批由 AgentManager 直接以同样理由 deny。`tools/list` 照常返回（CLI 在会话开始时缓存工具列表，模型调用时得到明确的拒绝原因）。
+- 策略在请求到达时读取；已挂起的审批不受之后的策略修改影响。
+
+**审批分流（策略为 `ask` 时）**：
 - **由 CLI 审批**：Claude 会话当前生效模式（显式选了模式就用它，否则用 initialize 报告的用户默认模式）为 `default` / `acceptEdits` / `plan` 时，CLI 照常发 `can_use_tool`，由用户审批；为 `auto` 时由 Claude 的分类器模型审批。CLI 发来的 Computer Use 工具审批**不提供「始终允许」**（忽略 permission_suggestions）。
 - **由 sidecar 审批**：其它情况（Claude 的 `bypassPermissions` / `dontAsk` / 模式未知；Codex 全部模式；会话不支持判断）。代理在转发前经 `AgentManager.requestHostPermission` 在该会话发出 `permission_requested`：id `cu-<uuid>`、kind `tool`、name `agentdeck_cua.<tool>`、title「允许 Computer Use：<tool>？」、input 为调用参数、actions 只有 `allow`「允许一次」/ `deny`「拒绝」。用户经 `agent.permission.respond` 应答时由 AgentManager 直接完成，不经 provider。拒绝 → 工具错误「用户拒绝了这次 Computer Use 操作」（附理由）；回合结束、会话关闭时视为拒绝（快照的 `pendingPermissions` 随回合 / 会话一并清空，不另发事件）；MCP 请求被中断（CLI 取消调用）时视为拒绝并补发 `permission_resolved`。
 - 判断接口：`AgentSession.cliApprovesMcpTools?(): boolean`（未实现视为 false，即由 sidecar 审批）。
@@ -1410,11 +1416,14 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 
 残留面（已知并接受）：整屏截图里仍能看到 AgentDeck，但看到不等于能操作；CLI 自身的 shell 等工具不受此约束。
 
-**驱动进程**：整个 sidecar 共享一个驱动子进程（`spawnProcess`：`shell:false`、`windowsHide`），首次 `tools/list` / `tools/call` 时懒启动，工具列表缓存到进程退出；进程退出后下次调用重新拉起；关闭开关或 sidecar 退出时 tree-kill。单次转发调用超时 120 秒；stderr 写入 sidecar 日志。模块：`computer-use/driver.ts`（定位、manifest、安装）、`computer-use/self-guard.ts`（防自指，纯函数）、`computer-use/proxy.ts`（驱动连接与 `/mcp/cua` 端点）。
+**驱动进程**：整个 sidecar 共享一个驱动子进程（`spawnProcess`：`shell:false`、`windowsHide`），首次 `tools/list` / `tools/call` 时懒启动，工具列表缓存到进程退出；进程退出后下次调用重新拉起；关闭开关或 sidecar 退出时 tree-kill。单次转发调用超时取 `callTimeoutSec`（只计驱动执行，不含等待审批；`tools/list` 固定 120 秒）；stderr 写入 sidecar 日志。模块：`computer-use/driver.ts`（定位、manifest、安装）、`computer-use/self-guard.ts`（防自指，纯函数）、`computer-use/proxy.ts`（驱动连接与 `/mcp/cua` 端点）。
 
-**前端**：设置「Agent」组新增「Computer Use」（`/computer-use`）：
-- 驱动状态（已安装 / 未安装、版本、路径、「重新检测」）；未安装时「安装驱动」→ 确认对话框：标题「安装驱动」、副标题「安装驱动 → 启用。完成当前步骤后继续下一步。」、说明「将从 <sourceUrl> 下载并执行官方安装脚本，请确认命令内容（也可复制到终端手动运行）：」、命令全文 + 复制按钮、「确认运行」；运行中对话框显示滚动日志（最多 200 行），结束后显示成功 / 失败（退出码）并重新检测。
-- 「启用 Computer Use」开关（未安装时禁用）；「允许操作 AgentDeck 自身」开关（默认关闭，开启时提示风险）；审批规则说明；「设置对之后启动或恢复的会话生效」。
+**前端**：设置「Agent」组新增「Computer Use」（`/computer-use`），页面内按组展示（版式参考 LiveAgent 的「管理设置」，用本项目设置页的行卡与分段控件）：
+- **驱动**：驱动状态（已安装 / 未安装、版本、路径、「重新检测」）、「启用 Computer Use」开关（未安装时禁用）。
+- **安全与审批**：「工具审批策略」分段控件 允许 / 询问 / 拒绝（对应 `approval`，说明随所选档位变化）；「允许操作 AgentDeck 自身」开关。
+- **运行时配置**：「单次调用超时」分段控件 30s / 60s / 120s / 300s。
+- **能力概览**：静态六项（窗口枚举与切换、屏幕截图、鼠标移动与点击、键盘按键与输入、原生系统菜单控制、系统浏览器联动）；底部一行提示「操作直接作用于本机且不可撤销，常规任务建议保持「询问」」+ 外链 trycua/cua（`https://github.com/trycua/cua`，经 `openExternalUrl` 打开）。
+- 未安装时「安装驱动」→ 确认对话框：标题「安装驱动」、副标题「安装驱动 → 启用。完成当前步骤后继续下一步。」、说明「将从 <sourceUrl> 下载并执行官方安装脚本，请确认命令内容（也可复制到终端手动运行）：」、命令全文 + 复制按钮、「确认运行」；运行中对话框显示滚动日志（最多 200 行），结束后显示成功 / 失败（退出码）并重新检测。
 - 时间线：`agentdeck_cua` 的工具卡片标题显示为「Computer Use · <tool>」。
 
 ## 5. sidecar 内部结构（packages/sidecar）

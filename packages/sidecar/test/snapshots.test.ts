@@ -10,7 +10,7 @@ import { AgentManager } from "../src/agent/agent-manager.js";
 import { MockAgentClient } from "../src/providers/mock/index.js";
 import { ProviderRegistry } from "../src/providers/registry.js";
 import { RpcServer } from "../src/server/rpc-server.js";
-import { DEFAULT_SIDECAR_SETTINGS, SettingsStore } from "../src/settings/sidecar-settings.js";
+import { DEFAULT_SIDECAR_SETTINGS, SettingsStore, settingsPatchSchema } from "../src/settings/sidecar-settings.js";
 import { locateGit } from "../src/snapshots/git.js";
 import { SnapshotService } from "../src/snapshots/snapshot-service.js";
 import { RpcCallError, TestRpcClient } from "./rpc-test-client.js";
@@ -110,6 +110,34 @@ describe("SettingsStore", () => {
     const invalid = new SettingsStore({ dataDir: root });
     await invalid.load();
     expect(invalid.get().idleReclaim).toEqual({ enabled: false, idleMinutes: 15 });
+  });
+
+  test("computerUse：审批策略默认询问、超时默认 120 秒；只接受预设超时", async () => {
+    expect(DEFAULT_SIDECAR_SETTINGS.computerUse).toEqual({
+      enabled: false,
+      allowSelfTargeting: false,
+      approval: "ask",
+      callTimeoutSec: 120,
+    });
+    const store = new SettingsStore({ dataDir: root });
+    await store.load();
+    const next = await store.set({ computerUse: { approval: "allow", callTimeoutSec: 30 } });
+    expect(next.computerUse).toMatchObject({ approval: "allow", callTimeoutSec: 30 });
+    expect(settingsPatchSchema.safeParse({ computerUse: { callTimeoutSec: 45 } }).success).toBe(false);
+    expect(settingsPatchSchema.safeParse({ computerUse: { approval: "maybe" } }).success).toBe(false);
+
+    writeFileSync(
+      path.join(root, "sidecar-settings.json"),
+      JSON.stringify({ computerUse: { enabled: true, approval: "never", callTimeoutSec: 45 } }),
+    );
+    const invalid = new SettingsStore({ dataDir: root });
+    await invalid.load();
+    expect(invalid.get().computerUse).toEqual({
+      enabled: true,
+      allowSelfTargeting: false,
+      approval: "ask",
+      callTimeoutSec: 120,
+    });
   });
 
   test("文件中非法字段回退默认值，未设 dataDir 只在内存", async () => {

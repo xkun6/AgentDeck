@@ -10,6 +10,9 @@ export const COMPUTER_USE_SERVER_NAME = "agentdeck_cua";
 /** Claude 侧 Computer Use 工具名前缀 */
 export const CLAUDE_COMPUTER_USE_TOOL_PREFIX = `mcp__${COMPUTER_USE_SERVER_NAME}__`;
 
+/** 审批策略为「拒绝」时回给模型的理由（代理与 Claude CLI 审批共用） */
+export const COMPUTER_USE_POLICY_DENIED = "Computer Use 已设为拒绝所有调用（设置 → Computer Use → 工具审批策略）";
+
 /** Claude：`--mcp-config <内联 JSON>`（type http + Authorization 头）；两个端点合在同一份 JSON 里 */
 export function claudeInteropArgs(
   endpoint: InteropEndpoint | undefined,

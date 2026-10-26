@@ -18,11 +18,13 @@ import type {
   AgentStreamEvent,
   AgentTimelineItem,
   AgentUsage,
+  ComputerUseApproval,
   ProviderSubagentDescriptor,
   ProviderSubagentUpdate,
 } from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
+import { CLAUDE_COMPUTER_USE_TOOL_PREFIX, COMPUTER_USE_POLICY_DENIED } from "../providers/shared/interop.js";
 import { withTimeout } from "../utils/promise-timeout.js";
 import { normalizeCwd, type SnapshotService } from "../snapshots/snapshot-service.js";
 import type { UsageLedger } from "../usage/ledger.js";
@@ -100,11 +102,13 @@ export interface AgentManagerOptions {
   snapshots?: SnapshotService;
   /**
    * 会话互通（design.md 4.26）：返回该会话当前应注入的 MCP 端点，互通关闭时返回 undefined；
-   * computerUseEndpointFor 返回 Computer Use 代理端点（design.md 4.37），未启用时返回 undefined
+   * computerUseEndpointFor 返回 Computer Use 代理端点（design.md 4.37），未启用时返回 undefined；
+   * computerUseApproval 返回当前 Computer Use 审批策略
    */
   interop?: {
     endpointFor(agentId: string): InteropEndpoint | undefined;
     computerUseEndpointFor?(agentId: string): InteropEndpoint | undefined;
+    computerUseApproval?(): ComputerUseApproval;
   };
   /** 空闲回收设置（design.md 4.34）：每次扫描时读取；不传则不自动回收 */
   idleReclaim?: () => { enabled: boolean; idleMinutes: number };
@@ -210,6 +214,8 @@ export class AgentManager {
     string,
     { agentId: string; settle: (response: AgentPermissionResponse) => void }
   >();
+  /** 按 Computer Use 审批策略代答的 CLI 审批 id：provider 随后发的 permission_resolved 不再下发 */
+  private readonly autoAnsweredPermissions = new Set<string>();
   private readonly listeners = new Set<AgentManagerListener>();
   private readonly registry: AgentClientLookup;
   private readonly logger: Logger;
@@ -963,6 +969,28 @@ export class AgentManager {
     });
   }
 
+  /**
+   * Computer Use 审批策略为允许 / 拒绝时（design.md 4.37），Claude CLI 发来的 Computer Use 工具审批直接代答，
+   * 不下发、不进快照；返回 true 表示已代答
+   */
+  private autoAnswerComputerUse(agent: ManagedAgent, request: AgentPermissionRequest): boolean {
+    if (request.kind !== "tool" || !request.name.startsWith(CLAUDE_COMPUTER_USE_TOOL_PREFIX) || !agent.session) {
+      return false;
+    }
+    const approval = this.interop?.computerUseApproval?.();
+    if (approval !== "allow" && approval !== "deny") {
+      return false;
+    }
+    const response: AgentPermissionResponse =
+      approval === "allow" ? { behavior: "allow" } : { behavior: "deny", message: COMPUTER_USE_POLICY_DENIED };
+    this.autoAnsweredPermissions.add(request.id);
+    agent.session.respondToPermission(request.id, response).catch((error: unknown) => {
+      this.autoAnsweredPermissions.delete(request.id);
+      this.logger.warn("agent %s 代答 Computer Use 审批 %s 失败：%s", agent.id, request.id, String(error));
+    });
+    return true;
+  }
+
   /** 结束该会话所有 sidecar 发起的审批（视为拒绝）；快照里的 pendingPermissions 由调用方清空 */
   private denyHostPermissions(agentId: string, message: string): void {
     for (const [id, pending] of this.hostPermissions) {
@@ -1705,6 +1733,12 @@ export class AgentManager {
     if (rawEvent.type === "provider_subagent") {
       // 子代理事件写入子代理 store，不进主时间线、不占 seq
       this.applySubagentEvent(agent, rawEvent.event);
+      return;
+    }
+    if (rawEvent.type === "permission_requested" && this.autoAnswerComputerUse(agent, rawEvent.request)) {
+      return;
+    }
+    if (rawEvent.type === "permission_resolved" && this.autoAnsweredPermissions.delete(rawEvent.requestId)) {
       return;
     }
     const event = this.tagKeepAliveTurn(

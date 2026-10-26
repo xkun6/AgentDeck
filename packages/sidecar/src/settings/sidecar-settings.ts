@@ -1,7 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { SidecarSettings, SidecarSettingsPatch } from "@agentdeck/protocol";
+import { COMPUTER_USE_CALL_TIMEOUT_PRESETS, type SidecarSettings, type SidecarSettingsPatch } from "@agentdeck/protocol";
 import { z } from "zod";
 
 import { writeFileAtomic } from "../agent/agent-store.js";
@@ -20,7 +20,7 @@ export const DEFAULT_SIDECAR_SETTINGS: SidecarSettings = {
     translateReasoning: false,
     enabledByDefault: false,
   },
-  computerUse: { enabled: false, allowSelfTargeting: false },
+  computerUse: { enabled: false, allowSelfTargeting: false, approval: "ask", callTimeoutSec: 120 },
 };
 
 /** settings.set 的 patch 校验：未知字段、非法取值一律拒绝（-32602） */
@@ -52,7 +52,15 @@ export const settingsPatchSchema = z
       })
       .partial()
       .strict(),
-    computerUse: z.object({ enabled: z.boolean(), allowSelfTargeting: z.boolean() }).partial().strict(),
+    computerUse: z
+      .object({
+        enabled: z.boolean(),
+        allowSelfTargeting: z.boolean(),
+        approval: z.enum(["allow", "ask", "deny"]),
+        callTimeoutSec: z.union(COMPUTER_USE_CALL_TIMEOUT_PRESETS.map((value) => z.literal(value))),
+      })
+      .partial()
+      .strict(),
   })
   .partial()
   .strict();

@@ -864,9 +864,24 @@ export interface SidecarSettings {
     translateReasoning: boolean;
     enabledByDefault: boolean;
   };
-  /** 4.37 Computer Use：enabled 默认 false；allowSelfTargeting（允许操作 AgentDeck 自身）默认 false */
-  computerUse: { enabled: boolean; allowSelfTargeting: boolean };
+  /**
+   * 4.37 Computer Use：enabled 默认 false；allowSelfTargeting（允许操作 AgentDeck 自身）默认 false；
+   * approval 工具审批策略默认 ask；callTimeoutSec 单次调用超时默认 120
+   */
+  computerUse: {
+    enabled: boolean;
+    allowSelfTargeting: boolean;
+    approval: ComputerUseApproval;
+    callTimeoutSec: ComputerUseCallTimeoutSec;
+  };
 }
+
+/** 4.37 Computer Use 工具审批策略：允许（不经人工审批）/ 询问 / 拒绝 */
+export type ComputerUseApproval = "allow" | "ask" | "deny";
+
+/** 4.37 Computer Use 单次调用超时可选值（秒） */
+export const COMPUTER_USE_CALL_TIMEOUT_PRESETS = [30, 60, 120, 300] as const;
+export type ComputerUseCallTimeoutSec = (typeof COMPUTER_USE_CALL_TIMEOUT_PRESETS)[number];
 
 export interface SidecarSettingsPatch {
   snapshots?: Partial<SidecarSettings["snapshots"]>;

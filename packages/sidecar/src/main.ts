@@ -247,6 +247,7 @@ async function main(): Promise<void> {
   const interop = new InteropService({
     settings: () => settings.get().interop,
     computerUseEnabled: () => COMPUTER_USE_SUPPORTED && settings.get().computerUse.enabled,
+    computerUseApproval: () => settings.get().computerUse.approval,
   });
   manager = new AgentManager({
     registry,

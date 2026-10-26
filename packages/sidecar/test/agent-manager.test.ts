@@ -8,10 +8,11 @@ import type {
 } from "@agentdeck/protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AgentManager } from "../src/agent/agent-manager.js";
+import { AgentManager, type AgentManagerOptions } from "../src/agent/agent-manager.js";
 import { AgentRpcError } from "../src/agent/errors.js";
 import { PERMISSION_FIELD_MAX_BYTES } from "../src/agent/permission-limits.js";
 import type { AgentClient, AgentSession } from "../src/agent/types.js";
+import { COMPUTER_USE_POLICY_DENIED } from "../src/providers/shared/interop.js";
 
 /** 由测试手动驱动事件的假会话 */
 class ScriptedSession implements AgentSession {
@@ -75,7 +76,7 @@ class ScriptedSession implements AgentSession {
   }
 }
 
-function createHarness() {
+function createHarness(options: Partial<AgentManagerOptions> = {}) {
   const sessions: ScriptedSession[] = [];
   const client: AgentClient = {
     provider: "fake",
@@ -98,7 +99,7 @@ function createHarness() {
     [client.provider, client],
     [unavailable.provider, unavailable],
   ]);
-  const manager = new AgentManager({ registry: { get: (id) => clients.get(id) } });
+  const manager = new AgentManager({ registry: { get: (id) => clients.get(id) }, ...options });
   const streams: AgentStreamEnvelope[] = [];
   const states: AgentSnapshot[] = [];
   manager.subscribe({
@@ -122,8 +123,8 @@ afterEach(async () => {
   current = null;
 });
 
-async function setup() {
-  current = createHarness();
+async function setup(options: Partial<AgentManagerOptions> = {}) {
+  current = createHarness(options);
   const agent = await current.manager.createAgent({ provider: "fake", cwd: "/work" });
   return { ...current, agent, session: current.sessions[0]! };
 }
@@ -708,6 +709,41 @@ describe("AgentManager：sidecar 发起的审批（Computer Use，design.md 4.37
     controller.abort();
     await expect(aborted).resolves.toEqual({ behavior: "deny", message: "权限请求已取消" });
     await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toEqual([]));
+  });
+
+  test("审批策略为允许 / 拒绝时代答 Claude CLI 的 Computer Use 审批，不下发；询问时照常下发", async () => {
+    let approval: "allow" | "ask" | "deny" = "allow";
+    const { manager, agent, session, streams } = await setup({
+      interop: { endpointFor: () => undefined, computerUseApproval: () => approval },
+    });
+    await manager.sendPrompt(agent.id, "hi");
+    const cuRequest = (id: string): AgentPermissionRequest => ({
+      id,
+      provider: "fake",
+      name: "mcp__agentdeck_cua__click",
+      kind: "tool",
+    });
+    const permissionEvents = () =>
+      streams.filter((e) => e.event.type === "permission_requested" || e.event.type === "permission_resolved");
+
+    session.emit({ type: "permission_requested", request: cuRequest("p-allow") });
+    await vi.waitFor(() => expect(session.responses).toHaveLength(1));
+    approval = "deny";
+    session.emit({ type: "permission_requested", request: cuRequest("p-deny") });
+    // 非 Computer Use 工具不受策略影响
+    session.emit({ type: "permission_requested", request: permissionRequest });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(1));
+    expect(session.responses).toEqual([
+      { requestId: "p-allow", response: { behavior: "allow" } },
+      { requestId: "p-deny", response: { behavior: "deny", message: COMPUTER_USE_POLICY_DENIED } },
+    ]);
+    expect(manager.getAgent(agent.id).pendingPermissions.map((r) => r.id)).toEqual(["perm-1"]);
+    expect(permissionEvents().map((e) => e.event.type)).toEqual(["permission_requested"]);
+
+    approval = "ask";
+    session.emit({ type: "permission_requested", request: cuRequest("p-ask") });
+    await vi.waitFor(() => expect(manager.getAgent(agent.id).pendingPermissions).toHaveLength(2));
+    expect(session.responses).toHaveLength(2);
   });
 
   test("cliApprovesMcpTools 取会话的判断；会话不支持判断或不存在时为 false", async () => {
