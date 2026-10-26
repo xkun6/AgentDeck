@@ -366,13 +366,36 @@ describe("reduceAgentEvent：上下文压缩与提问卡片（design.md 4.13）"
       { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "先说一句" } },
       compaction("completed", { trigger: "manual" }),
     ]);
-    expect(runtime.messages.map((message) => message.role)).toEqual(["assistant", "system"]);
+    expect(runtime.messages.map((message) => message.role)).toEqual(["assistant", "system", "assistant"]);
     expect(notices(runtime)[0]!.parts).toEqual([{ type: "notice", level: "system", text: "上下文已手动压缩" }]);
 
     const failed = replay([compaction("running"), compaction("failed", { error: "摘要失败" })]);
     expect(notices(failed)[0]!.parts).toEqual([
       { type: "notice", level: "warning", text: "上下文压缩失败：摘要失败" },
     ]);
+  });
+
+  it("回合中途压缩：后续输出接在提示之下，提示不再停在末尾；回合结束时空的后续段被移除", () => {
+    const head: AgentStreamEvent[] = [
+      { type: "turn_started", turnId: "t1" },
+      { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "先说一句" } },
+      compaction("running"),
+      compaction("completed", { trigger: "auto" }),
+    ];
+    const runtime = replay([
+      ...head,
+      { type: "timeline", turnId: "t1", item: { type: "assistant_message", text: "接着说" } },
+      { type: "turn_completed", turnId: "t1" },
+    ]);
+    expect(runtime.messages.map((message) => message.role)).toEqual(["assistant", "system", "assistant"]);
+    const [before, , after] = runtime.messages;
+    expect(before!.status).toBe("complete");
+    expect(before!.parts).toEqual([{ type: "text", text: "先说一句" }]);
+    expect(after!.parts).toEqual([{ type: "text", text: "接着说" }]);
+    expect(after!.status).toBe("complete");
+
+    const idle = replay([...head, { type: "turn_completed", turnId: "t1" }]);
+    expect(idle.messages.map((message) => message.role)).toEqual(["assistant", "system"]);
   });
 
   it("question 工具卡片显示为「提问」，输出为「问题 → 回答」", () => {

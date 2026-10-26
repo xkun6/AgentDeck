@@ -437,6 +437,8 @@ export function compactionNoticeText(item: CompactionTimelineItem): string {
 /**
  * 同 compactionId 的提示原地更新；新提示插在本轮还没有内容的助手消息之前
  * （压缩通常发生在回答之前，回答随后显示在提示之下），否则追加在末尾。
+ * 回合中途压缩（助手消息已有内容）时，在提示处截断助手消息、提示下方另起一条承接后续输出，
+ * 否则后续输出仍写进提示上方那条，提示会一直停在时间线底部。
  */
 function upsertCompactionNotice(
   runtime: ChatSessionRuntime,
@@ -465,7 +467,22 @@ function upsertCompactionNotice(
       messages: [...runtime.messages.slice(0, activeIndex), notice, ...runtime.messages.slice(activeIndex)],
     };
   }
-  return { ...runtime, messages: [...runtime.messages, notice] };
+  if (!active) return { ...runtime, messages: [...runtime.messages, notice] };
+  const segmentId = `${active.id}-after-${id}`;
+  const closed = updateMessage(runtime, active.id, (message) => ({
+    ...message,
+    status: message.status === "error" ? "error" : "complete",
+    parts: withoutProgressParts(message.parts),
+  }));
+  return {
+    ...closed,
+    activeAssistantId: segmentId,
+    messages: [
+      ...closed.messages,
+      notice,
+      { id: segmentId, sessionId: agentId, role: "assistant", createdAt, status: "streaming", parts: [] },
+    ],
+  };
 }
 
 function withActiveAgentAssistant(
