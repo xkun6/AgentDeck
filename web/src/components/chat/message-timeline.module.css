@@ -281,6 +281,11 @@
   background: var(--h-bg-chip);
 }
 
+/* 用户输入里的单个换行在 Markdown 中是软换行（渲染成空格），用户气泡按原样保留换行。 */
+.bubble[data-role="user"] .messageText p {
+  white-space: pre-wrap;
+}
+
 .messageText {
   -webkit-user-select: text;
   user-select: text;
