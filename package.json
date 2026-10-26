@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "private": true,
   "author": "AgentDeck Contributors",
   "packageManager": "pnpm@9.15.0",
