@@ -172,7 +172,7 @@ export function PreviewRail({ sessionId, workspaceRoot, onClose }: PreviewRailPr
             }}
           />
         ) : null}
-        {active === "terminal" ? <TerminalTab /> : null}
+        {active === "terminal" ? <TerminalTab cwd={workspaceRoot} /> : null}
       </div>
     </aside>
   );
