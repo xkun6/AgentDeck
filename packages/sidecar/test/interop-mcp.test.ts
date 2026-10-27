@@ -22,6 +22,7 @@ import { InteropService } from "../src/server/interop-service.js";
 import {
   buildReadTranscript,
   clampTimeoutSec,
+  INTEROP_INSTRUCTIONS,
   INTEROP_MAX_RUNNING_CHILDREN,
   lastAssistantText,
   McpInteropEndpoint,
@@ -289,10 +290,11 @@ describe("POST /mcp 鉴权", () => {
 });
 
 describe("工具：tools/list 与只读工具", () => {
-  test("tools/list 返回 7 个工具", async () => {
+  test("tools/list 返回 7 个工具；initialize 带 instructions", async () => {
     const h = await createHarness();
     const caller = await h.createCaller();
     const client = await h.connect(caller.token);
+    expect(client.getInstructions()).toBe(INTEROP_INSTRUCTIONS);
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual(
       ["cancel_agent", "delegate", "list_agents", "list_providers", "read_agent", "send_to_agent", "wait_agent"],

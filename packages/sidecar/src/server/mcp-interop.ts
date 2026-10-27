@@ -33,6 +33,14 @@ export const INTEROP_DEFAULT_TIMEOUT_SEC = 600;
 export const INTEROP_MAX_TIMEOUT_SEC = 3600;
 /** 调用方开启缓存保活时的单次等待上限（design.md 4.36）：短于 1 小时 TTL，返回后 Agent 再次调用即刷新缓存 */
 export const INTEROP_KEEPALIVE_MAX_TIMEOUT_SEC = 3000;
+/**
+ * initialize 应答的 instructions：CLI 会放进系统提示词（工具延迟加载时也在），
+ * 让用户只给会话 ID 时 Agent 也走互通工具，而不是把它当本地会话记录去搜 jsonl
+ */
+export const INTEROP_INSTRUCTIONS =
+  "用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理：" +
+  "send_to_agent 发消息并等回复，read_agent 读最近消息，list_agents 按标题 / 目录查找，wait_agent 继续等待，delegate 新建子会话。" +
+  "不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。";
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024;
 /** 即使目录里查不到，这些 modeId 也一律视为危险（跳过权限确认类） */
 const DANGEROUS_MODE_PATTERN = /bypass|full-access|dangerous|yolo/i;
@@ -299,7 +307,7 @@ export class McpInteropEndpoint {
   // -------------------------------------------------------------------------
 
   private createServer(callerId: string): McpServer {
-    const server = new McpServer({ name: "agentdeck", version: "1.0.0" });
+    const server = new McpServer({ name: "agentdeck", version: "1.0.0" }, { instructions: INTEROP_INSTRUCTIONS });
     const register = <S extends z.ZodRawShape>(
       name: string,
       description: string,

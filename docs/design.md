@@ -969,6 +969,8 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 - `send_to_agent` 只允许发给调用方的子孙会话，或用户明确标记为「允许被其它会话调用」的会话（快照字段 `interopTarget?: boolean`，经 `agent.update` 设置）；否则返回工具错误。
 - 工具调用的结果只包含文本，不包含 token、apiKey 等。
 
+**服务说明（instructions）**：initialize 应答带 `instructions`（`INTEROP_INSTRUCTIONS`）：用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理，不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。Claude Code 把 MCP 工具延迟加载（只列名字），但会把服务说明放进系统提示词，因此用户只说「把 X 发给会话 <ID>」时，Agent 也会经 ToolSearch 取用 `send_to_agent` / `read_agent`，不用在提示词里写工具名（claude 2.1.x 实测）。
+
 **快照**：`AgentSnapshot` 增加 `parentAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
 
 **前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关与「复制会话 ID」（便于用户把准确的目标 id 告诉 Agent）。
