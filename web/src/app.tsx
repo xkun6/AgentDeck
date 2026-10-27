@@ -3,6 +3,7 @@ import { DEFAULT_THEME_CONFIG, hydrateThemeAtom, usePlatform, type ThemeConfig }
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { useSetAtom } from "jotai";
 import { useSidecarBridge } from "@/hooks/use-agent-session";
+import { useQueueAutoDrain } from "@/hooks/use-queue-auto-drain";
 import { readUiValue } from "@/lib/ui-store";
 import { installNativeContextMenuBlocker } from "@/lib/block-native-context-menu";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -53,6 +54,7 @@ function RouteLoadingFallback() {
 
 function MainApp() {
   useSidecarBridge();
+  useQueueAutoDrain();
   return (
     <>
       <AppShell>

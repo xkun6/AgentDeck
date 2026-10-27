@@ -248,3 +248,47 @@ export function useQueuedPrompts(key: string | null | undefined): QueuedPromptEn
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return entriesFor(snapshot, key);
 }
+
+/** Subscribe to the whole queue state (all sessions). */
+export function useQueueState(): QueueState {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// ---- 出队协调（仅内存） ------------------------------------------------------
+// 自动出队由应用根部的 useQueueAutoDrain 统一监视所有会话，详情页的「立即发送」
+// 与之共用同一把按会话的发送锁；用户主动中止 / 撤回时记一次抑制。
+
+const drainingKeys = new Set<string>();
+const interruptedKeys = new Set<string>();
+
+/** 用户主动中止 / 撤回本轮：抑制该会话下一次回合结束时的自动出队 */
+export function markQueueInterrupted(key: string | null | undefined): void {
+  if (key) interruptedKeys.add(key);
+}
+
+export function clearQueueInterrupted(key: string | null | undefined): void {
+  if (key) interruptedKeys.delete(key);
+}
+
+/** 读取并清除中止标记 */
+export function takeQueueInterrupted(key: string): boolean {
+  return interruptedKeys.delete(key);
+}
+
+/** 发送一条排队消息，成功后移出队列；同一会话同时只发一条 */
+export async function drainQueuedPrompt(
+  key: string,
+  entry: QueuedPromptEntry,
+  send: (entry: QueuedPromptEntry) => Promise<void>,
+): Promise<void> {
+  if (drainingKeys.has(key)) return;
+  drainingKeys.add(key);
+  try {
+    await send(entry);
+    commit(removeEntry(liveState, key, entry.id));
+  } catch (error) {
+    console.error("发送排队消息失败：", error);
+  } finally {
+    drainingKeys.delete(key);
+  }
+}

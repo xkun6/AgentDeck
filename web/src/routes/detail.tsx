@@ -66,9 +66,11 @@ import { StatusDialog } from "@/components/chat/status-dialog";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
 import { QueuePanel } from "@/components/composer/queue-panel";
 import {
+  clearQueueInterrupted,
+  drainQueuedPrompt,
   enqueueQueuedPrompt,
+  markQueueInterrupted,
   removeQueuedPrompt,
-  shouldAutoDrainOnSettle,
   useQueuedPrompts,
   type QueuedPromptEntry,
 } from "@/stores/composer-queue";
@@ -335,51 +337,16 @@ export function DetailRoute() {
     await actions.steerPrompt(taskId, prepared.prompt);
   }, [actions, taskId]);
 
-  // ---- 发送队列（空闲时自动发出 / 立即发送 / 编辑 / 删除） ----------------------
+  // ---- 发送队列（立即发送 / 编辑 / 删除；回合结束自动出队见 useQueueAutoDrain） ----
   const queuedPrompts = useQueuedPrompts(taskId);
   const [composerPrefill, setComposerPrefill] = useState<ComposerPrefillState>({ text: "", nonce: 0 });
-  const drainingRef = useRef(false);
-  const previousBusyRef = useRef(runtimeIsBusy);
-  const userInterruptedRef = useRef(false);
-
-  const drainEntry = useCallback(async (entry: QueuedPromptEntry) => {
-    if (!taskId || drainingRef.current) return;
-    drainingRef.current = true;
-    try {
-      await submitPayload({ text: entry.text, attachments: entry.attachments });
-      removeQueuedPrompt(taskId, entry.id);
-    } catch (error) {
-      console.error("发送排队消息失败：", error);
-    } finally {
-      drainingRef.current = false;
-    }
-  }, [submitPayload, taskId]);
-
-  useEffect(() => {
-    const wasBusy = previousBusyRef.current;
-    previousBusyRef.current = runtimeIsBusy;
-    if (runtimeIsBusy && !wasBusy) {
-      userInterruptedRef.current = false;
-      return;
-    }
-    const interrupted = userInterruptedRef.current;
-    if (!runtimeIsBusy && wasBusy && interrupted) {
-      userInterruptedRef.current = false;
-    }
-    if (shouldAutoDrainOnSettle({
-      isBusy: runtimeIsBusy,
-      wasBusy,
-      queueLength: queuedPrompts.length,
-      userInterrupted: interrupted,
-    })) {
-      void drainEntry(queuedPrompts[0]!);
-    }
-  }, [drainEntry, queuedPrompts, runtimeIsBusy]);
 
   const onQueueSendNow = useCallback((id: string) => {
     const entry = queuedPrompts.find((item) => item.id === id);
-    if (entry) void drainEntry(entry);
-  }, [drainEntry, queuedPrompts]);
+    if (!taskId || !entry) return;
+    void drainQueuedPrompt(taskId, entry, (item) =>
+      submitPayload({ text: item.text, attachments: item.attachments }));
+  }, [queuedPrompts, submitPayload, taskId]);
 
   const onQueueEdit = useCallback((entry: QueuedPromptEntry) => {
     setComposerPrefill((prefill) => ({ text: entry.text, nonce: prefill.nonce + 1, sessionId: taskId }));
@@ -401,12 +368,12 @@ export function DetailRoute() {
   }, [taskId]);
   // 撤回会中断本轮：抑制一次队列自动出队，避免刚撤回的回合被队列立刻顶替
   const onRetracted = useCallback(() => {
-    userInterruptedRef.current = true;
-  }, []);
+    markQueueInterrupted(taskId);
+  }, [taskId]);
   // 撤回失败（如 Agent 刚好开始响应）：本轮并未被中断，复位标记
   const onRetractFailed = useCallback(() => {
-    userInterruptedRef.current = false;
-  }, []);
+    clearQueueInterrupted(taskId);
+  }, [taskId]);
   const retraction = useRetractMessage({
     retract: retractAgent,
     onPrefill: onRetractPrefill,
@@ -445,8 +412,6 @@ export function DetailRoute() {
 
   useEffect(() => {
     setComposerPrefill({ text: "", nonce: 0 });
-    previousBusyRef.current = false;
-    userInterruptedRef.current = false;
     setControlError(undefined);
     setControlNotice(undefined);
     setSendUnrecoverable(null);
@@ -458,7 +423,7 @@ export function DetailRoute() {
   const onStop = useCallback(async () => {
     if (!taskId || !runtimeIsBusy) return;
     // 主动停止只抑制一次自动出队，避免刚停下的回合被队列立刻重新触发。
-    userInterruptedRef.current = true;
+    markQueueInterrupted(taskId);
     await actions.interrupt(taskId);
   }, [actions, runtimeIsBusy, taskId]);
 
