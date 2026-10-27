@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agentInWorkspace,
   ensureWorkspaceProject,
+  moveWorkspaceProject,
   normalizeWorkspacePath,
   readPinnedWorkspaceProjectPaths,
   readSessionWorkspaceMap,
@@ -88,6 +89,35 @@ describe("workspace persistence helpers", () => {
       vi.useRealTimers();
     }
   });
+  it("rememberWorkspaceProject 新项目放最前，已有项目刷新 updatedAt 但不调整顺序", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      rememberWorkspaceProject("/Users/claw/A");
+      rememberWorkspaceProject("/Users/claw/B");
+      vi.setSystemTime(5_000);
+      rememberWorkspaceProject("/Users/claw/A");
+      expect(readWorkspaceProjects().map((p) => [p.path, p.updatedAt])).toEqual([
+        ["/Users/claw/B", 1_000],
+        ["/Users/claw/A", 5_000],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("moveWorkspaceProject 把项目移到目标之前 / 之后", () => {
+    for (const path of ["/p/C", "/p/B", "/p/A"]) rememberWorkspaceProject(path);
+    const order = () => readWorkspaceProjects().map((p) => p.path);
+    expect(order()).toEqual(["/p/A", "/p/B", "/p/C"]);
+    moveWorkspaceProject("/p/A", "/p/C", "after");
+    expect(order()).toEqual(["/p/B", "/p/C", "/p/A"]);
+    moveWorkspaceProject("/p/A", "/p/B", "before");
+    expect(order()).toEqual(["/p/A", "/p/B", "/p/C"]);
+    moveWorkspaceProject("/p/A", "/p/missing", "before");
+    expect(order()).toEqual(["/p/A", "/p/B", "/p/C"]);
+  });
+
   it("stores workspace projects without duplicating equivalent paths", () => {
     rememberWorkspaceProject("/Users/claw/Project/");
     rememberWorkspaceProject("/Users/claw/Project", "Renamed");

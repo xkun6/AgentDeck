@@ -1,4 +1,13 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useNavigate, useLocation } from "react-router-dom";
 import { StatusDot, type StatusDotTone } from "@agentdeck/shared-ui";
@@ -48,6 +57,7 @@ import {
   normalizeWorkspacePath,
   readPinnedWorkspaceProjectPaths,
   readSessionWorkspaceMap,
+  moveWorkspaceProject,
   readWorkspaceProjects,
   rememberWorkspaceProject,
   subscribeWorkspaceChanges,
@@ -215,7 +225,21 @@ interface ProjectBucket {
   /** 运行中的块在前，其余保持会话列表顺序 */
   items: SidebarItem[];
   running: boolean;
+  pinned?: boolean;
 }
+
+type DropPlacement = "before" | "after";
+
+/** 拖拽项目排序：按下后移动超过阈值才算拖拽，否则仍是点击折叠 */
+interface ProjectDrag {
+  path: string;
+  pinned: boolean;
+  startY: number;
+  active: boolean;
+  target: { path: string; placement: DropPlacement } | null;
+}
+
+const PROJECT_DRAG_THRESHOLD = 4;
 
 function itemContains(item: SidebarItem, agentId: string | null): boolean {
   return agentId !== null && item.rows.some((row) => row.agent.id === agentId);
@@ -230,13 +254,35 @@ interface ProjectRowProps {
   onToggle: () => void;
   onNewChat?: () => void;
   menuItems?: () => ContextMenuEntry[];
+  /** 可拖拽排序的项目才有（「其他对话」没有） */
+  dragHandlers?: {
+    onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+    onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
+    onPointerUp: () => void;
+    onPointerCancel: () => void;
+  };
 }
 
-/** 项目节点：点击折叠 / 展开其下会话；折叠时有运行中的会话显示状态点，悬停出现「新建对话」。 */
-function ProjectRow({ name, tooltip, icon: Icon, collapsed, running, onToggle, onNewChat, menuItems }: ProjectRowProps) {
+/**
+ * 项目节点：点击折叠 / 展开其下会话；折叠时有运行中的会话显示状态点，悬停出现「新建对话」；
+ * 按住拖动调整项目顺序（用 pointer 事件实现：Windows 上 Tauri 接管了文件拖放，HTML5 拖放进不了 webview）。
+ */
+function ProjectRow({
+  name,
+  tooltip,
+  icon: Icon,
+  collapsed,
+  running,
+  onToggle,
+  onNewChat,
+  menuItems,
+  dragHandlers,
+}: ProjectRowProps) {
   const row = (
     <div
       className={s.projectRow}
+      data-project-row="true"
+      {...dragHandlers}
       role="button"
       tabIndex={0}
       aria-expanded={!collapsed}
@@ -384,11 +430,11 @@ export function WorkbenchSidebar() {
   const buckets = useMemo<ProjectBucket[]>(() => {
     const groupById = new Map(groups.map((group) => [group.id, group]));
     const projectByPath = new Map(projects.map((project) => [project.path, project]));
-    const byKey = new Map<string, { running: SidebarItem[]; idle: SidebarItem[]; activity: number }>();
+    const byKey = new Map<string, { running: SidebarItem[]; idle: SidebarItem[] }>();
     const bucketOf = (key: string) => {
       let bucket = byKey.get(key);
       if (!bucket) {
-        bucket = { running: [], idle: [], activity: 0 };
+        bucket = { running: [], idle: [] };
         byKey.set(key, bucket);
       }
       return bucket;
@@ -414,10 +460,10 @@ export function WorkbenchSidebar() {
       const projectPath = projectByPath.has(path) ? path : worktreeProjects.get(worktreePathKey(path));
       const bucket = bucketOf(projectPath ?? OTHER_BUCKET_KEY);
       (running ? bucket.running : bucket.idle).push(item);
-      bucket.activity = Math.max(bucket.activity, ...block.roots.map((root) => root.agent.updatedAt));
     }
 
-    // 置顶项目在前，其余按最近活动（会话更新或选用该工作区）倒序；没有会话的项目也显示。
+    // 置顶项目在前，其余保持已记住项目的列表顺序（新项目在最前、可拖拽调整），会话活动不改变顺序；
+    // 没有会话的项目也显示。
     const projectBuckets = projects.map((project) => {
       const bucket = bucketOf(project.path);
       return {
@@ -426,10 +472,9 @@ export function WorkbenchSidebar() {
         items: [...bucket.running, ...bucket.idle],
         running: bucket.running.length > 0,
         pinned: pinnedProjectPaths.has(project.path),
-        activity: Math.max(bucket.activity, project.updatedAt),
       };
     });
-    projectBuckets.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.activity - a.activity);
+    projectBuckets.sort((a, b) => Number(b.pinned) - Number(a.pinned));
     const result: ProjectBucket[] = projectBuckets;
     const other = byKey.get(OTHER_BUCKET_KEY);
     if (other) {
@@ -476,6 +521,52 @@ export function WorkbenchSidebar() {
     const project = path ? rememberWorkspaceProject(path) : null;
     if (project) projectActions.newChat(project);
   };
+
+  // 拖拽排序只在同为置顶 / 同为非置顶的项目之间落点（置顶项目总在前面）
+  const projectDragRef = useRef<ProjectDrag | null>(null);
+  const suppressProjectClickRef = useRef(false);
+  const [projectDrag, setProjectDrag] = useState<Pick<ProjectDrag, "path" | "target"> | null>(null);
+  const endProjectDrag = useCallback(() => {
+    projectDragRef.current = null;
+    setProjectDrag(null);
+  }, []);
+  const projectDragHandlers = (path: string, pinned: boolean): NonNullable<ProjectRowProps["dragHandlers"]> => ({
+    onPointerDown: (event) => {
+      suppressProjectClickRef.current = false;
+      if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+      projectDragRef.current = { path, pinned, startY: event.clientY, active: false, target: null };
+      // 按下就捕获：之后的 move / up / click 都落在被拖的这一行，不会派给指针经过的其他项目行
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    onPointerMove: (event) => {
+      const drag = projectDragRef.current;
+      if (!drag) return;
+      if (!drag.active) {
+        if (Math.abs(event.clientY - drag.startY) < PROJECT_DRAG_THRESHOLD) return;
+        drag.active = true;
+      }
+      const container = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-project-path]");
+      const targetPath = container?.dataset.projectPath;
+      const row = container?.querySelector<HTMLElement>("[data-project-row]");
+      drag.target = null;
+      if (container && row && targetPath && targetPath !== drag.path && (container.dataset.pinned === "true") === drag.pinned) {
+        const rect = row.getBoundingClientRect();
+        drag.target = { path: targetPath, placement: event.clientY < rect.top + rect.height / 2 ? "before" : "after" };
+      }
+      setProjectDrag({ path: drag.path, target: drag.target });
+    },
+    onPointerUp: () => {
+      const drag = projectDragRef.current;
+      if (drag?.active) {
+        suppressProjectClickRef.current = true;
+        if (drag.target) moveWorkspaceProject(drag.path, drag.target.path, drag.target.placement);
+      }
+      endProjectDrag();
+    },
+    onPointerCancel: endProjectDrag,
+  });
 
   const projectNameByPath = useMemo(
     () => new Map(projects.map((project) => [project.path, project.name])),
@@ -551,16 +642,31 @@ export function WorkbenchSidebar() {
       : items.filter((item, index) => index < PROJECT_ITEM_LIMIT || itemContains(item, activeSessionId));
     const hiddenCount = items.length - visible.length;
     return (
-      <div key={key || "other"} className={s.project}>
+      <div
+        key={key || "other"}
+        className={s.project}
+        data-project-path={project ? key : undefined}
+        data-pinned={bucket.pinned ? "true" : undefined}
+        data-dragging={projectDrag?.path === key ? "true" : undefined}
+        data-drop={projectDrag?.target?.path === key ? projectDrag.target.placement : undefined}
+      >
         <ProjectRow
           name={name}
           tooltip={project ? `${project.name}\n${project.path}` : "不属于任何项目的对话"}
           icon={project ? (collapsed ? Folder : FolderOpen) : MessagesSquare}
           collapsed={collapsed}
           running={bucket.running}
-          onToggle={() => toggleProject(key)}
+          onToggle={() => {
+            // 拖拽结束时紧跟的 click 不算折叠
+            if (suppressProjectClickRef.current) {
+              suppressProjectClickRef.current = false;
+              return;
+            }
+            toggleProject(key);
+          }}
           onNewChat={project ? () => projectActions.newChat(project) : undefined}
           menuItems={project ? () => projectActions.buildMenu(project) : undefined}
+          dragHandlers={project ? projectDragHandlers(project.path, Boolean(bucket.pinned)) : undefined}
         />
         {collapsed ? null : (
           <>

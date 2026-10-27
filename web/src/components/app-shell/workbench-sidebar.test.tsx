@@ -87,7 +87,7 @@ describe("侧栏会话列表", () => {
 describe("侧栏按项目分组", () => {
   const project = (path: string, updatedAt: number) => ({ path, name: path.split("/").pop(), createdAt: 1, updatedAt });
 
-  it("会话归到 cwd 所在项目；置顶项目在前，其余按最近活动；项目内运行中的在前；未归入项目的放在「其他对话」", () => {
+  it("会话归到 cwd 所在项目；置顶项目在前，其余按项目列表顺序（会话活动不改变顺序）；项目内运行中的在前；未归入项目的放在「其他对话」", () => {
     __resetUiStoreForTests({
       "agentdeck-cn-ui.workspaceProjects": [project("C:/work/alpha", 1), project("C:/work/beta", 1), project("C:/work/empty", 1)],
       "agentdeck-cn-ui.pinnedWorkspaceProjects": ["C:/work/empty"],
@@ -99,7 +99,39 @@ describe("侧栏按项目分组", () => {
       agent("a2", { cwd: "C:/work/alpha", status: "running", updatedAt: 3000 }),
     ]);
     const labels = screen.getAllByText(/^(会话-|alpha|beta|empty|其他对话|暂无对话)/).map((node) => node.textContent);
-    expect(labels).toEqual(["empty", "暂无对话", "beta", "会话-b1", "alpha", "会话-a2", "会话-a1", "其他对话", "会话-loose"]);
+    expect(labels).toEqual(["empty", "暂无对话", "alpha", "会话-a2", "会话-a1", "beta", "会话-b1", "其他对话", "会话-loose"]);
+  });
+
+  it("按住项目行拖动调整顺序，拖完不触发折叠", () => {
+    // jsdom 没有 PointerEvent，fireEvent 会退回普通 Event、丢掉 button / clientY
+    vi.stubGlobal("PointerEvent", class extends MouseEvent {});
+    __resetUiStoreForTests({
+      "agentdeck-cn-ui.workspaceProjects": [project("C:/work/alpha", 1), project("C:/work/beta", 1)],
+    });
+    try {
+      renderSidebar([]);
+      const alpha = screen.getByRole("button", { name: "折叠项目：alpha" });
+      const beta = screen.getByRole("button", { name: "折叠项目：beta" });
+      beta.getBoundingClientRect = () => ({ top: 100, height: 32 }) as DOMRect;
+      Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => beta });
+      fireEvent.pointerDown(alpha, { button: 0, clientY: 10 });
+      fireEvent.pointerMove(alpha, { clientY: 120 });
+      fireEvent.pointerUp(alpha, { clientY: 120 });
+      fireEvent.click(alpha);
+      const names = () => screen.getAllByText(/^(alpha|beta)$/).map((node) => node.textContent);
+      expect(names()).toEqual(["beta", "alpha"]);
+      expect(screen.getByRole("button", { name: "折叠项目：alpha" })).toBeTruthy();
+
+      // 没超过阈值就是普通点击
+      fireEvent.pointerDown(alpha, { button: 0, clientY: 10 });
+      fireEvent.pointerMove(alpha, { clientY: 12 });
+      fireEvent.pointerUp(alpha, { clientY: 12 });
+      fireEvent.click(alpha);
+      expect(screen.getByRole("button", { name: "展开项目：alpha" })).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
   });
 
   it("项目可折叠，折叠状态记住", () => {

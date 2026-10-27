@@ -117,12 +117,26 @@ export function rememberWorkspaceProject(path: string, name?: string): Workspace
         updatedAt: now,
       };
 
-  const next = [
-    nextProject,
-    ...projects.filter((item) => item.path !== normalized),
-  ];
+  // 列表顺序即侧栏项目顺序（design.md 4.17）：新项目放最前，已有项目原位更新、不调整顺序
+  const next = existing
+    ? projects.map((item) => (item.path === normalized ? nextProject : item))
+    : [nextProject, ...projects];
   writeJSON(WORKSPACE_PROJECTS_STORAGE_KEY, next);
   return nextProject;
+}
+
+/** 侧栏拖拽调整项目顺序：把 path 移到 targetPath 之前 / 之后 */
+export function moveWorkspaceProject(path: string, targetPath: string, placement: "before" | "after"): void {
+  const from = normalizeWorkspacePath(path);
+  const to = normalizeWorkspacePath(targetPath);
+  if (!from || !to || from === to) return;
+  const projects = readWorkspaceProjects();
+  const moving = projects.find((item) => item.path === from);
+  const rest = projects.filter((item) => item.path !== from);
+  const targetIndex = rest.findIndex((item) => item.path === to);
+  if (!moving || targetIndex < 0) return;
+  rest.splice(placement === "before" ? targetIndex : targetIndex + 1, 0, moving);
+  writeJSON(WORKSPACE_PROJECTS_STORAGE_KEY, rest);
 }
 
 /**
