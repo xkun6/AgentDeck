@@ -1,5 +1,4 @@
 import { useAtom, useAtomValue } from "jotai";
-import { useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Camera,
@@ -11,7 +10,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  DEFAULT_PREVIEW_PANEL,
   PREVIEW_PANEL_QUERY_KEY,
   SNAPSHOT_TURN_QUERY_KEY,
   UNSAVED_DISCARD_CONFIRM,
@@ -60,23 +58,11 @@ export function PreviewRail({ sessionId, workspaceRoot, onClose }: PreviewRailPr
   const [searchParams, setSearchParams] = useSearchParams();
   const active = normalizePreviewPanel(searchParams.get(PREVIEW_PANEL_QUERY_KEY));
   const editorDirty = useAtomValue(previewEditorDirtyAtom);
-  const didInitPanel = useRef(false);
   const { confirm } = useConfirm();
 
-  // On mount, ensure the URL has a ?panel= parameter so the tab selection
-  // survives page refresh (F5). The browser preserves the URL, so a tab
-  // explicitly set via setActive() already persists — this handles the
-  // case where the panel opens programmatically (⌘B / TopBar button) without
-  // any tab having been clicked yet.
-  useEffect(() => {
-    if (didInitPanel.current) return;
-    didInitPanel.current = true;
-    if (!searchParams.has(PREVIEW_PANEL_QUERY_KEY)) {
-      const next = new URLSearchParams(searchParams);
-      next.set(PREVIEW_PANEL_QUERY_KEY, DEFAULT_PREVIEW_PANEL);
-      setSearchParams(next, { replace: true });
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // 不在挂载时往 URL 补写默认 ?panel=：React Router v7 的 setSearchParams 走 transition，
+  // 「本回合修改了 N 个文件」小条同时打开右栏并写入 panel=snapshots 时，右栏先以旧 URL 挂载，
+  // 补写会用旧参数覆盖成 panel=files（design.md 4.24）。缺省时 normalizePreviewPanel 已回落到默认页。
 
   const setActive = async (panel: PreviewPanel) => {
     if (panel === active) return;
