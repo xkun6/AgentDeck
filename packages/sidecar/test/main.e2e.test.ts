@@ -100,11 +100,11 @@ describe("main.ts 端到端", () => {
     const sidecar = startSidecar({ AGENTDECK_TOKEN: TOKEN, AGENTDECK_LOG_DIR: nestedLogDir });
 
     const ready = await sidecar.ready;
-    expect(ready).toMatchObject({ type: "ready", version: "0.3.15", pid: sidecar.child.pid });
+    expect(ready).toMatchObject({ type: "ready", version: "0.3.16", pid: sidecar.child.pid });
     expect(ready.port).toBeGreaterThan(0);
 
     const health = await fetch(`http://127.0.0.1:${ready.port}/health`);
-    await expect(health.json()).resolves.toEqual({ ok: true, version: "0.3.15" });
+    await expect(health.json()).resolves.toEqual({ ok: true, version: "0.3.16" });
 
     const client = await TestRpcClient.connect(
       `ws://127.0.0.1:${ready.port}/rpc?token=${TOKEN}`,
