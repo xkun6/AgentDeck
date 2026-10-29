@@ -135,6 +135,13 @@ export function safeImageSrc(value: string | undefined): string | undefined {
   return trimmed;
 }
 
+/** 有确定位置的图片来源：data:image、http(s)、blob 或本机绝对路径；相对路径没有基准目录，不算。 */
+export function isAnchoredImageSource(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) return false;
+  return /^(?:data:image\/|https?:|blob:)/i.test(trimmed) || isLikelyLocalFilePath(trimmed);
+}
+
 function imagePartFromTrustedString(value: string, fallbackName?: string): AgentImagePart | null {
   const url = value.trim();
   if (!url) return null;

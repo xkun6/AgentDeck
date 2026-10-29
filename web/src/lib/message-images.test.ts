@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractImagePartsFromUnknown,
   extractMarkdownImageParts,
+  isAnchoredImageSource,
   isLikelyLocalFilePath,
   normalizeLocalFilePath,
   safeImageSrc,
@@ -55,5 +56,16 @@ describe("message image extraction", () => {
       normalizeLocalFilePath("/D:/AgentDeck/e2e/.runtime/agentdeck-home/images/generated%20previews/model%20output.png"),
     ).toBe("D:/AgentDeck/e2e/.runtime/agentdeck-home/images/generated previews/model output.png");
     expect(normalizeLocalFilePath("/D:/data/shot.png")).toBe("D:/data/shot.png");
+  });
+});
+
+describe("isAnchoredImageSource", () => {
+  it("接受 data / http(s) / blob 与本机绝对路径，拒绝相对路径", () => {
+    for (const ok of ["data:image/png;base64,AAAA", "https://a.test/x.png", "http://127.0.0.1/x.png", "blob:abc", "C:\\a\\b.png", "J:/a/b.png", "/Users/me/b.png", "file:///C:/a.png"]) {
+      expect(isAnchoredImageSource(ok), ok).toBe(true);
+    }
+    for (const bad of [undefined, "", "tag-none.png", "./images/a.png", "../a.png", "icons/32x32.png"]) {
+      expect(isAnchoredImageSource(bad), String(bad)).toBe(false);
+    }
   });
 });

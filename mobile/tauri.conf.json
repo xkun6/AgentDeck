@@ -14,7 +14,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc://localhost http://ipc.localhost http://tauri.localhost ws: wss:; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc://localhost http://ipc.localhost http://tauri.localhost ws: wss:; img-src 'self' data: blob: http: https:; font-src 'self' data:; media-src 'self' data: blob:"
     }
   },
   "bundle": {

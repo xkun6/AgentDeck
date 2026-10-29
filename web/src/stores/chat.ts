@@ -552,6 +552,8 @@ function upsertAgentToolPart(
     completedAt: state === "running" ? undefined : existing?.completedAt ?? timestamp,
     ...(subAgent ? { subAgent } : {}),
     ...(delegate ? { delegate } : {}),
+    // unknown（多为 MCP）的 output 文本里拼了输入，图片只从原始输出里找（design.md 5.3）
+    ...(item.detail.type === "unknown" ? { imageSource: item.detail.output } : {}),
   };
   if (!existing) return appendToolPart(withoutProgressParts(parts), tool);
   const next = [...parts];

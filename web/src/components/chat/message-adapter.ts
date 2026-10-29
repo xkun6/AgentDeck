@@ -6,7 +6,7 @@ import {
   normalizeCliThinkingProgress,
   normalizeReasoningText,
 } from "@/lib/reasoning-filter";
-import { extractImagePartsFromUnknown } from "@/lib/message-images";
+import { extractImagePartsFromUnknown, isAnchoredImageSource } from "@/lib/message-images";
 import { toolDisplayName } from "@/lib/computer-use-tools";
 import type { AssistantTurnBlock } from "@/stores/chat";
 import type {
@@ -134,7 +134,9 @@ function toolPartToToolEntry(part: AgentToolPart, message: AgentUIMessage): Chat
   const subAgent = readSubAgent(part.subAgent);
   const delegate = part.delegate as ChatToolItem["delegate"];
   const input = parseToolInput(part.input);
-  const images = extractImagePartsFromUnknown(part.output).map(imagePartToEntry);
+  const images = extractImagePartsFromUnknown("imageSource" in part ? part.imageSource : part.output)
+    .filter((image) => isAnchoredImageSource(image.url))
+    .map(imagePartToEntry);
   return {
     tool_id: part.toolCallId,
     name: toolDisplayName(part.name),

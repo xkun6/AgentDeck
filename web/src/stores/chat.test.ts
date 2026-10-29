@@ -9,6 +9,7 @@ import {
   markStreamsReconnectingAtom,
   startAgentPromptAtom,
 } from "./chat";
+import { agentUIMessageToChatMessage } from "@/components/chat/message-adapter";
 
 describe("markStreamsReconnectingAtom", () => {
   it("把进行中的回合标成临时重连状态，而不是错误收尾", () => {
@@ -127,5 +128,49 @@ describe("CLI 自发轮次（turn_started 没有前置用户消息）", () => {
     expect(runtime.streamStatus).toBe("complete");
     expect(runtime.messages).toHaveLength(1);
     expect(runtime.messages[0]).toMatchObject({ role: "assistant", status: "complete", parts: [{ type: "text", text: "后台完成" }] });
+  });
+});
+
+describe("工具卡片图片", () => {
+  function toolImages(detail: Record<string, unknown>) {
+    const store = createStore();
+    store.set(applyAgentEventAtom, {
+      agentId: "a1",
+      seq: 1,
+      epoch: "e1",
+      timestamp: 10,
+      event: {
+        type: "timeline",
+        turnId: "t1",
+        item: { type: "tool_call", callId: "c1", name: "mcp__demo__run", status: "completed", detail },
+      },
+    } as AgentStreamEnvelope);
+    const message = store.get(chatRuntimeBySessionAtom).a1.messages[0];
+    return agentUIMessageToChatMessage(message)?.tools?.[0]?.images?.map((image) => image.url);
+  }
+
+  it("MCP 工具只从输出里找图片，不把输入代码里的文件名当图片", () => {
+    expect(toolImages({
+      type: "unknown",
+      input: { code: "load('C:/tex/tag-none.png')" },
+      output: "1",
+    })).toBeUndefined();
+  });
+
+  it("输出里的相对路径不显示，绝对路径、https 与 data URL 照常显示", () => {
+    expect(toolImages({
+      type: "unknown",
+      input: { mode: "full" },
+      output: "参考 ./images/sample.png 与 tag-none.png\n已保存截图: C:\\Temp\\shot.jpg\n![远程](https://example.test/a.png)",
+    })).toEqual(["https://example.test/a.png", "C:\\Temp\\shot.jpg"]);
+  });
+
+  it("非 MCP 工具输出里的相对路径同样不显示", () => {
+    expect(toolImages({
+      type: "shell",
+      command: "ls",
+      output: "icons/32x32.png\nJ:/out/result.png",
+      exitCode: 0,
+    })).toEqual(["J:/out/result.png"]);
   });
 });
