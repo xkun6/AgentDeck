@@ -316,6 +316,7 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
     val density = activity.resources.displayMetrics.density
     val result = JSObject()
     result.put("top", (insets.top / density).toDouble())
+    result.put("bottom", (insets.bottom / density).toDouble())
     invoke.resolve(result)
   }
 

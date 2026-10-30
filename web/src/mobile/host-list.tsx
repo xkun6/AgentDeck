@@ -1,5 +1,6 @@
 // 电脑列表：已配对电脑、连接状态、切换、删除（二次确认），以及「扫码配对」「粘贴配对链接」入口。
 import { useState } from "react";
+import { Laptop, QrCode } from "lucide-react";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { AUTH_REASON_TEXT, type ConnectionSnapshot } from "./connection-manager";
 import { isTauriShell } from "./platform";
@@ -54,10 +55,16 @@ export function HostList({ hosts, connection, onOpenHost, onDeleteHost, onScan, 
           </button>
         </div>
         {hosts.length === 0 ? (
-          <div className={s.empty}>
-            还没有配对过电脑。
-            <br />
-            在电脑 AgentDeck 的「手机连接」页生成配对二维码，用「扫码配对」扫描，或复制链接后粘贴。
+          <div className={s.hero}>
+            <span className={s.heroIcon} aria-hidden="true">
+              <QrCode />
+            </span>
+            <div className={s.heroTitle}>连接你的电脑</div>
+            <div className={s.heroText}>
+              还没有配对过电脑。
+              <br />
+              在电脑 AgentDeck 的「手机连接」页生成配对二维码，用「扫码配对」扫描，或复制链接后粘贴。
+            </div>
           </div>
         ) : (
           <ul className={s.list} aria-label="已配对电脑">
@@ -67,14 +74,19 @@ export function HostList({ hosts, connection, onOpenHost, onDeleteHost, onScan, 
               return (
                 <li key={host.id} className={s.hostItem}>
                   <button type="button" className={s.hostMain} onClick={() => onOpenHost(host.id)}>
-                    <span className={s.rowTitle}>{host.name}</span>
-                    <span className={s.hostStatus} data-state={status.state}>
-                      {status.text}
+                    <span className={s.hostIcon} data-state={status.state} aria-hidden="true">
+                      <Laptop />
                     </span>
-                    <span className={s.rowMeta}>
-                      {host.lastAddress
-                        ? `${host.lastAddress.host}:${host.lastAddress.port}`
-                        : `${host.addresses.length} 个地址`}
+                    <span className={s.rowBody}>
+                      <span className={s.rowTitle}>{host.name}</span>
+                      <span className={s.hostStatus} data-state={status.state}>
+                        {status.text}
+                      </span>
+                      <span className={s.rowMeta}>
+                        {host.lastAddress
+                          ? `${host.lastAddress.host}:${host.lastAddress.port}`
+                          : `${host.addresses.length} 个地址`}
+                      </span>
                     </span>
                   </button>
                   {confirming ? (

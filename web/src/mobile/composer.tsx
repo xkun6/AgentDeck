@@ -1,6 +1,7 @@
 // 手机端输入区：发送 / 运行中插话（provider 支持 steer）/ 取消，以及图片附件（拍照 / 相册，最多 4 张，可预览可删除）。
 // 撤回按钮在消息气泡上（MessageTimeline 的 retract 操作）。
 import { useRef, useState } from "react";
+import { ArrowUp, Plus, Square } from "lucide-react";
 import { IMAGE_LIMITS, type DraftImage } from "./image-attachments";
 import s from "./mobile.module.css";
 
@@ -97,14 +98,15 @@ export function MobileComposer({
         <div className={s.imageMenuWrap}>
           <button
             type="button"
-            className={s.secondaryButton}
+            className={s.composerIcon}
+            aria-label="图片"
             disabled={!canType || imagesFull || imagesBusy}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             title={imagesFull ? `最多 ${IMAGE_LIMITS.maxCount} 张` : undefined}
             onClick={() => setMenuOpen((open) => !open)}
           >
-            图片
+            <Plus aria-hidden="true" />
           </button>
           {menuOpen ? (
             <div className={s.imageMenu} role="menu">
@@ -132,17 +134,17 @@ export function MobileComposer({
       {busy ? (
         <div className={s.inputActions}>
           {steerSupported ? (
-            <button type="submit" className={s.primaryButton} disabled={sendBlocked}>
+            <button type="submit" className={s.composerSteer} disabled={sendBlocked}>
               插话
             </button>
           ) : null}
-          <button type="button" className={s.dangerButton} onClick={onCancel} disabled={!connected}>
-            取消
+          <button type="button" className={s.composerStop} aria-label="取消" onClick={onCancel} disabled={!connected}>
+            <Square aria-hidden="true" />
           </button>
         </div>
       ) : (
-        <button type="submit" className={s.primaryButton} disabled={sendBlocked}>
-          发送
+        <button type="submit" className={s.composerSend} aria-label="发送" disabled={sendBlocked}>
+          <ArrowUp aria-hidden="true" />
         </button>
       )}
     </form>

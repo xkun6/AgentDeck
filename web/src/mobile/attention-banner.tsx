@@ -1,6 +1,7 @@
 // client.attention 的应用内提示条（design.md 4.31）：前台且在其它页面时弹出，点击跳转到对应会话。
 // App 在后台时交给 attention.ts 里注册的本地通知处理器（native/local-notifications.ts）。
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import type { AttentionNotice } from "@agentdeck/protocol";
 import type { SidecarClient } from "@/lib/sidecar-client";
 import { attentionTarget, decideAttention, dispatchBackgroundAttention, dispatchResolvedAttention } from "./attention";
@@ -101,7 +102,7 @@ export function AttentionBanner({
         <span className={s.attentionBody}>{notice.body}</span>
       </button>
       <button type="button" className={s.iconButton} aria-label="关闭提示" onClick={onDismiss}>
-        ×
+        <X aria-hidden="true" />
       </button>
     </div>
   );

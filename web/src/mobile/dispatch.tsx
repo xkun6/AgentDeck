@@ -1,6 +1,7 @@
 // 手机端派单页（design.md 4.26）：总览列出主会话，详情列出主会话与它派发的子会话，点行进入普通会话页。
 import { useCallback, useEffect, useState } from "react";
 import { useAtomValue } from "jotai";
+import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
@@ -17,6 +18,7 @@ import { dispatcherIdOf, isDispatchedAgent } from "@/lib/session-list";
 import { workspaceNameFromPath } from "@/lib/workspaces";
 import { agentListLoadedAtom, agentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
+import { ProgressRing, StatusTile } from "./visual";
 import s from "./mobile.module.css";
 
 function useTitleOf(): (agent: AgentSnapshot) => string {
@@ -71,21 +73,24 @@ function NodeRows({
   return (
     <>
       {nodes.map((node) => (
-        <li key={node.agent.id}>
+        <li key={node.agent.id} className={s.rowWrap}>
           <button
             type="button"
             className={s.row}
             style={depth > 0 ? { paddingLeft: 12 + depth * 16 } : undefined}
             onClick={() => onOpen(node.agent.id)}
           >
-            <span className={s.rowTitleLine}>
-              <span className={s.rowTitle}>{titleOf(node.agent)}</span>
-            </span>
-            <span className={s.rowMeta}>
-              <StatusText status={node.status} />
-              <span>{agentProviderLabel(node.agent.provider, providers)}</span>
-              <span>{workspaceNameFromPath(node.agent.cwd)}</span>
-              <span>{formatAgentTime(node.agent.updatedAt, now)}</span>
+            <StatusTile kind={node.status} />
+            <span className={s.rowBody}>
+              <span className={s.rowTitleLine}>
+                <span className={s.rowTitle}>{titleOf(node.agent)}</span>
+                <span className={s.rowTime}>{formatAgentTime(node.agent.updatedAt, now)}</span>
+              </span>
+              <span className={s.rowMeta}>
+                <StatusText status={node.status} />
+                <span>{agentProviderLabel(node.agent.provider, providers)}</span>
+                <span>{workspaceNameFromPath(node.agent.cwd)}</span>
+              </span>
             </span>
           </button>
           {node.children.length > 0 ? (
@@ -123,8 +128,15 @@ export function DispatchOverview({
     <div className={s.page}>
       <header className={s.header}>
         <h1 className={s.title}>派单</h1>
-        <button type="button" className={s.textButton} onClick={() => void refresh()} disabled={refreshing}>
-          {refreshing ? "刷新中…" : "刷新"}
+        <button
+          type="button"
+          className={s.iconButton}
+          aria-label={refreshing ? "刷新中…" : "刷新"}
+          data-spinning={refreshing ? "true" : undefined}
+          onClick={() => void refresh()}
+          disabled={refreshing}
+        >
+          <RefreshCw aria-hidden="true" />
         </button>
       </header>
       {error ? (
@@ -134,25 +146,34 @@ export function DispatchOverview({
       ) : null}
       <ul className={s.list} aria-label="主会话列表">
         {masters.map(({ master, summary }) => (
-          <li key={master!.agent.id}>
-            <button type="button" className={s.row} onClick={() => onOpenDetail(master!.agent.id)}>
-              <span className={s.rowTitleLine}>
-                <span className={s.rowTitle}>{titleOf(master!.agent)}</span>
-              </span>
-              <span className={s.rowMeta}>
+          <li key={master!.agent.id} className={s.dispatchCardWrap}>
+            <button type="button" className={s.dispatchCard} onClick={() => onOpenDetail(master!.agent.id)}>
+              <ProgressRing summary={summary} size={48} label />
+              <span className={s.rowBody}>
+                <span className={s.rowTitleLine}>
+                  <span className={s.rowTitle}>{titleOf(master!.agent)}</span>
+                </span>
                 <span className={s.dispatchSummary} data-attention={summary.attention > 0 ? "true" : undefined}>
                   {dispatchSummaryText(summary)}
                 </span>
-                <span>{formatAgentTime(master!.agent.updatedAt, now)}</span>
+                <span className={s.rowMeta}>
+                  <span>{workspaceNameFromPath(master!.agent.cwd)}</span>
+                  <span>{formatAgentTime(master!.agent.updatedAt, now)}</span>
+                </span>
               </span>
+              <ChevronRight className={s.rowChevron} aria-hidden="true" />
             </button>
           </li>
         ))}
         {orphans ? (
-          <>
-            <li className={s.dispatchSection}>主会话已删除</li>
-            <NodeRows nodes={orphans.children} onOpen={onOpenSession} />
-          </>
+          <li className={s.project}>
+            <div className={s.projectHead} data-static="true">
+              <span className={s.projectName}>主会话已删除</span>
+            </div>
+            <ul className={s.projectRows}>
+              <NodeRows nodes={orphans.children} onOpen={onOpenSession} />
+            </ul>
+          </li>
         ) : null}
         {loaded && groups.length === 0 ? (
           <li className={s.empty}>还没有派单。会话用 delegate 派发任务后，会在这里显示主会话和子会话</li>
@@ -182,7 +203,7 @@ export function DispatchDetail({
     <div className={s.page}>
       <header className={s.header}>
         <button type="button" className={s.iconButton} onClick={onBack} aria-label="返回">
-          ‹
+          <ChevronLeft aria-hidden="true" />
         </button>
         <h1 className={s.titleSmall}>{master ? titleOf(master.agent) : "派单详情"}</h1>
       </header>
@@ -193,25 +214,33 @@ export function DispatchDetail({
       ) : null}
       {master && group ? (
         <>
-          <div className={s.dispatchHead}>
+          <div className={s.dispatchHero}>
+            <ProgressRing summary={group.summary} size={56} label />
             <span className={s.dispatchSummary} data-attention={group.summary.attention > 0 ? "true" : undefined}>
               {dispatchSummaryText(group.summary)}
             </span>
           </div>
           <ul className={s.list} aria-label="派单详情">
-            <li>
-              <button type="button" className={s.row} onClick={() => onOpenSession(master.agent.id)}>
-                <span className={s.rowTitleLine}>
-                  <span className={s.pin}>主会话</span>
-                  <span className={s.rowTitle}>{titleOf(master.agent)}</span>
-                </span>
-                <span className={s.rowMeta}>
-                  <StatusText status={master.status} />
-                  {master.agent.archived ? <span>已归档</span> : null}
-                </span>
-              </button>
+            <li className={s.project}>
+              <ul className={s.projectRows}>
+                <li className={s.rowWrap}>
+                  <button type="button" className={s.row} onClick={() => onOpenSession(master.agent.id)}>
+                    <StatusTile kind={master.status} />
+                    <span className={s.rowBody}>
+                      <span className={s.rowTitleLine}>
+                        <span className={s.pin}>主会话</span>
+                        <span className={s.rowTitle}>{titleOf(master.agent)}</span>
+                      </span>
+                      <span className={s.rowMeta}>
+                        <StatusText status={master.status} />
+                        {master.agent.archived ? <span>已归档</span> : null}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+                <NodeRows nodes={group.children} onOpen={onOpenSession} />
+              </ul>
             </li>
-            <NodeRows nodes={group.children} onOpen={onOpenSession} />
           </ul>
         </>
       ) : (
@@ -261,6 +290,7 @@ export function SessionDispatchBar({
   if (!group) return null;
   return (
     <div className={s.dispatchBar}>
+      <ProgressRing summary={group.summary} size={14} />
       <button
         type="button"
         className={s.dispatchLink}

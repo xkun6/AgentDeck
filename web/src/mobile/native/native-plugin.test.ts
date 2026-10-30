@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getBatteryOptimization,
-  getSafeAreaTop,
+  getSafeAreaInsets,
   openUrl,
   getNotificationsEnabled,
   keepaliveStart,
@@ -31,7 +31,7 @@ describe("原生包装在非 Tauri 环境下是 no-op", () => {
     expect(await requestIgnoreBatteryOptimization()).toBe(false);
     expect(await openAppSettings()).toBe(false);
     expect(await openUrl("https://example.com")).toBe(false);
-    expect(await getSafeAreaTop()).toBeNull();
+    expect(await getSafeAreaInsets()).toBeNull();
     expect(await showAttentionNotification({ id: 1, title: "t", body: "b", kind: "finished" })).toBe(false);
     expect(await cancelAttentionNotification(1)).toBe(false);
     expect(await getNotificationsEnabled()).toBeNull();
@@ -120,7 +120,7 @@ describe("原生包装转发命令", () => {
   });
 });
 
-describe("openUrl / getSafeAreaTop", () => {
+describe("openUrl / getSafeAreaInsets", () => {
   it("openUrl 转发 open_url；原生拒绝（非 http(s) / 无浏览器）返回 false", async () => {
     const calls: Array<[string, Record<string, unknown> | undefined]> = [];
     setNativeBackend({
@@ -136,18 +136,20 @@ describe("openUrl / getSafeAreaTop", () => {
     expect(calls[0]).toEqual(["open_url", { url: "https://example.com/a" }]);
   });
 
-  it("getSafeAreaTop 读 safe_area_insets 的 top；取不到或非数字返回 null", async () => {
-    let reply: unknown = { top: 28.5 };
+  it("getSafeAreaInsets 读 safe_area_insets 的 top / bottom；旧原生没有 bottom、非数字时该项为 null，调用失败返回 null", async () => {
+    let reply: unknown = { top: 28.5, bottom: 16 };
     setNativeBackend({ invoke: async () => reply });
-    expect(await getSafeAreaTop()).toBe(28.5);
-    reply = { top: "x" };
-    expect(await getSafeAreaTop()).toBeNull();
+    expect(await getSafeAreaInsets()).toEqual({ top: 28.5, bottom: 16 });
+    reply = { top: 28.5 };
+    expect(await getSafeAreaInsets()).toEqual({ top: 28.5, bottom: null });
+    reply = { top: "x", bottom: 16 };
+    expect(await getSafeAreaInsets()).toEqual({ top: null, bottom: 16 });
     setNativeBackend({
       invoke: async () => {
         throw new Error("窗口尚未就绪");
       },
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(await getSafeAreaTop()).toBeNull();
+    expect(await getSafeAreaInsets()).toBeNull();
   });
 });

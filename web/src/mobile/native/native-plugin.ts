@@ -103,12 +103,13 @@ export async function openUrl(url: string): Promise<boolean> {
   return (await call("open_url", { url })).ok;
 }
 
-/** 系统栏（状态栏 / 刘海）顶部高度，单位 CSS px；原生取不到（窗口未就绪 / 非 Tauri 环境）返回 null */
-export async function getSafeAreaTop(): Promise<number | null> {
+/** 系统栏（状态栏 / 刘海、导航条）的顶部与底部高度，单位 CSS px；原生取不到（窗口未就绪 / 非 Tauri 环境）返回 null，单项无效时该项为 null */
+export async function getSafeAreaInsets(): Promise<{ top: number | null; bottom: number | null } | null> {
   const result = await call("safe_area_insets");
   if (!result.ok) return null;
-  const top = (result.value as { top?: unknown } | null)?.top;
-  return typeof top === "number" && Number.isFinite(top) ? top : null;
+  const value = result.value as { top?: unknown; bottom?: unknown } | null;
+  const valid = (inset: unknown) => (typeof inset === "number" && Number.isFinite(inset) ? inset : null);
+  return { top: valid(value?.top), bottom: valid(value?.bottom) };
 }
 
 // ── 后台提醒通知 ──────────────────────────────────────────────────────────────

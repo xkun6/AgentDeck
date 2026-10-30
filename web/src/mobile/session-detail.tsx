@@ -1,6 +1,7 @@
 // 会话详情：窗口化的时间线（打开取最近 300 条，滚到顶部向前分页）、审批 / 提问、状态行、输入区。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
+import { ChevronLeft, Languages } from "lucide-react";
 import type { AgentPermissionResponse } from "@agentdeck/protocol";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { MessageTimeline } from "@/components/chat/message-timeline";
@@ -21,6 +22,7 @@ import { useRetractMessage } from "@/hooks/use-retract-message";
 import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
 import { agentDisplayTitle, agentStatusLabel } from "@/lib/agent-session-display";
+import { workspaceNameFromPath } from "@/lib/workspaces";
 import { MobileComposer } from "./composer";
 import { SessionDispatchBar } from "./dispatch";
 import { addImages, compressImage, describeImageSendFailure, imagesToAttachments, type DraftImage } from "./image-attachments";
@@ -211,7 +213,7 @@ export function SessionDetail({
     setError(null);
     try {
       const prepared = await prepareAgentPrompt({ text: value, attachments: imagesToAttachments(draft) });
-      await actions.steerPrompt(agentId, prepared.prompt);
+      await actions.steerPrompt(agentId, prepared.prompt, { displayImages: prepared.displayImages });
       setText("");
       setImages([]);
     } catch (e) {
@@ -241,16 +243,23 @@ export function SessionDetail({
     <div className={s.page}>
       <header className={s.header}>
         <button type="button" className={s.iconButton} onClick={onBack} aria-label="返回">
-          ‹
+          <ChevronLeft aria-hidden="true" />
         </button>
-        <h1 className={s.titleSmall}>{title}</h1>
-        {snapshot ? <span className={s.conn}>{agentStatusLabel(snapshot)}</span> : null}
+        <div className={s.headerTitles}>
+          <h1 className={s.titleSmall}>{title}</h1>
+          {snapshot ? (
+            <div className={s.headerSub}>
+              {agentStatusLabel(snapshot)} · {workspaceNameFromPath(snapshot.cwd)}
+            </div>
+          ) : null}
+        </div>
         {snapshot ? (
           <button
             type="button"
             className={s.headerToggle}
             data-on={translation.enabled ? "true" : undefined}
             aria-pressed={translation.enabled}
+            aria-label="翻译"
             disabled={!connected || savingTranslation}
             onClick={() => {
               setSavingTranslation(true);
@@ -261,7 +270,7 @@ export function SessionDetail({
                 .finally(() => setSavingTranslation(false));
             }}
           >
-            翻译
+            <Languages aria-hidden="true" />
           </button>
         ) : null}
       </header>

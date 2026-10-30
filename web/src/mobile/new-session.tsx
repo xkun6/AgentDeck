@@ -2,6 +2,7 @@
 // 危险模式（AgentMode.dangerous，跳过权限确认）标红，且绝不默认选中：初始模式恒为「默认」，只有用户明确点选才会带 modeId。
 import { useMemo, useState } from "react";
 import { useAtomValue } from "jotai";
+import { Check, X } from "lucide-react";
 import { agentListAtom } from "@/stores/agents";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useAgentCatalog, useAgentProviders } from "@/hooks/use-agent-catalog";
@@ -10,7 +11,7 @@ import { isDangerousMode, resolveProvider } from "@/lib/agent-selection";
 import { cwdBaseName, cwdKey, recentCwdOptions } from "./cwd-options";
 import s from "./mobile.module.css";
 
-export function NewSession({ onCreated }: { onCreated: (agentId: string) => void }) {
+export function NewSession({ onCreated, onClose }: { onCreated: (agentId: string) => void; onClose?: () => void }) {
   const actions = useAgentSession();
   const agents = useAtomValue(agentListAtom);
   const providersQuery = useAgentProviders();
@@ -60,7 +61,12 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
   return (
     <div className={s.page}>
       <header className={s.header}>
-        <h1 className={s.title}>新建会话</h1>
+        {onClose ? (
+          <button type="button" className={s.iconButton} onClick={onClose} aria-label="关闭">
+            <X aria-hidden="true" />
+          </button>
+        ) : null}
+        <h1 className={onClose ? s.titleSmall : s.title}>新建会话</h1>
       </header>
       <div className={s.body}>
         <section className={s.section} aria-label="Agent">
@@ -173,8 +179,11 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
                       setPickedCwd(item.cwd);
                     }}
                   >
-                    <span className={s.rowTitle}>{cwdBaseName(item.cwd)}</span>
-                    <span className={s.rowMeta}>{item.cwd}</span>
+                    <span className={s.optionText}>
+                      <span className={s.rowTitle}>{cwdBaseName(item.cwd)}</span>
+                      <span className={s.rowMeta}>{item.cwd}</span>
+                    </span>
+                    {selected ? <Check className={s.optionCheck} aria-hidden="true" /> : null}
                   </button>
                 );
               })}
@@ -186,8 +195,11 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
                 data-selected={manualMode ? "true" : undefined}
                 onClick={() => setManualSelected(true)}
               >
-                <span className={s.rowTitle}>手动输入路径</span>
-                <span className={s.rowMeta}>电脑上的其它目录</span>
+                <span className={s.optionText}>
+                  <span className={s.rowTitle}>手动输入路径</span>
+                  <span className={s.rowMeta}>电脑上的其它目录</span>
+                </span>
+                {manualMode ? <Check className={s.optionCheck} aria-hidden="true" /> : null}
               </button>
             </div>
           ) : null}
@@ -224,6 +236,8 @@ export function NewSession({ onCreated }: { onCreated: (agentId: string) => void
           </div>
         </section>
 
+      </div>
+      <div className={s.footerBar}>
         {error ? (
           <div className={s.error} role="alert">
             {error}

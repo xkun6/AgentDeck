@@ -7,7 +7,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { DEFAULT_THEME_CONFIG, applyPlatformToDOM, applyThemeToDOM } from "@agentdeck/shared-ui";
+import { applyPlatformToDOM } from "@agentdeck/shared-ui";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { queryClient } from "@/lib/query-client";
 import { configureNotifier } from "@/lib/notifications";
@@ -22,22 +22,23 @@ import { BackgroundNotifier } from "./native/local-notifications";
 import { keepaliveStart, keepaliveStop } from "./native/native-plugin";
 import { setBackgroundAttentionHandler, setResolvedAttentionHandler } from "./attention";
 import { installMobileExternalLinks } from "./external-links";
-import { installSafeAreaTop } from "./safe-area";
+import { installSafeArea } from "./safe-area";
+import { installMobileTheme } from "./theme";
 import { startAppStateTracking, subscribeAppForeground } from "./native/app-state";
 import "@/styles/global.css";
 
 // 手机上即使在 Tauri 壳里也不是桌面：显式声明，避免任何代码按 platform==="tauri" 去调桌面命令
 window.__AGENTDECK_RUNTIME__ = { platform: "web" };
 applyPlatformToDOM("web");
-applyThemeToDOM(DEFAULT_THEME_CONFIG);
+installMobileTheme();
 
 // 持久化只用 localStorage；桌面通知出口关闭（后台提醒走 setBackgroundAttentionHandler → 本地通知，见 bootstrap）
 configureUiStoreBackend("local-storage");
 configureNotifier(null);
 // 外链一律交给系统浏览器（<a> 点击与 window.open 都拦），避免 Android WebView 在本页内导航把 App 界面替换掉
 installMobileExternalLinks();
-// 顶部避开系统状态栏（原生提供高度 → --ad-safe-top）
-installSafeAreaTop();
+// 避开系统状态栏与导航条（原生提供高度 → --ad-safe-top / --ad-safe-bottom）
+installSafeArea();
 
 async function bootstrap() {
   await initUiStore();

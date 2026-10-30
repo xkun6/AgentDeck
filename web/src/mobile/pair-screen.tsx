@@ -1,5 +1,6 @@
 // 配对页：粘贴配对链接（也接受整段文本）或扫码结果 → 解析 → 连接电脑发送 pair → 存凭据 → 进入该电脑。
 import { useEffect, useRef, useState } from "react";
+import { ChevronLeft } from "lucide-react";
 import { PairingError, pairWithOffer, parsePairingInput, type PairOverrides } from "@/lib/remote/pairing";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { isTauriShell, scanPairingQr } from "./platform";
@@ -66,7 +67,7 @@ export function PairScreen({ deviceName, onPaired, onBack, autoScan = false, pai
     <div className={s.page}>
       <header className={s.header}>
         <button type="button" className={s.iconButton} onClick={onBack} aria-label="返回">
-          ‹
+          <ChevronLeft aria-hidden="true" />
         </button>
         <h1 className={s.titleSmall}>配对电脑</h1>
       </header>

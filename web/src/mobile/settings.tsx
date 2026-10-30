@@ -1,5 +1,6 @@
 // 设置页：当前电脑与设备名、断开、删除配对（二次确认）、关于。
 import { useState } from "react";
+import { Laptop } from "lucide-react";
 import type { PairedHost } from "@/lib/remote/hosts";
 import { DESKTOP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/build-info";
 import { BackgroundSection, NotifyModeSection } from "./background-section";
@@ -43,13 +44,18 @@ export function Settings({
         <section className={s.section} aria-label="当前电脑">
           <h2 className={s.sectionTitle}>当前电脑</h2>
           {host ? (
-            <div className={s.card}>
-              <div className={s.rowTitle}>{host.name}</div>
-              <div className={s.hostStatus} data-state={status?.state}>
-                {status?.text}
-              </div>
-              <div className={s.rowMeta}>
-                {host.lastAddress ? `${host.lastAddress.host}:${host.lastAddress.port}` : `${host.addresses.length} 个地址`}
+            <div className={s.hostCard}>
+              <span className={s.hostIcon} data-state={status?.state} aria-hidden="true">
+                <Laptop />
+              </span>
+              <div className={s.rowBody}>
+                <div className={s.rowTitle}>{host.name}</div>
+                <div className={s.hostStatus} data-state={status?.state}>
+                  {status?.text}
+                </div>
+                <div className={s.rowMeta}>
+                  {host.lastAddress ? `${host.lastAddress.host}:${host.lastAddress.port}` : `${host.addresses.length} 个地址`}
+                </div>
               </div>
             </div>
           ) : (

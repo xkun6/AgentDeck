@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // 手机端与桌面的派单拆分（design.md 4.26）：会话列表、派单页、会话页入口。
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { Provider as JotaiProvider, createStore } from "jotai";
 import type { AgentSnapshot } from "@agentdeck/protocol";
+import { __resetUiStoreForTests } from "@/lib/ui-store";
 import { agentListLoadedAtom, replaceAgentSnapshotsAtom } from "@/stores/agents";
 import { DispatchDetail, DispatchOverview, SessionDispatchBar } from "./dispatch";
 import { SessionList } from "./session-list";
@@ -27,7 +28,7 @@ function wrap(node: React.ReactNode, agents: AgentSnapshot[]) {
   const store = createStore();
   store.set(replaceAgentSnapshotsAtom, agents);
   store.set(agentListLoadedAtom, true);
-  return render(<JotaiProvider store={store}>{node}</JotaiProvider>);
+  return { store, ...render(<JotaiProvider store={store}>{node}</JotaiProvider>) };
 }
 
 const FIXTURE = [
@@ -89,6 +90,78 @@ describe("手机会话列表", () => {
     fireEvent.click(screen.getByLabelText("显示已归档（3）"));
     expect(screen.getAllByText("主会话 会话-master")).toHaveLength(2);
     expect(screen.queryByText("主会话 会话-mid")).toBeNull();
+  });
+});
+
+describe("手机会话列表按项目分组", () => {
+  const projects = () =>
+    screen.getAllByRole("button", { expanded: true }).map((head) => head.textContent);
+
+  it("按工作目录分组，折叠后隐藏该组会话，重新进入页面仍保持折叠", () => {
+    __resetUiStoreForTests();
+    const agents = [
+      named("a", { cwd: "J:/Program/Alpha" }),
+      named("b", { cwd: "J:/Program/Beta" }),
+      named("a2", { cwd: "j:\\program\\alpha" }),
+    ];
+    wrap(<SessionList onOpen={() => {}} />, agents);
+    expect(projects()).toEqual(["Alpha2", "Beta1"]);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Alpha/ }));
+    expect(screen.queryByText("会话-a")).toBeNull();
+    expect(screen.getByText("会话-b")).toBeTruthy();
+
+    cleanup();
+    wrap(<SessionList onOpen={() => {}} />, agents);
+    expect(screen.queryByText("会话-a")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Alpha/ }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("每组默认显示最近 5 个，运行中的不受限制，可展开其余", () => {
+    __resetUiStoreForTests();
+    const agents = Array.from({ length: 8 }, (_, index) =>
+      named(`n${index}`, index === 7 ? { status: "running" } : {}),
+    );
+    wrap(<SessionList onOpen={() => {}} />, agents);
+    expect(screen.getByText("会话-n4")).toBeTruthy();
+    expect(screen.queryByText("会话-n5")).toBeNull();
+    expect(screen.getByText("会话-n7")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "显示其余 2 个会话" }));
+    expect(screen.getByText("会话-n5")).toBeTruthy();
+    expect(screen.getByText("会话-n6")).toBeTruthy();
+  });
+
+  it("只有全部会话时不显示筛选；可按进行中筛选且不受每组行数限制，筛选项清空后回到全部", () => {
+    __resetUiStoreForTests();
+    const idle = Array.from({ length: 6 }, (_, index) => named(`i${index}`));
+    const view = wrap(<SessionList onOpen={() => {}} />, idle);
+    expect(screen.queryByRole("group", { name: "按状态筛选" })).toBeNull();
+    view.unmount();
+
+    const running = Array.from({ length: 6 }, (_, index) => named(`r${index}`, { status: "running" }));
+    const { store } = wrap(<SessionList onOpen={() => {}} />, [...running, named("idle")]);
+    const filter = () => screen.getByRole("button", { name: /^进行中/ });
+    fireEvent.click(filter());
+    expect(filter().getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByText("会话-idle")).toBeNull();
+    expect(screen.getByText("会话-r5")).toBeTruthy();
+
+    act(() => {
+      store.set(replaceAgentSnapshotsAtom, [named("idle")]);
+    });
+    expect(screen.queryByRole("group", { name: "按状态筛选" })).toBeNull();
+    expect(screen.getByText("会话-idle")).toBeTruthy();
+  });
+
+  it("主会话自身空闲但子会话在工作时显示「等待子任务」，项目头计入进行中", () => {
+    __resetUiStoreForTests();
+    wrap(<SessionList onOpen={() => {}} />, [
+      named("master"),
+      named("c1", { parentAgentId: "master", origin: "delegate", status: "running" }),
+    ]);
+    expect(screen.getByText("等待子任务")).toBeTruthy();
+    expect(screen.getByText("1 进行中")).toBeTruthy();
   });
 });
 

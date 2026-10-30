@@ -1,6 +1,7 @@
 // 手机端应用壳：电脑列表 / 配对（无需连接）→ 会话列表 / 会话详情 / 新建 / 设置（需要已连接的电脑，带底部导航）。
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { Provider as JotaiProvider } from "jotai";
+import { MessageSquare, Network, Plus, Settings as SettingsIcon, type LucideIcon } from "lucide-react";
 import type { HostStore, PairedHost } from "@/lib/remote/hosts";
 import type { PairOverrides } from "@/lib/remote/pairing";
 import { useSidecarBridge } from "@/hooks/use-agent-session";
@@ -34,11 +35,10 @@ export interface MobileAppProps {
   pairOverrides?: PairOverrides;
 }
 
-const NAV_ITEMS: Array<{ tab: "sessions" | "dispatch" | "new" | "settings"; label: string }> = [
-  { tab: "sessions", label: "会话" },
-  { tab: "dispatch", label: "派单" },
-  { tab: "new", label: "新建" },
-  { tab: "settings", label: "设置" },
+const NAV_ITEMS: Array<{ tab: "sessions" | "dispatch" | "settings"; label: string; icon: LucideIcon }> = [
+  { tab: "sessions", label: "会话", icon: MessageSquare },
+  { tab: "dispatch", label: "派单", icon: Network },
+  { tab: "settings", label: "设置", icon: SettingsIcon },
 ];
 
 export function MobileApp({ hosts, manager, prefs, pairOverrides }: MobileAppProps) {
@@ -201,8 +201,9 @@ function ConnectedShell({
         <SyncBanner />
       ) : null}
       {content}
-      {tab ? (
+      {tab && tab !== "new" ? (
         <nav className={s.nav} aria-label="主导航">
+          <div className={s.navTabs}>
           {NAV_ITEMS.map((item) => (
             <button
               key={item.tab}
@@ -212,18 +213,25 @@ function ConnectedShell({
               aria-current={tab === item.tab ? "page" : undefined}
               onClick={() => navigate({ name: item.tab })}
             >
-              {item.label}
-              {item.tab === "dispatch" && dispatchBadge ? (
-                <span
-                  className={s.navBadge}
-                  data-attention={dispatchBadge.attention > 0 ? "true" : undefined}
-                  title={`${dispatchBadge.working} 工作中，${dispatchBadge.attention} 需要处理`}
-                >
-                  {dispatchBadge.count}
-                </span>
-              ) : null}
+              <span className={s.navIcon}>
+                <item.icon aria-hidden="true" />
+                {item.tab === "dispatch" && dispatchBadge ? (
+                  <span
+                    className={s.navBadge}
+                    data-attention={dispatchBadge.attention > 0 ? "true" : undefined}
+                    title={`${dispatchBadge.working} 工作中，${dispatchBadge.attention} 需要处理`}
+                  >
+                    {dispatchBadge.count}
+                  </span>
+                ) : null}
+              </span>
+              <span className={s.navLabel}>{item.label}</span>
             </button>
           ))}
+          </div>
+          <button type="button" className={s.navFab} aria-label="新建" onClick={() => navigate({ name: "new" })}>
+            <Plus aria-hidden="true" />
+          </button>
         </nav>
       ) : null}
     </div>
@@ -311,7 +319,12 @@ function ShellContent({
         />
       );
     case "new":
-      return <NewSession onCreated={(agentId) => navigate({ name: "session", agentId })} />;
+      return (
+        <NewSession
+          onCreated={(agentId) => navigate({ name: "session", agentId }, { replace: true })}
+          onClose={() => back({ name: "sessions" })}
+        />
+      );
     case "settings":
       return (
         <Settings
