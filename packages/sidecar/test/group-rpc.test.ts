@@ -23,7 +23,7 @@ beforeEach(async () => {
   dataDir = mkdtempSync(path.join(tmpdir(), "agentdeck-group-rpc-"));
   const registry = new ProviderRegistry([new MockAgentClient()]);
   const manager = new AgentManager({ registry });
-  groups = new GroupService({ manager, registry, store: new GroupStore({ dataDir }), dataDir });
+  groups = new GroupService({ manager, registry, store: new GroupStore({ dataDir }) });
   await groups.start();
   server = new RpcServer({ token: TOKEN, version: "t", manager, registry, groups });
   const port = await server.listen(0);

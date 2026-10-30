@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -167,7 +167,7 @@ async function setup(dataDir: string = makeDir()): Promise<Harness> {
   const manager = new AgentManager({ registry, store: new AgentStore({ dataDir }) });
   managers.push(manager);
   await manager.restore();
-  const service = new GroupService({ manager, registry, store: new GroupStore({ dataDir }), dataDir });
+  const service = new GroupService({ manager, registry, store: new GroupStore({ dataDir }) });
   services.push(service);
   const changed: AgentGroup[] = [];
   const removed: string[] = [];
@@ -339,7 +339,7 @@ describe.skipIf(!gitPath)("per-member worktree", () => {
       `agentdeck/${group.id}/2`,
     ]);
     for (const [index, member] of group.members.entries()) {
-      expect(member.worktree!.path).toBe(path.join(h.dataDir, "worktrees", group.id, String(index + 1)));
+      expect(member.worktree!.path).toBe(path.join(realpathSync.native(repo), "tmp", "worktrees", group.id, String(index + 1)));
       expect(existsSync(path.join(member.worktree!.path, "a.txt"))).toBe(true);
       expect(h.manager.getAgent(member.agentId).cwd).toBe(member.worktree!.path);
     }
@@ -360,6 +360,7 @@ describe.skipIf(!gitPath)("per-member worktree", () => {
       // 成员会话保留，只解除 groupId
       expect(h.manager.getAgent(member.agentId).groupId).toBeUndefined();
     }
+    expect(existsSync(path.join(repo, "tmp", "worktrees", group.id))).toBe(false);
     expect(h.manager.getAgent(chairId).groupId).toBeUndefined();
     expect(await git(repo, "branch", "--list", `agentdeck/${group.id}/*`)).toBe("");
     expect(existsSync(path.join(h.dataDir, "groups", `${group.id}.json`))).toBe(false);
@@ -388,7 +389,7 @@ describe.skipIf(!gitPath)("per-member worktree", () => {
       h.service.create(input({ cwd: repo, worktree: "per-member" })),
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     expect(h.manager.listAgents()).toHaveLength(0);
-    expect(existsSync(path.join(h.dataDir, "worktrees"))).toBe(true);
+    expect(readdirSync(path.join(repo, "tmp", "worktrees"))).toEqual([]);
     expect(await git(repo, "worktree", "list")).not.toContain("worktrees");
     expect(await git(repo, "branch", "--list", "agentdeck/*")).toBe("");
     expect(h.service.list()).toEqual([]);
@@ -397,8 +398,8 @@ describe.skipIf(!gitPath)("per-member worktree", () => {
   test("worktree 创建失败返回 INTERNAL_ERROR 且不建任何会话", async () => {
     const repo = await makeRepo();
     const h = await setup();
-    // 让 <dataDir>/worktrees 是个文件，mkdir 必然失败
-    writeFileSync(path.join(h.dataDir, "worktrees"), "占位");
+    // 让项目的 tmp 是个文件，mkdir 必然失败
+    writeFileSync(path.join(repo, "tmp"), "占位");
     await expect(h.service.create(input({ cwd: repo, worktree: "per-member" }))).rejects.toMatchObject({
       code: "INTERNAL_ERROR",
     });

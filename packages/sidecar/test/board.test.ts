@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -136,7 +136,6 @@ async function setup(opts: { dataDir?: string; persist?: boolean; start?: boolea
   const service = new BoardService({
     manager,
     store: new BoardStore({ dataDir }),
-    dataDir,
   });
   const changed: Harness["changed"] = [];
   service.subscribe({ onChanged: (projectPath, board) => changed.push({ projectPath, board }) });
@@ -312,9 +311,10 @@ describe.skipIf(!gitPath)("手动派发与 worktree", () => {
     const moved = taskOf(board, task.id);
     expect(moved.status).toBe("running");
     expect(moved.worktree).toEqual({
-      path: path.join(h.dataDir, "worktrees", `task-${task.id}`),
+      path: path.join(realpathSync.native(repo), "tmp", "worktrees", `task-${task.id}`),
       branch: `agentdeck/task-${task.id}`,
     });
+    expect(await git(repo, "status", "--porcelain")).toBe("");
     expect(existsSync(moved.worktree!.path)).toBe(true);
     expect(await git(repo, "branch", "--list", `agentdeck/task-${task.id}`)).toContain("agentdeck/task-");
 
@@ -353,7 +353,7 @@ describe.skipIf(!gitPath)("手动派发与 worktree", () => {
     const moved = taskOf(await h.service.moveTask(repo, task.id, "running"), task.id);
     expect(moved.status).toBe("blocked");
     expect(moved.blockedReason).toContain("派发失败");
-    expect(existsSync(path.join(h.dataDir, "worktrees", `task-${task.id}`))).toBe(false);
+    expect(existsSync(path.join(repo, "tmp", "worktrees", `task-${task.id}`))).toBe(false);
   });
 });
 

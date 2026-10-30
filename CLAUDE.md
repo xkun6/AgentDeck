@@ -36,6 +36,7 @@ pnpm tauri:dev        # 开发：Rust 以 `node --import tsx` 拉起 packages/si
 
 - 回复、注释说明、提交信息一律简体中文（代码标识符、路径、命令除外）。
 - 临时文件放项目根 `tmp/`（已 gitignore）。
+- 产品在用户项目里新建的目录一律放 `<主工作区>/tmp/<用途>/`（如 `tmp/worktrees/`），并写 `info/exclude`，不改用户的 `.gitignore`；应用自身数据放 `AGENTDECK_DATA_DIR`（design.md 4.27）。
 - 前端样式用 CSS Modules，颜色/圆角/字号用 `packages/shared-ui/src/tokens/` 的变量，不硬编码。
 - 前端不要在 `web/src/lib/transport.ts` 之外手写 fetch；与 sidecar 通信只走 `lib/sidecar-client.ts` 与 `hooks/use-agent-session.ts`。
 - sidecar 内所有子进程 spawn 设 `windowsHide: true`；能解析到真实 exe 就 `shell:false`；内联 JSON 参数绝不经过 cmd.exe；关闭会话要 tree-kill。

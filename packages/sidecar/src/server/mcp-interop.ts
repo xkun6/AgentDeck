@@ -17,7 +17,7 @@ import { z } from "zod";
 
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentRpcError } from "../agent/errors.js";
-import { addWorktree, currentBranch, diffStat, removeWorktree, reviewDiff } from "../git/worktree.js";
+import { addProjectWorktree, currentBranch, diffStat, removeWorktree, reviewDiff } from "../git/worktree.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { redactInteropTokens } from "../utils/redact-interop.js";
@@ -58,8 +58,6 @@ export interface McpInteropOptions {
   manager: AgentManager;
   registry: Pick<ProviderRegistry, "get" | "listProviderInfo">;
   interop: InteropService;
-  /** AGENTDECK_DATA_DIR：worktree 放在 `<dataDir>/worktrees/` 下 */
-  dataDir?: string;
   /** 派单回传的稳定时间，测试用；缺省 REPORT_SETTLE_MS */
   reportSettleMs?: number;
   logger?: Logger;
@@ -337,7 +335,6 @@ export class McpInteropEndpoint {
   private readonly manager: AgentManager;
   private readonly registry: McpInteropOptions["registry"];
   private readonly interop: InteropService;
-  private readonly dataDir: string | undefined;
   private readonly logger: Logger;
   private readonly reports: InteropReports;
 
@@ -345,7 +342,6 @@ export class McpInteropEndpoint {
     this.manager = options.manager;
     this.registry = options.registry;
     this.interop = options.interop;
-    this.dataDir = options.dataDir;
     this.logger = options.logger ?? createSilentLogger();
     this.reports = new InteropReports({
       manager: this.manager,
@@ -557,6 +553,11 @@ export class McpInteropEndpoint {
         thinkingOptionId: z.string().optional().describe("思考强度；缺省跟随 CLI 自身设置"),
         title: z.string().max(200).optional(),
         worktree: z.boolean().optional().describe("为 true 时在独立 git worktree（新分支）中工作，要求 cwd 在 git 仓库内"),
+        worktreePath: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("worktree 目录的完整路径，相对路径按 cwd 解析；需同时传 worktree=true。缺省为项目的 tmp/worktrees/delegate-<id>"),
         independent: z
           .boolean()
           .optional()
@@ -697,6 +698,7 @@ export class McpInteropEndpoint {
       thinkingOptionId?: string | undefined;
       title?: string | undefined;
       worktree?: boolean | undefined;
+      worktreePath?: string | undefined;
       independent?: boolean | undefined;
       report?: boolean | undefined;
       wait?: boolean | undefined;
@@ -738,16 +740,18 @@ export class McpInteropEndpoint {
       report && !this.manager.listAgents().some((agent) => agent.reportToAgentId === callerId);
     const id = randomUUID();
     let worktree: { path: string; branch: string } | undefined;
+    if (args.worktreePath !== undefined && args.worktree !== true) {
+      throw new ToolError("worktreePath 需要同时传 worktree=true");
+    }
     if (args.worktree === true) {
-      if (!this.dataDir) {
-        throw new ToolError("未设置数据目录，无法创建 worktree");
-      }
       const short = id.slice(0, 8);
       try {
-        worktree = await addWorktree({
+        worktree = await addProjectWorktree({
           repoCwd: cwd,
-          path: path.join(this.dataDir, "worktrees", `delegate-${short}`),
+          name: `delegate-${short}`,
+          customPath: args.worktreePath,
           branch: `agentdeck/delegate-${short}`,
+          logger: this.logger,
         });
       } catch (error) {
         throw new ToolError(error instanceof Error ? error.message : String(error));

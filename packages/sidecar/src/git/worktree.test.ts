@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -34,6 +34,22 @@ describe.skipIf(!gitPath)("git worktree 工具", () => {
 
   afterAll(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("addWorktree 失败时不留下这次新建的空上层目录，已存在的上层目录不动", async () => {
+    await run(repo, "branch", "agentdeck/taken");
+    const fresh = path.join(root, "fresh-group");
+    await expect(
+      addWorktree({ repoCwd: repo, path: path.join(fresh, "1"), branch: "agentdeck/taken" }),
+    ).rejects.toThrow("创建 worktree 失败");
+    await expect(stat(fresh)).rejects.toThrow();
+
+    const existing = path.join(root, "existing-group");
+    await mkdir(existing);
+    await expect(
+      addWorktree({ repoCwd: repo, path: path.join(existing, "1"), branch: "agentdeck/taken" }),
+    ).rejects.toThrow("创建 worktree 失败");
+    expect((await stat(existing)).isDirectory()).toBe(true);
   });
 
   it("addWorktree 基于 HEAD 建分支与目录，diffStat 反映改动，removeWorktree 清理目录与分支", async () => {

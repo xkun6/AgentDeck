@@ -1109,8 +1109,13 @@ fn default_branch(cwd: &Path) -> String {
     String::new()
 }
 
-/// Resolve the repo's MAIN worktree root so `.worktrees/` always nests under the
-/// primary checkout even when called from a linked worktree.
+/// Where AgentDeck nests worktrees inside a project (design.md 4.27).
+fn worktrees_dir(root: &Path) -> PathBuf {
+    root.join("tmp").join("worktrees")
+}
+
+/// Resolve the repo's MAIN worktree root so `tmp/worktrees/` always nests under
+/// the primary checkout even when called from a linked worktree.
 fn main_root(cwd: &Path) -> PathBuf {
     list_worktrees_impl(cwd)
         .into_iter()
@@ -1134,7 +1139,7 @@ fn unique_dir(base: &Path) -> PathBuf {
     }
 }
 
-/// Keep `.worktrees/` out of the main repo's status (and out of a one-click
+/// Keep `tmp/worktrees/` out of the main repo's status (and out of a one-click
 /// review commit, which would record the nested worktree as a gitlink) by
 /// appending it to `<git-common-dir>/info/exclude`. Repo-local — never touches
 /// the user's `.gitignore`. Idempotent and best-effort: the worktree already
@@ -1154,7 +1159,10 @@ fn ensure_worktrees_excluded(root: &Path) {
 
     let exclude = common_dir.join("info").join("exclude");
     let existing = fs::read_to_string(&exclude).unwrap_or_default();
-    if existing.lines().any(|line| line.trim() == ".worktrees/") {
+    if existing
+        .lines()
+        .any(|line| line.trim() == "/tmp/worktrees/")
+    {
         return;
     }
     if let Some(parent) = exclude.parent() {
@@ -1164,7 +1172,7 @@ fn ensure_worktrees_excluded(root: &Path) {
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
-    content.push_str(".worktrees/\n");
+    content.push_str("/tmp/worktrees/\n");
     let _ = fs::write(&exclude, content);
 }
 
@@ -1249,7 +1257,7 @@ fn add_existing_branch_worktree(root: &Path, name: &str) -> AppResult<WorktreeAd
         });
     }
 
-    let dir = unique_dir(&root.join(".worktrees").join(slugify(&branch)));
+    let dir = unique_dir(&worktrees_dir(root).join(slugify(&branch)));
     let dir_str = dir.to_string_lossy().to_string();
     run_git(root, &["worktree", "add", "--", &dir_str, &branch])?;
     ensure_worktrees_excluded(root);
@@ -1293,7 +1301,7 @@ fn add_worktree_impl(
         }
     }
 
-    let dir = unique_dir(&root.join(".worktrees").join(&slug));
+    let dir = unique_dir(&worktrees_dir(&root).join(&slug));
     let dir_str = dir.to_string_lossy().to_string();
 
     // Probe the ref up front (locale-independent — never sniff git's translated
@@ -1731,7 +1739,7 @@ mod tests {
             std::path::Path::new(&added.path).is_dir(),
             "worktree dir created"
         );
-        assert!(added.path.contains(".worktrees"));
+        assert!(added.path.replace('\\', "/").contains("/tmp/worktrees/"));
 
         let list = list_worktrees_impl(dir.path());
         assert_eq!(list.len(), 2);
@@ -1780,21 +1788,21 @@ mod tests {
     }
 
     #[test]
-    fn worktree_add_excludes_dot_worktrees_from_main_status() {
+    fn worktree_add_excludes_worktrees_from_main_status() {
         let dir = init_repo();
         let repo = dir.path().to_string_lossy().to_string();
 
         add_worktree_impl(&repo, Some("one"), None, None, None).unwrap();
         let status = run_git_ok(dir.path(), &["status", "--porcelain"]);
         assert!(
-            !status.contains(".worktrees"),
+            !status.contains("tmp"),
             "main repo status stays clean: {status}"
         );
 
         let exclude = dir.path().join(".git").join("info").join("exclude");
         let read = || fs::read_to_string(&exclude).unwrap_or_default();
         assert_eq!(
-            read().lines().filter(|l| *l == ".worktrees/").count(),
+            read().lines().filter(|l| *l == "/tmp/worktrees/").count(),
             1,
             "exclude gained the entry"
         );
@@ -1802,7 +1810,7 @@ mod tests {
         // A second add must not duplicate the line.
         add_worktree_impl(&repo, Some("two"), None, None, None).unwrap();
         assert_eq!(
-            read().lines().filter(|l| *l == ".worktrees/").count(),
+            read().lines().filter(|l| *l == "/tmp/worktrees/").count(),
             1,
             "exclude entry is idempotent"
         );
@@ -1895,7 +1903,7 @@ mod tests {
             "clear error: {err}"
         );
         assert!(
-            !dir.path().join(".worktrees").exists(),
+            !worktrees_dir(dir.path()).exists(),
             "nothing written on failure"
         );
         assert_eq!(list_worktrees_impl(dir.path()).len(), 1);
@@ -1910,7 +1918,7 @@ mod tests {
             add_worktree_impl(&repo, Some("thing"), None, Some("no-such-base"), None).unwrap_err();
         assert!(err.to_string().contains("not found"), "clear error: {err}");
         assert!(
-            !dir.path().join(".worktrees").exists(),
+            !worktrees_dir(dir.path()).exists(),
             "nothing written on failure"
         );
     }

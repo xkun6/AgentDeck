@@ -1,16 +1,26 @@
 // 共用 git worktree 工具（design.md 4.27 开头）：会话互通（4.26）、并行协作（4.27）、看板（4.28）复用。
 // git 定位与 spawn 规则复用 snapshots/git.ts（shell:false、windowsHide:true）。
-import { mkdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rmdir } from "node:fs/promises";
 import path from "node:path";
 
+import type { Logger } from "../logger.js";
 import { locateGit, runGit } from "../snapshots/git.js";
 
 export interface AddWorktreeOptions {
   /** 必须位于 git 仓库内；worktree 基于该仓库当前 HEAD */
   repoCwd: string;
-  /** worktree 目录（统一放在 `<AGENTDECK_DATA_DIR>/worktrees/` 下） */
   path: string;
   branch: string;
+}
+
+export interface AddProjectWorktreeOptions {
+  repoCwd: string;
+  /** `tmp/worktrees/` 下的相对路径 */
+  name: string;
+  branch: string;
+  /** 调用方指定的完整路径，相对路径按 repoCwd 解析；优先于 name */
+  customPath?: string | undefined;
+  logger: Logger;
 }
 
 export interface RemoveWorktreeOptions {
@@ -42,11 +52,15 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<{ path: 
     throw new Error(`工作目录不在 git 仓库内，无法创建 worktree：${options.repoCwd}`);
   }
   const target = path.resolve(options.path);
-  await mkdir(path.dirname(target), { recursive: true });
+  const createdParent = await mkdir(path.dirname(target), { recursive: true });
   const result = await runGit(gitPath, ["worktree", "add", target, "-b", options.branch], {
     cwd: options.repoCwd,
   });
   if (result.code !== 0) {
+    // 上层目录是这次新建的就不留空目录（如协作组第一个成员就失败时的 `<组 id>`）
+    if (createdParent) {
+      await rmdir(path.dirname(target)).catch(() => undefined);
+    }
     throw new Error(`创建 worktree 失败：${stderrOf(result)}`);
   }
   return { path: target, branch: options.branch };
@@ -67,6 +81,69 @@ export async function removeWorktree(options: RemoveWorktreeOptions): Promise<vo
       throw new Error(`删除分支 ${options.branch} 失败：${stderrOf(deleted)}`);
     }
   }
+}
+
+/** 项目主工作区根目录：cwd 在子目录或其它 worktree 里也回到主工作区；裸仓库没有主工作区，取 cwd 所在 worktree 的根目录 */
+export async function mainWorktreeRoot(options: { cwd: string }): Promise<string> {
+  const gitPath = await requireGit();
+  const notRepo = () => new Error(`工作目录不在 git 仓库内，无法创建 worktree：${options.cwd}`);
+  const list = await runGit(gitPath, ["worktree", "list", "--porcelain"], { cwd: options.cwd }).catch(() => null);
+  if (list?.code !== 0) {
+    throw notRepo();
+  }
+  // 主工作区总在第一条：`worktree <路径>`，裸仓库下一行是 `bare`
+  const [first, second] = list.stdout.toString("utf8").split(/\r?\n/);
+  if (first?.startsWith("worktree ") && second !== "bare") {
+    return path.resolve(first.slice("worktree ".length));
+  }
+  const top = await runGit(gitPath, ["rev-parse", "--show-toplevel"], { cwd: options.cwd }).catch(() => null);
+  const root = top?.code === 0 ? top.stdout.toString("utf8").trim() : "";
+  if (!root) {
+    throw notRepo();
+  }
+  return path.resolve(root);
+}
+
+/**
+ * 把主工作区内的目录写入 `<git-common-dir>/info/exclude`，避免主仓库 `git add -A` 把嵌套的 worktree 记成 gitlink。
+ * 不改用户的 `.gitignore`；目录在主工作区外或已被忽略时什么都不做。
+ */
+export async function excludeFromRepo(options: { root: string; dir: string }): Promise<void> {
+  const relative = path.relative(options.root, options.dir);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return;
+  }
+  const gitPath = await requireGit();
+  const posix = relative.split(path.sep).join("/");
+  const ignored = await runGit(gitPath, ["check-ignore", "-q", `${posix}/`], { cwd: options.root });
+  if (ignored.code === 0) {
+    return;
+  }
+  const located = await runGit(gitPath, ["rev-parse", "--git-path", "info/exclude"], { cwd: options.root });
+  if (located.code !== 0) {
+    throw new Error(stderrOf(located));
+  }
+  const exclude = path.resolve(options.root, located.stdout.toString("utf8").trim());
+  const existing = await readFile(exclude, "utf8").catch(() => "");
+  const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
+  await mkdir(path.dirname(exclude), { recursive: true });
+  // appendFile 而不是整体重写：并行派单同时写时最多多一行重复，不丢内容
+  await appendFile(exclude, `${prefix}/${posix.replace(/[\\*?[\]!# ]/g, "\\$&")}/\n`);
+}
+
+/** 委派、协作组、看板建 worktree 的统一入口（design.md 4.27「项目内目录约定」）：默认放 `<主工作区>/tmp/worktrees/<name>`，并从主仓库状态里排除 */
+export async function addProjectWorktree(options: AddProjectWorktreeOptions): Promise<{ path: string; branch: string }> {
+  const root = await mainWorktreeRoot({ cwd: options.repoCwd });
+  const defaultDir = path.join(root, "tmp", "worktrees");
+  const worktree = await addWorktree({
+    repoCwd: options.repoCwd,
+    path: options.customPath ? path.resolve(options.repoCwd, options.customPath) : path.join(defaultDir, options.name),
+    branch: options.branch,
+  });
+  await excludeFromRepo({ root, dir: options.customPath ? worktree.path : defaultDir }).catch((error: unknown) =>
+    options.logger.warn("写入 info/exclude 失败：%s", error instanceof Error ? error.message : String(error)),
+  );
+  return worktree;
 }
 
 /** 目录当前分支名；不是仓库或处于 detached HEAD 时返回 null */

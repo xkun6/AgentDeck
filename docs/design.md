@@ -960,7 +960,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 | `list_providers` | `{ provider?: string }` | 可用 provider（id、label、可用性）；传 `provider` 时只返回该 provider，并附带其 `models`（id、label、isDefault、thinkingOptions、defaultThinkingOptionId）与 `modes`（id、label、dangerous），供 `delegate` 选用 |
 | `list_agents` | `{ includeArchived?: boolean, callableOnly?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId、reportToAgentId、`interopTarget`、`callable`、`updatedAt`）；标题未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准；`callable` = 调用方可对其 `send_to_agent` / `cancel_agent`（非自己，且为子孙或 `interopTarget`）；`callableOnly: true` 只返回 `callable` 的会话；`updatedAt` 为 ISO 时间 |
 | `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */, offset?: number, includeTools?: boolean, includeDiff?: boolean }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字。`offset` 跳过最近 N 条以向前翻页，还有更早消息时文末提示下一页参数；`includeTools` 附工具入参与输出（每个上限 4k 字）；`includeDiff` 附代码改动：相对派单会话 HEAD 的 merge-base 的提交列表、`git diff`（含未提交的已跟踪改动）与未跟踪文件清单（上限 40k 字），供派单会话审查。任何状态都可读，不恢复会话。`offset` 按记录翻页（一条用户 / 助手消息或一次工具调用各算一条），文末提示下一页的值；一页超过上限时只放完整的记录，其余留给下一页，时间线不变时不漏不重（`offset` 从最新一条往回数，翻页之间有新记录时会重复一部分），只有最新一条单独超限时才截断它。`includeDiff` 的基线取目标的派单会话，已删除时取调用方；和基线在同一工作区（含子目录）或不在同一仓库时比不出提交，只给未提交的改动并说明这一点，不说「没有改动」；已合并进基线的提交不列出，这时说明「没有未合并的改动」。所有工具结果都对互通 token 脱敏，先脱敏再截断 |
-| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, thinkingOptionId?, title?, worktree?: boolean, independent?: boolean, report?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`，只在派单页显示，见 4.26「派单页」），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"`。`independent` 已废弃，不再影响归属与显示，只让 `wait` 默认 false。`report`（默认 true）时写入 `reportToAgentId` = 调用方，启用下文「派单回传」 |
+| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, thinkingOptionId?, title?, worktree?: boolean, worktreePath?: string, independent?: boolean, report?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`，只在派单页显示，见 4.26「派单页」），cwd 缺省为调用方 cwd；`worktree: true` 时建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`），路径由 `worktreePath` 指定，缺省为项目的 `tmp/worktrees/delegate-<agentId 前 8 位>`；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"`。`independent` 已废弃，不再影响归属与显示，只让 `wait` 默认 false。`report`（默认 true）时写入 `reportToAgentId` = 调用方，启用下文「派单回传」 |
 | `send_to_agent` | `{ agentId, message, wait?: boolean, timeoutSec?: number }` | 同上；目标忙 → 工具错误「目标会话正在运行」 |
 | `wait_agent` | `{ agentId, timeoutSec?: number }` | 等到目标当前回合结束，返回最后一条助手消息 |
 | `cancel_agent` | `{ agentId }` | 中断目标会话当前回合 |
@@ -981,7 +981,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 - 投递：回传内容为状态、错误、最后一条助手消息（上限 40k 字），`cwd` 与派单会话不同时另附分支名与未提交改动统计。按接收方排队，接收方空闲并稳定 1.5 秒后合并成一条 `sendPrompt(internal)` 发出（休眠的会话会被恢复，已归档或已删除的放弃并记日志）；接收方忙时等它本回合结束，遇到 `TURN_IN_PROGRESS` 则放回队列等下一次空闲；其它发送失败（如恢复失败）每 60 秒重试，最多 5 次，仍失败才放弃并记日志。稳定时间也让前端排队消息优先发出。
 - worktree 的合并与清理由派单会话用 git 完成，sidecar 不代做；`delegate` 工具说明要求在任务里交代子会话提交改动。
 - 局限：待回传记录只在内存，sidecar 重启后丢失（运行中的回合本来也会中断），派单会话可用 `list_agents` / `read_agent` 查看。
-- AgentDeck 自建的 worktree 目录（`<dataDir>/worktrees/` 下的 `delegate-<8 位>`、`task-<UUID>`、`<8 位组 id>/<n>`）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。
+- AgentDeck 自建的 worktree 目录（项目 `tmp/worktrees/` 下的 `delegate-<8 位>`、`task-<UUID>`、`<8 位组 id>/<n>`；旧版建在 `<dataDir>/worktrees/` 下的同样识别）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。主会话用 `worktreePath` 指定的目录不一定符合这个命名，子会话靠 `isDispatchedAgent` 同样不登记。
 - 干活的会话（`delegate` 带回传新建的会话）：Claude 类建好即开启缓存保活、不置顶，因此只在等待子代理 / 后台任务 / 子任务时保活，空闲时不保活（4.36）。派单任务完成（回传已入队，或派单方经 `wait` 拿到结果）后，按 4.34 自动回收的同一套条件立刻回收进程（关闭了「空闲自动回收」设置时不回收；置顶、后台活动、待审批、不可恢复、仍有子任务在工作的都跳过），不等空闲时长；派单方再 `send_to_agent` 时自动恢复。派单方 `cancel_agent` 的回合不触发，由空闲回收兜底。
 - 派单会话（有 `reportToAgentId` 指向它，且自身没有 `reportToAgentId` / `parentAgentId`）：首次发出带回传的 `delegate` 时自动开启缓存保活（仅 Claude 类），不改置顶，置顶由用户自己决定。开着保活时等同置顶的效果：空闲也保活、不被自动回收（4.36、4.34）；只在首次开启（已有会话指向它时不再设置），用户关掉后不会被重新打开；设置失败只记日志，不影响派单。
 - 只有 Agent 发起的会话有此字段；前端详情页「由 <父会话> 委派」链接取 `parentAgentId ?? reportToAgentId`；缓存保活（4.36）把 `reportToAgentId` 相同的运行中会话也算作等待中的子会话。
@@ -1009,14 +1009,16 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 **实现补充（落地时确定）**：
 - 模块：`server/interop-service.ts`（token ↔ agentId、端点）、`server/mcp-interop.ts`（`POST /mcp` 与工具）、`providers/shared/interop.ts`（三类 provider 的注入形态）、`git/worktree.ts`（共用 worktree 工具）。鉴权顺序：路径 `/mcp` → 互通关闭 404 → token 缺失 / 错误 401 → 非 POST 405。token 形如 `adi_<48 位 hex>`，sidecar 日志写入前统一把 `adi_[0-9a-f]{16,}` 替换为 `adi_***`（因此诊断包里的 `sidecar.log` 与 MCP 状态错误文本都不含 token）。
 - 注入点：`AgentSessionConfig.interop` / `resumeSession` 的 `AgentResumeConfig.interop`（`{ url, token }`），由 AgentManager 在创建、恢复、分叉（含 Claude 懒启动的 pendingFork 恢复）时填入；token 每会话稳定、仅内存，sidecar 重启后重新生成并随恢复重新注入。互通关闭或端口未知时不注入。创建会话改为先生成 agentId 再建 provider 会话（`CreateAgentParams.id` 供委派预先建 worktree 分支）。
-- `delegate`：`cwd` 相对路径按调用方 cwd 解析，目录必须存在；`worktree: true` 时 worktree 放 `<AGENTDECK_DATA_DIR>/worktrees/delegate-<agentId 前 8 位>`（要求设置了数据目录），失败 / 创建会话失败时回滚；`modeId` 除 `AgentMode.dangerous` 外，id 含 `bypass` / `full-access` / `dangerous` / `yolo` 或目录里查无此模式也拒绝；结果 JSON 为 `{ agentId, status: "completed" | "failed" | "canceled" | "running", reply?, error?, note?, worktree? }`，`reply` 超过 40k 字截断；`timeoutSec` 超过上限按上限处理。
+- `delegate`：`cwd` 相对路径按调用方 cwd 解析，目录必须存在；`worktree: true` 时 worktree 放 `worktreePath`（完整路径，相对路径按 delegate 的 cwd 解析；不传 `worktree: true` 而给了它时报错），缺省放 `<主工作区根目录>/tmp/worktrees/delegate-<agentId 前 8 位>`，见下文「共用 worktree 工具」；失败 / 创建会话失败时回滚；`modeId` 除 `AgentMode.dangerous` 外，id 含 `bypass` / `full-access` / `dangerous` / `yolo` 或目录里查无此模式也拒绝；结果 JSON 为 `{ agentId, status: "completed" | "failed" | "canceled" | "running", reply?, error?, note?, worktree? }`，`reply` 超过 40k 字截断；`timeoutSec` 超过上限按上限处理。
 - `wait_agent` 额外拒绝等待自己的上级会话（会互相等待）；`cancel_agent` 与 `send_to_agent` 同样只允许子孙或 `interopTarget` 会话；`read_agent` 不限制目标。
 - `agent.update` 增加 `interopTarget?: boolean`（与 title / pinned / archived 至少给一个）。meta.json 持久化 `parentAgentId` / `origin` / `groupId` / `interopTarget`，加载时校验类型。
 - 前端：委派卡片按工具名（`mcp__agentdeck__` 或 `agentdeck.` 前缀的 delegate / send_to_agent / wait_agent / cancel_agent / read_agent）识别，信息在 reducer 中从 `detail.unknown` 的入参与输出解析；子会话不进侧栏，只在派单页（见上文「派单页」）；「会话互通」设置页路径 `/interop`。
 
 ### 4.27 界面发起的并行协作（扇出 + 汇总）
 
-**共用 worktree 工具**：`packages/sidecar/src/git/worktree.ts`（4.26 先实现，4.27 / 4.28 复用）：`addWorktree({ repoCwd, path, branch })`（基于当前 HEAD，`git worktree add <path> -b <branch>`，要求 repoCwd 在 git 仓库内）、`removeWorktree({ repoCwd, path, branch, deleteBranch })`、`diffStat({ cwd })`；git 定位与 spawn 规则复用 4.24 的 `snapshots/git.ts`。worktree 统一放在 `<AGENTDECK_DATA_DIR>/worktrees/` 下。
+**共用 worktree 工具**：`packages/sidecar/src/git/worktree.ts`（4.26 先实现，4.27 / 4.28 复用）：`addWorktree({ repoCwd, path, branch })`（基于当前 HEAD，`git worktree add <path> -b <branch>`，要求 repoCwd 在 git 仓库内）、`removeWorktree({ repoCwd, path, branch, deleteBranch })`、`diffStat({ cwd })`；git 定位与 spawn 规则复用 4.24 的 `snapshots/git.ts`。
+
+**项目内目录约定**：AgentDeck 在用户项目里新建的东西一律放 `<主工作区根目录>/tmp/<用途>/`，目前只有 worktree（`tmp/worktrees/`：委派、协作组、看板经 `addProjectWorktree`，项目页 worktree 面板经 Rust `git.rs`）；新增这类目录时按同样方式另起文件夹。主工作区根目录：cwd 在子目录或其它 worktree 里也回到主工作区，裸仓库没有主工作区时取 cwd 所在 worktree 的根目录。目录在主工作区内且未被忽略时写入 `<git-common-dir>/info/exclude`（`/tmp/worktrees/`；`worktreePath` 指定的写该目录本身），避免主仓库 `git add -A` 把嵌套 worktree 记成 gitlink，不改用户的 `.gitignore`，写入失败只记日志。快照的影子仓库不读这份 exclude，但 `ls-files -o` 把嵌套 worktree 列为 `dir/`，捕获时已跳过。会话、日志、设置、快照等应用自身数据与项目无关，仍在 `<AGENTDECK_DATA_DIR>/`。此前建在 `<AGENTDECK_DATA_DIR>/worktrees/` 或 `.worktrees/` 的 worktree 不迁移，按记录的绝对路径继续使用。
 
 **协作组**：
 ```ts
@@ -1029,7 +1031,7 @@ interface AgentGroup {
 ```
 - 存储 `<AGENTDECK_DATA_DIR>/groups/<id>.json`。
 - `group.create { title?, prompt, cwd, members: Array<{ provider, model?, modeId?, thinkingOptionId? }> /* 2–6 个 */, worktree: "none" | "per-member", chair?: { provider, model?, mode } }` → `{ group }`：
-  - `per-member` 时要求 cwd 在 git 仓库内，为每个成员执行 `git worktree add <AGENTDECK_DATA_DIR>/worktrees/<groupId>/<n> -b agentdeck/<groupId>/<n>`（基于当前 HEAD），成员会话 cwd 指向该 worktree；失败则回滚已建 worktree 并返回 `INTERNAL_ERROR`。
+  - `per-member` 时要求 cwd 在 git 仓库内，为每个成员执行 `git worktree add <主工作区根目录>/tmp/worktrees/<groupId>/<n> -b agentdeck/<groupId>/<n>`（基于当前 HEAD），成员会话 cwd 指向该 worktree；失败则回滚已建 worktree 并返回 `INTERNAL_ERROR`。
   - 成员会话快照 `groupId` + `origin: "group"`，同时发送同一 prompt。
   - 全部成员首个回合结束（任一失败不阻塞其余）后若配置了 chair：新建汇总会话（cwd 为原 cwd），发送汇总提示——`synthesize`：「以下是 N 个 Agent 对同一任务的回答，请综合出一个最佳答案，并指出各自的优缺点」；`review`：「请评审以下 N 个方案，给出排序与理由」——附各成员最后一条助手消息（各上限 20k 字）与（per-member 时）各 worktree 的 `git diff --stat`。状态依次为 running → chairing → done。
 - `group.list {}`、`group.get { id }`、`group.delete { id, removeWorktrees: boolean }`（成员会话不删除，只解除 groupId；removeWorktrees 时 `git worktree remove --force` 并删分支）；通知 `group.changed { group }`。
@@ -1039,10 +1041,10 @@ interface AgentGroup {
 **实现补充（落地时确定）**：
 - 模块：`packages/sidecar/src/groups/`（`group-service.ts` 服务与汇总提示、`schema.ts` zod、`store.ts` 存储）；`AgentManager` 新增 `CreateAgentParams.groupId` 与 `setGroupId(agentId, null | id)`（落盘并推 `agent.state`）。`GroupService` 在 `main.ts` 于 `AgentManager.restore()` 之后启动，`RpcServer` 选项 `groups`（缺省时 `group.*` 返回 `NOT_SUPPORTED`）。
 - 协议：`AgentGroup` / `AgentGroupMember` / `GroupCreateParams` 见 `agent-api.ts`；除 `group.changed { group }` 外新增通知 `group.removed { groupId }`（协作组被删除，前端据此从 store 移除、协作视图回首页）；`group.delete` 返回 `{ warnings?: string[] }`（removeWorktrees 时个别 worktree 清理失败的中文说明，协作组本身照常删除）。
-- `group.create`：校验顺序为 zod（成员数 2–6、`worktree` 取值、`chair.mode`，失败 `-32602`）→ provider 存在且可用（`PROVIDER_NOT_FOUND` / `PROVIDER_UNAVAILABLE`，此时尚未建任何东西）→ per-member 要求 cwd 在 git 仓库内且设置了数据目录（否则 `-32602`「…要求工作目录位于 git 仓库内…」/ `NOT_SUPPORTED`）。groupId 取 uuid 前 8 位；worktree 路径 `<dataDir>/worktrees/<groupId>/<n>`、分支 `agentdeck/<groupId>/<n>`（n 从 1 起）。worktree 逐个建，任一失败回滚已建者并返回 `INTERNAL_ERROR`；成员会话并发创建，任一失败则删除已建会话与 worktree，沿用该错误码（非业务错误按 `INTERNAL_ERROR`）。成员 / 汇总会话标题为「<组标题> · 成员 n」/「<组标题> · 汇总」，组标题缺省取 prompt 前 30 字。prompt 以内部发送标记 `{ internal: true }` 并发发出；个别成员发送失败记为该成员失败，不使 `group.create` 失败。
+- `group.create`：校验顺序为 zod（成员数 2–6、`worktree` 取值、`chair.mode`，失败 `-32602`）→ provider 存在且可用（`PROVIDER_NOT_FOUND` / `PROVIDER_UNAVAILABLE`，此时尚未建任何东西）→ per-member 要求 cwd 在 git 仓库内（否则 `-32602`「…要求工作目录位于 git 仓库内…」）。groupId 取 uuid 前 8 位；worktree 路径 `<主工作区根目录>/tmp/worktrees/<groupId>/<n>`、分支 `agentdeck/<groupId>/<n>`（n 从 1 起）。worktree 逐个建，任一失败回滚已建者并返回 `INTERNAL_ERROR`；成员会话并发创建，任一失败则删除已建会话与 worktree，沿用该错误码（非业务错误按 `INTERNAL_ERROR`）。成员 / 汇总会话标题为「<组标题> · 成员 n」/「<组标题> · 汇总」，组标题缺省取 prompt 前 30 字。prompt 以内部发送标记 `{ internal: true }` 并发发出；个别成员发送失败记为该成员失败，不使 `group.create` 失败。
 - 回合结束判定：只看成员 / 汇总会话收到的 `turn_completed` / `turn_failed` / `turn_canceled`（CLI 自发轮次 `origin: "background"` 不算），成员只取首个结局；`canceled` 与 `failed` 对汇总判断等同「已结束」，汇总提示里分别注明「回合失败：<错误>」/「回合被中断」。汇总提示结构：模板首句 →「# 原任务」→「# 各成员结果」，每个成员一节（标题含序号 / provider / 模型，助手回答、per-member 时附 worktree 路径 / 分支与 `diffStat`，回答与 diffStat 各上限 20000 字，超出截断并注明）。汇总会话 cwd 为组原 cwd，使用默认模式与默认思考强度。
 - 状态：`running` → `chairing`（全部成员有结局时，先落盘再建汇总会话）→ `done`（汇总回合 `completed`）/ `failed`（汇总回合失败 / 中断、建汇总会话或发送失败、汇总会话被删除）；无 chair 时全部成员结局即 `done`；成员被全部删除时直接 `done`。
-- 删除：`group.delete` 解除成员与汇总会话的 `groupId`（落盘），`removeWorktrees` 时先中断运行中的成员再 `removeWorktree`（删分支）；`agent.removed` 时该会话从组中移除（组保留，仅余成员全部结束时仍会触发汇总）；汇总会话被删则清除 `chair.agentId`，`chairing` 的组转 `failed`。
+- 删除：`group.delete` 解除成员与汇总会话的 `groupId`（落盘），`removeWorktrees` 时先中断运行中的成员再 `removeWorktree`（删分支），并删掉已空的 `<groupId>` 目录（建组回滚时同样；还有 worktree 没删掉就保留）；`agent.removed` 时该会话从组中移除（组保留，仅余成员全部结束时仍会触发汇总）；汇总会话被删则清除 `chair.agentId`，`chairing` 的组转 `failed`。
 - 重启恢复（`GroupService.start`，在会话恢复之后）：先剔除已不存在的成员 / 汇总会话；`running` 的组按各成员时间线的最后结局恢复，**没有结束回合的成员（重启时回合被打断，会话已是 dormant）记为失败**，全部有结局后继续推进（建汇总会话或完成）；`chairing` 的组：汇总会话尚未建出（`chair.agentId` 缺失）→ 重新建；汇总会话存在且时间线已有结束回合 → 按结局 `done` / `failed`；存在但没有结束回合 → 保持 `chairing` 等待它（用户在会话里手动续跑，其回合结束时据此收尾）。
 - 存储：`groups/<id>.json` 原子写入；加载时非法 JSON / 结构不合法的文件记日志后跳过（不改名）；未设置数据目录时只在内存。
 - 前端：`stores/groups.ts`（`bindGroupsToStore`：每次（重）连成功拉 `group.list`，之后 `group.changed` / `group.removed` 增量更新）；新建入口为首页「新任务」区右上角的「并行协作」按钮（`components/group/group-dialog.tsx`，每个成员复用 `AgentSessionPicker` 且各自拉取模型目录；是否 git 仓库复用 `useWorktrees(cwd).isRepo`，非仓库时「独立 worktree」禁用并提示）；协作视图路由 `/groups/:groupId`（`routes/group-view.tsx`，成员列复用 `MessageTimeline` 的 `compact` 密度，「查看 diff」复用预览栏的 `ReviewTab`，汇总区取 chair 会话最后一条助手消息经 `MessageText` 渲染）；侧栏用 `lib/session-list.ts` 的 `groupSessionRoots` 把同组根会话（连同其 4.26 子会话树）归入组节点，整组按 `group.cwd` 归入项目，组内任一会话在运行则整组排在项目内前面，组节点折叠状态与子会话折叠共用同一集合（键 `group:<id>`）。历史页不改。
@@ -1074,7 +1076,7 @@ interface BoardTask {
 - 模块：`kanban/store.ts`（`boards/<sha1(规范化路径) 前 16 位>.json` 原子写入，坏文件 / 结构非法备份为 `.bad` 后视为空，单条非法任务跳过；未设数据目录只在内存）、`kanban/board-service.ts`（派发 / 判定 / 合并）；`main.ts` 在会话恢复之后 `start()`，关闭时先于 AgentManager 停止。
 - 路径规范化（sidecar `normalizeProjectPath` 与前端 `lib/board-path.ts` 的 `boardPathKey` 等价）：去首尾空白、`\` 统一为 `/`、去尾部 `/`；盘符 / UNC 路径（Windows）一律转小写。看板内 `projectPath` 保留首次创建时的写法（去尾部分隔符），`board.changed` 带它；前端按规范化 key 索引。
 - RPC 返回：`board.get / updateSettings / moveTask` → `{ board }`；`upsertTask` → `{ board, task }`；`deleteTask` → `{ board, warning? }`（`removeWorktree` 清理失败不阻止删除，原因放 warning）；`merge` → `{ ok, conflicts?, board, warning? }`。`board.updateSettings` 的 `settings` 是补丁（只覆盖给出的字段）；`board.upsertTask` 入参 `BoardTaskDraft`（`id` / `title` 1–200 / `description` ≤ 20000 / `assignee`（null 清除）/ `dependsOn` / `maxAttempts` 1–10），状态只能经 `moveTask` 改变。依赖不存在、依赖自己、成环均为 `-32602`；任务不存在为 `TASK_NOT_FOUND`。`maxConcurrent` 1–16。看板默认值：`worktreePerTask` 取决于 projectPath 是否在 git 仓库内，`autoDispatch: false`，`maxConcurrent: 2`，`defaultAssignee: { provider: "claude" }`；不存在的看板 `board.get` 只返回默认值，不落盘（第一次修改才创建）。
-- 派发：同一看板的所有操作串行（按看板的互斥队列）。自动派发在每次看板变化后检查（任务增删改 / 移动 / 设置变化 / 回合结束 / 会话删除 / sidecar 启动），只数 running 状态的并发；依赖指向已不存在的任务视为已满足。worktree 目录 `<dataDir>/worktrees/task-<id>`、分支 `agentdeck/task-<id>`；未设数据目录或项目不在 git 仓库内时忽略 worktree 设置直接用 projectPath。任务已有 worktree（目录还在）时复用；任务的原会话仍存在且空闲时（review / blocked 再拖回 running）复用原会话重发提示，否则新建会话（`origin: "kanban"`，标题为任务标题）。`attempts` 每次进入 running 归零。**派发失败**（provider 不可用、建 worktree 失败等）不抛错：任务转 `blocked`，`blockedReason` 为「派发失败：…」，新建的 worktree 回滚。
+- 派发：同一看板的所有操作串行（按看板的互斥队列）。自动派发在每次看板变化后检查（任务增删改 / 移动 / 设置变化 / 回合结束 / 会话删除 / sidecar 启动），只数 running 状态的并发；依赖指向已不存在的任务视为已满足。worktree 目录 `<主工作区根目录>/tmp/worktrees/task-<id>`、分支 `agentdeck/task-<id>`；项目不在 git 仓库内时忽略 worktree 设置直接用 projectPath。任务已有 worktree（目录还在）时复用；任务的原会话仍存在且空闲时（review / blocked 再拖回 running）复用原会话重发提示，否则新建会话（`origin: "kanban"`，标题为任务标题）。`attempts` 每次进入 running 归零。**派发失败**（provider 不可用、建 worktree 失败等）不抛错：任务转 `blocked`，`blockedReason` 为「派发失败：…」，新建的 worktree 回滚。
 - 回合结束：只看 `turn_started.origin !== "background"` 的回合，末行（忽略末尾空行）去空白后精确等于 `TASK_DONE` 或以 `TASK_BLOCKED:` 开头；`turn_canceled`（用户在会话里中断）→ review（交人工判断）；任务不在 running（如已被拖走）的回合结束事件一律忽略，所以移出 running 时先改状态再中断。`maxAttempts` 到达时 `blockedReason` 为「执行失败（已尝试 N 次）：<错误>」。
 - `board.merge`：仅 review 且有 worktree 的任务可合并；先检查项目工作区**已跟踪文件**有无未提交改动（`status --porcelain --untracked-files=no`，有则拒绝并报「项目工作区有未提交改动…」，未跟踪文件交给 git 自己的冲突检测）；合并前若任务 worktree 里还有未提交改动，先自动 `git add -A && git commit`（Agent 通常不提交；本机无 git 身份时用 `AgentDeck <agentdeck@localhost>` 兜底重试）；然后 `git merge --no-ff --no-edit <分支>`，失败且有未合并文件 → `merge --abort` 返回 `{ ok: false, conflicts }`，无冲突文件的失败（如无 git 身份无法建合并提交）→ 中止后抛错。成功后任务 done；`removeWorktree` 时删 worktree 与分支并清掉 `task.worktree`，清理失败放 warning。
 - 会话被删除（`onRemoved`）：该会话的任务解除 `agentId`，running → todo（开启自动派发时会立即重新派发）。sidecar 重启（`start()`）：running 任务的会话不存在 → todo；会话在重启后一律 dormant，时间线末尾有未结束回合 → blocked（「sidecar 重启时任务回合尚未结束…」）；否则按最后一个已结束回合补判（规则同上，失败回合会计一次 attempts 并按需重发）；没有任何已结束回合同样 blocked。
@@ -1457,8 +1459,6 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 - 未安装时「安装驱动」→ 确认对话框：标题「安装驱动」、副标题「安装驱动 → 启用。完成当前步骤后继续下一步。」、说明「将从 <sourceUrl> 下载并执行官方安装脚本，请确认命令内容（也可复制到终端手动运行）：」、命令全文 + 复制按钮、「确认运行」；运行中对话框显示滚动日志（最多 200 行），结束后显示成功 / 失败（退出码）并重新检测。
 - 时间线：`agentdeck_cua` 的工具卡片标题显示为「Computer Use · <tool>」。
 
-## 5. sidecar 内部结构（packages/sidecar）
-
 ### 4.38 手机端设计语言（安卓 App）
 
 手机端与桌面分开设计，桌面样式不变。只改前端，协议不变。
@@ -1471,6 +1471,8 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 - **派单**：环形进度代替进度条，总览每个主会话一张卡片，详情顶部是进度卡片。
 - **会话页**：输入框是悬浮胶囊，用户消息用强调色气泡。
 - **动效**：页面淡入、按压缩放，`prefers-reduced-motion` 时关闭页面淡入和转圈动画。
+
+## 5. sidecar 内部结构（packages/sidecar）
 
 ```
 packages/sidecar/

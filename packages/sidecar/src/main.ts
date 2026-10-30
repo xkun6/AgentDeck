@@ -308,7 +308,6 @@ async function main(): Promise<void> {
     manager,
     store: new BoardStore({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) }),
     logger,
-    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
   });
   try {
     await board.start();
@@ -321,7 +320,6 @@ async function main(): Promise<void> {
     registry,
     store: new GroupStore({ logger, ...(config.dataDir ? { dataDir: config.dataDir } : {}) }),
     logger,
-    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
   });
   try {
     await groups.start();
@@ -339,7 +337,6 @@ async function main(): Promise<void> {
     registry,
     interop,
     logger,
-    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
   });
   server = new RpcServer({
     token: config.token,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rmdir } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -11,7 +12,7 @@ import type {
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentInvalidParamsError, AgentRpcError } from "../agent/errors.js";
 import type { AgentClient } from "../agent/types.js";
-import { addWorktree, diffStat, removeWorktree } from "../git/worktree.js";
+import { addProjectWorktree, diffStat, removeWorktree } from "../git/worktree.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import { lastAssistantText } from "../server/mcp-interop.js";
 import { locateGit, runGit } from "../snapshots/git.js";
@@ -31,8 +32,6 @@ export interface GroupServiceOptions {
   manager: GroupManager;
   registry: { get(provider: AgentProviderId): AgentClient | undefined };
   store: GroupStore;
-  /** AGENTDECK_DATA_DIR；per-member worktree 放在 `<dataDir>/worktrees/<groupId>/<n>` */
-  dataDir?: string;
   logger?: Logger;
 }
 
@@ -112,6 +111,11 @@ function lastOutcome(entries: AgentStreamEnvelope[]): Outcome | undefined {
   return undefined;
 }
 
+/** 删掉成员 worktree 的上层 `<组 id>` 目录；还有 worktree 没删掉时目录非空，rmdir 失败即保留 */
+async function removeGroupDir(worktreePath: string): Promise<void> {
+  await rmdir(path.dirname(worktreePath)).catch(() => undefined);
+}
+
 async function isInsideGitRepo(cwd: string): Promise<boolean> {
   const gitPath = await locateGit();
   if (!gitPath) {
@@ -129,7 +133,6 @@ export class GroupService {
   private readonly manager: GroupManager;
   private readonly registry: GroupServiceOptions["registry"];
   private readonly store: GroupStore;
-  private readonly dataDir: string | undefined;
   private readonly logger: Logger;
   private readonly listeners = new Set<GroupListener>();
 
@@ -146,7 +149,6 @@ export class GroupService {
     this.manager = options.manager;
     this.registry = options.registry;
     this.store = options.store;
-    this.dataDir = options.dataDir;
     this.logger = options.logger ?? createSilentLogger();
   }
 
@@ -301,9 +303,6 @@ export class GroupService {
           `「成员独立 worktree」要求工作目录位于 git 仓库内：${input.cwd}`,
         );
       }
-      if (!this.dataDir) {
-        throw new AgentRpcError("NOT_SUPPORTED", "未设置数据目录，无法创建 worktree");
-      }
     }
 
     let id = randomUUID().slice(0, 8);
@@ -324,6 +323,7 @@ export class GroupService {
           }).catch((error: unknown) =>
             this.logger.warn("回滚 worktree %s 失败：%s", worktree.path, errorMessage(error)),
           );
+          await removeGroupDir(worktree.path);
         }
       }
     };
@@ -332,10 +332,11 @@ export class GroupService {
         const n = index + 1;
         try {
           worktrees.push(
-            await addWorktree({
+            await addProjectWorktree({
               repoCwd: input.cwd,
-              path: path.join(this.dataDir!, "worktrees", id, String(n)),
+              name: path.join(id, String(n)),
               branch: `agentdeck/${id}/${n}`,
+              logger: this.logger,
             }),
           );
         } catch (error) {
@@ -452,6 +453,7 @@ export class GroupService {
         } catch (error) {
           warnings.push(`${member.worktree.path}：${errorMessage(error)}`);
         }
+        await removeGroupDir(member.worktree.path);
       }
     }
     await this.store.remove(id);

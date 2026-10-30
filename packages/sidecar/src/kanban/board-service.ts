@@ -16,7 +16,7 @@ import type {
 
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentInvalidParamsError, AgentRpcError } from "../agent/errors.js";
-import { addWorktree, removeWorktree } from "../git/worktree.js";
+import { addProjectWorktree, removeWorktree } from "../git/worktree.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import { locateGit, runGit } from "../snapshots/git.js";
 import { BoardStore, boardKey } from "./store.js";
@@ -38,8 +38,6 @@ export type BoardManager = Pick<
 export interface BoardServiceOptions {
   manager: BoardManager;
   store: BoardStore;
-  /** AGENTDECK_DATA_DIR：任务 worktree 放在 `<dataDir>/worktrees/task-<id>`；不传则不建 worktree */
-  dataDir?: string;
   logger?: Logger;
   now?: () => number;
 }
@@ -155,7 +153,6 @@ function nextOrder(board: Board, status: BoardTaskStatus): number {
 export class BoardService {
   private readonly manager: BoardManager;
   private readonly store: BoardStore;
-  private readonly dataDir: string | undefined;
   private readonly logger: Logger;
   private readonly now: () => number;
   private readonly listeners = new Set<BoardListener>();
@@ -168,7 +165,6 @@ export class BoardService {
   constructor(options: BoardServiceOptions) {
     this.manager = options.manager;
     this.store = options.store;
-    this.dataDir = options.dataDir;
     this.logger = options.logger ?? createSilentLogger();
     this.now = options.now ?? Date.now;
   }
@@ -559,11 +555,12 @@ export class BoardService {
     let createdWorktree: { path: string; branch: string } | undefined;
     try {
       let worktree = task.worktree && existsSync(task.worktree.path) ? task.worktree : undefined;
-      if (!worktree && this.dataDir && board.settings.worktreePerTask && (await this.isGitRepo(board.projectPath))) {
-        createdWorktree = await addWorktree({
+      if (!worktree && board.settings.worktreePerTask && (await this.isGitRepo(board.projectPath))) {
+        createdWorktree = await addProjectWorktree({
           repoCwd: board.projectPath,
-          path: path.join(this.dataDir, "worktrees", `task-${task.id}`),
+          name: `task-${task.id}`,
           branch: `agentdeck/task-${task.id}`,
+          logger: this.logger,
         });
         worktree = createdWorktree;
       }

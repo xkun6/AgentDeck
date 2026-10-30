@@ -1,6 +1,6 @@
 // 会话互通 MCP 端点（design.md 4.26）：鉴权、tools/list、各工具成功与安全约束失败路径、worktree 委派
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -193,7 +193,7 @@ async function createHarness(opts: { kind?: AgentClient["kind"] } = {}): Promise
   const settings = new SettingsStore();
   const interop = new InteropService({ settings: () => settings.get().interop });
   const manager = new AgentManager({ registry, interop });
-  const mcp = new McpInteropEndpoint({ manager, registry, interop, dataDir, reportSettleMs: 10 });
+  const mcp = new McpInteropEndpoint({ manager, registry, interop, reportSettleMs: 10 });
   const server = new RpcServer({ token: "rpc-token", version: "test", manager, registry, settings, mcp });
   const port = await server.listen(0, "127.0.0.1");
   interop.setPort(port);
@@ -1343,9 +1343,9 @@ describe.skipIf(!hasGit)("delegate worktree:true", () => {
     run("commit", "-m", "init");
   }
 
-  test("在 <dataDir>/worktrees 下建 worktree 与 agentdeck/delegate-<前 8 位> 分支，子会话 cwd 指向它", async () => {
+  test("默认在项目 tmp/worktrees 下建 worktree 与 agentdeck/delegate-<前 8 位> 分支，子会话 cwd 指向它", async () => {
     const h = await createHarness();
-    const repo = path.join(h.dataDir, "repo");
+    const repo = path.join(realpathSync.native(h.dataDir), "repo");
     mkdirSync(repo);
     initRepo(repo);
     const caller = await h.createCaller({ cwd: repo });
@@ -1355,10 +1355,86 @@ describe.skipIf(!hasGit)("delegate worktree:true", () => {
     expect(json.status).toBe("completed");
     const short = json.agentId.slice(0, 8);
     expect(json.worktree.branch).toBe(`agentdeck/delegate-${short}`);
-    expect(json.worktree.path).toBe(path.join(h.dataDir, "worktrees", `delegate-${short}`));
+    expect(json.worktree.path).toBe(path.join(repo, "tmp", "worktrees", `delegate-${short}`));
     expect(h.manager.getAgent(json.agentId).cwd).toBe(json.worktree.path);
     const branches = execFileSync("git", ["branch", "--list", json.worktree.branch], { cwd: repo }).toString();
     expect(branches).toContain(json.worktree.branch);
+    // 项目没忽略 tmp/ 时也不能出现在主仓库的状态里，否则 git add -A 会记成 gitlink
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: repo }).toString()).toBe("");
+  });
+
+  test("从子目录与子会话的 worktree 里再派单，默认路径都回到主工作区", async () => {
+    const h = await createHarness();
+    const repo = path.join(realpathSync.native(h.dataDir), "repo");
+    mkdirSync(path.join(repo, "sub"), { recursive: true });
+    initRepo(repo);
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+    const delegate = async (cwd: string) =>
+      (await callTool(client, "delegate", { provider: "fake", prompt: "x", cwd, worktree: true })).json as {
+        agentId: string;
+        worktree: { path: string };
+      };
+    const fromSub = await delegate("sub");
+    const expected = (agentId: string) => path.join(repo, "tmp", "worktrees", `delegate-${agentId.slice(0, 8)}`);
+    expect(fromSub.worktree.path).toBe(expected(fromSub.agentId));
+    const fromWorktree = await delegate(fromSub.worktree.path);
+    expect(fromWorktree.worktree.path).toBe(expected(fromWorktree.agentId));
+  });
+
+  test("worktreePath 由主会话指定：相对路径按 cwd 解析，项目内未忽略时写 exclude", async () => {
+    const h = await createHarness();
+    const repo = path.join(realpathSync.native(h.dataDir), "repo");
+    mkdirSync(repo);
+    initRepo(repo);
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+    const inRepo = (await callTool(client, "delegate", {
+      provider: "fake",
+      prompt: "x",
+      worktree: true,
+      worktreePath: "wt/my tree",
+    })).json as { agentId: string; worktree: { path: string } };
+    expect(inRepo.worktree.path).toBe(path.join(repo, "wt", "my tree"));
+    expect(h.manager.getAgent(inRepo.agentId).cwd).toBe(inRepo.worktree.path);
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: repo }).toString()).toBe("");
+
+    const outside = path.join(realpathSync.native(h.dataDir), "outside");
+    const excludeFile = path.join(repo, ".git", "info", "exclude");
+    const excludeBefore = readFileSync(excludeFile, "utf8");
+    const out = (await callTool(client, "delegate", {
+      provider: "fake",
+      prompt: "x",
+      worktree: true,
+      worktreePath: outside,
+    })).json as { worktree: { path: string } };
+    expect(out.worktree.path).toBe(outside);
+    expect(readFileSync(excludeFile, "utf8")).toBe(excludeBefore);
+  });
+
+  test("已被 .gitignore 忽略时不写 exclude", async () => {
+    const h = await createHarness();
+    const repo = path.join(realpathSync.native(h.dataDir), "repo");
+    mkdirSync(repo);
+    initRepo(repo);
+    writeFileSync(path.join(repo, ".gitignore"), "tmp/\n");
+    const excludeFile = path.join(repo, ".git", "info", "exclude");
+    const excludeBefore = readFileSync(excludeFile, "utf8");
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+    await callTool(client, "delegate", { provider: "fake", prompt: "x", worktree: true });
+    expect(readFileSync(excludeFile, "utf8")).toBe(excludeBefore);
+  });
+
+  test("给了 worktreePath 却没传 worktree=true → 工具错误，且不创建子会话", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const before = h.manager.listAgents().length;
+    const result = await callTool(client, "delegate", { provider: "fake", prompt: "x", worktreePath: "wt" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("worktreePath");
+    expect(h.manager.listAgents().length).toBe(before);
   });
 
   test("cwd 不在 git 仓库内 → 工具错误，且不创建子会话", async () => {
