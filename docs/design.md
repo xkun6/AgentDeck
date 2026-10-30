@@ -979,6 +979,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 - 投递：回传内容为状态、错误、最后一条助手消息（上限 40k 字），`cwd` 与派单会话不同时另附分支名与未提交改动统计。按接收方排队，接收方空闲并稳定 1.5 秒后合并成一条 `sendPrompt(internal)` 发出（休眠的会话会被恢复，已归档或已删除的放弃并记日志）；接收方忙时等它本回合结束，遇到 `TURN_IN_PROGRESS` 则放回队列等下一次空闲。稳定时间也让前端排队消息优先发出。
 - worktree 的合并与清理由派单会话用 git 完成，sidecar 不代做；`delegate` 工具说明要求在任务里交代子会话提交改动。
 - 局限：待回传记录只在内存，sidecar 重启后丢失（运行中的回合本来也会中断），派单会话可用 `list_agents` / `read_agent` 查看。
+- 侧栏归属：会话 cwd 不属于已记住的项目时，先按 git worktree 归回所属项目（4.17），查不到（如 worktree 已清理）且有 `reportToAgentId` 时归入派单会话的项目。AgentDeck 自建的 worktree 目录（`<dataDir>/worktrees/` 下的 `delegate-<8 位>`、`task-<id>`、`<组 id>/<n>`）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。
 - 只有 Agent 发起的会话有此字段；前端详情页「由 <父会话> 委派」链接取 `parentAgentId ?? reportToAgentId`；缓存保活（4.36）把 `reportToAgentId` 相同的运行中会话也算作等待中的子会话。
 
 **服务说明（instructions）**：initialize 应答带 `instructions`（`INTEROP_INSTRUCTIONS`）：用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理，不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。Claude Code 把 MCP 工具延迟加载（只列名字），但会把服务说明放进系统提示词，因此用户只说「把 X 发给会话 <ID>」时，Agent 也会经 ToolSearch 取用 `send_to_agent` / `read_agent`，不用在提示词里写工具名（claude 2.1.x 实测）。

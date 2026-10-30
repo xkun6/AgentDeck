@@ -457,7 +457,10 @@ export function WorkbenchSidebar() {
         : { kind: "rows", rows };
       const lead = block.roots[0].agent;
       const path = normalizeWorkspacePath(group?.cwd || lead.cwd || sessionWorkspaceMap[lead.id]);
-      const projectPath = projectByPath.has(path) ? path : worktreeProjects.get(worktreePathKey(path));
+      const projectOf = (cwd: string) => (projectByPath.has(cwd) ? cwd : worktreeProjects.get(worktreePathKey(cwd)));
+      // 派单出去的会话：worktree 已清理、查不到归属时跟随派单会话的项目（design.md 4.26）
+      const dispatcher = lead.reportToAgentId ? agents.find((agent) => agent.id === lead.reportToAgentId) : undefined;
+      const projectPath = projectOf(path) ?? (dispatcher ? projectOf(normalizeWorkspacePath(dispatcher.cwd)) : undefined);
       const bucket = bucketOf(projectPath ?? OTHER_BUCKET_KEY);
       (running ? bucket.running : bucket.idle).push(item);
     }

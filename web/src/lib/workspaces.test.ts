@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agentInWorkspace,
   ensureWorkspaceProject,
+  isManagedWorktreePath,
   moveWorkspaceProject,
   normalizeWorkspacePath,
   readPinnedWorkspaceProjectPaths,
   readSessionWorkspaceMap,
+  readWorkspacePath,
   readWorkspaceProjects,
   rememberSessionWorkspace,
   rememberWorkspaceProject,
@@ -13,9 +15,10 @@ import {
   togglePinnedWorkspaceProject,
   unpinWorkspaceProjects,
   writePinnedWorkspaceProjectPaths,
+  writeWorkspacePath,
   workspaceNameFromPath,
 } from "./workspaces";
-import { __resetUiStoreForTests } from "./ui-store";
+import { __resetUiStoreForTests, writeUiValue } from "./ui-store";
 
 describe("workspace persistence helpers", () => {
   beforeEach(() => {
@@ -25,6 +28,33 @@ describe("workspace persistence helpers", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
+  });
+
+  it("AgentDeck 自建的 worktree 不算项目：不登记、不写当前工作区，已误登记的读取时过滤", () => {
+    const managed = [
+      "C:\\Users\\x\\AppData\\Roaming\\local.agentdeck.desktop\\worktrees\\delegate-906423a5",
+      "/data/worktrees/task-3f2a",
+      "/data/worktrees/ab12cd34/2",
+    ];
+    for (const path of managed) expect(isManagedWorktreePath(path)).toBe(true);
+    for (const path of ["/work/worktrees", "/work/worktrees/feature-x", "/work/delegate-906423a5"]) {
+      expect(isManagedWorktreePath(path)).toBe(false);
+    }
+
+    rememberWorkspaceProject("/Users/claw/A");
+    expect(rememberWorkspaceProject(managed[0]!)).toBeNull();
+    ensureWorkspaceProject(managed[1]!);
+    expect(readWorkspaceProjects().map((p) => p.path)).toEqual(["/Users/claw/A"]);
+
+    writeWorkspacePath("/Users/claw/A");
+    writeWorkspacePath(managed[0]!);
+    expect(readWorkspacePath()).toBe("/Users/claw/A");
+
+    writeUiValue("agentdeck-cn-ui.workspaceProjects", [
+      { path: managed[0], name: "delegate-906423a5" },
+      { path: "/Users/claw/B", name: "B" },
+    ]);
+    expect(readWorkspaceProjects().map((p) => p.path)).toEqual(["/Users/claw/B"]);
   });
 
   it("normalizes paths and derives project names", () => {

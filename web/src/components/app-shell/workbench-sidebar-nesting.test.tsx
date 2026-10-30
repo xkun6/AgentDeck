@@ -7,6 +7,8 @@ import { Provider, createStore } from "jotai";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { stubRadixGlobals } from "@/test-utils/radix";
 import { ConfirmProvider } from "@/lib/use-confirm";
+import { __resetUiStoreForTests } from "@/lib/ui-store";
+import { rememberWorkspaceProject } from "@/lib/workspaces";
 import { replaceAgentSnapshotsAtom } from "@/stores/agents";
 import { WorkbenchSidebar } from "./workbench-sidebar";
 
@@ -59,6 +61,27 @@ function renderSidebar(agents: AgentSnapshot[]) {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("派单出去的顶层会话", () => {
+  it("worktree 查不到归属时跟随派单会话的项目，不进「其他对话」", () => {
+    __resetUiStoreForTests();
+    rememberWorkspaceProject("C:/work/demo");
+    renderSidebar([
+      agent("dispatcher"),
+      agent("task", { cwd: "C:/data/worktrees/delegate-906423a5", reportToAgentId: "dispatcher" }),
+    ]);
+    expect(screen.getByText("会话-task")).toBeTruthy();
+    expect(screen.queryByText("其他对话")).toBeNull();
+    expect(screen.queryByText("delegate-906423a5")).toBeNull();
+  });
+
+  it("没有派单关系的会话仍进「其他对话」", () => {
+    __resetUiStoreForTests();
+    rememberWorkspaceProject("C:/work/demo");
+    renderSidebar([agent("dispatcher"), agent("task", { cwd: "C:/data/worktrees/delegate-906423a5" })]);
+    expect(screen.getByText("其他对话")).toBeTruthy();
+  });
 });
 
 describe("子会话嵌套", () => {

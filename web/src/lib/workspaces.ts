@@ -61,11 +61,20 @@ function normalizeWorkspacePathList(value: unknown): string[] {
   });
 }
 
+/** AgentDeck 自建的 worktree 目录（委派、看板任务、协作组成员，design.md 4.26）：属于所在仓库的项目，自身不是项目 */
+const MANAGED_WORKTREE_PATTERN = /[\\/]worktrees[\\/](?:delegate-[0-9a-f]{8}|task-[^\\/]+|[0-9a-f]{8}[\\/]\d+)$/i;
+
+export function isManagedWorktreePath(path: string): boolean {
+  return MANAGED_WORKTREE_PATTERN.test(path);
+}
+
 export function readWorkspacePath(): string {
-  return normalizeWorkspacePath(readUiValue(WORKSPACE_STORAGE_KEY, ""));
+  const path = normalizeWorkspacePath(readUiValue(WORKSPACE_STORAGE_KEY, ""));
+  return isManagedWorktreePath(path) ? "" : path;
 }
 
 export function writeWorkspacePath(path: string): void {
+  if (isManagedWorktreePath(normalizeWorkspacePath(path))) return;
   const normalized = normalizeWorkspacePath(path);
   if (normalized) {
     writeUiValue(WORKSPACE_STORAGE_KEY, normalized);
@@ -82,7 +91,7 @@ export function readWorkspaceProjects(): WorkspaceProject[] {
   return raw.flatMap((item) => {
     if (!isRecord(item)) return [];
     const path = normalizeWorkspacePath(item.path);
-    if (!path || seen.has(path)) return [];
+    if (!path || seen.has(path) || isManagedWorktreePath(path)) return [];
     seen.add(path);
     const name = typeof item.name === "string" ? item.name.trim() : "";
     const createdAt = typeof item.createdAt === "number" && Number.isFinite(item.createdAt) ? item.createdAt : Date.now();
@@ -98,7 +107,7 @@ export function readWorkspaceProjects(): WorkspaceProject[] {
 
 export function rememberWorkspaceProject(path: string, name?: string): WorkspaceProject | null {
   const normalized = normalizeWorkspacePath(path);
-  if (!normalized) return null;
+  if (!normalized || isManagedWorktreePath(normalized)) return null;
 
   const now = Date.now();
   const projects = readWorkspaceProjects();
