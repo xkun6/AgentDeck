@@ -99,6 +99,28 @@ describe("派单与项目列表拆分（4.26）", () => {
     expect(screen.queryByRole("button", { name: "查看派单进度：会话-plain" })).toBeNull();
   });
 
+  it("主会话空闲但子会话还在工作时行首亮状态点；子会话都结束或失败后不亮", () => {
+    const leadDot = (title: string) => {
+      const row = screen.getByText(title).closest<HTMLElement>("[role=button]")!;
+      return { dots: row.firstElementChild!.childElementCount, tooltip: row.title };
+    };
+    renderSidebar([
+      agent("master"),
+      agent("run", { parentAgentId: "master", status: "running" }),
+      agent("plain"),
+    ]);
+    expect(leadDot("会话-master").dots).toBe(1);
+    expect(leadDot("会话-master").tooltip).toContain("等待子任务");
+    expect(leadDot("会话-plain").dots).toBe(0);
+    cleanup();
+    renderSidebar([
+      agent("master"),
+      agent("ok", { parentAgentId: "master", lastTurnOutcome: "completed" }),
+      agent("bad", { parentAgentId: "master", lastTurnOutcome: "failed" }),
+    ]);
+    expect(leadDot("会话-master").dots).toBe(0);
+  });
+
   it("「派单」入口统计工作中与需要处理的子会话，待审批不重复计数；都已完成时不显示", () => {
     renderSidebar([
       agent("master"),

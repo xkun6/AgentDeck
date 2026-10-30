@@ -37,7 +37,7 @@ import { agentListAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { groupListAtom } from "@/stores/groups";
 import { appSidebarVisibleAtom, sidebarHiddenEntriesAtom } from "@/stores/ui";
 import { GROUP_STATUS_LABELS } from "@/lib/group-display";
-import { dispatchBadgeOf, dispatchSummaryText } from "@/lib/dispatch";
+import { DISPATCH_STATUS_LABELS, dispatchBadgeOf, dispatchSummaryText } from "@/lib/dispatch";
 import { useDispatchGroups } from "@/hooks/use-dispatch-groups";
 import {
   buildSessionTree,
@@ -426,6 +426,11 @@ export function WorkbenchSidebar() {
       .filter((path) => path && !known.has(path));
   }, [agents, projectPaths, sessionWorkspaceMap]);
   const worktreeProjects = useWorktreeProjects(projectPaths, unmatchedCwds);
+  const dispatchGroups = useDispatchGroups();
+  const dispatchGroupByMaster = useMemo(
+    () => new Map(dispatchGroups.flatMap((group) => (group.master ? [[group.master.agent.id, group] as const] : []))),
+    [dispatchGroups],
+  );
   const buckets = useMemo<ProjectBucket[]>(() => {
     const groupById = new Map(groups.map((group) => [group.id, group]));
     const projectByPath = new Map(projects.map((project) => [project.path, project]));
@@ -441,7 +446,12 @@ export function WorkbenchSidebar() {
     const blocks = groupSessionRoots(buildSessionTree(sidebarSessions(agents)), new Set(groupById.keys()));
     for (const block of blocks) {
       const running = block.roots.some((root) =>
-        treeSome(root, (agent) => isAgentRunning(agent, runtimeBySession[agent.id])),
+        treeSome(
+          root,
+          (agent) =>
+            isAgentRunning(agent, runtimeBySession[agent.id]) ||
+            dispatchGroupByMaster.get(agent.id)?.master?.status === "waiting",
+        ),
       );
       const rows = block.roots.flatMap((root) => flattenSessionTree(root, (agent) => agent.id, collapsedIds));
       const group = block.groupId !== null ? groupById.get(block.groupId) : undefined;
@@ -488,6 +498,7 @@ export function WorkbenchSidebar() {
   }, [
     agents,
     collapsedIds,
+    dispatchGroupByMaster,
     groups,
     pinnedProjectPaths,
     projects,
@@ -581,11 +592,6 @@ export function WorkbenchSidebar() {
 
   const goSession = sessionActions.openSession;
 
-  const dispatchGroups = useDispatchGroups();
-  const dispatchGroupByMaster = useMemo(
-    () => new Map(dispatchGroups.flatMap((group) => (group.master ? [[group.master.agent.id, group] as const] : []))),
-    [dispatchGroups],
-  );
   const dispatchBadge = useMemo(() => {
     const badge = dispatchBadgeOf(dispatchGroups);
     return badge
@@ -606,13 +612,19 @@ export function WorkbenchSidebar() {
     const running = isAgentRunning(agent, runtimeBySession[agent.id]);
     const title = agentDisplayTitle(agent, runtimeBySession[agent.id], providers);
     const provider = agentProviderLabel(agent.provider, providers);
-    const status = running ? AGENT_STATUS_LABELS.running : AGENT_STATUS_LABELS[agent.status];
+    // 自身空闲但子孙还在工作的主会话，和运行中一样亮绿点
+    const waiting = dispatchGroup?.master?.status === "waiting";
+    const status = running
+      ? AGENT_STATUS_LABELS.running
+      : waiting
+        ? DISPATCH_STATUS_LABELS.waiting
+        : AGENT_STATUS_LABELS[agent.status];
     const projectName = projectNameByPath.get(agent.cwd) ?? workspaceNameFromPath(agent.cwd);
     return (
       <SessionRow
         key={agent.id}
         title={title}
-        tone={statusTone(agent, running)}
+        tone={statusTone(agent, running || waiting)}
         active={agent.id === activeSessionId}
         time={formatAgentTime(agent.updatedAt, now)}
         tooltip={`${title}\n${provider}，${status}\n${projectName}：${agent.cwd}`}

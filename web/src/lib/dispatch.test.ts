@@ -73,6 +73,21 @@ describe("dispatchBadgeOf / findDispatchGroup", () => {
     expect(dispatchBadgeOf(calm)).toBeNull();
   });
 
+  it("进度分子包含没有结局记录的旧会话，不包含失败和工作中的", () => {
+    const [group] = buildDispatchGroups(
+      [
+        agent("m"),
+        agent("old", { parentAgentId: "m" }),
+        agent("ok", { parentAgentId: "m", lastTurnOutcome: "completed" }),
+        agent("bad", { parentAgentId: "m", lastTurnOutcome: "failed" }),
+        agent("run", { parentAgentId: "m", status: "running" }),
+      ],
+      (entry) => entry.status === "running",
+    );
+    expect(group!.summary).toMatchObject({ done: 2, total: 4 });
+    expect(dispatchSummaryText(group!.summary)).toBe("1 运行中 · 1 失败 · 1 已完成 · 1 已结束");
+  });
+
   it("任一层子会话都能找到所属主会话；孤儿组 master 为 null；无关会话找不到", () => {
     const groups = buildDispatchGroups(
       [

@@ -38,6 +38,8 @@ export const DISPATCH_STATUS_TONES: Record<DispatchStatus, StatusDotTone> = {
 /** 需要用户处理：待审批，或没有成功结束 */
 const ATTENTION_STATUSES: ReadonlySet<DispatchStatus> = new Set(["approval", "failed", "canceled"]);
 const WORKING_STATUSES: ReadonlySet<DispatchStatus> = new Set(["approval", "running", "waiting"]);
+/** 算进进度分子：已结束 = 没有结局记录的旧会话，已经做完，只是不知道成败 */
+const FINISHED_STATUSES: ReadonlySet<DispatchStatus> = new Set(["done", "ended"]);
 
 /** 汇总文案的显示顺序 */
 const SUMMARY_ORDER: readonly DispatchStatus[] = [
@@ -91,7 +93,7 @@ function summarize(nodes: readonly DispatchNode[]): DispatchSummary {
   const walk = (node: DispatchNode) => {
     summary.total += 1;
     summary.counts[node.status] = (summary.counts[node.status] ?? 0) + 1;
-    if (node.status === "done") summary.done += 1;
+    if (FINISHED_STATUSES.has(node.status)) summary.done += 1;
     if (WORKING_STATUSES.has(node.status)) summary.working += 1;
     if (ATTENTION_STATUSES.has(node.status)) summary.attention += 1;
     node.children.forEach(walk);
