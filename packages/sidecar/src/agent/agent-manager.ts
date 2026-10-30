@@ -127,6 +127,8 @@ export interface CreateAgentParams {
   id?: string;
   /** 父会话与来源（design.md 4.26 / 4.27 / 4.28）；缺省为用户直接创建 */
   parentAgentId?: string;
+  /** 派单回传的接收会话（design.md 4.26） */
+  reportToAgentId?: string;
   /** 并行协作组 id（design.md 4.27） */
   groupId?: string;
   origin?: NonNullable<AgentSnapshot["origin"]>;
@@ -332,6 +334,7 @@ export class AgentManager {
       cwd: params.cwd,
       ...(params.title !== undefined ? { title: params.title } : {}),
       ...(params.parentAgentId !== undefined ? { parentAgentId: params.parentAgentId } : {}),
+      ...(params.reportToAgentId !== undefined ? { reportToAgentId: params.reportToAgentId } : {}),
       ...(params.origin !== undefined ? { origin: params.origin } : {}),
       ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
       ...((params.translation ?? ((params.origin ?? "user") === "user" && this.translationDefault?.()))
@@ -1166,7 +1169,7 @@ export class AgentManager {
     for (const other of this.agents.values()) {
       const child = other.snapshot;
       if (
-        child.parentAgentId === agent.id &&
+        (child.parentAgentId === agent.id || child.reportToAgentId === agent.id) &&
         (child.status === "running" ||
           child.status === "starting" ||
           Boolean(child.activeTurnId) ||

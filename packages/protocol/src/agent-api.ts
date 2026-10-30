@@ -519,6 +519,8 @@ export interface AgentSnapshot {
   origin?: AgentOrigin;
   /** 父会话（由其它会话经 agentdeck MCP `delegate` 委派创建，design.md 4.26） */
   parentAgentId?: string;
+  /** 派单回传的接收会话（design.md 4.26），与决定侧边栏层级的 parentAgentId 相互独立 */
+  reportToAgentId?: string;
   /** 并行协作组 id（design.md 4.27） */
   groupId?: string;
   /** 允许被其它会话经 send_to_agent 调用（design.md 4.26），经 agent.update 设置 */

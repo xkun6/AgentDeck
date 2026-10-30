@@ -120,6 +120,10 @@ function isBusy(snapshot: AgentSnapshot): boolean {
 function isWaiting(agent: AgentSnapshot, all: AgentSnapshot[]): boolean {
   return (
     agent.backgroundActive === true ||
-    all.some((child) => child.parentAgentId === agent.id && (isBusy(child) || child.backgroundActive === true))
+    all.some(
+      (child) =>
+        (child.parentAgentId === agent.id || child.reportToAgentId === agent.id) &&
+        (isBusy(child) || child.backgroundActive === true),
+    )
   );
 }

@@ -956,23 +956,34 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 **工具**（名称前缀由 CLI 自行加，如 `mcp__agentdeck__list_agents`）：
 | 工具 | 参数 | 返回 |
 |---|---|---|
-| `list_providers` | — | 可用 provider（id、label、可用性） |
-| `list_agents` | `{ includeArchived?: boolean, callableOnly?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId、`interopTarget`、`callable`、`updatedAt`）；标题未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准；`callable` = 调用方可对其 `send_to_agent` / `cancel_agent`（非自己，且为子孙或 `interopTarget`）；`callableOnly: true` 只返回 `callable` 的会话；`updatedAt` 为 ISO 时间 |
+| `list_providers` | `{ provider?: string }` | 可用 provider（id、label、可用性）；传 `provider` 时只返回该 provider，并附带其 `models`（id、label、isDefault、thinkingOptions、defaultThinkingOptionId）与 `modes`（id、label、dangerous），供 `delegate` 选用 |
+| `list_agents` | `{ includeArchived?: boolean, callableOnly?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId、reportToAgentId、`interopTarget`、`callable`、`updatedAt`）；标题未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准；`callable` = 调用方可对其 `send_to_agent` / `cancel_agent`（非自己，且为子孙或 `interopTarget`）；`callableOnly: true` 只返回 `callable` 的会话；`updatedAt` 为 ISO 时间 |
 | `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */ }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字 |
-| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, title?, worktree?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"` |
+| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, thinkingOptionId?, title?, worktree?: boolean, independent?: boolean, report?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"`。`independent: true` 时改为新开独立会话：不设 `parentAgentId`（`origin` 仍为 `delegate`），侧边栏作为顶层会话显示，`wait` 默认 false。`report`（默认 true）时写入 `reportToAgentId` = 调用方，启用下文「派单回传」，调用方也因此可对它 `send_to_agent` / `cancel_agent`；`independent: true, report: false` 的会话与调用方再无关系 |
 | `send_to_agent` | `{ agentId, message, wait?: boolean, timeoutSec?: number }` | 同上；目标忙 → 工具错误「目标会话正在运行」 |
 | `wait_agent` | `{ agentId, timeoutSec?: number }` | 等到目标当前回合结束，返回最后一条助手消息 |
 | `cancel_agent` | `{ agentId }` | 中断目标会话当前回合 |
+| `report_to_dispatcher` | `{ message }` | 向派单会话（`reportToAgentId`）汇报，走派单回传队列，立即返回；没有派单会话 → 工具错误。派单任务的回合结束时已自动回传，本工具用于用户在该会话里直接交代的回合 |
 
 **安全约束**：
-- 不能对自己调用 `send_to_agent` / `wait_agent`；委派深度（parent 链长度）上限 3，单个会话同时运行的子会话上限 8，超出返回工具错误。
-- `delegate` 的 `modeId` 若为危险模式（`AgentMode.dangerous`）一律拒绝；缺省用 provider 默认模式。子会话的权限请求照常出现在 AgentDeck 界面由用户审批。
+- 不能对自己调用 `send_to_agent` / `wait_agent`；上级链取 `parentAgentId ?? reportToAgentId`，判断子孙与「不能等待上级」都沿这条链；委派深度（链长度）上限 3，单个会话同时运行的子会话上限 8，超出返回工具错误。
+- 独立会话不占委派深度和子会话名额，另设约束防止 Agent 无限自我繁殖：调用方自身是 `origin: "delegate"`（子会话或独立会话）时不能再新开独立会话；全局同时运行的独立会话（`origin: "delegate"` 且无 `parentAgentId`）上限 8。
+- `delegate` 不越权：`modeId` 若为危险模式（`AgentMode.dangerous`），只有调用方当前也在危险模式时才允许，否则拒绝。不传 `modeId` 时，`provider` 与调用方相同则继承调用方当前模式（plan 模式除外，它不能动手开发），否则用 provider 默认模式。子会话的权限请求照常出现在 AgentDeck 界面由用户审批。
 - `send_to_agent` 只允许发给调用方的子孙会话，或用户明确标记为「允许被其它会话调用」的会话（快照字段 `interopTarget?: boolean`，经 `agent.update` 设置）；否则返回工具错误。
 - 工具调用的结果只包含文本，不包含 token、apiKey 等。
 
+**派单回传**（`server/interop-reports.ts`）：让派单会话不必阻塞等待，并行派出多个任务后结束回合即可，子任务完成时由 sidecar 把它唤醒。
+- 快照字段 `reportToAgentId?: string`（持久化）：派单时写入，指向接收回传的会话，与决定侧边栏层级的 `parentAgentId` 相互独立。
+- 回传时机：只有派单方经 `delegate` / `send_to_agent` 发出的回合才回传；用户在该会话里手动发的回合、保活回合不回传。回合结束后要求状态为 `idle` / `error` 且 `backgroundActive` 为 false，并稳定 1.5 秒（防止把后台子代理完成后 CLI 自发的下一轮截断）；状态变为 `closed` / `dormant` 或会话被删除时放弃。
+- 不重复：派单方正在 `wait` / `wait_agent` 并拿到了结果，或自己 `cancel_agent` 了该回合时，不再回传（已入队未送达的也撤回）；`wait` 超时或被中断则照常回传。
+- 投递：回传内容为状态、错误、最后一条助手消息（上限 40k 字），`cwd` 与派单会话不同时另附分支名与未提交改动统计。按接收方排队，接收方空闲并稳定 1.5 秒后合并成一条 `sendPrompt(internal)` 发出（休眠的会话会被恢复，已归档或已删除的放弃并记日志）；接收方忙时等它本回合结束，遇到 `TURN_IN_PROGRESS` 则放回队列等下一次空闲。稳定时间也让前端排队消息优先发出。
+- worktree 的合并与清理由派单会话用 git 完成，sidecar 不代做；`delegate` 工具说明要求在任务里交代子会话提交改动。
+- 局限：待回传记录只在内存，sidecar 重启后丢失（运行中的回合本来也会中断），派单会话可用 `list_agents` / `read_agent` 查看。
+- 只有 Agent 发起的会话有此字段；前端详情页「由 <父会话> 委派」链接取 `parentAgentId ?? reportToAgentId`；缓存保活（4.36）把 `reportToAgentId` 相同的运行中会话也算作等待中的子会话。
+
 **服务说明（instructions）**：initialize 应答带 `instructions`（`INTEROP_INSTRUCTIONS`）：用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理，不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。Claude Code 把 MCP 工具延迟加载（只列名字），但会把服务说明放进系统提示词，因此用户只说「把 X 发给会话 <ID>」时，Agent 也会经 ToolSearch 取用 `send_to_agent` / `read_agent`，不用在提示词里写工具名（claude 2.1.x 实测）。
 
-**快照**：`AgentSnapshot` 增加 `parentAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
+**快照**：`AgentSnapshot` 增加 `parentAgentId?: string`、`reportToAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
 
 **前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关与「复制会话 ID」（便于用户把准确的目标 id 告诉 Agent）。
 

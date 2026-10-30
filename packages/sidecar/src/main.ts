@@ -126,6 +126,7 @@ async function main(): Promise<void> {
   let scheduler: Scheduler | null = null;
   let board: BoardService | null = null;
   let groups: GroupService | null = null;
+  let mcp: McpInteropEndpoint | null = null;
   let server: RpcServer | null = null;
   let remote: RemoteService | null = null;
   let attention: AttentionService | null = null;
@@ -148,6 +149,7 @@ async function main(): Promise<void> {
       await withTimeout(
         (async () => {
           keepAlive?.stop();
+          mcp?.stop();
           await scheduler?.stop();
           await board?.stop();
           await groups?.stop();
@@ -332,6 +334,13 @@ async function main(): Promise<void> {
     logger,
     ...(config.dataDir ? { dataDir: config.dataDir } : {}),
   });
+  mcp = new McpInteropEndpoint({
+    manager,
+    registry,
+    interop,
+    logger,
+    ...(config.dataDir ? { dataDir: config.dataDir } : {}),
+  });
   server = new RpcServer({
     token: config.token,
     remote,
@@ -347,13 +356,7 @@ async function main(): Promise<void> {
     board,
     translation,
     computerUse,
-    mcp: new McpInteropEndpoint({
-      manager,
-      registry,
-      interop,
-      logger,
-      ...(config.dataDir ? { dataDir: config.dataDir } : {}),
-    }),
+    mcp,
     logger,
   });
 

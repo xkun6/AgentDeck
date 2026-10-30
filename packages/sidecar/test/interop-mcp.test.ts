@@ -24,6 +24,7 @@ import {
   clampTimeoutSec,
   INTEROP_INSTRUCTIONS,
   INTEROP_MAX_RUNNING_CHILDREN,
+  INTEROP_MAX_RUNNING_INDEPENDENT,
   lastAssistantText,
   McpInteropEndpoint,
 } from "../src/server/mcp-interop.js";
@@ -32,6 +33,7 @@ import { SettingsStore } from "../src/settings/sidecar-settings.js";
 import { locateGit } from "../src/snapshots/git.js";
 
 const hasGit = (await locateGit()) !== null;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * 脚本化会话：prompt 以 `hold:` 开头时只发 turn_started（运行中，由测试调用 finish 结束）；
@@ -125,9 +127,11 @@ interface Harness {
   port: number;
   url: string;
   /** 以用户身份建会话（origin 缺省），返回 agentId 与它的互通 token */
-  createCaller(opts?: { cwd?: string; parentAgentId?: string }): Promise<{ id: string; token: string }>;
+  createCaller(opts?: { cwd?: string; parentAgentId?: string; modeId?: string }): Promise<{ id: string; token: string }>;
   /** 用某会话的 token 连上 MCP 端点 */
   connect(token: string): Promise<Client>;
+  /** 按 agentId 取它的脚本化会话（用互通 token 对应） */
+  sessionOf(agentId: string): ScriptedSession | undefined;
 }
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -146,9 +150,20 @@ async function createHarness(): Promise<Harness> {
     label: "Fake",
     isAvailable: async () => ({ available: true }),
     fetchCatalog: async () => ({
-      models: [],
+      models: [
+        {
+          provider: "fake",
+          id: "fast",
+          label: "快",
+          isDefault: true,
+          thinkingOptions: [{ id: "high", label: "高" }],
+          defaultThinkingOptionId: "high",
+        },
+      ],
       modes: [
         { id: "default", label: "默认" },
+        { id: "auto", label: "自动" },
+        { id: "plan", label: "计划" },
         { id: "danger", label: "危险", dangerous: true },
       ],
     }),
@@ -173,11 +188,12 @@ async function createHarness(): Promise<Harness> {
   const settings = new SettingsStore();
   const interop = new InteropService({ settings: () => settings.get().interop });
   const manager = new AgentManager({ registry, interop });
-  const mcp = new McpInteropEndpoint({ manager, registry, interop, dataDir });
+  const mcp = new McpInteropEndpoint({ manager, registry, interop, dataDir, reportSettleMs: 10 });
   const server = new RpcServer({ token: "rpc-token", version: "test", manager, registry, settings, mcp });
   const port = await server.listen(0, "127.0.0.1");
   interop.setPort(port);
   cleanups.push(async () => {
+    mcp.stop();
     await server.close();
     await manager.shutdown();
     rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -197,9 +213,14 @@ async function createHarness(): Promise<Harness> {
         provider: "fake",
         cwd: opts.cwd ?? dataDir,
         ...(opts.parentAgentId ? { parentAgentId: opts.parentAgentId } : {}),
+        ...(opts.modeId ? { modeId: opts.modeId } : {}),
       });
       const endpoint = interop.endpointFor(agent.id);
       return { id: agent.id, token: endpoint!.token };
+    },
+    sessionOf(agentId) {
+      const token = interop.endpointFor(agentId)?.token;
+      return sessions.find((session) => session.cfg.interop?.token === token);
     },
     async connect(token) {
       const client = new Client({ name: "test", version: "0.0.1" });
@@ -255,7 +276,7 @@ describe("POST /mcp 鉴权", () => {
     const ok = await postMcp(h.url, { authorization: `Bearer ${caller.token}` });
     expect(ok.status).toBe(200);
     const body = (await ok.json()) as { result: { tools: Array<{ name: string }> } };
-    expect(body.result.tools.length).toBe(7);
+    expect(body.result.tools.length).toBe(8);
     const get = await fetch(h.url, { headers: { authorization: `Bearer ${caller.token}` } });
     expect(get.status).toBe(405);
   });
@@ -290,14 +311,23 @@ describe("POST /mcp 鉴权", () => {
 });
 
 describe("工具：tools/list 与只读工具", () => {
-  test("tools/list 返回 7 个工具；initialize 带 instructions", async () => {
+  test("tools/list 返回 8 个工具；initialize 带 instructions", async () => {
     const h = await createHarness();
     const caller = await h.createCaller();
     const client = await h.connect(caller.token);
     expect(client.getInstructions()).toBe(INTEROP_INSTRUCTIONS);
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual(
-      ["cancel_agent", "delegate", "list_agents", "list_providers", "read_agent", "send_to_agent", "wait_agent"],
+      [
+        "cancel_agent",
+        "delegate",
+        "list_agents",
+        "list_providers",
+        "read_agent",
+        "report_to_dispatcher",
+        "send_to_agent",
+        "wait_agent",
+      ],
     );
   });
 
@@ -511,6 +541,300 @@ describe("delegate", () => {
     );
     const again = await callTool(client, "delegate", { provider: "fake", prompt: "x" });
     expect(again.isError).toBe(false);
+  });
+
+  test("independent + report=false：不设 parentAgentId、默认不等待，调用方可读取和等待但不能发消息，也不回传", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller({ cwd: h.dataDir });
+    const client = await h.connect(caller.token);
+    const json = (
+      await callTool(client, "delegate", {
+        provider: "fake",
+        prompt: "hold:独立任务",
+        title: "独立",
+        independent: true,
+        report: false,
+      })
+    ).json as { agentId: string; status: string };
+    expect(json.status).toBe("running");
+    const agent = h.manager.getAgent(json.agentId);
+    expect(agent.parentAgentId).toBeUndefined();
+    expect(agent).toMatchObject({ origin: "delegate", title: "独立", cwd: h.dataDir });
+
+    const send = await callTool(client, "send_to_agent", { agentId: json.agentId, message: "x" });
+    expect(send.isError).toBe(true);
+    expect(send.text).toContain("只能向自己委派出的子孙会话");
+
+    h.sessions.at(-1)!.finish("完成");
+    const waited = (await callTool(client, "wait_agent", { agentId: json.agentId })).json as { reply: string };
+    expect(waited.reply).toBe("完成");
+    const read = await callTool(client, "read_agent", { agentId: json.agentId });
+    expect(read.isError).toBe(false);
+    await sleep(50);
+    expect(h.sessionOf(caller.id)!.prompts).toEqual([]);
+  });
+
+  test("independent：wait 为 true 时等回合结束", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const json = (await callTool(client, "delegate", { provider: "fake", prompt: "做点事", independent: true, wait: true }))
+      .json as { status: string; reply: string };
+    expect(json.status).toBe("completed");
+    expect(json.reply).toBe("回答:做点事");
+  });
+
+  test("independent：子会话和独立会话不能再新开独立会话", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const independent = (await callTool(client, "delegate", { provider: "fake", prompt: "x", independent: true, wait: true }))
+      .json as { agentId: string };
+    const child = (await callTool(client, "delegate", { provider: "fake", prompt: "x" })).json as { agentId: string };
+    for (const id of [independent.agentId, child.agentId]) {
+      const nested = await h.connect(h.interop.endpointFor(id)!.token);
+      const result = await callTool(nested, "delegate", { provider: "fake", prompt: "x", independent: true });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("不能再新开独立会话");
+    }
+  });
+
+  test(`independent：全局同时运行的独立会话上限 ${INTEROP_MAX_RUNNING_INDEPENDENT}，不占子会话名额`, async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const other = await h.createCaller();
+    const client = await h.connect(caller.token);
+    for (let i = 0; i < INTEROP_MAX_RUNNING_INDEPENDENT; i += 1) {
+      const result = await callTool(client, "delegate", { provider: "fake", prompt: `hold:${i}`, independent: true });
+      expect(result.isError).toBe(false);
+    }
+    const over = await callTool(await h.connect(other.token), "delegate", {
+      provider: "fake",
+      prompt: "x",
+      independent: true,
+    });
+    expect(over.isError).toBe(true);
+    expect(over.text).toContain("同时运行的独立会话已达上限");
+    const child = await callTool(client, "delegate", { provider: "fake", prompt: "x" });
+    expect(child.isError).toBe(false);
+  });
+});
+
+describe("派单回传", () => {
+  const reportsOf = (h: Harness, agentId: string) =>
+    (h.sessionOf(agentId)?.prompts ?? []).filter((prompt) => prompt.includes("派单回传"));
+
+  test("wait=false：子任务结束后自动发回派单会话，顶层会话也一样", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const json = (
+      await callTool(client, "delegate", { provider: "fake", prompt: "hold:并行", title: "任务A", independent: true })
+    ).json as { agentId: string };
+    const child = h.manager.getAgent(json.agentId);
+    expect(child.parentAgentId).toBeUndefined();
+    expect(child.reportToAgentId).toBe(caller.id);
+
+    h.sessionOf(json.agentId)!.finish("A 做完了");
+    await vi.waitUntil(() => reportsOf(h, caller.id).length === 1, { timeout: 3000 });
+    const report = reportsOf(h, caller.id)[0]!;
+    expect(report).toContain("任务A");
+    expect(report).toContain("completed");
+    expect(report).toContain("A 做完了");
+  });
+
+  test("派单会话忙时排队，空闲后多个结果合并成一条", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const a = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:a", wait: false })).json as {
+      agentId: string;
+    };
+    const b = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:b", wait: false })).json as {
+      agentId: string;
+    };
+    await h.manager.sendPrompt(caller.id, "hold:派单方在忙");
+    h.sessionOf(a.agentId)!.finish("A 结果");
+    h.sessionOf(b.agentId)!.finish("B 结果");
+    await sleep(100);
+    expect(reportsOf(h, caller.id)).toEqual([]);
+
+    h.sessionOf(caller.id)!.finish("忙完");
+    await vi.waitUntil(() => reportsOf(h, caller.id).length > 0, { timeout: 3000 });
+    expect(reportsOf(h, caller.id)).toHaveLength(1);
+    expect(reportsOf(h, caller.id)[0]).toContain("A 结果");
+    expect(reportsOf(h, caller.id)[0]).toContain("B 结果");
+  });
+
+  test("派单方等到了结果就不回传；等待超时后结束的回合仍回传", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const waited = await callTool(client, "delegate", { provider: "fake", prompt: "做点事" });
+    expect(waited.isError).toBe(false);
+
+    const held = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:长", wait: false })).json as {
+      agentId: string;
+    };
+    const finishing = callTool(client, "wait_agent", { agentId: held.agentId });
+    await sleep(30);
+    h.sessionOf(held.agentId)!.finish("等到了");
+    expect(((await finishing).json as { reply: string }).reply).toBe("等到了");
+    await sleep(80);
+    expect(reportsOf(h, caller.id)).toEqual([]);
+
+    const timedOut = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:超时", timeoutSec: 1 }))
+      .json as { agentId: string; status: string };
+    expect(timedOut.status).toBe("running");
+    h.sessionOf(timedOut.agentId)!.finish("超时后完成");
+    await vi.waitUntil(() => reportsOf(h, caller.id).length === 1, { timeout: 3000 });
+    expect(reportsOf(h, caller.id)[0]).toContain("超时后完成");
+  });
+
+  test("只回传派单方发出的回合：用户手动发的不回传，派单方 send_to_agent 的回传，自己中断的不回传", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const { agentId } = (await callTool(client, "delegate", { provider: "fake", prompt: "第一步", independent: true, wait: true }))
+      .json as { agentId: string };
+
+    await h.manager.sendPrompt(agentId, "用户直接问的");
+    await sleep(80);
+    expect(reportsOf(h, caller.id)).toEqual([]);
+
+    const sent = await callTool(client, "send_to_agent", { agentId, message: "第二步", wait: false });
+    expect(sent.isError).toBe(false);
+    await vi.waitUntil(() => reportsOf(h, caller.id).length === 1, { timeout: 3000 });
+    expect(reportsOf(h, caller.id)[0]).toContain("回答:第二步");
+    await vi.waitUntil(() => h.manager.getAgent(caller.id).status === "idle");
+
+    await callTool(client, "send_to_agent", { agentId, message: "hold:第三步", wait: false });
+    await callTool(client, "cancel_agent", { agentId });
+    await sleep(80);
+    expect(reportsOf(h, caller.id)).toHaveLength(1);
+  });
+
+  test("report_to_dispatcher：转发给派单会话；没有派单会话时报错", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const { agentId } = (await callTool(client, "delegate", { provider: "fake", prompt: "x", independent: true, wait: true }))
+      .json as { agentId: string };
+    const child = await h.connect(h.interop.endpointFor(agentId)!.token);
+    const queued = await callTool(child, "report_to_dispatcher", { message: "用户让我转告" });
+    expect(queued.json).toMatchObject({ status: "queued", reportToAgentId: caller.id });
+    await vi.waitUntil(() => reportsOf(h, caller.id).length === 1, { timeout: 3000 });
+    expect(reportsOf(h, caller.id)[0]).toContain("用户让我转告");
+
+    const none = await callTool(client, "report_to_dispatcher", { message: "x" });
+    expect(none.isError).toBe(true);
+    expect(none.text).toContain("没有派单会话");
+  });
+
+  test("派单会话已归档或已删除：放弃回传，不把它唤醒", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const { agentId } = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:x", wait: false })).json as {
+      agentId: string;
+    };
+    await h.manager.updateAgent(caller.id, { archived: true });
+    h.sessionOf(agentId)!.finish("完成");
+    await sleep(80);
+    expect(reportsOf(h, caller.id)).toEqual([]);
+    expect(h.manager.getAgent(caller.id).archived).toBe(true);
+  });
+
+  test.skipIf(!hasGit)("worktree 任务：回传带分支与未提交改动", async () => {
+    const h = await createHarness();
+    const repo = path.join(h.dataDir, "repo");
+    mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, windowsHide: true });
+    git("init", "-q");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init");
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+    const json = (
+      await callTool(client, "delegate", { provider: "fake", prompt: "hold:改代码", worktree: true, wait: false })
+    ).json as { agentId: string; worktree: { path: string; branch: string } };
+    writeFileSync(path.join(json.worktree.path, "new.txt"), "x");
+    h.sessionOf(json.agentId)!.finish("改好了");
+    await vi.waitUntil(() => reportsOf(h, caller.id).length === 1, { timeout: 3000 });
+    const report = reportsOf(h, caller.id)[0]!;
+    expect(report).toContain(`分支：${json.worktree.branch}`);
+    expect(report).toContain("未提交改动");
+    expect(report).toContain("new.txt");
+  });
+});
+
+describe("delegate 的模型与设置", () => {
+  test("list_providers 传 provider 时返回模型与模式目录；未知 provider 报错", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const json = (await callTool(client, "list_providers", { provider: "fake" })).json as {
+      id: string;
+      models: Array<Record<string, unknown>>;
+      modes: Array<Record<string, unknown>>;
+    };
+    expect(json.id).toBe("fake");
+    expect(json.models[0]).toEqual({
+      id: "fast",
+      label: "快",
+      isDefault: true,
+      thinkingOptions: ["high"],
+      defaultThinkingOptionId: "high",
+    });
+    expect(json.modes.find((mode) => mode.id === "danger")).toMatchObject({ dangerous: true });
+    expect((await callTool(client, "list_providers", { provider: "nope" })).isError).toBe(true);
+  });
+
+  test("model / thinkingOptionId 传给新会话", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const { agentId } = (
+      await callTool(client, "delegate", { provider: "fake", prompt: "x", model: "fast", thinkingOptionId: "high" })
+    ).json as { agentId: string };
+    expect(h.manager.getAgent(agentId)).toMatchObject({ model: "fast", thinkingOptionId: "high" });
+    expect(h.sessionOf(agentId)!.cfg).toMatchObject({ model: "fast", thinkingOptionId: "high" });
+  });
+
+  test("权限模式：同 provider 继承，plan 不继承，显式传的优先", async () => {
+    const h = await createHarness();
+    const auto = await h.createCaller({ modeId: "auto" });
+    const autoClient = await h.connect(auto.token);
+    const inherited = (await callTool(autoClient, "delegate", { provider: "fake", prompt: "x" })).json as { agentId: string };
+    expect(h.manager.getAgent(inherited.agentId).modeId).toBe("auto");
+    const explicit = (await callTool(autoClient, "delegate", { provider: "fake", prompt: "x", modeId: "default" })).json as {
+      agentId: string;
+    };
+    expect(h.manager.getAgent(explicit.agentId).modeId).toBe("default");
+
+    const plan = await h.createCaller({ modeId: "plan" });
+    const planChild = (await callTool(await h.connect(plan.token), "delegate", { provider: "fake", prompt: "x" })).json as {
+      agentId: string;
+    };
+    expect(h.manager.getAgent(planChild.agentId).modeId).toBeNull();
+  });
+
+  test("不越权：只有调用方在危险模式时子会话才能用危险模式", async () => {
+    const h = await createHarness();
+    const normal = await h.createCaller({ modeId: "auto" });
+    const denied = await callTool(await h.connect(normal.token), "delegate", {
+      provider: "fake",
+      prompt: "x",
+      modeId: "danger",
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain("不允许委派使用危险模式");
+
+    const danger = await h.createCaller({ modeId: "danger" });
+    const dangerClient = await h.connect(danger.token);
+    const inherited = (await callTool(dangerClient, "delegate", { provider: "fake", prompt: "x" })).json as { agentId: string };
+    expect(h.manager.getAgent(inherited.agentId).modeId).toBe("danger");
+    const explicit = await callTool(dangerClient, "delegate", { provider: "fake", prompt: "x", modeId: "danger" });
+    expect(explicit.isError).toBe(false);
   });
 });
 

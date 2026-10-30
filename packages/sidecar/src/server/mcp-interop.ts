@@ -16,16 +16,19 @@ import { z } from "zod";
 
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentRpcError } from "../agent/errors.js";
-import { addWorktree, removeWorktree } from "../git/worktree.js";
+import { addWorktree, currentBranch, diffStat, removeWorktree } from "../git/worktree.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { redactInteropTokens } from "../utils/redact-interop.js";
+import { InteropReports, isBusy } from "./interop-reports.js";
 import { MCP_PATH, type InteropService } from "./interop-service.js";
 
 /** 委派深度（parent 链长度）上限 */
 export const INTEROP_MAX_DEPTH = 3;
 /** 单个会话同时运行的子会话上限 */
 export const INTEROP_MAX_RUNNING_CHILDREN = 8;
+/** 全局同时运行的独立会话上限（独立会话没有 parent 链，不受上面两项限制） */
+export const INTEROP_MAX_RUNNING_INDEPENDENT = 8;
 export const INTEROP_REPLY_MAX_CHARS = 40_000;
 export const INTEROP_READ_DEFAULT_MESSAGES = 10;
 export const INTEROP_READ_MAX_MESSAGES = 50;
@@ -39,11 +42,14 @@ export const INTEROP_KEEPALIVE_MAX_TIMEOUT_SEC = 3000;
  */
 export const INTEROP_INSTRUCTIONS =
   "用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理：" +
-  "send_to_agent 发消息并等回复，read_agent 读最近消息，list_agents 按标题 / 目录查找，wait_agent 继续等待，delegate 新建子会话。" +
+  "send_to_agent 发消息并等回复，read_agent 读最近消息，list_agents 按标题 / 目录查找，wait_agent 继续等待，delegate 新建子会话（independent 为 true 时新开独立会话），report_to_dispatcher 向派单会话汇报。" +
+  "并行派单时用 delegate 的 wait=false 并结束当前回合，任务完成后结果会作为一条消息自动发回本会话，不必等待或轮询。" +
   "不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。";
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024;
 /** 即使目录里查不到，这些 modeId 也一律视为危险（跳过权限确认类） */
 const DANGEROUS_MODE_PATTERN = /bypass|full-access|dangerous|yolo/i;
+/** plan 模式不能动手开发，子会话不继承 */
+const PLAN_MODE_PATTERN = /plan/i;
 
 export interface McpInteropOptions {
   manager: AgentManager;
@@ -51,6 +57,8 @@ export interface McpInteropOptions {
   interop: InteropService;
   /** AGENTDECK_DATA_DIR：worktree 放在 `<dataDir>/worktrees/` 下 */
   dataDir?: string;
+  /** 派单回传的稳定时间，测试用；缺省 REPORT_SETTLE_MS */
+  reportSettleMs?: number;
   logger?: Logger;
 }
 
@@ -85,8 +93,12 @@ function truncateReply(text: string): string {
     : text;
 }
 
-function isBusy(snapshot: AgentSnapshot): boolean {
-  return snapshot.status === "running" || snapshot.status === "starting" || Boolean(snapshot.activeTurnId);
+function isDangerousMode(snapshot: AgentSnapshot): boolean {
+  const modeId = snapshot.modeId;
+  return (
+    Boolean(modeId) &&
+    (DANGEROUS_MODE_PATTERN.test(modeId!) || snapshot.availableModes?.find((mode) => mode.id === modeId)?.dangerous === true)
+  );
 }
 
 /** 最后一条助手消息：按 messageId 拼接增量 chunk；没有 messageId 时取末尾连续的一段 */
@@ -242,6 +254,7 @@ export class McpInteropEndpoint {
   private readonly interop: InteropService;
   private readonly dataDir: string | undefined;
   private readonly logger: Logger;
+  private readonly reports: InteropReports;
 
   constructor(options: McpInteropOptions) {
     this.manager = options.manager;
@@ -249,6 +262,17 @@ export class McpInteropEndpoint {
     this.interop = options.interop;
     this.dataDir = options.dataDir;
     this.logger = options.logger ?? createSilentLogger();
+    this.reports = new InteropReports({
+      manager: this.manager,
+      describeTurn: (agentId, sinceSeq, reportTo) => this.describeTurn(agentId, sinceSeq, reportTo),
+      logger: this.logger,
+      ...(options.reportSettleMs !== undefined ? { settleMs: options.reportSettleMs } : {}),
+    });
+  }
+
+  /** 须在 manager.shutdown 之前调用：否则关闭会话时的状态变化可能触发回传、把会话重新拉起 */
+  stop(): void {
+    this.reports.stop();
   }
 
   /** 处理 HTTP 请求；路径不是 /mcp 时返回 false（交给上层） */
@@ -333,14 +357,44 @@ export class McpInteropEndpoint {
       server.registerTool(name, { description, inputSchema: shape }, callback as never);
     };
 
-    register("list_providers", "列出 AgentDeck 里可用的 Agent（provider）：id、名称、类型与可用性。", {}, async () => {
-      const providers = await this.registry.listProviderInfo();
-      return textResult(providers.map(summarizeProvider));
-    });
+    register(
+      "list_providers",
+      "列出 AgentDeck 里可用的 Agent（provider）：id、名称、类型与可用性。传 provider 时只返回该 provider，并附带可选的模型、思考强度与权限模式，供 delegate 使用。",
+      { provider: z.string().min(1).optional().describe("provider id；传了才返回模型与模式目录") },
+      async (args) => {
+        const providers = await this.registry.listProviderInfo();
+        if (args.provider === undefined) {
+          return textResult(providers.map(summarizeProvider));
+        }
+        const info = providers.find((entry) => entry.id === args.provider);
+        const client = this.registry.get(args.provider);
+        if (!info || !client) {
+          throw new ToolError(`未知的 provider：${args.provider}`);
+        }
+        const catalog = await client.fetchCatalog({ cwd: this.requireTarget(callerId).cwd }).catch((error: unknown) => {
+          throw new ToolError(`读取 ${args.provider} 的模型目录失败：${error instanceof Error ? error.message : String(error)}`);
+        });
+        return textResult({
+          ...summarizeProvider(info),
+          models: catalog.models.map((model) => ({
+            id: model.id,
+            label: model.label,
+            ...(model.isDefault ? { isDefault: true } : {}),
+            ...(model.thinkingOptions ? { thinkingOptions: model.thinkingOptions.map((option) => option.id) } : {}),
+            ...(model.defaultThinkingOptionId ? { defaultThinkingOptionId: model.defaultThinkingOptionId } : {}),
+          })),
+          modes: catalog.modes.map((mode) => ({
+            id: mode.id,
+            label: mode.label,
+            ...(mode.dangerous ? { dangerous: true } : {}),
+          })),
+        });
+      },
+    );
 
     register(
       "list_agents",
-      "列出 AgentDeck 里的会话：id、标题（未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准）、provider、工作目录、状态、模型、父会话 id、是否被用户标记为允许被其它会话调用（interopTarget）、当前会话能否对其 send_to_agent / cancel_agent（callable）、最近更新时间。",
+      "列出 AgentDeck 里的会话：id、标题（未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准）、provider、工作目录、状态、模型、父会话 id、派单会话 id、是否被用户标记为允许被其它会话调用（interopTarget）、当前会话能否对其 send_to_agent / cancel_agent（callable）、最近更新时间。",
       {
         includeArchived: z.boolean().optional().describe("是否包含已归档会话，默认 false"),
         callableOnly: z
@@ -360,6 +414,7 @@ export class McpInteropEndpoint {
             status: agent.status,
             model: agent.model ?? null,
             parentAgentId: agent.parentAgentId ?? null,
+            reportToAgentId: agent.reportToAgentId ?? null,
             interopTarget: agent.interopTarget === true,
             callable: agent.id !== callerId && this.canOperate(callerId, agent),
             updatedAt: new Date(agent.updatedAt).toISOString(),
@@ -393,16 +448,32 @@ export class McpInteropEndpoint {
     register(
       "delegate",
       "新建一个子会话（由指定 provider 的 Agent 执行）并发送任务。wait 为 true（默认）时等回合结束并返回最后一条助手消息，超时返回 status=running，之后可用 wait_agent 继续等待。" +
-        " modeId 不能是跳过权限确认的危险模式；子会话的权限请求由用户在 AgentDeck 界面审批。",
+        " 并行派单时用 wait=false 并结束当前回合：任务结束后结果会作为一条消息自动发回本会话。" +
+        " worktree=true 时任务要交代对方提交改动；合并到主线和清理（git merge、git worktree remove、git branch -d）由当前会话用 git 完成。" +
+        " 不传 modeId 且 provider 相同时继承当前会话的权限模式；只有当前会话本身在危险模式时才能指定危险模式。子会话的权限请求由用户在 AgentDeck 界面审批。" +
+        " 可选的模型、思考强度与模式见 list_providers 的 provider 参数。",
       {
         provider: z.string().min(1).describe("provider id，见 list_providers，如 claude / codex"),
         prompt: z.string().min(1).describe("交给子会话的任务描述"),
         cwd: z.string().optional().describe("工作目录，默认与当前会话相同"),
         model: z.string().optional(),
-        modeId: z.string().optional().describe("权限模式；缺省用 provider 默认模式"),
+        modeId: z.string().optional().describe("权限模式；缺省时同 provider 继承当前会话的模式，否则用 provider 默认模式"),
+        thinkingOptionId: z.string().optional().describe("思考强度；缺省跟随 CLI 自身设置"),
         title: z.string().max(200).optional(),
         worktree: z.boolean().optional().describe("为 true 时在独立 git worktree（新分支）中工作，要求 cwd 在 git 仓库内"),
-        wait: z.boolean().optional().describe("是否等待回合结束，默认 true"),
+        independent: z
+          .boolean()
+          .optional()
+          .describe(
+            "为 true 时新开独立会话而不是子会话：在侧边栏作为顶层会话显示。子会话和独立会话自身不能再新开独立会话",
+          ),
+        report: z
+          .boolean()
+          .optional()
+          .describe(
+            "任务结束后是否把结果自动发回当前会话，默认 true。为 false 时不回传；若同时 independent=true，当前会话之后也不能 send_to_agent / cancel_agent（除非用户允许）",
+          ),
+        wait: z.boolean().optional().describe("是否等待回合结束，默认 true；independent 为 true 时默认 false"),
         timeoutSec: z
           .number()
           .positive()
@@ -412,6 +483,25 @@ export class McpInteropEndpoint {
           ),
       },
       (args, signal) => this.delegate(callerId, args, signal),
+    );
+
+    register(
+      "report_to_dispatcher",
+      "向派单给当前会话的会话汇报。派单任务的回合结束时结果已自动回传，不必调用；只用于用户在当前会话里直接交代的回合，或要把额外信息告诉派单会话时。对方正忙时排队，立即返回。",
+      { message: z.string().min(1) },
+      async (args) => {
+        const self = this.requireTarget(callerId);
+        if (!self.reportToAgentId) {
+          throw new ToolError("当前会话没有派单会话");
+        }
+        this.requireTarget(self.reportToAgentId);
+        this.reports.enqueue(
+          self.reportToAgentId,
+          callerId,
+          `【AgentDeck 派单回传】以下内容由系统转发，不是用户消息。\n会话「${self.title ?? self.preview ?? callerId}」（${callerId}）汇报：\n${truncateReply(args.message)}`,
+        );
+        return textResult({ status: "queued", reportToAgentId: self.reportToAgentId });
+      },
     );
 
     register(
@@ -451,7 +541,7 @@ export class McpInteropEndpoint {
     }
   }
 
-  /** 祖先会话 id 链（不含自己），带环保护 */
+  /** 祖先会话 id 链（不含自己，上级取 parentAgentId ?? reportToAgentId），带环保护 */
   private ancestorsOf(agentId: string): string[] {
     const chain: string[] = [];
     const seen = new Set<string>([agentId]);
@@ -459,7 +549,8 @@ export class McpInteropEndpoint {
     for (;;) {
       let parent: string | undefined;
       try {
-        parent = this.manager.getAgent(current).parentAgentId;
+        const snapshot = this.manager.getAgent(current);
+        parent = snapshot.parentAgentId ?? snapshot.reportToAgentId;
       } catch {
         break;
       }
@@ -478,8 +569,9 @@ export class McpInteropEndpoint {
     return target.interopTarget === true || this.ancestorsOf(target.id).includes(callerId);
   }
 
-  private async assertModeAllowed(provider: string, cwd: string, modeId: string): Promise<void> {
-    if (DANGEROUS_MODE_PATTERN.test(modeId)) {
+  /** callerDangerous = 调用方当前已在危险模式：子会话不算越权，可以使用危险模式 */
+  private async assertModeAllowed(provider: string, cwd: string, modeId: string, callerDangerous: boolean): Promise<void> {
+    if (!callerDangerous && DANGEROUS_MODE_PATTERN.test(modeId)) {
       throw new ToolError(`不允许委派使用危险模式：${modeId}`);
     }
     const client = this.registry.get(provider);
@@ -488,7 +580,7 @@ export class McpInteropEndpoint {
     }
     const catalog = await client.fetchCatalog({ cwd }).catch(() => null);
     const mode = catalog?.modes.find((entry) => entry.id === modeId);
-    if (mode?.dangerous) {
+    if (!callerDangerous && mode?.dangerous) {
       throw new ToolError(`不允许委派使用危险模式：${modeId}`);
     }
     if (catalog && catalog.modes.length > 0 && !mode) {
@@ -506,28 +598,49 @@ export class McpInteropEndpoint {
       cwd?: string | undefined;
       model?: string | undefined;
       modeId?: string | undefined;
+      thinkingOptionId?: string | undefined;
       title?: string | undefined;
       worktree?: boolean | undefined;
+      independent?: boolean | undefined;
+      report?: boolean | undefined;
       wait?: boolean | undefined;
       timeoutSec?: number | undefined;
     },
     signal: AbortSignal | undefined,
   ): Promise<ToolResult> {
     const caller = this.requireTarget(callerId);
-    const depth = this.ancestorsOf(callerId).length + 1;
-    if (depth > INTEROP_MAX_DEPTH) {
-      throw new ToolError(`委派深度已达上限（${INTEROP_MAX_DEPTH} 层），不能继续向下委派`);
-    }
-    const running = this.manager
-      .listAgents()
-      .filter((agent) => agent.parentAgentId === callerId && isBusy(agent)).length;
-    if (running >= INTEROP_MAX_RUNNING_CHILDREN) {
-      throw new ToolError(`同时运行的子会话已达上限（${INTEROP_MAX_RUNNING_CHILDREN} 个），请等待部分完成后再委派`);
+    const independent = args.independent === true;
+    if (independent) {
+      if (caller.origin === "delegate") {
+        throw new ToolError("子会话和独立会话不能再新开独立会话");
+      }
+      const running = this.manager
+        .listAgents()
+        .filter((agent) => agent.origin === "delegate" && !agent.parentAgentId && isBusy(agent)).length;
+      if (running >= INTEROP_MAX_RUNNING_INDEPENDENT) {
+        throw new ToolError(`同时运行的独立会话已达上限（${INTEROP_MAX_RUNNING_INDEPENDENT} 个），请等待部分完成后再新开`);
+      }
+    } else {
+      const depth = this.ancestorsOf(callerId).length + 1;
+      if (depth > INTEROP_MAX_DEPTH) {
+        throw new ToolError(`委派深度已达上限（${INTEROP_MAX_DEPTH} 层），不能继续向下委派`);
+      }
+      const running = this.manager
+        .listAgents()
+        .filter((agent) => agent.parentAgentId === callerId && isBusy(agent)).length;
+      if (running >= INTEROP_MAX_RUNNING_CHILDREN) {
+        throw new ToolError(`同时运行的子会话已达上限（${INTEROP_MAX_RUNNING_CHILDREN} 个），请等待部分完成后再委派`);
+      }
     }
 
     const cwd = args.cwd ? path.resolve(caller.cwd, args.cwd) : caller.cwd;
-    if (args.modeId !== undefined) {
-      await this.assertModeAllowed(args.provider, cwd, args.modeId);
+    const inheritedMode =
+      args.provider === caller.provider && caller.modeId && !PLAN_MODE_PATTERN.test(caller.modeId)
+        ? caller.modeId
+        : undefined;
+    const modeId = args.modeId ?? inheritedMode;
+    if (modeId !== undefined) {
+      await this.assertModeAllowed(args.provider, cwd, modeId, isDangerousMode(caller));
     }
     const isDir = await stat(cwd).then(
       (info) => info.isDirectory(),
@@ -560,10 +673,12 @@ export class McpInteropEndpoint {
         id,
         provider: args.provider,
         cwd: worktree?.path ?? cwd,
-        parentAgentId: callerId,
+        ...(independent ? {} : { parentAgentId: callerId }),
+        ...(args.report !== false ? { reportToAgentId: callerId } : {}),
         origin: "delegate",
         ...(args.model !== undefined ? { model: args.model } : {}),
-        ...(args.modeId !== undefined ? { modeId: args.modeId } : {}),
+        ...(modeId !== undefined ? { modeId } : {}),
+        ...(args.thinkingOptionId !== undefined ? { thinkingOptionId: args.thinkingOptionId } : {}),
         ...(args.title !== undefined ? { title: args.title } : {}),
       });
     } catch (error) {
@@ -584,10 +699,14 @@ export class McpInteropEndpoint {
       await this.manager.sendPrompt(id, args.prompt);
     } catch (error) {
       throw new ToolError(
-        `子会话 ${id} 已创建，但发送任务失败：${error instanceof Error ? error.message : String(error)}`,
+        `${independent ? "独立会话" : "子会话"} ${id} 已创建，但发送任务失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return this.finish(id, 0, args.wait !== false, clampTimeoutSec(args.timeoutSec, caller), signal, worktree);
+    if (args.report !== false) {
+      this.reports.expect(id, callerId, 0);
+    }
+    const wait = args.wait ?? !independent;
+    return this.finish(callerId, id, 0, wait, clampTimeoutSec(args.timeoutSec, caller), signal, worktree);
   }
 
   private async sendToAgent(
@@ -614,7 +733,11 @@ export class McpInteropEndpoint {
       }
       throw error;
     }
+    if (target.reportToAgentId === callerId) {
+      this.reports.expect(target.id, callerId, sinceSeq);
+    }
     return this.finish(
+      callerId,
       target.id,
       sinceSeq,
       args.wait !== false,
@@ -635,7 +758,14 @@ export class McpInteropEndpoint {
     if (this.ancestorsOf(callerId).includes(target.id)) {
       throw new ToolError("不能等待自己的上级会话（会互相等待）");
     }
-    return this.finish(target.id, 0, true, clampTimeoutSec(args.timeoutSec, this.callerSnapshot(callerId)), signal);
+    return this.finish(
+      callerId,
+      target.id,
+      0,
+      true,
+      clampTimeoutSec(args.timeoutSec, this.callerSnapshot(callerId)),
+      signal,
+    );
   }
 
   /** 调用方快照（取等待上限用）；调用方已被删除时为 undefined */
@@ -655,12 +785,14 @@ export class McpInteropEndpoint {
     if (!this.canOperate(callerId, target)) {
       throw new ToolError("只能中断自己委派出的子孙会话，或被用户标记为「允许被其它会话调用」的会话");
     }
+    this.reports.settle(target.id, callerId);
     await this.manager.cancel(target.id);
     return textResult({ agentId: target.id, status: this.manager.getAgent(target.id).status });
   }
 
   /** 按需等待回合结束，组装 `{ agentId, status, reply?, error?, note? }` */
   private async finish(
+    callerId: string,
     agentId: string,
     sinceSeq: number,
     wait: boolean,
@@ -683,17 +815,57 @@ export class McpInteropEndpoint {
       }
       return textResult(result);
     }
+    // 派单方已拿到结果，不再回传；后台任务未结束时保留，之后的结果仍要发回
+    if (wait && snapshot.reportToAgentId === callerId && snapshot.backgroundActive !== true) {
+      this.reports.settle(agentId, callerId);
+    }
+    return textResult({ ...result, ...(await this.turnResult(agentId, sinceSeq)) });
+  }
+
+  private async turnResult(
+    agentId: string,
+    sinceSeq: number,
+  ): Promise<{ status: string; error?: string; reply?: string }> {
     const { entries } = await this.manager.timeline(agentId, sinceSeq);
     const outcome = lastOutcome(entries);
-    result.status = outcome?.status ?? "completed";
-    if (outcome?.error) {
-      result.error = outcome.error;
-    }
     const reply = lastAssistantText(entries);
-    if (reply !== undefined) {
-      result.reply = truncateReply(reply);
+    return {
+      status: outcome?.status ?? "completed",
+      ...(outcome?.error ? { error: outcome.error } : {}),
+      ...(reply !== undefined ? { reply: truncateReply(reply) } : {}),
+    };
+  }
+
+  /** 派单回传的正文；cwd 与接收方不同（通常是 worktree）时附分支与未提交改动，便于对方合并 */
+  private async describeTurn(agentId: string, sinceSeq: number, reportTo: string): Promise<string> {
+    const snapshot = this.manager.getAgent(agentId);
+    const result = await this.turnResult(agentId, sinceSeq);
+    const lines = [
+      "【AgentDeck 派单回传】以下内容由系统自动发送，不是用户消息。",
+      `会话「${snapshot.title ?? snapshot.preview ?? agentId}」（${agentId}）本回合已结束，状态：${result.status}`,
+    ];
+    if (result.error) {
+      lines.push(`错误：${result.error}`);
     }
-    return textResult(result);
+    if (snapshot.cwd !== this.callerSnapshot(reportTo)?.cwd) {
+      lines.push(`工作目录：${snapshot.cwd}`);
+      lines.push(...(await this.describeWorkingTree(snapshot.cwd)));
+    }
+    lines.push(result.reply !== undefined ? `回复：\n${result.reply}` : "（没有回复内容）");
+    return lines.join("\n");
+  }
+
+  private async describeWorkingTree(cwd: string): Promise<string[]> {
+    try {
+      const branch = await currentBranch({ cwd });
+      const changes = await diffStat({ cwd });
+      return [
+        ...(branch ? [`分支：${branch}`] : []),
+        changes ? `未提交改动（合并前需先提交）：\n${changes}` : "没有未提交改动",
+      ];
+    } catch {
+      return []; // 不是 git 仓库
+    }
   }
 }
 

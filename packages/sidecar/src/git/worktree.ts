@@ -69,6 +69,14 @@ export async function removeWorktree(options: RemoveWorktreeOptions): Promise<vo
   }
 }
 
+/** 目录当前分支名；不是仓库或处于 detached HEAD 时返回 null */
+export async function currentBranch(options: { cwd: string }): Promise<string | null> {
+  const gitPath = await requireGit();
+  const result = await runGit(gitPath, ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: options.cwd });
+  const branch = result.stdout.toString("utf8").trim();
+  return result.code === 0 && branch ? branch : null;
+}
+
 /**
  * 目录相对 HEAD 的改动摘要：`diff --stat HEAD` 加未跟踪文件清单。
  * 没有改动返回空字符串；不是仓库时抛出。

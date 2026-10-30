@@ -517,6 +517,9 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   if (typeof value.parentAgentId !== "string") {
     delete meta.parentAgentId;
   }
+  if (typeof value.reportToAgentId !== "string") {
+    delete meta.reportToAgentId;
+  }
   if (typeof value.groupId !== "string") {
     delete meta.groupId;
   }

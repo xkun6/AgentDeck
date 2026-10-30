@@ -505,9 +505,10 @@ export function DetailRoute() {
     </>
   ) : undefined;
   // 由其它会话委派创建的子会话：顶部显示「由 <父会话> 委派」链接（design.md 4.26）
-  const sub = snapshot?.parentAgentId ? (
+  const delegatedFrom = snapshot?.parentAgentId ?? snapshot?.reportToAgentId;
+  const sub = delegatedFrom ? (
     <>
-      <DelegatedFromLink parentAgentId={snapshot.parentAgentId} />
+      <DelegatedFromLink parentAgentId={delegatedFrom} />
       {subText}
     </>
   ) : (
