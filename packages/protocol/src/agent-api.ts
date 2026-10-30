@@ -497,6 +497,11 @@ export interface AgentSnapshot {
   rateLimits?: AgentRateLimits;
   lastError?: string | null;
   /**
+   * 最近一个非保活回合的结局（design.md 4.26），随 meta 持久化；回合开始时为 running，
+   * 因此 dormant / closed 且仍为 running = 回合被打断。旧会话缺省
+   */
+  lastTurnOutcome?: "running" | "completed" | "failed" | "canceled";
+  /**
    * 本会话有运行中的 provider 子代理或后台任务（design.md 4.11 / 4.15）；由 sidecar 维护，不持久化（缺省 = false）。
    * 前端显示状态时 `status === "running" || backgroundActive` 视为「进行中」；不影响发送与忙碌判断。
    */
@@ -517,9 +522,9 @@ export interface AgentSnapshot {
    * "judge" = 目标循环的隐藏评判会话（前端侧栏与历史页默认不显示）；"delegate" / "group" / "kanban" 见 4.26。
    */
   origin?: AgentOrigin;
-  /** 父会话（由其它会话经 agentdeck MCP `delegate` 委派创建，design.md 4.26） */
+  /** 派单归属（由其它会话经 agentdeck MCP `delegate` 创建，design.md 4.26） */
   parentAgentId?: string;
-  /** 派单回传的接收会话（design.md 4.26），与决定侧边栏层级的 parentAgentId 相互独立 */
+  /** 派单回传的接收会话（design.md 4.26） */
   reportToAgentId?: string;
   /** 并行协作组 id（design.md 4.27） */
   groupId?: string;

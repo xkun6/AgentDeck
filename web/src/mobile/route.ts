@@ -1,8 +1,9 @@
-// 手机端的 hash 路由（Android 返回键走 history）：#/sessions  #/s/<agentId>  #/s/<agentId>/sub/<subagentId>  #/new  #/settings  #/hosts  #/pair
+// 手机端的 hash 路由（Android 返回键走 history）：#/sessions  #/dispatch  #/dispatch/<主会话 id>  #/s/<agentId>  #/s/<agentId>/sub/<subagentId>  #/new  #/settings  #/hosts  #/pair
 export type MobileRoute =
   | { name: "hosts" }
   | { name: "pair" }
   | { name: "sessions" }
+  | { name: "dispatch"; agentId?: string }
   | { name: "session"; agentId: string; subagentId?: string }
   | { name: "new" }
   | { name: "settings" };
@@ -25,7 +26,17 @@ export function parseRoute(hash: string): MobileRoute {
       return { name: "sessions" };
     }
   }
+  const dispatch = /^#\/dispatch\/(.+)$/.exec(hash);
+  if (dispatch) {
+    try {
+      return { name: "dispatch", agentId: decodeURIComponent(dispatch[1]!) };
+    } catch {
+      return { name: "dispatch" };
+    }
+  }
   switch (hash) {
+    case "#/dispatch":
+      return { name: "dispatch" };
     case "#/hosts":
       return { name: "hosts" };
     case "#/pair":
@@ -45,6 +56,8 @@ export function routeHash(route: MobileRoute): string {
       return route.subagentId === undefined
         ? `#/s/${encodeURIComponent(route.agentId)}`
         : `#/s/${encodeURIComponent(route.agentId)}/sub/${encodeURIComponent(route.subagentId)}`;
+    case "dispatch":
+      return route.agentId === undefined ? "#/dispatch" : `#/dispatch/${encodeURIComponent(route.agentId)}`;
     case "sessions":
       return "#/sessions";
     default:
@@ -53,6 +66,7 @@ export function routeHash(route: MobileRoute): string {
 }
 
 /** 底部导航高亮哪一项（详情页 / 电脑列表 / 配对页不显示导航） */
-export function navTabOf(route: MobileRoute): "sessions" | "new" | "settings" | null {
+export function navTabOf(route: MobileRoute): "sessions" | "dispatch" | "new" | "settings" | null {
+  if (route.name === "dispatch") return route.agentId === undefined ? "dispatch" : null;
   return route.name === "sessions" || route.name === "new" || route.name === "settings" ? route.name : null;
 }

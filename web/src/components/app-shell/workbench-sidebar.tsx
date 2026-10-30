@@ -21,6 +21,7 @@ import {
   FolderOpen,
   History,
   MessagesSquare,
+  Network,
   PanelLeftClose,
   Plus,
   Search,
@@ -36,6 +37,8 @@ import { agentListAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { groupListAtom } from "@/stores/groups";
 import { appSidebarVisibleAtom, sidebarHiddenEntriesAtom } from "@/stores/ui";
 import { GROUP_STATUS_LABELS } from "@/lib/group-display";
+import { dispatchBadgeOf, dispatchSummaryText } from "@/lib/dispatch";
+import { useDispatchGroups } from "@/hooks/use-dispatch-groups";
 import {
   buildSessionTree,
   flattenSessionTree,
@@ -98,6 +101,7 @@ interface NavEntry {
 export const SIDEBAR_NAV_ENTRIES: readonly NavEntry[] = [
   { label: "对话历史", path: "/history", icon: History },
   { label: "工作空间", path: "/projects", icon: Folder },
+  { label: "派单", path: "/dispatch", icon: Network },
   { label: "终端", path: "/console", icon: TerminalSquare },
   { label: "用量统计", path: "/usage", icon: BarChart3 },
   { label: "自动化", path: "/automation", icon: CalendarClock },
@@ -109,12 +113,10 @@ interface SessionRowProps {
   active: boolean;
   time: string;
   tooltip: string;
-  /** 子会话缩进层级（design.md 4.26），0 = 顶层 */
+  /** 协作组成员的缩进层级（design.md 4.27），0 = 顶层 */
   depth?: number;
-  /** 有子会话时显示折叠按钮 */
-  childCount?: number;
-  collapsed?: boolean;
-  onToggle?: () => void;
+  /** 主会话的派单进度（design.md 4.26），点击进入派单详情 */
+  dispatch?: { text: string; attention: boolean; tooltip: string; onClick: () => void };
   onClick: () => void;
   onDelete: () => void;
   menuItems: () => ContextMenuEntry[];
@@ -127,9 +129,7 @@ function SessionRow({
   time,
   tooltip,
   depth = 0,
-  childCount = 0,
-  collapsed = false,
-  onToggle,
+  dispatch,
   onClick,
   onDelete,
   menuItems,
@@ -152,25 +152,24 @@ function SessionRow({
         }}
         title={tooltip}
       >
-        {childCount > 0 ? (
+        <span className={s.rowLead}>{tone ? <StatusDot tone={tone} size="xs" /> : null}</span>
+        <span className={s.rowTitle}>{title}</span>
+        {dispatch ? (
           <button
             type="button"
-            className={s.rowToggle}
-            aria-label={collapsed ? `展开子会话：${title}` : `折叠子会话：${title}`}
-            aria-expanded={!collapsed}
+            className={s.rowDispatch}
+            data-attention={dispatch.attention ? "true" : undefined}
+            aria-label={`查看派单进度：${title}`}
+            title={dispatch.tooltip}
             onClick={(event) => {
               event.stopPropagation();
-              onToggle?.();
+              dispatch.onClick();
             }}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            {collapsed ? <ChevronRight size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+            {dispatch.text}
           </button>
-        ) : (
-          <span className={s.rowLead}>{tone ? <StatusDot tone={tone} size="xs" /> : null}</span>
-        )}
-        <span className={s.rowTitle}>{title}</span>
-        {childCount > 0 && collapsed ? <span className={s.rowCount}>+{childCount}</span> : null}
+        ) : null}
         <span className={s.rowTrail}>
           <span className={s.rowTime}>{time}</span>
           <button
@@ -406,7 +405,7 @@ export function WorkbenchSidebar() {
 
   // 会话按项目分组（design.md 4.17）：agent.list 已按 updatedAt 倒序；不显示已归档的，置顶的排在最前。
   // 运行中 = sidecar 报 running/starting 或本地仍在流式输出，项目内运行中的块排在前面。
-  // 子会话（design.md 4.26）缩进显示在父会话下，随父会话归入项目，整块按「自身或任一子孙在运行」算运行中。
+  // 派单出去的子会话不在这里显示（design.md 4.26），只在派单页。
   const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(() => new Set());
   const toggleCollapsed = useCallback((id: string) => {
     setCollapsedIds((previous) => {
@@ -457,10 +456,7 @@ export function WorkbenchSidebar() {
         : { kind: "rows", rows };
       const lead = block.roots[0].agent;
       const path = normalizeWorkspacePath(group?.cwd || lead.cwd || sessionWorkspaceMap[lead.id]);
-      const projectOf = (cwd: string) => (projectByPath.has(cwd) ? cwd : worktreeProjects.get(worktreePathKey(cwd)));
-      // 派单出去的会话：worktree 已清理、查不到归属时跟随派单会话的项目（design.md 4.26）
-      const dispatcher = lead.reportToAgentId ? agents.find((agent) => agent.id === lead.reportToAgentId) : undefined;
-      const projectPath = projectOf(path) ?? (dispatcher ? projectOf(normalizeWorkspacePath(dispatcher.cwd)) : undefined);
+      const projectPath = projectByPath.has(path) ? path : worktreeProjects.get(worktreePathKey(path));
       const bucket = bucketOf(projectPath ?? OTHER_BUCKET_KEY);
       (running ? bucket.running : bucket.idle).push(item);
     }
@@ -585,11 +581,28 @@ export function WorkbenchSidebar() {
 
   const goSession = sessionActions.openSession;
 
+  const dispatchGroups = useDispatchGroups();
+  const dispatchGroupByMaster = useMemo(
+    () => new Map(dispatchGroups.flatMap((group) => (group.master ? [[group.master.agent.id, group] as const] : []))),
+    [dispatchGroups],
+  );
+  const dispatchBadge = useMemo(() => {
+    const badge = dispatchBadgeOf(dispatchGroups);
+    return badge
+      ? {
+          count: badge.count,
+          attention: badge.attention > 0,
+          tooltip: `${badge.working} 工作中，${badge.attention} 需要处理`,
+        }
+      : null;
+  }, [dispatchGroups]);
+
   const activeSessionId = location.pathname.startsWith("/tasks/")
     ? decodeURIComponent(location.pathname.slice("/tasks/".length))
     : null;
 
-  const renderRow = ({ agent, depth, childCount, collapsed }: SessionTreeRow<AgentSnapshot>) => {
+  const renderRow = ({ agent, depth }: SessionTreeRow<AgentSnapshot>) => {
+    const dispatchGroup = dispatchGroupByMaster.get(agent.id);
     const running = isAgentRunning(agent, runtimeBySession[agent.id]);
     const title = agentDisplayTitle(agent, runtimeBySession[agent.id], providers);
     const provider = agentProviderLabel(agent.provider, providers);
@@ -604,9 +617,16 @@ export function WorkbenchSidebar() {
         time={formatAgentTime(agent.updatedAt, now)}
         tooltip={`${title}\n${provider}，${status}\n${projectName}：${agent.cwd}`}
         depth={depth}
-        childCount={childCount}
-        collapsed={collapsed}
-        onToggle={() => toggleCollapsed(agent.id)}
+        dispatch={
+          dispatchGroup
+            ? {
+                text: `${dispatchGroup.summary.done}/${dispatchGroup.summary.total}`,
+                attention: dispatchGroup.summary.attention > 0,
+                tooltip: `派单：${dispatchSummaryText(dispatchGroup.summary)}`,
+                onClick: () => navigate(`/dispatch/${encodeURIComponent(agent.id)}`),
+              }
+            : undefined
+        }
         onClick={() => goSession(agent)}
         onDelete={() => void deleteSession(agent, title)}
         menuItems={() => sessionActions.buildMenu(agent, title)}
@@ -743,6 +763,15 @@ export function WorkbenchSidebar() {
                 <Icon size={16} />
               </span>
               <span className={s.itemLabel}>{entry.label}</span>
+              {entry.path === "/dispatch" && dispatchBadge ? (
+                <span
+                  className={s.itemBadge}
+                  data-attention={dispatchBadge.attention ? "true" : undefined}
+                  title={dispatchBadge.tooltip}
+                >
+                  {dispatchBadge.count}
+                </span>
+              ) : null}
             </button>
           );
         })}

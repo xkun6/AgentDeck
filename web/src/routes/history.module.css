@@ -555,3 +555,17 @@
   background: var(--h-highlight-soft);
   color: var(--h-text);
 }
+
+.titleStack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.titleDispatcher {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--h-text-3);
+  font-size: 12px;
+}

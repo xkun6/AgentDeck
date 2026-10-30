@@ -111,6 +111,8 @@ interface GooseComposerProps {
   loadingPlaceholder?: string;
   onDraftChange?: (text: string) => void;
   initialWorkspacePath?: string;
+  /** false：只显示 initialWorkspacePath，不登记为项目、不改当前工作区（子会话，design.md 4.26） */
+  adoptWorkspace?: boolean;
   /** 工具栏里工作区按钮之后的额外控件（AgentDeck 的 Agent / 模型 / 模式选择器）；
    * 与左侧工具以细分隔线隔开，窄宽度时整体换到第二行。 */
   toolbarExtra?: ReactNode;
@@ -158,6 +160,7 @@ export function GooseComposer({
   submitShortcut,
   onDraftChange,
   initialWorkspacePath = "",
+  adoptWorkspace = true,
   toolbarExtra,
   toolbarTrailing,
   onWorkspaceChange,
@@ -274,10 +277,11 @@ export function GooseComposer({
     const nextPath = normalizeWorkspacePath(initialWorkspacePath);
     if (!nextPath) return;
     setWorkspacePath(nextPath);
+    if (!adoptWorkspace) return;
     writeWorkspacePath(nextPath);
     // 会话页传入的是会话自身的 cwd：只登记、不刷新项目活动时间，否则一打开会话项目就跳到侧栏最前
     ensureWorkspaceProject(nextPath);
-  }, [initialWorkspacePath]);
+  }, [adoptWorkspace, initialWorkspacePath]);
 
   useEffect(() => {
     onDraftChange?.(value);

@@ -4,7 +4,7 @@ import type { AttentionNotice } from "@agentdeck/protocol";
 import { attentionTarget, decideAttention } from "./attention";
 import { cwdBaseName, cwdKey, recentCwdOptions } from "./cwd-options";
 import { detectDeviceName } from "./platform";
-import { navTabOf, parseRoute, routeHash } from "./route";
+import { navTabOf, parseRoute, routeHash, type MobileRoute } from "./route";
 import { archivedCount, visibleSessions } from "./session-filter";
 import { agent } from "./test-fixtures";
 
@@ -39,6 +39,60 @@ describe("route", () => {
     expect(navTabOf({ name: "sessions" })).toBe("sessions");
     expect(navTabOf({ name: "session", agentId: "x" })).toBeNull();
     expect(navTabOf({ name: "pair" })).toBeNull();
+  });
+});
+
+describe("派单路由", () => {
+  it("总览与详情可往返；总览有底部导航，详情没有；坏编码退回总览", () => {
+    expect(parseRoute(routeHash({ name: "dispatch" }))).toEqual({ name: "dispatch" });
+    const detail: MobileRoute = { name: "dispatch", agentId: "a/b c" };
+    expect(routeHash(detail)).toBe("#/dispatch/a%2Fb%20c");
+    expect(parseRoute(routeHash(detail))).toEqual(detail);
+    expect(parseRoute("#/dispatch/%E0%A4%A")).toEqual({ name: "dispatch" });
+    expect(navTabOf({ name: "dispatch" })).toBe("dispatch");
+    expect(navTabOf(detail)).toBeNull();
+  });
+});
+
+describe("visibleSessions：子会话（4.26）", () => {
+  const list = [
+    agent("master"),
+    agent("child", { parentAgentId: "master" }),
+    agent("legacy", { reportToAgentId: "master" }),
+    agent("byOrigin", { origin: "delegate" }),
+    agent("oldChild", { parentAgentId: "master", archived: true }),
+    agent("gone", { archived: true }),
+    agent("left", { parentAgentId: "gone" }),
+  ];
+
+  it("默认不显示任何子会话", () => {
+    expect(visibleSessions(list, false).map((x) => x.id)).toEqual(["master"]);
+  });
+
+  it("显示归档时只多出已归档的子会话和已归档主会话名下的子会话，计数一致", () => {
+    expect(visibleSessions(list, true).map((x) => x.id)).toEqual(["master", "oldChild", "gone", "left"]);
+    expect(archivedCount(list)).toBe(3);
+  });
+
+  it("已归档主会话名下多层的子会话都能从「显示已归档」进入；中间层归档但主会话正常的不进（在派单页）", () => {
+    const deep = [
+      agent("m", { archived: true }),
+      agent("a", { parentAgentId: "m" }),
+      agent("b", { parentAgentId: "a" }),
+      agent("live"),
+      agent("mid", { parentAgentId: "live", archived: true }),
+      agent("leaf", { parentAgentId: "mid" }),
+    ];
+    expect(visibleSessions(deep, true).map((x) => x.id)).toEqual(["m", "a", "b", "live", "mid"]);
+    expect(archivedCount(deep)).toBe(4);
+  });
+
+  it("目录候选不含子会话的目录", () => {
+    const options = recentCwdOptions([
+      agent("m", { cwd: "J:/repo" }),
+      agent("w", { cwd: "J:/data/worktrees/delegate-1234abcd", parentAgentId: "m" }),
+    ]);
+    expect(options.map((option) => option.cwd)).toEqual(["J:/repo"]);
   });
 });
 

@@ -384,4 +384,31 @@ describe("侧栏快捷入口开关", () => {
     fireEvent.click(screen.getByRole("button", { name: "终端", pressed: false }));
     expect(nav.getByRole("button", { name: "终端" })).toBeTruthy();
   });
+
+  it("「派单」入口同样可关，关掉后主会话行的进度徽标还在", () => {
+    const store = createStore();
+    store.set(replaceAgentSnapshotsAtom, [
+      agent("master", { title: "主" }),
+      agent("child", { title: "子", parentAgentId: "master", status: "running" }),
+    ]);
+    render(
+      <Provider store={store}>
+        <ConfirmProvider>
+          <MemoryRouter>
+            <WorkbenchSidebar />
+            <GeneralSection />
+          </MemoryRouter>
+        </ConfirmProvider>
+      </Provider>,
+    );
+    const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+    expect(nav.getByRole("button", { name: /^派单/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "派单", pressed: true }));
+    expect(nav.queryByRole("button", { name: /^派单/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "查看派单进度：主" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "派单", pressed: false }));
+    expect(nav.getByRole("button", { name: /^派单/ })).toBeTruthy();
+  });
 });

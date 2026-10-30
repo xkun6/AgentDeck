@@ -35,3 +35,7 @@
   outline: var(--h-focus-outline);
   outline-offset: 2px;
 }
+
+.link[data-attention="true"] {
+  color: var(--h-danger);
+}

@@ -5,6 +5,7 @@ import { LoadingState, Popover } from "@agentdeck/shared-ui";
 import { ExternalLink, Folder, FolderPlus, MoreHorizontal, Pin, PinOff, Plus, Search, Trash2 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
+import { isDispatchedAgent } from "@/lib/session-list";
 import { formatTokens, relativeTime } from "@/lib/format";
 import { shortenPath } from "@/lib/paths";
 import {
@@ -126,6 +127,7 @@ export function ProjectsRoute() {
       byPath.set(project.path, []);
     }
     for (const session of agents) {
+      if (isDispatchedAgent(session)) continue; // 子会话只在派单页（design.md 4.26）
       const workspace = normalizeWorkspacePath(session.cwd || sessionWorkspaceMap[session.id]);
       if (!workspace) continue;
       const list = byPath.get(workspace);

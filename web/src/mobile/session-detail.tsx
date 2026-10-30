@@ -22,6 +22,7 @@ import { isRuntimeRunning } from "@/lib/session-activity";
 import { prepareAgentPrompt } from "@/lib/agent-prompt";
 import { agentDisplayTitle, agentStatusLabel } from "@/lib/agent-session-display";
 import { MobileComposer } from "./composer";
+import { SessionDispatchBar } from "./dispatch";
 import { addImages, compressImage, describeImageSendFailure, imagesToAttachments, type DraftImage } from "./image-attachments";
 import s from "./mobile.module.css";
 
@@ -43,6 +44,8 @@ export function SessionDetail({
   openSubagentId = null,
   onOpenSubagent = () => {},
   onCloseSubagent = () => {},
+  onOpenSession = () => {},
+  onOpenDispatch = () => {},
   compress = compressImage,
 }: {
   agentId: string;
@@ -51,6 +54,9 @@ export function SessionDetail({
   openSubagentId?: string | null;
   onOpenSubagent?: (subagentId: string) => void;
   onCloseSubagent?: () => void;
+  /** 派单入口（design.md 4.26）：打开另一个会话 / 派单页（null 为总览） */
+  onOpenSession?: (agentId: string) => void;
+  onOpenDispatch?: (masterId: string | null) => void;
   /** 图片压缩实现，测试注入 */
   compress?: (file: File) => Promise<DraftImage>;
 }) {
@@ -259,6 +265,9 @@ export function SessionDetail({
           </button>
         ) : null}
       </header>
+      {snapshot ? (
+        <SessionDispatchBar agent={snapshot} onOpenSession={onOpenSession} onOpenDispatch={onOpenDispatch} />
+      ) : null}
       {inHistory ? (
         <div className={s.historyBar} role="status">
           <span>正在查看较早的消息</span>

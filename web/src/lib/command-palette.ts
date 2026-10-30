@@ -10,6 +10,7 @@ export type CommandPaletteGroupId =
 export type CommandPaletteIconKey =
   | "agents"
   | "automation"
+  | "dispatch"
   | "console"
   | "env"
   | "file"
@@ -32,6 +33,8 @@ export interface CommandPaletteItem {
   group: CommandPaletteGroupId;
   label: string;
   subtitle?: string;
+  /** 只显示在 subtitle 前，不参与搜索（否则搜主会话时会被它的子会话挤掉） */
+  note?: string;
   keywords?: string[];
   icon: CommandPaletteIconKey;
   action: CommandPaletteAction;
@@ -59,6 +62,8 @@ export interface CommandPaletteSession {
   title: string;
   /** 例如「Claude Code，/path/to/repo」。 */
   subtitle?: string;
+  /** 只显示，不参与搜索 */
+  note?: string;
   preview?: string;
   updatedAt: number;
 }
@@ -99,6 +104,7 @@ export const COMMAND_PALETTE_COMMANDS: readonly CommandPaletteItem[] = [
   command("command-new-session", "新建对话", "回到工作台并开始新任务", ["new", "chat", "session", "task", "compose", "新任务", "新会话"], "new", "/", 0),
   command("command-history", "对话历史", "搜索和管理会话", ["history", "sessions", "chat", "conversation", "历史", "会话"], "history", "/history", 1),
   command("command-projects", "项目 / 工作空间", "查看已登记项目", ["project", "workspace", "folder", "cwd", "工作区", "目录"], "project", "/projects", 2),
+  command("command-dispatch", "派单", "查看主会话与子会话的进度", ["dispatch", "delegate", "worktree", "subagent", "派单", "委派", "子会话", "主会话"], "dispatch", "/dispatch", 2),
   command("command-console", "终端", "在工作区打开终端", ["console", "terminal", "command", "shell", "终端", "命令行"], "console", "/console", 3),
   command("command-usage", "用量统计", "跨会话 tokens、费用与性能", ["usage", "stats", "statistics", "token", "tokens", "cost", "用量", "统计", "费用", "花费"], "usage", "/usage", 3),
   command("command-automation", "自动化", "定时任务、心跳与目标循环", ["automation", "schedule", "cron", "heartbeat", "goal", "loop", "自动化", "定时", "心跳", "目标", "循环"], "automation", "/automation", 3),
@@ -176,6 +182,7 @@ function buildSessionItems(sessions: readonly CommandPaletteSession[]): CommandP
         group: "sessions",
         label: title,
         subtitle: [subtitle || "会话", preview].filter(Boolean).join("，"),
+        ...(session.note ? { note: session.note } : {}),
         keywords: [session.id, title, subtitle, preview, "session", "chat", "conversation", "会话", "对话"].filter(Boolean),
         icon: "history",
         to: `/tasks/${encodeURIComponent(session.id)}`,

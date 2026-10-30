@@ -6,6 +6,7 @@ import path from "node:path";
 
 import type {
   AgentPermissionRequest,
+  AgentStreamEnvelope,
   AgentPersistenceHandle,
   AgentPromptInput,
   AgentSnapshot,
@@ -24,7 +25,6 @@ import {
   clampTimeoutSec,
   INTEROP_INSTRUCTIONS,
   INTEROP_MAX_RUNNING_CHILDREN,
-  INTEROP_MAX_RUNNING_INDEPENDENT,
   lastAssistantText,
   McpInteropEndpoint,
 } from "../src/server/mcp-interop.js";
@@ -549,80 +549,23 @@ describe("delegate", () => {
     expect(again.isError).toBe(false);
   });
 
-  test("independent + report=false：不设 parentAgentId、默认不等待，调用方可读取和等待但不能发消息，也不回传", async () => {
+  test("所有子会话都写 parentAgentId；independent 只让 wait 默认 false，不再有单独的限制", async () => {
     const h = await createHarness();
-    const caller = await h.createCaller({ cwd: h.dataDir });
+    const caller = await h.createCaller();
     const client = await h.connect(caller.token);
     const json = (
-      await callTool(client, "delegate", {
-        provider: "fake",
-        prompt: "hold:独立任务",
-        title: "独立",
-        independent: true,
-        report: false,
-      })
+      await callTool(client, "delegate", { provider: "fake", prompt: "hold:任务", independent: true, report: false })
     ).json as { agentId: string; status: string };
     expect(json.status).toBe("running");
-    const agent = h.manager.getAgent(json.agentId);
-    expect(agent.parentAgentId).toBeUndefined();
-    expect(agent).toMatchObject({ origin: "delegate", title: "独立", cwd: h.dataDir });
+    expect(h.manager.getAgent(json.agentId)).toMatchObject({ parentAgentId: caller.id, origin: "delegate" });
+    expect(h.manager.getAgent(json.agentId).reportToAgentId).toBeUndefined();
 
-    const send = await callTool(client, "send_to_agent", { agentId: json.agentId, message: "x" });
-    expect(send.isError).toBe(true);
-    expect(send.text).toContain("只能向自己委派出的子孙会话");
-
-    h.sessions.at(-1)!.finish("完成");
-    const waited = (await callTool(client, "wait_agent", { agentId: json.agentId })).json as { reply: string };
-    expect(waited.reply).toBe("完成");
-    const read = await callTool(client, "read_agent", { agentId: json.agentId });
-    expect(read.isError).toBe(false);
-    await sleep(50);
-    expect(h.sessionOf(caller.id)!.prompts).toEqual([]);
-  });
-
-  test("independent：wait 为 true 时等回合结束", async () => {
-    const h = await createHarness();
-    const caller = await h.createCaller();
-    const client = await h.connect(caller.token);
-    const json = (await callTool(client, "delegate", { provider: "fake", prompt: "做点事", independent: true, wait: true }))
-      .json as { status: string; reply: string };
-    expect(json.status).toBe("completed");
-    expect(json.reply).toBe("回答:做点事");
-  });
-
-  test("independent：子会话和独立会话不能再新开独立会话", async () => {
-    const h = await createHarness();
-    const caller = await h.createCaller();
-    const client = await h.connect(caller.token);
-    const independent = (await callTool(client, "delegate", { provider: "fake", prompt: "x", independent: true, wait: true }))
-      .json as { agentId: string };
-    const child = (await callTool(client, "delegate", { provider: "fake", prompt: "x" })).json as { agentId: string };
-    for (const id of [independent.agentId, child.agentId]) {
-      const nested = await h.connect(h.interop.endpointFor(id)!.token);
-      const result = await callTool(nested, "delegate", { provider: "fake", prompt: "x", independent: true });
-      expect(result.isError).toBe(true);
-      expect(result.text).toContain("不能再新开独立会话");
-    }
-  });
-
-  test(`independent：全局同时运行的独立会话上限 ${INTEROP_MAX_RUNNING_INDEPENDENT}，不占子会话名额`, async () => {
-    const h = await createHarness();
-    const caller = await h.createCaller();
-    const other = await h.createCaller();
-    const client = await h.connect(caller.token);
-    for (let i = 0; i < INTEROP_MAX_RUNNING_INDEPENDENT; i += 1) {
-      const result = await callTool(client, "delegate", { provider: "fake", prompt: `hold:${i}`, independent: true });
-      expect(result.isError).toBe(false);
-    }
-    const over = await callTool(await h.connect(other.token), "delegate", {
-      provider: "fake",
-      prompt: "x",
-      independent: true,
-    });
-    expect(over.isError).toBe(true);
-    expect(over.text).toContain("同时运行的独立会话已达上限");
-    const child = await callTool(client, "delegate", { provider: "fake", prompt: "x" });
-    expect(child.isError).toBe(false);
+    // 子会话可以再派单，也可以被派单方继续发消息
+    const nested = await h.connect(h.interop.endpointFor(json.agentId)!.token);
+    expect((await callTool(nested, "delegate", { provider: "fake", prompt: "x", independent: true, wait: true })).isError).toBe(false);
+    h.sessionOf(json.agentId)!.finish("完成");
+    await vi.waitUntil(() => h.manager.getAgent(json.agentId).status === "idle");
+    expect((await callTool(client, "send_to_agent", { agentId: json.agentId, message: "继续" })).isError).toBe(false);
   });
 });
 
@@ -630,7 +573,7 @@ describe("派单回传", () => {
   const reportsOf = (h: Harness, agentId: string) =>
     (h.sessionOf(agentId)?.prompts ?? []).filter((prompt) => prompt.includes("派单回传"));
 
-  test("wait=false：子任务结束后自动发回派单会话，顶层会话也一样", async () => {
+  test("wait=false：子任务结束后自动发回派单会话", async () => {
     const h = await createHarness();
     const caller = await h.createCaller();
     const client = await h.connect(caller.token);
@@ -638,7 +581,7 @@ describe("派单回传", () => {
       await callTool(client, "delegate", { provider: "fake", prompt: "hold:并行", title: "任务A", independent: true })
     ).json as { agentId: string };
     const child = h.manager.getAgent(json.agentId);
-    expect(child.parentAgentId).toBeUndefined();
+    expect(child.parentAgentId).toBe(caller.id);
     expect(child.reportToAgentId).toBe(caller.id);
 
     h.sessionOf(json.agentId)!.finish("A 做完了");
@@ -887,6 +830,337 @@ describe("派单时自动开启保活", () => {
     const child = h.manager.getAgent(agentId);
     expect(child.cacheKeepAlive).toBe(true);
     expect(child.pinned).toBeUndefined();
+  });
+});
+
+describe("read_agent 审查子会话", () => {
+  const seedTranscript = async (h: Harness, agentId: string, count: number) => {
+    for (let index = 1; index <= count; index += 1) {
+      await h.manager.sendPrompt(agentId, `问${index}`);
+      await vi.waitUntil(() => h.manager.getAgent(agentId).status === "idle");
+    }
+  };
+
+  test("offset 向前翻页，文末提示下一页；翻到头后说明", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const target = await h.manager.createAgent({ provider: "fake", cwd: h.dataDir });
+    await seedTranscript(h, target.id, 3); // 共 6 条
+
+    const first = (await callTool(client, "read_agent", { agentId: target.id, lastMessages: 2 })).text;
+    expect(first).toContain("问3");
+    expect(first).not.toContain("问2");
+    expect(first).toContain("offset=2");
+
+    const second = (await callTool(client, "read_agent", { agentId: target.id, lastMessages: 2, offset: 2 })).text;
+    expect(second).toContain("问2");
+    expect(second).not.toContain("问3");
+    expect(second).toContain("offset=4");
+
+    const last = (await callTool(client, "read_agent", { agentId: target.id, lastMessages: 2, offset: 4 })).text;
+    expect(last).toContain("问1");
+    expect(last).not.toContain("offset=");
+    expect((await callTool(client, "read_agent", { agentId: target.id, offset: 6 })).text).toContain("没有更早的消息");
+  });
+
+  test("buildReadTranscript：tools 附工具入参与输出，过长截断", () => {
+    const entries = [
+      {
+        agentId: "a",
+        seq: 1,
+        timestamp: 1,
+        event: {
+          type: "timeline",
+          item: {
+            type: "tool_call",
+            callId: "c1",
+            name: "Bash",
+            status: "completed",
+            detail: { type: "shell", command: "pnpm test", output: "x".repeat(5000), exitCode: 1 },
+          },
+        },
+      },
+    ] as unknown as AgentStreamEnvelope[];
+    expect(buildReadTranscript(entries, 10)).toBe("[工具 Bash · completed]");
+    const text = buildReadTranscript(entries, 10, { tools: true });
+    expect(text).toContain("$ pnpm test");
+    expect(text).toContain("已截断");
+    expect(text.length).toBeLessThan(4200);
+  });
+
+  describe("buildReadTranscript 翻页", () => {
+    const user = (text: string) =>
+      ({ agentId: "a", seq: 1, event: { type: "timeline", item: { type: "user_message", text } } }) as unknown as AgentStreamEnvelope;
+    const assistant = (text: string) =>
+      ({ agentId: "a", seq: 1, event: { type: "timeline", item: { type: "assistant_message", text } } }) as unknown as AgentStreamEnvelope;
+    const tool = (callId: string) =>
+      ({
+        agentId: "a",
+        seq: 1,
+        event: {
+          type: "timeline",
+          item: { type: "tool_call", callId, name: callId, status: "completed", detail: { type: "plain_text", text: "x".repeat(3900) } },
+        },
+      }) as unknown as AgentStreamEnvelope;
+    /** 按文末提示一直翻到头，返回每页文本 */
+    const walk = (entries: AgentStreamEnvelope[], lastMessages: number) => {
+      const pages: string[] = [];
+      let offset = 0;
+      for (let guard = 0; guard < 50; guard += 1) {
+        const page = buildReadTranscript(entries, lastMessages, { offset, tools: true });
+        pages.push(page);
+        const next = /传 offset=(\d+) 继续读/.exec(page);
+        if (!next) return pages;
+        expect(Number(next[1])).toBeGreaterThan(offset);
+        offset = Number(next[1]);
+      }
+      throw new Error("翻页没有结束");
+    };
+    const countOf = (pages: string[], marker: string) => pages.join("\n").split(marker).length - 1;
+
+    test("工具比消息多：用户消息和每个工具都读到且只读到一次", () => {
+      const tools = Array.from({ length: 30 }, (_, index) => tool(`T${index}_`));
+      for (const entries of [
+        [user("问题"), ...tools, assistant("答案")],
+        [user("问题"), ...tools.slice(0, 15)],
+        [user("更早"), assistant("更早的答"), user("问题"), ...tools.slice(0, 20), assistant("答案")],
+      ]) {
+        const pages = walk(entries, 10);
+        expect(pages.length).toBeGreaterThan(1);
+        for (const entry of entries) {
+          const item = (entry.event as unknown as { item: { type: string; callId?: string; text?: string } }).item;
+          const marker = item.type === "tool_call" ? `[工具 ${item.callId} ` : `：${item.text!}\n`;
+          expect(countOf(pages.map((page) => `${page}\n`), marker)).toBe(1);
+        }
+      }
+    });
+
+    test("消息过长时一页放不下的留给下一页；单条超限也能往前走", () => {
+      const big = "x".repeat(25_000);
+      const entries = [user(`a${big}`), user(`b${big}`), user(`c${big}`), user("最新")];
+      const first = buildReadTranscript(entries, 4, {});
+      expect(first).toContain("用户：c");
+      expect(first).not.toContain("用户：b");
+      expect(first).toContain("更早还有 2 条记录，传 offset=2");
+      const second = buildReadTranscript(entries, 4, { offset: 2 });
+      expect(second).toContain("用户：b");
+      expect(second).toContain("更早还有 1 条记录，传 offset=3");
+      expect(buildReadTranscript(entries, 4, { offset: 3 })).toContain("用户：a");
+
+      const huge = [user("旧"), user("y".repeat(50_000))];
+      const clipped = buildReadTranscript(huge, 2, {});
+      expect(clipped).toContain("这一条过长");
+      expect(clipped).toContain("更早还有 1 条记录，传 offset=1");
+      expect(buildReadTranscript(huge, 2, { offset: 1 })).toContain("用户：旧");
+    });
+
+    test("撤回后工具状态仍更新在原位，不会多出一条", () => {
+      const toolWith = (status: string) =>
+        ({ agentId: "a", seq: 1, event: { type: "timeline", item: { type: "tool_call", callId: "c1", name: "T1", status } } }) as unknown as AgentStreamEnvelope;
+      const retract = { agentId: "a", seq: 1, event: { type: "user_message_retracted", clientMessageId: "m" } } as unknown as AgentStreamEnvelope;
+      const asked = { agentId: "a", seq: 1, event: { type: "timeline", item: { type: "user_message", text: "撤回的", clientMessageId: "m" } } } as unknown as AgentStreamEnvelope;
+      const text = buildReadTranscript([user("前"), toolWith("running"), asked, retract, toolWith("completed")], 10, {});
+      expect(text).toContain("[工具 T1 · completed]");
+      expect(text).not.toContain("running");
+      expect(text).not.toContain("撤回的");
+    });
+
+    test("放得下时按 lastMessages 取；翻到头没有提示", () => {
+      const small = [user("一"), user("二"), user("三")];
+      expect(buildReadTranscript(small, 2, {})).toContain("更早还有 1 条记录，传 offset=2");
+      expect(buildReadTranscript(small, 3, {})).not.toContain("更早还有");
+      expect(buildReadTranscript([], 3, {})).toBe("");
+    });
+
+    test("token 跨截断边界也被脱敏", () => {
+      const secret = `adi_${"ab".repeat(20)}`;
+      const text = `${secret}${"z".repeat(40_000 - 20)}`;
+      const clipped = buildReadTranscript([user(text)], 1, {});
+      expect(clipped).not.toContain("abab");
+    });
+  });
+
+  test("read_agent：结果里的互通 token 被脱敏", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller({ cwd: h.dataDir });
+    const client = await h.connect(caller.token);
+    const other = await h.manager.createAgent({ provider: "fake", cwd: h.dataDir, title: "另一个" });
+    const secret = `adi_${"ab".repeat(16)}`;
+    await h.manager.sendPrompt(other.id, `看到 ${secret}`);
+    await vi.waitFor(() => expect(h.manager.getAgent(other.id).status).not.toBe("running"));
+    const text = (await callTool(client, "read_agent", { agentId: other.id, includeTools: true })).text;
+    expect(text).toContain("adi_***");
+    expect(text).not.toContain(secret);
+  });
+
+  test.skipIf(!hasGit)("includeDiff：附相对派单会话的提交、未提交改动与未跟踪文件；不是仓库时说明", async () => {
+    const h = await createHarness();
+    const repo = path.join(h.dataDir, "repo");
+    mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, windowsHide: true, stdio: "ignore" });
+    git("init", "-q");
+    writeFileSync(path.join(repo, "a.txt"), "1\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+    const { agentId, worktree } = (
+      await callTool(client, "delegate", { provider: "fake", prompt: "改", worktree: true })
+    ).json as { agentId: string; worktree: { path: string } };
+    const inWorktree = (...args: string[]) =>
+      execFileSync("git", args, { cwd: worktree.path, windowsHide: true, stdio: "ignore" });
+    writeFileSync(path.join(worktree.path, "b.txt"), "2\n");
+    inWorktree("add", "-A");
+    inWorktree("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "加了b");
+    writeFileSync(path.join(worktree.path, "a.txt"), "改过\n");
+    writeFileSync(path.join(worktree.path, "c.txt"), "3\n");
+
+    const text = (await callTool(client, "read_agent", { agentId, includeDiff: true })).text;
+    expect(text).toContain("回答:改");
+    expect(text).toContain("加了b");
+    expect(text).toContain("c.txt");
+    expect(text).toContain("改过");
+
+    const plain = await h.createCaller({ cwd: h.dataDir });
+    const none = (await callTool(client, "read_agent", { agentId: plain.id, includeDiff: true })).text;
+    expect(none).toContain("读取改动失败");
+  });
+
+  test.skipIf(!hasGit)("includeDiff：子目录与基线同仓库、基线不是仓库时，已提交的改动不会被说成「没有改动」", async () => {
+    const h = await createHarness();
+    const repo = path.join(h.dataDir, "repo");
+    const sub = path.join(repo, "sub");
+    mkdirSync(sub, { recursive: true });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, windowsHide: true, stdio: "ignore" });
+    git("init", "-q");
+    writeFileSync(path.join(sub, "a.txt"), "1\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+
+    const inRepo = await h.createCaller({ cwd: repo });
+    const repoClient = await h.connect(inRepo.token);
+    const child = (await callTool(repoClient, "delegate", { provider: "fake", prompt: "改", cwd: sub })).json as {
+      agentId: string;
+    };
+    writeFileSync(path.join(sub, "b.txt"), "2\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "子会话的提交");
+    const sameRepo = (await callTool(repoClient, "read_agent", { agentId: child.agentId, includeDiff: true })).text;
+    expect(sameRepo).toContain("同一工作区");
+    expect(sameRepo).not.toContain("没有改动");
+
+    const outside = await h.createCaller({ cwd: h.dataDir });
+    const outsideClient = await h.connect(outside.token);
+    const other = (await callTool(outsideClient, "delegate", { provider: "fake", prompt: "改", cwd: repo })).json as {
+      agentId: string;
+    };
+    const noBase = (await callTool(outsideClient, "read_agent", { agentId: other.agentId, includeDiff: true })).text;
+    expect(noBase).toContain("不在同一个仓库");
+    expect(noBase).not.toContain("没有改动");
+  });
+
+  test.skipIf(!hasGit)("includeDiff：同一工作区时如实说明，不说「没有改动」；中文文件名不转义", async () => {
+    const h = await createHarness();
+    const repo = path.join(h.dataDir, "repo");
+    mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, windowsHide: true, stdio: "ignore" });
+    git("init", "-q");
+    writeFileSync(path.join(repo, "a.txt"), "1\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+    const { agentId } = (await callTool(client, "delegate", { provider: "fake", prompt: "改" })).json as {
+      agentId: string;
+    };
+
+    const clean = (await callTool(client, "read_agent", { agentId, includeDiff: true })).text;
+    expect(clean).toContain("同一工作区");
+    expect(clean).not.toContain("没有改动");
+
+    writeFileSync(path.join(repo, "中文.txt"), "3\n");
+    const dirty = (await callTool(client, "read_agent", { agentId, includeDiff: true })).text;
+    expect(dirty).toContain("同一工作区");
+    expect(dirty).toContain("中文.txt");
+  });
+
+  test.skipIf(!hasGit)("includeDiff：已合并的提交不说成「没有改动」；子目录不漏根目录的未跟踪文件；没有提交的仓库照常列出；非仓库不带 git 用法全文", async () => {
+    const h = await createHarness();
+    const repo = path.join(h.dataDir, "repo");
+    mkdirSync(path.join(repo, "sub"), { recursive: true });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, windowsHide: true, stdio: "ignore" });
+    git("init", "-q");
+    writeFileSync(path.join(repo, "sub", "a.txt"), "1\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    const caller = await h.createCaller({ cwd: repo });
+    const client = await h.connect(caller.token);
+
+    const { agentId, worktree } = (
+      await callTool(client, "delegate", { provider: "fake", prompt: "改", worktree: true })
+    ).json as { agentId: string; worktree: { path: string; branch: string } };
+    const inWorktree = (...args: string[]) =>
+      execFileSync("git", args, { cwd: worktree.path, windowsHide: true, stdio: "ignore" });
+    writeFileSync(path.join(worktree.path, "b.txt"), "2\n");
+    inWorktree("add", "-A");
+    inWorktree("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "加了b");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "-m", "合并", worktree.branch);
+    const merged = (await callTool(client, "read_agent", { agentId, includeDiff: true })).text;
+    expect(merged).toContain("没有未合并的改动");
+    expect(merged).toContain("已合并");
+
+    const subDir = path.join(worktree.path, "sub");
+    writeFileSync(path.join(worktree.path, "根目录新文件.txt"), "3\n");
+    const inSub = (await callTool(client, "delegate", { provider: "fake", prompt: "看", cwd: subDir })).json as {
+      agentId: string;
+    };
+    const subText = (await callTool(client, "read_agent", { agentId: inSub.agentId, includeDiff: true })).text;
+    expect(subText).toContain("根目录新文件.txt");
+
+    const empty = path.join(h.dataDir, "empty");
+    mkdirSync(empty);
+    execFileSync("git", ["init", "-q"], { cwd: empty, windowsHide: true, stdio: "ignore" });
+    writeFileSync(path.join(empty, "新.txt"), "1\n");
+    const inEmpty = (await callTool(client, "delegate", { provider: "fake", prompt: "看", cwd: empty })).json as {
+      agentId: string;
+    };
+    const emptyText = (await callTool(client, "read_agent", { agentId: inEmpty.agentId, includeDiff: true })).text;
+    expect(emptyText).toContain("新.txt");
+    expect(emptyText).not.toContain("读取改动失败");
+
+    const plain = await h.createCaller({ cwd: h.dataDir });
+    const notRepo = (await callTool(client, "read_agent", { agentId: plain.id, includeDiff: true })).text;
+    expect(notRepo).toContain("不是 git 仓库");
+    expect(notRepo).not.toContain("usage:");
+  });
+
+  test.skipIf(!hasGit)("includeDiff：派单会话已删除时以调用方为基线，提交不丢", async () => {
+    const h = await createHarness();
+    const repo = path.join(h.dataDir, "repo");
+    mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, windowsHide: true, stdio: "ignore" });
+    git("init", "-q");
+    writeFileSync(path.join(repo, "a.txt"), "1\n");
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+    const dispatcher = await h.createCaller({ cwd: repo });
+    const dispatcherClient = await h.connect(dispatcher.token);
+    const { agentId, worktree } = (
+      await callTool(dispatcherClient, "delegate", { provider: "fake", prompt: "改", worktree: true })
+    ).json as { agentId: string; worktree: { path: string } };
+    const inWorktree = (...args: string[]) =>
+      execFileSync("git", args, { cwd: worktree.path, windowsHide: true, stdio: "ignore" });
+    writeFileSync(path.join(worktree.path, "b.txt"), "2\n");
+    inWorktree("add", "-A");
+    inWorktree("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "加了b");
+
+    const reviewer = await h.createCaller({ cwd: repo });
+    const reviewerClient = await h.connect(reviewer.token);
+    await h.manager.deleteAgent(dispatcher.id);
+    const text = (await callTool(reviewerClient, "read_agent", { agentId, includeDiff: true })).text;
+    expect(text).toContain("加了b");
+    expect(text).not.toContain("同一工作区");
   });
 });
 

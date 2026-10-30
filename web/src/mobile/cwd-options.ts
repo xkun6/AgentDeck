@@ -1,6 +1,6 @@
-// 新建会话的工作目录候选：从现有会话的 cwd 去重，最近使用的在前。
+// 新建会话的工作目录候选：从现有会话的 cwd 去重，最近使用的在前；子会话（多在 worktree 里）不算（design.md 4.26）。
 import type { AgentSnapshot } from "@agentdeck/protocol";
-import { isHiddenAgent } from "@/lib/session-list";
+import { isDispatchedAgent, isHiddenAgent } from "@/lib/session-list";
 
 export interface CwdOption {
   cwd: string;
@@ -14,10 +14,12 @@ export function cwdKey(cwd: string): string {
   return /^[a-z]:/i.test(unified) || unified.startsWith("//") ? unified.toLowerCase() : unified;
 }
 
-export function recentCwdOptions(agents: readonly Pick<AgentSnapshot, "cwd" | "updatedAt" | "origin">[]): CwdOption[] {
+export function recentCwdOptions(
+  agents: readonly Pick<AgentSnapshot, "cwd" | "updatedAt" | "origin" | "parentAgentId" | "reportToAgentId">[],
+): CwdOption[] {
   const byKey = new Map<string, CwdOption>();
   for (const agent of agents) {
-    if (isHiddenAgent(agent) || !agent.cwd.trim()) continue;
+    if (isHiddenAgent(agent) || isDispatchedAgent(agent) || !agent.cwd.trim()) continue;
     const key = cwdKey(agent.cwd);
     const current = byKey.get(key);
     if (!current) {

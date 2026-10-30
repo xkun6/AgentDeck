@@ -1,8 +1,8 @@
 // 委派卡片（design.md 4.26）：时间线里 agentdeck MCP 互通工具（delegate / send_to_agent / …）的工具卡片，
 // 显示目标会话标题、实时状态，并可跳转到该会话。
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { useAtomValue } from "jotai";
-import { useNavigate } from "react-router-dom";
+import { useInRouterContext, useNavigate } from "react-router-dom";
 import { ExternalLink, GitBranch } from "lucide-react";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { agentDisplayTitle, agentProviderLabel, agentStatusLabel } from "@/lib/agent-session-display";
@@ -29,9 +29,32 @@ function statusTone(label: string | undefined, toolStatus: ChatToolItem["status"
   return "idle";
 }
 
+/** 打开另一个会话。手机端没有 Router（hash 路由自管），由页面注入；桌面端不提供，走 Router */
+export const OpenSessionContext = createContext<((agentId: string) => void) | null>(null);
+
+function OpenSessionAction({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" className={s.action} title="跳转到该会话" onClick={onClick}>
+      <ExternalLink size={12} aria-hidden="true" />
+      <span>查看会话</span>
+    </button>
+  );
+}
+
+function RouterOpenSessionAction({ agentId }: { agentId: string }) {
+  const navigate = useNavigate();
+  return <OpenSessionAction onClick={() => navigate(`/tasks/${encodeURIComponent(agentId)}`)} />;
+}
+
+function OpenSessionButton({ agentId }: { agentId: string }) {
+  const openSession = useContext(OpenSessionContext);
+  const inRouter = useInRouterContext();
+  if (openSession) return <OpenSessionAction onClick={() => openSession(agentId)} />;
+  return inRouter ? <RouterOpenSessionAction agentId={agentId} /> : null;
+}
+
 export function DelegateCard({ tool }: { tool: ChatToolItem }) {
   const info = tool.delegate!;
-  const navigate = useNavigate();
   const snapshots = useAtomValue(agentSnapshotsAtom);
   const runtimes = useAtomValue(chatRuntimeBySessionAtom);
   const { data: providers } = useAgentProviders();
@@ -81,17 +104,7 @@ export function DelegateCard({ tool }: { tool: ChatToolItem }) {
             {open ? "收起" : "详情"}
           </button>
         ) : null}
-        {info.agentId && target ? (
-          <button
-            type="button"
-            className={s.action}
-            title="跳转到该会话"
-            onClick={() => navigate(`/tasks/${encodeURIComponent(info.agentId!)}`)}
-          >
-            <ExternalLink size={12} aria-hidden="true" />
-            <span>查看会话</span>
-          </button>
-        ) : null}
+        {info.agentId && target ? <OpenSessionButton agentId={info.agentId} /> : null}
       </div>
       {open && hasBody ? (
         <div className={s.body}>

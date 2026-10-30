@@ -60,7 +60,8 @@ import { TopBar, TopBarActionButton, TopBarActions } from "@/components/top-bar/
 import { GooseComposer } from "@/components/chat/goose-composer";
 import { ApprovalDialog } from "@/components/chat/approval-dialog";
 import { ContextUsageIndicator } from "@/components/chat/context-usage-indicator";
-import { DelegatedFromLink } from "@/components/chat/delegated-from";
+import { DelegatedFromLink, DispatchOverviewLink, DispatchProgressLink } from "@/components/chat/delegated-from";
+import { isDispatchedAgent } from "@/lib/session-list";
 import { McpServersDialog } from "@/components/chat/mcp-servers-dialog";
 import { StatusDialog } from "@/components/chat/status-dialog";
 import { AgentSessionPicker } from "@/components/composer/agent-session-picker";
@@ -504,11 +505,16 @@ export function DetailRoute() {
       {model ? <span>{model}</span> : null}
     </>
   ) : undefined;
-  // 由其它会话委派创建的子会话：顶部显示「由 <父会话> 委派」链接（design.md 4.26）
+  // 子会话顶部显示「由 <主会话> 委派」与派单页入口，主会话显示派单进度（design.md 4.26）
   const delegatedFrom = snapshot?.parentAgentId ?? snapshot?.reportToAgentId;
   const sub = delegatedFrom ? (
     <>
       <DelegatedFromLink parentAgentId={delegatedFrom} />
+      {subText}
+    </>
+  ) : snapshot ? (
+    <>
+      {isDispatchedAgent(snapshot) ? <DispatchOverviewLink /> : <DispatchProgressLink agentId={snapshot.id} />}
       {subText}
     </>
   ) : (
@@ -733,6 +739,7 @@ export function DetailRoute() {
               key={`${taskId}:${composerDraftKey ?? "draft"}`}
               flushBottom
               initialWorkspacePath={sessionWorkspace}
+              adoptWorkspace={!snapshot || !isDispatchedAgent(snapshot)}
               initial={composerInitial}
               initialNonce={composerInitialNonce}
               initialFiles={hasActiveComposerPrefill ? composerPrefill.files : undefined}

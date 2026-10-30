@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 侧栏子会话嵌套与「允许被其它会话调用」「复制会话 ID」菜单项（design.md 4.26）。
+// 侧栏与派单页的拆分，以及「允许被其它会话调用」「复制会话 ID」菜单项（design.md 4.26）。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -63,15 +63,17 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("派单出去的顶层会话", () => {
-  it("worktree 查不到归属时跟随派单会话的项目，不进「其他对话」", () => {
+describe("派单与项目列表拆分（4.26）", () => {
+  it("子会话不进项目列表，也不把 worktree 目录变成项目或进「其他对话」", () => {
     __resetUiStoreForTests();
     rememberWorkspaceProject("C:/work/demo");
     renderSidebar([
-      agent("dispatcher"),
-      agent("task", { cwd: "C:/data/worktrees/delegate-906423a5", reportToAgentId: "dispatcher" }),
+      agent("master"),
+      agent("task", { cwd: "C:/data/worktrees/delegate-906423a5", parentAgentId: "master", reportToAgentId: "master" }),
+      agent("legacy", { reportToAgentId: "master" }),
+      agent("orphan", { origin: "delegate" }),
     ]);
-    expect(screen.getByText("会话-task")).toBeTruthy();
+    expect(screen.getAllByText(/^会话-/).map((node) => node.textContent)).toEqual(["会话-master"]);
     expect(screen.queryByText("其他对话")).toBeNull();
     expect(screen.queryByText("delegate-906423a5")).toBeNull();
   });
@@ -79,50 +81,39 @@ describe("派单出去的顶层会话", () => {
   it("没有派单关系的会话仍进「其他对话」", () => {
     __resetUiStoreForTests();
     rememberWorkspaceProject("C:/work/demo");
-    renderSidebar([agent("dispatcher"), agent("task", { cwd: "C:/data/worktrees/delegate-906423a5" })]);
+    renderSidebar([agent("master"), agent("task", { cwd: "C:/data/worktrees/delegate-906423a5" })]);
     expect(screen.getByText("其他对话")).toBeTruthy();
   });
-});
 
-describe("子会话嵌套", () => {
-  it("子会话缩进显示在父会话下，不在顶层重复出现；父会话行可折叠 / 展开", () => {
+  it("主会话行显示进度徽标，有未完成的高亮；普通会话没有徽标", () => {
     renderSidebar([
-      agent("child1", { parentAgentId: "parent", updatedAt: 4000 }),
-      agent("other", { updatedAt: 3000 }),
-      agent("parent", { updatedAt: 2000 }),
-      agent("child2", { parentAgentId: "parent", updatedAt: 1000 }),
+      agent("master"),
+      agent("plain"),
+      agent("ok", { parentAgentId: "master", lastTurnOutcome: "completed" }),
+      agent("bad", { parentAgentId: "master", lastTurnOutcome: "failed" }),
     ]);
-    // 顺序：other（根）、parent（根）、其下 child1、child2
-    expect(screen.getAllByText(/^会话-/).map((node) => node.textContent)).toEqual([
-      "会话-other",
-      "会话-parent",
-      "会话-child1",
-      "会话-child2",
-    ]);
-    expect(screen.getByText("会话-child1").closest("[data-depth]")?.getAttribute("data-depth")).toBe("1");
-    expect(screen.getByText("会话-parent").closest("[data-depth]")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "折叠子会话：会话-parent" }));
-    expect(screen.queryByText("会话-child1")).toBeNull();
-    expect(screen.queryByText("会话-child2")).toBeNull();
-    expect(screen.getByText("+2")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "展开子会话：会话-parent" }));
-    expect(screen.getByText("会话-child1")).toBeTruthy();
+    const badge = screen.getByRole("button", { name: "查看派单进度：会话-master" });
+    expect(badge.textContent).toBe("1/2");
+    expect(badge.getAttribute("data-attention")).toBe("true");
+    expect(badge.getAttribute("title")).toBe("派单：1 失败 · 1 已完成");
+    expect(screen.queryByRole("button", { name: "查看派单进度：会话-plain" })).toBeNull();
   });
 
-  it("子会话在运行时整块排在前面；父会话已归档的子会话当作顶层显示", () => {
+  it("「派单」入口统计工作中与需要处理的子会话，待审批不重复计数；都已完成时不显示", () => {
     renderSidebar([
-      agent("parent", { updatedAt: 3000 }),
-      agent("child", { parentAgentId: "parent", status: "running", updatedAt: 2000 }),
-      agent("orphan", { parentAgentId: "gone", updatedAt: 1000 }),
-      agent("gone", { archived: true }),
+      agent("master"),
+      agent("run", { parentAgentId: "master", status: "running" }),
+      agent("ask", {
+        parentAgentId: "master",
+        pendingPermissions: [{ id: "p" } as AgentSnapshot["pendingPermissions"][number]],
+      }),
+      agent("bad", { parentAgentId: "master", lastTurnOutcome: "failed" }),
     ]);
-    const labels = screen.getAllByText(/^会话-/).map((node) => node.textContent);
-    // 运行中的块：parent + child；其后 orphan（父会话已归档，退化为顶层）
-    expect(labels).toEqual(["会话-parent", "会话-child", "会话-orphan"]);
-    expect(screen.getByText("会话-orphan").closest("[data-depth]")).toBeNull();
-    expect(screen.queryByText("会话-gone")).toBeNull();
+    const entry = screen.getByRole("button", { name: /^派单/ });
+    expect(entry.textContent).toContain("3");
+    cleanup();
+    renderSidebar([agent("master"), agent("ok", { parentAgentId: "master", lastTurnOutcome: "completed" })]);
+    expect(screen.getByRole("button", { name: "派单" }).textContent).toBe("派单");
   });
 });
 

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
+import { isDispatchedAgent } from "@/lib/session-list";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
 import { agentDisplayTitle, agentProviderLabel } from "@/lib/agent-session-display";
@@ -118,6 +119,7 @@ export function ProjectDetailRoute() {
     if (!workspacePath) return [];
     const matched: AgentSnapshot[] = [];
     for (const session of agents) {
+      if (isDispatchedAgent(session)) continue; // 子会话只在派单页（design.md 4.26）
       if (normalizeWorkspacePath(session.cwd || sessionWorkspaceMap[session.id]) === workspacePath) {
         matched.push(session);
       }

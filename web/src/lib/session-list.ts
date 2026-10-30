@@ -6,9 +6,23 @@ export function isHiddenAgent(agent: Pick<AgentSnapshot, "origin">): boolean {
   return agent.origin === "judge";
 }
 
-/** 侧栏：不显示已归档与隐藏的会话；置顶的排在最前，组内保持传入顺序（agent.list 已按 updatedAt 倒序）。 */
-export function sidebarSessions<T extends Pick<AgentSnapshot, "pinned" | "archived" | "origin">>(agents: T[]): T[] {
-  const visible = agents.filter((agent) => !agent.archived && !isHiddenAgent(agent));
+/** 派单出去的子会话（design.md 4.26）：只在派单页显示，不进项目列表；历史页与命令面板仍可搜到。 */
+export function isDispatchedAgent(
+  agent: Pick<AgentSnapshot, "origin" | "parentAgentId" | "reportToAgentId">,
+): boolean {
+  return agent.origin === "delegate" || agent.parentAgentId !== undefined || agent.reportToAgentId !== undefined;
+}
+
+/** 子会话所属的主会话（或上一级子会话）；0.3.18–0.3.19 建的顶层会话可能只有 reportToAgentId，或两者都没有。 */
+export function dispatcherIdOf(agent: Pick<AgentSnapshot, "parentAgentId" | "reportToAgentId">): string | undefined {
+  return agent.parentAgentId ?? agent.reportToAgentId;
+}
+
+/** 侧栏：不显示已归档、隐藏与派单出去的会话；置顶的排在最前，组内保持传入顺序（agent.list 已按 updatedAt 倒序）。 */
+export function sidebarSessions<
+  T extends Pick<AgentSnapshot, "pinned" | "archived" | "origin" | "parentAgentId" | "reportToAgentId">,
+>(agents: T[]): T[] {
+  const visible = agents.filter((agent) => !agent.archived && !isHiddenAgent(agent) && !isDispatchedAgent(agent));
   return [...visible.filter((agent) => agent.pinned), ...visible.filter((agent) => !agent.pinned)];
 }
 
@@ -58,7 +72,7 @@ export function batchSummary(label: string, result: BatchResult): string {
 }
 
 // ---------------------------------------------------------------------------
-// 子会话嵌套（design.md 4.26）：由 delegate 创建的子会话缩进显示在父会话下
+// 会话森林：协作组（design.md 4.27）按根归并；子会话不进侧栏后（4.26）侧栏的根都没有子节点
 // ---------------------------------------------------------------------------
 
 export interface SessionTreeNode<T> {

@@ -18,6 +18,7 @@ import {
   isAgentRunning,
 } from "@/lib/agent-session-display";
 import { useConfirm } from "@/lib/use-confirm";
+import { dispatchMasterOf } from "@/lib/dispatch";
 import {
   batchSummary,
   inHistoryView,
@@ -135,6 +136,12 @@ export function HistoryRoute() {
     [agents, providers, runtimeBySession, sessionWorkspaceMap, workspacePath],
   );
 
+  const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  // 取全部会话：按工作区筛选时，主会话可能不在当前目录
+  const titleById = useMemo(
+    () => new Map(agents.map((agent) => [agent.id, agentDisplayTitle(agent, runtimeBySession[agent.id], providers)])),
+    [agents, providers, runtimeBySession],
+  );
   const viewRows = useMemo(() => rows.filter((row) => inHistoryView(row.agent, view)), [rows, view]);
   const archivedCount = useMemo(
     () => rows.filter((row) => inHistoryView(row.agent, "archived")).length,
@@ -399,6 +406,7 @@ export function HistoryRoute() {
                 const sec = Math.floor(agent.updatedAt / 1000);
                 const updated = isToday(sec) ? timeOfDay(sec) : relativeTime(sec);
                 const isSelected = selected.has(agent.id);
+                const masterId = dispatchMasterOf(agent, agentById)?.id;
                 return (
                   <EntityContextMenu key={agent.id} items={() => sessionActions.buildMenu(agent, title)}>
                   <div
@@ -439,7 +447,14 @@ export function HistoryRoute() {
                       ) : kind === "error" ? (
                         <StatusDot tone="danger" aria-hidden />
                       ) : null}
-                      <span className={s.titleText}>{title}</span>
+                      <span className={s.titleStack}>
+                        <span className={s.titleText}>{title}</span>
+                        {masterId !== undefined ? (
+                          <span className={s.titleDispatcher} title={`主会话：${titleById.get(masterId)}`}>
+                            主会话 {titleById.get(masterId)}
+                          </span>
+                        ) : null}
+                      </span>
                     </span>
                     <span className={s.sourceChip}>{provider}</span>
                     <span className={s.cellMono}>{agent.model || "默认"}</span>

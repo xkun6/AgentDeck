@@ -3,8 +3,10 @@ import type { AgentSnapshot } from "@agentdeck/protocol";
 import {
   batchSummary,
   buildSessionTree,
+  dispatcherIdOf,
   flattenSessionTree,
   inHistoryView,
+  isDispatchedAgent,
   runBatch,
   sidebarSessions,
   splitPinned,
@@ -12,6 +14,7 @@ import {
 } from "./session-list";
 
 type Flags = Pick<AgentSnapshot, "pinned" | "archived"> & { id: string };
+type DispatchFlags = Pick<AgentSnapshot, "origin" | "parentAgentId" | "reportToAgentId"> & { id: string };
 
 describe("sidebarSessions", () => {
   it("过滤归档；置顶排最前，组内保持原有（updatedAt 倒序）顺序", () => {
@@ -23,6 +26,24 @@ describe("sidebarSessions", () => {
       { id: "e", pinned: true },
     ];
     expect(sidebarSessions(agents).map((agent) => agent.id)).toEqual(["b", "e", "a", "d"]);
+  });
+
+  it("派单出去的子会话不进侧栏：origin、parentAgentId、reportToAgentId 任一成立都算", () => {
+    const agents: DispatchFlags[] = [
+      { id: "master" },
+      { id: "byOrigin", origin: "delegate" },
+      { id: "byParent", parentAgentId: "master" },
+      { id: "byReport", reportToAgentId: "master" },
+      { id: "scheduled", origin: "schedule" },
+    ];
+    expect(sidebarSessions(agents).map((agent) => agent.id)).toEqual(["master", "scheduled"]);
+    expect(agents.filter(isDispatchedAgent).map((agent) => agent.id)).toEqual(["byOrigin", "byParent", "byReport"]);
+  });
+
+  it("dispatcherIdOf 优先取 parentAgentId，旧会话退回 reportToAgentId", () => {
+    expect(dispatcherIdOf({ parentAgentId: "p", reportToAgentId: "r" })).toBe("p");
+    expect(dispatcherIdOf({ reportToAgentId: "r" })).toBe("r");
+    expect(dispatcherIdOf({})).toBeUndefined();
   });
 });
 

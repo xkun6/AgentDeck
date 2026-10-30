@@ -30,12 +30,28 @@ describe("command palette item building and filtering", () => {
     expect(groupLabels("terminal")).toContain("终端");
   });
 
+  it("子会话的主会话标注只显示、不参与搜索：搜主会话时不会被它的子会话挤掉", () => {
+    const items = buildCommandPaletteItems({
+      sessions: [
+        { ...session("master", "修复登录问题"), updatedAt: 100 },
+        ...Array.from({ length: 9 }, (_, index) => ({
+          ...session(`child${index}`, `子任务${index}`),
+          note: "主会话 修复登录问题",
+        })),
+      ],
+    });
+    expect(groupLabels("登录", items)).toContain("修复登录问题");
+    expect(groupLabels("登录", items)).not.toContain("子任务0");
+    expect(items.find((item) => item.label === "子任务0")?.note).toBe("主会话 修复登录问题");
+  });
+
   it("only navigates to routes that still exist", () => {
     const routes = COMMAND_PALETTE_COMMANDS.map((item) => item.action.type === "navigate" ? item.action.to : "");
     expect(routes).toEqual([
       "/",
       "/history",
       "/projects",
+      "/dispatch",
       "/console",
       "/usage",
       "/automation",

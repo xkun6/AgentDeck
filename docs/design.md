@@ -709,8 +709,8 @@ export interface AgentBackgroundTaskOutput { text: string; truncated: boolean; s
 **前端**：
 - 会话右键菜单（`use-context-actions.tsx`）在现有项之外增加：重命名（弹窗，带「恢复自动标题」）、置顶 / 取消置顶、归档 / 取消归档、导出为 JSON、导出为 Markdown。运行中的会话不提供「归档」。
 - 侧边栏会话列表：不显示归档的会话；置顶的会话排在最前（置顶组内仍按 `updatedAt` 倒序）。
-- 侧边栏按项目分组（「项目」区，取代原来的「进行中 / 置顶项目 / 最近对话」三段）：会话按 `agentInWorkspace` 同一口径（cwd，没有再看会话与工作区的关联；协作组整组取 `group.cwd`，子会话随父会话）归入已记住的项目；cwd 不是项目路径时按仓库归属——前端对每个已记住的项目调 `git_worktree_list`（仅在存在这类会话时查询），cwd 是某项目的非主 worktree（看板任务、委派、协作成员等，路径比较统一分隔符并忽略大小写）就归入该项目；仍找不到所属项目的会话（项目已删除、worktree 已移除、非仓库等）归入最后的「其他对话」。项目顺序：置顶项目在前，其余保持已记住项目列表（ui_store kv `agentdeck-cn-ui.workspaceProjects`）的顺序，会话活动不参与排序——新建对话、Agent 回复、打开会话都不会改变项目位置；新记住的项目放在最前，已记住的项目再次选用只刷新其 `updatedAt`（命令面板、工作空间页仍按它排序），不调整位置；按住项目行上下拖动可调整顺序（只能落在同为置顶 / 同为非置顶的项目之间，落在项目行上半 / 下半 = 排在其前 / 后），用 pointer 事件实现而非 HTML5 拖放（Windows 上 Tauri 接管文件拖放，HTML5 拖放事件进不了 webview），移动超过 4px 才算拖拽、拖完不触发折叠；打开已有会话只在其 cwd 尚未记住时登记为项目；没有会话的项目也显示（「暂无对话」）。项目内运行中的块（含子会话 / 协作组）排在前面，其余保持会话列表顺序；默认最多显示 8 块，其余收进「显示更多（N）」，当前打开的会话始终可见。项目行点击折叠 / 展开（折叠状态存 ui_store kv `agentdeck-cn-ui.sidebarCollapsedProjects`），折叠时有运行中的会话显示状态点；悬停出现「新建对话」，右键为项目菜单；区标题的「+」选择目录添加项目并在其中新建对话（仅桌面端）。
-- 侧边栏顶部导航：「新建对话」始终显示；其下的快捷入口（对话历史、工作空间、终端、用量统计、自动化，`SIDEBAR_NAV_ENTRIES`）可在「设置 → 常规 → 侧栏快捷入口」逐个开关。关掉的入口路径存 ui_store kv `agentdeck.sidebar-hidden-entries`（字符串数组，缺省为空即全部显示；存「隐藏」而非「显示」，以后新增的入口默认可见）。只影响侧栏，命令面板与路由不变。
+- 侧边栏按项目分组（「项目」区，取代原来的「进行中 / 置顶项目 / 最近对话」三段）：会话按 `agentInWorkspace` 同一口径（cwd，没有再看会话与工作区的关联；协作组整组取 `group.cwd`；派单出去的子会话不进项目列表，见 4.26「派单页」）归入已记住的项目；cwd 不是项目路径时按仓库归属——前端对每个已记住的项目调 `git_worktree_list`（仅在存在这类会话时查询），cwd 是某项目的非主 worktree（看板任务、委派、协作成员等，路径比较统一分隔符并忽略大小写）就归入该项目；仍找不到所属项目的会话（项目已删除、worktree 已移除、非仓库等）归入最后的「其他对话」。项目顺序：置顶项目在前，其余保持已记住项目列表（ui_store kv `agentdeck-cn-ui.workspaceProjects`）的顺序，会话活动不参与排序——新建对话、Agent 回复、打开会话都不会改变项目位置；新记住的项目放在最前，已记住的项目再次选用只刷新其 `updatedAt`（命令面板、工作空间页仍按它排序），不调整位置；按住项目行上下拖动可调整顺序（只能落在同为置顶 / 同为非置顶的项目之间，落在项目行上半 / 下半 = 排在其前 / 后），用 pointer 事件实现而非 HTML5 拖放（Windows 上 Tauri 接管文件拖放，HTML5 拖放事件进不了 webview），移动超过 4px 才算拖拽、拖完不触发折叠；打开已有会话只在其 cwd 尚未记住时登记为项目（子会话不登记）；没有会话的项目也显示（「暂无对话」）。项目内运行中的块（含协作组）排在前面，其余保持会话列表顺序；默认最多显示 8 块，其余收进「显示更多（N）」，当前打开的会话始终可见。项目行点击折叠 / 展开（折叠状态存 ui_store kv `agentdeck-cn-ui.sidebarCollapsedProjects`），折叠时有运行中的会话显示状态点；悬停出现「新建对话」，右键为项目菜单；区标题的「+」选择目录添加项目并在其中新建对话（仅桌面端）。
+- 侧边栏顶部导航：「新建对话」始终显示；其下的快捷入口（对话历史、工作空间、派单、终端、用量统计、自动化，`SIDEBAR_NAV_ENTRIES`）可在「设置 → 常规 → 侧栏快捷入口」逐个开关。关掉的入口路径存 ui_store kv `agentdeck.sidebar-hidden-entries`（字符串数组，缺省为空即全部显示；存「隐藏」而非「显示」，以后新增的入口默认可见）。只影响侧栏，命令面板与路由不变。
 - 历史页：
   - 状态筛选旁增加视图切换「全部会话 / 已归档」，默认视图不含归档的会话。置顶的会话在最前，单列一个「置顶」分组。
   - 新增「选择」模式：每行复选框、「全选当前筛选结果」、底部批量操作栏（已选 N 个）：删除（确认弹窗写明数量；运行中的会话由 `agent.delete` 先关闭再删除）、归档 / 取消归档、置顶 / 取消置顶。批量操作在前端逐个调用 RPC，结束后汇总提示成功与失败数量。
@@ -958,8 +958,8 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 |---|---|---|
 | `list_providers` | `{ provider?: string }` | 可用 provider（id、label、可用性）；传 `provider` 时只返回该 provider，并附带其 `models`（id、label、isDefault、thinkingOptions、defaultThinkingOptionId）与 `modes`（id、label、dangerous），供 `delegate` 选用 |
 | `list_agents` | `{ includeArchived?: boolean, callableOnly?: boolean }` | 会话列表（id、标题、provider、cwd、状态、模型、parentAgentId、reportToAgentId、`interopTarget`、`callable`、`updatedAt`）；标题未命名时为首条消息摘要，可能与界面上截断显示的不同，定位会话以 id 为准；`callable` = 调用方可对其 `send_to_agent` / `cancel_agent`（非自己，且为子孙或 `interopTarget`）；`callableOnly: true` 只返回 `callable` 的会话；`updatedAt` 为 ISO 时间 |
-| `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */ }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字 |
-| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, thinkingOptionId?, title?, worktree?: boolean, independent?: boolean, report?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"`。`independent: true` 时改为新开独立会话：不设 `parentAgentId`（`origin` 仍为 `delegate`），侧边栏作为顶层会话显示，`wait` 默认 false。`report`（默认 true）时写入 `reportToAgentId` = 调用方，启用下文「派单回传」，调用方也因此可对它 `send_to_agent` / `cancel_agent`；`independent: true, report: false` 的会话与调用方再无关系 |
+| `read_agent` | `{ agentId, lastMessages?: number /* 默认 10，上限 50 */, offset?: number, includeTools?: boolean, includeDiff?: boolean }` | 最近的用户 / 助手消息文本（工具调用一行摘要），总长上限 40k 字。`offset` 跳过最近 N 条以向前翻页，还有更早消息时文末提示下一页参数；`includeTools` 附工具入参与输出（每个上限 4k 字）；`includeDiff` 附代码改动：相对派单会话 HEAD 的 merge-base 的提交列表、`git diff`（含未提交的已跟踪改动）与未跟踪文件清单（上限 40k 字），供派单会话审查。任何状态都可读，不恢复会话。`offset` 按记录翻页（一条用户 / 助手消息或一次工具调用各算一条），文末提示下一页的值；一页超过上限时只放完整的记录，其余留给下一页，时间线不变时不漏不重（`offset` 从最新一条往回数，翻页之间有新记录时会重复一部分），只有最新一条单独超限时才截断它。`includeDiff` 的基线取目标的派单会话，已删除时取调用方；和基线在同一工作区（含子目录）或不在同一仓库时比不出提交，只给未提交的改动并说明这一点，不说「没有改动」；已合并进基线的提交不列出，这时说明「没有未合并的改动」。所有工具结果都对互通 token 脱敏，先脱敏再截断 |
+| `delegate` | `{ provider, prompt, cwd?, model?, modeId?, thinkingOptionId?, title?, worktree?: boolean, independent?: boolean, report?: boolean, wait?: boolean, timeoutSec?: number }` | `{ agentId, status, reply? }`：新建子会话（`parentAgentId` = 调用方，`origin: "delegate"`，只在派单页显示，见 4.26「派单页」），cwd 缺省为调用方 cwd；`worktree: true` 时按 4.27 的规则建 worktree 作为 cwd（分支 `agentdeck/delegate-<agentId 前 8 位>`）；`wait`（默认 true）时等到该回合结束返回最后一条助手消息（上限 40k 字），超时（默认 600 秒，上限 3600；调用方开启缓存保活时上限 3000，见 4.36）返回 `status: "running"`。`independent` 已废弃，不再影响归属与显示，只让 `wait` 默认 false。`report`（默认 true）时写入 `reportToAgentId` = 调用方，启用下文「派单回传」 |
 | `send_to_agent` | `{ agentId, message, wait?: boolean, timeoutSec?: number }` | 同上；目标忙 → 工具错误「目标会话正在运行」 |
 | `wait_agent` | `{ agentId, timeoutSec?: number }` | 等到目标当前回合结束，返回最后一条助手消息 |
 | `cancel_agent` | `{ agentId }` | 中断目标会话当前回合 |
@@ -967,13 +967,12 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 
 **安全约束**：
 - 不能对自己调用 `send_to_agent` / `wait_agent`；上级链取 `parentAgentId ?? reportToAgentId`，判断子孙与「不能等待上级」都沿这条链；委派深度（链长度）上限 3，单个会话同时运行的子会话上限 8，超出返回工具错误。
-- 独立会话不占委派深度和子会话名额，另设约束防止 Agent 无限自我繁殖：调用方自身是 `origin: "delegate"`（子会话或独立会话）时不能再新开独立会话；全局同时运行的独立会话（`origin: "delegate"` 且无 `parentAgentId`）上限 8。
 - `delegate` 不越权：`modeId` 若为危险模式（`AgentMode.dangerous`），只有调用方当前也在危险模式时才允许，否则拒绝。不传 `modeId` 时，`provider` 与调用方相同则继承调用方当前模式（plan 模式除外，它不能动手开发），否则用 provider 默认模式。子会话的权限请求照常出现在 AgentDeck 界面由用户审批。
 - `send_to_agent` 只允许发给调用方的子孙会话，或用户明确标记为「允许被其它会话调用」的会话（快照字段 `interopTarget?: boolean`，经 `agent.update` 设置）；否则返回工具错误。
 - 工具调用的结果只包含文本，不包含 token、apiKey 等。
 
 **派单回传**（`server/interop-reports.ts`）：让派单会话不必阻塞等待，并行派出多个任务后结束回合即可，子任务完成时由 sidecar 把它唤醒。
-- 快照字段 `reportToAgentId?: string`（持久化）：派单时写入，指向接收回传的会话，与决定侧边栏层级的 `parentAgentId` 相互独立。
+- 快照字段 `reportToAgentId?: string`（持久化）：派单时写入，指向接收回传的会话。`parentAgentId` 记录派单归属，新建的子会话总有；只有 0.3.18–0.3.19 建的顶层会话可能只有 `reportToAgentId` 或两者都没有。
 - 回传时机：只有派单方经 `delegate` / `send_to_agent` 发出的回合才回传；用户在该会话里手动发的回合、保活回合不回传。回合结束后要求状态为 `idle` / `error`、`backgroundActive` 为 false、它自己派出的任务都已回传并处理完（没有待回传、待投递的记录），并稳定 1.5 秒（防止把后台子代理完成后 CLI 自发的下一轮截断）；会话被关闭、休眠且没有这类未完成任务，或被删除时放弃。因此干活的会话再派单并结束回合时不算完成，等子任务回传、它处理完后才向上回传最终结果。
 - 不启用回传的调用方：`origin` 为 `schedule` / `kanban` / `group` / `judge` 的会话，回合结束对它们有业务含义（目标循环、任务状态、触发汇总），由回传唤醒的回合会打乱判断，因此 `delegate` 一律按 `report: false` 处理，也不开启保活。用户自己的会话上配置的目标循环（4.25）不受此限，每条回传会多跑一轮。
 - 回传与 `wait` 的正文不取缓存保活回合（4.36）的内容。
@@ -981,16 +980,26 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 - 投递：回传内容为状态、错误、最后一条助手消息（上限 40k 字），`cwd` 与派单会话不同时另附分支名与未提交改动统计。按接收方排队，接收方空闲并稳定 1.5 秒后合并成一条 `sendPrompt(internal)` 发出（休眠的会话会被恢复，已归档或已删除的放弃并记日志）；接收方忙时等它本回合结束，遇到 `TURN_IN_PROGRESS` 则放回队列等下一次空闲；其它发送失败（如恢复失败）每 60 秒重试，最多 5 次，仍失败才放弃并记日志。稳定时间也让前端排队消息优先发出。
 - worktree 的合并与清理由派单会话用 git 完成，sidecar 不代做；`delegate` 工具说明要求在任务里交代子会话提交改动。
 - 局限：待回传记录只在内存，sidecar 重启后丢失（运行中的回合本来也会中断），派单会话可用 `list_agents` / `read_agent` 查看。
-- 侧栏归属：会话 cwd 不属于已记住的项目时，先按 git worktree 归回所属项目（4.17），查不到（如 worktree 已清理）且有 `reportToAgentId` 时归入派单会话的项目。AgentDeck 自建的 worktree 目录（`<dataDir>/worktrees/` 下的 `delegate-<8 位>`、`task-<UUID>`、`<8 位组 id>/<n>`）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。
+- AgentDeck 自建的 worktree 目录（`<dataDir>/worktrees/` 下的 `delegate-<8 位>`、`task-<UUID>`、`<8 位组 id>/<n>`）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。
 - 干活的会话（`delegate` 带回传新建的会话）：Claude 类建好即开启缓存保活、不置顶，因此只在等待子代理 / 后台任务 / 子任务时保活，空闲时不保活（4.36）。派单任务完成（回传已入队，或派单方经 `wait` 拿到结果）后，按 4.34 自动回收的同一套条件立刻回收进程（关闭了「空闲自动回收」设置时不回收；置顶、后台活动、待审批、不可恢复、仍有子任务在工作的都跳过），不等空闲时长；派单方再 `send_to_agent` 时自动恢复。派单方 `cancel_agent` 的回合不触发，由空闲回收兜底。
 - 派单会话（有 `reportToAgentId` 指向它，且自身没有 `reportToAgentId` / `parentAgentId`）：首次发出带回传的 `delegate` 时自动开启缓存保活（仅 Claude 类），不改置顶，置顶由用户自己决定。开着保活时等同置顶的效果：空闲也保活、不被自动回收（4.36、4.34）；只在首次开启（已有会话指向它时不再设置），用户关掉后不会被重新打开；设置失败只记日志，不影响派单。
 - 只有 Agent 发起的会话有此字段；前端详情页「由 <父会话> 委派」链接取 `parentAgentId ?? reportToAgentId`；缓存保活（4.36）把 `reportToAgentId` 相同的运行中会话也算作等待中的子会话。
 
 **服务说明（instructions）**：initialize 应答带 `instructions`（`INTEROP_INSTRUCTIONS`）：用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理，不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。Claude Code 把 MCP 工具延迟加载（只列名字），但会把服务说明放进系统提示词，因此用户只说「把 X 发给会话 <ID>」时，Agent 也会经 ToolSearch 取用 `send_to_agent` / `read_agent`，不用在提示词里写工具名（claude 2.1.x 实测）。
 
-**快照**：`AgentSnapshot` 增加 `parentAgentId?: string`、`reportToAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
+**快照**：`AgentSnapshot` 增加 `lastTurnOutcome?: "running" | "completed" | "failed" | "canceled"`（持久化；最近一个非保活回合的结局，回合开始时为 `running`，因此 dormant / closed 且仍为 `running` = 回合被打断；旧会话缺省）、`parentAgentId?: string`、`reportToAgentId?: string`、`origin?: "user" | "delegate" | "group" | "schedule" | "judge" | "kanban"`、`groupId?: string`、`interopTarget?: boolean`。
 
-**前端**：侧边栏子会话缩进显示在父会话下（可折叠）；详情页顶部显示「由 <父会话> 委派」链接；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关与「复制会话 ID」（便于用户把准确的目标 id 告诉 Agent）。
+**派单页**（`/dispatch`、`/dispatch/:agentId`，`routes/dispatch.tsx`，纯函数在 `lib/dispatch.ts`）：把派单和项目列表完全分开。
+- 子会话（打开时不把其 cwd 登记为项目、不改当前工作区，工作空间页与项目详情页同样不列出）= `origin === "delegate"` 或有 `parentAgentId` / `reportToAgentId`：不在侧栏项目列表显示；历史页与命令面板仍可搜到，并标注主会话（标注的是归属链顶端的主会话，不是上一级；命令面板里标注只显示，不参与搜索）。
+- 手机端（`mobile/dispatch.tsx`，路由 `#/dispatch`、`#/dispatch/<主会话 id>`，与桌面共用 `lib/dispatch.ts`）：底部导航加「派单」，角标同桌面；会话列表不显示子会话，主会话行带「派单 x/y」入口；总览与详情同桌面，只读，点行进普通会话页；会话页顶栏下方显示「由 X 委派 / 派单页」或主会话的派单进度；新建会话的目录候选不含子会话的 cwd。手机没有历史页和搜索，所以「显示已归档」同时列出已归档的子会话和已归档主会话名下（含多层）的子会话（标注主会话），计数一致，这是它们在手机上唯一的入口。子会话的完成 / 失败 / 审批通知不变，点击直达该子会话。
+- 主会话 = 有子会话指向它、自身不是子会话：照常在项目里显示，行尾有徽标「已完成 / 总数」（含各层子孙），有待审批、失败或已中断时高亮，点徽标进入派单详情。
+- 总览 `/dispatch`：列出未归档的主会话（已归档但仍有工作中的子会话也列出；已归档主会话的详情页与对话页入口始终可用），显示状态汇总，点行进入详情；主会话不存在的子会话列在「主会话已删除」。侧栏「派单」入口显示运行中与需要处理的数量。
+- 详情 `/dispatch/:agentId`：主会话与未归档子会话的树（子会话再派单时缩进；中间层归档后，它派出的会话接到再上一级），每行状态、Agent、模型、工作目录、更新时间，点行打开与普通对话相同的页面 `/tasks/:id`，右键菜单同普通会话。
+- 状态（`dispatchStatus`，优先级从高到低）：待审批（`pendingPermissions` 非空）→ 运行中（含 `backgroundActive`）→ 等待子任务（自身空闲、子孙有工作中）→ 失败 → 已中断（`canceled`，或 dormant / closed 且 `lastTurnOutcome === "running"`）→ 已完成 → 未开始（没有事件）→ 已结束（旧会话，无结局记录）。
+
+**入口开关**：侧栏「派单」同其它快捷入口，可在「设置 → 常规 → 侧栏快捷入口」关闭；只影响侧栏，主会话行与对话页的入口、命令面板「派单」、路由不变。
+
+**前端**：详情页顶部显示「由 <父会话> 委派」链接与派单页入口，主会话显示派单进度入口；时间线里 agentdeck MCP 工具的工具卡片渲染为委派卡片（目标会话标题、状态、跳转）。设置「高级」中「会话互通」开关。会话右键菜单「允许被其它会话调用」开关与「复制会话 ID」（便于用户把准确的目标 id 告诉 Agent）。
 
 **实测结论（claude 2.1.296、codex-cli 0.162.1，探针见 `tmp/mcp-probe.mjs`、`run-claude.mjs`、`run-codex.mjs`、`e2e.mjs`）**：
 - Claude `--mcp-config '<内联 JSON>'`（`type: "http"` + `headers`，shell:false 传参）：**可用**。stream-json 模式下 `system init` 的 `mcp_servers` 里 `agentdeck` 为 `connected`（source `dynamic`），工具名 `mcp__agentdeck__<tool>`，调用结果正常返回。CLI 握手顺序为 `POST server/discover`（探测，返回 method-not-found 即可）→ `initialize` → `notifications/initialized` → `GET /mcp`（想开 SSE 通道，无状态端点返回 405 即可）→ `tools/list` → `tools/call`，均带 Authorization 头；与官方 SDK 的无状态 + `enableJsonResponse` 服务端兼容。用户 settings 允许时不弹权限；默认模式下每次工具调用走现有审批流。
@@ -1002,7 +1011,7 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 - `delegate`：`cwd` 相对路径按调用方 cwd 解析，目录必须存在；`worktree: true` 时 worktree 放 `<AGENTDECK_DATA_DIR>/worktrees/delegate-<agentId 前 8 位>`（要求设置了数据目录），失败 / 创建会话失败时回滚；`modeId` 除 `AgentMode.dangerous` 外，id 含 `bypass` / `full-access` / `dangerous` / `yolo` 或目录里查无此模式也拒绝；结果 JSON 为 `{ agentId, status: "completed" | "failed" | "canceled" | "running", reply?, error?, note?, worktree? }`，`reply` 超过 40k 字截断；`timeoutSec` 超过上限按上限处理。
 - `wait_agent` 额外拒绝等待自己的上级会话（会互相等待）；`cancel_agent` 与 `send_to_agent` 同样只允许子孙或 `interopTarget` 会话；`read_agent` 不限制目标。
 - `agent.update` 增加 `interopTarget?: boolean`（与 title / pinned / archived 至少给一个）。meta.json 持久化 `parentAgentId` / `origin` / `groupId` / `interopTarget`，加载时校验类型。
-- 前端：委派卡片按工具名（`mcp__agentdeck__` 或 `agentdeck.` 前缀的 delegate / send_to_agent / wait_agent / cancel_agent / read_agent）识别，信息在 reducer 中从 `detail.unknown` 的入参与输出解析；侧栏子会话按 `parentAgentId` 嵌套（父会话缺失或成环时退化为顶层，整组在任一成员运行时排在所属项目的前面）；「会话互通」设置页路径 `/interop`。
+- 前端：委派卡片按工具名（`mcp__agentdeck__` 或 `agentdeck.` 前缀的 delegate / send_to_agent / wait_agent / cancel_agent / read_agent）识别，信息在 reducer 中从 `detail.unknown` 的入参与输出解析；子会话不进侧栏，只在派单页（见上文「派单页」）；「会话互通」设置页路径 `/interop`。
 
 ### 4.27 界面发起的并行协作（扇出 + 汇总）
 

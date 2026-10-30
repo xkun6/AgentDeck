@@ -11,12 +11,13 @@ import type {
   AgentSnapshot,
   AgentStreamEnvelope,
   ProviderInfo,
+  ToolCallTimelineItem,
 } from "@agentdeck/protocol";
 import { z } from "zod";
 
 import type { AgentManager } from "../agent/agent-manager.js";
 import { AgentRpcError } from "../agent/errors.js";
-import { addWorktree, currentBranch, diffStat, removeWorktree } from "../git/worktree.js";
+import { addWorktree, currentBranch, diffStat, removeWorktree, reviewDiff } from "../git/worktree.js";
 import { createSilentLogger, type Logger } from "../logger.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { redactInteropTokens } from "../utils/redact-interop.js";
@@ -27,11 +28,11 @@ import { MCP_PATH, type InteropService } from "./interop-service.js";
 export const INTEROP_MAX_DEPTH = 3;
 /** 单个会话同时运行的子会话上限 */
 export const INTEROP_MAX_RUNNING_CHILDREN = 8;
-/** 全局同时运行的独立会话上限（独立会话没有 parent 链，不受上面两项限制） */
-export const INTEROP_MAX_RUNNING_INDEPENDENT = 8;
 export const INTEROP_REPLY_MAX_CHARS = 40_000;
 export const INTEROP_READ_DEFAULT_MESSAGES = 10;
 export const INTEROP_READ_MAX_MESSAGES = 50;
+/** read_agent includeTools 时单个工具的入参与输出上限 */
+export const INTEROP_READ_TOOL_MAX_CHARS = 4_000;
 export const INTEROP_DEFAULT_TIMEOUT_SEC = 600;
 export const INTEROP_MAX_TIMEOUT_SEC = 3600;
 /** 调用方开启缓存保活时的单次等待上限（design.md 4.36）：短于 1 小时 TTL，返回后 Agent 再次调用即刷新缓存 */
@@ -42,7 +43,7 @@ export const INTEROP_KEEPALIVE_MAX_TIMEOUT_SEC = 3000;
  */
 export const INTEROP_INSTRUCTIONS =
   "用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理：" +
-  "send_to_agent 发消息并等回复，read_agent 读最近消息，list_agents 按标题 / 目录查找，wait_agent 继续等待，delegate 新建子会话（independent 为 true 时新开独立会话），report_to_dispatcher 向派单会话汇报。" +
+  "send_to_agent 发消息并等回复，read_agent 读最近消息，list_agents 按标题 / 目录查找，read_agent 还能带工具详情和代码改动用于审查，wait_agent 继续等待，delegate 新建子会话，report_to_dispatcher 向派单会话汇报。" +
   "并行派单时用 delegate 的 wait=false 并结束当前回合，任务完成后结果会作为一条消息自动发回本会话，不必等待或轮询。" +
   "不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。";
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024;
@@ -73,9 +74,9 @@ type ToolResult = {
 };
 
 function textResult(value: unknown): ToolResult {
-  return {
-    content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
-  };
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  // 工具输出可能带着别的会话的 token（如 ps 看到内联的 --mcp-config）
+  return { content: [{ type: "text", text: redactInteropTokens(text) }] };
 }
 
 function errorResult(message: string): ToolResult {
@@ -168,8 +169,51 @@ function lastOutcome(
   return undefined;
 }
 
-/** read_agent 的对话文本：用户 / 助手消息，工具调用一行摘要；只取最近 N 条用户 / 助手消息 */
-export function buildReadTranscript(entries: AgentStreamEnvelope[], lastMessages: number): string {
+function clipToolText(text: string): string {
+  return text.length > INTEROP_READ_TOOL_MAX_CHARS
+    ? `${text.slice(0, INTEROP_READ_TOOL_MAX_CHARS)}\n…（已截断，超过 ${INTEROP_READ_TOOL_MAX_CHARS} 字）`
+    : text;
+}
+
+/** read_agent includeTools：工具的入参与输出 */
+function formatToolDetail(item: ToolCallTimelineItem): string {
+  const detail = item.detail;
+  const parts: Array<string | null | undefined> = (() => {
+    switch (detail.type) {
+      case "shell":
+        return [`$ ${detail.command}`, detail.output, detail.exitCode ? `退出码 ${detail.exitCode}` : null];
+      case "read":
+        return [detail.filePath, detail.content];
+      case "edit":
+        return [detail.filePath, detail.unifiedDiff ?? [detail.oldString, detail.newString].filter(Boolean).join("\n→\n")];
+      case "write":
+        return [detail.filePath, detail.content];
+      case "search":
+        return [detail.query, detail.content ?? detail.filePaths?.join("\n")];
+      case "fetch":
+        return [detail.url, detail.result];
+      case "plan":
+        return [detail.text];
+      case "sub_agent":
+        return [detail.description, detail.log];
+      case "plain_text":
+        return [detail.label, detail.text];
+      default:
+        return [JSON.stringify(detail)];
+    }
+  })();
+  return clipToolText(redactInteropTokens([...parts, item.error].filter(Boolean).join("\n")));
+}
+
+/**
+ * read_agent 的对话文本：用户 / 助手消息，工具调用一行摘要；只取最近 N 条用户 / 助手消息。
+ * opts.offset 跳过最近若干条记录以向前翻页，opts.tools 附工具详情；传 opts 时文末提示是否还有更早的记录
+ */
+export function buildReadTranscript(
+  entries: AgentStreamEnvelope[],
+  lastMessages: number,
+  opts?: { offset?: number; tools?: boolean },
+): string {
   type Part = { kind: "user" | "assistant" | "tool"; text: string; clientMessageId?: string };
   const parts: Part[] = [];
   const toolIndex = new Map<string, number>();
@@ -180,7 +224,9 @@ export function buildReadTranscript(entries: AgentStreamEnvelope[], lastMessages
         : parts.map((part) => part.kind).lastIndexOf("user");
       if (index >= 0) {
         parts.splice(index, 1);
-        toolIndex.clear();
+        for (const [callId, at] of toolIndex) {
+          if (at > index) toolIndex.set(callId, at - 1);
+        }
       }
       continue;
     }
@@ -202,7 +248,8 @@ export function buildReadTranscript(entries: AgentStreamEnvelope[], lastMessages
         parts.push({ kind: "assistant", text: item.text });
       }
     } else if (item.type === "tool_call") {
-      const text = `[工具 ${item.name} · ${item.status}]`;
+      const summary = `[工具 ${item.name} · ${item.status}]`;
+      const text = opts?.tools ? `${summary}\n${formatToolDetail(item)}` : summary;
       const existing = toolIndex.get(item.callId);
       if (existing !== undefined && parts[existing]) {
         parts[existing]!.text = text;
@@ -213,27 +260,48 @@ export function buildReadTranscript(entries: AgentStreamEnvelope[], lastMessages
     }
   }
   const visible = parts.filter((part) => part.text.trim() !== "");
-  // 从倒数第 N 条用户 / 助手消息开始截取（其间的工具摘要一并保留）
-  let seen = 0;
-  let start = 0;
-  for (let index = visible.length - 1; index >= 0; index -= 1) {
-    if (visible[index]!.kind !== "tool") {
-      seen += 1;
-      if (seen === lastMessages) {
-        start = index;
-        break;
-      }
-    }
+  // 记录 = 一条用户 / 助手消息或一次工具调用。offset 跳过最近若干条记录，再从此往前取 N 条消息（其间的工具一并保留）
+  const offset = opts?.offset ?? 0;
+  const end = visible.length - offset;
+  if (offset > 0 && end <= 0) {
+    return opts ? "（没有更早的消息了）" : "";
   }
-  const text = visible
-    .slice(start)
-    .map((part) =>
+  const messageIndexes = visible.slice(0, end).flatMap((part, index) => (part.kind === "tool" ? [] : [index]));
+  const startMessage = Math.max(0, messageIndexes.length - lastMessages);
+  const start = startMessage > 0 ? messageIndexes[startMessage]! : 0;
+  // 先脱敏再截断：token 正好跨截断边界时，切掉前缀后就认不出来了
+  const rendered = visible.slice(start, end).map((part) =>
+    redactInteropTokens(
       part.kind === "user" ? `用户：${part.text}` : part.kind === "assistant" ? `助手：${part.text}` : part.text,
-    )
-    .join("\n\n");
-  return text.length > INTEROP_REPLY_MAX_CHARS
-    ? `…（已截断，只保留最后 ${INTEROP_REPLY_MAX_CHARS} 字）\n${text.slice(-INTEROP_REPLY_MAX_CHARS)}`
-    : text;
+    ),
+  );
+  if (rendered.length === 0) {
+    return "";
+  }
+  if (!opts) {
+    const text = rendered.join("\n\n");
+    return text.length > INTEROP_REPLY_MAX_CHARS
+      ? `…（已截断，只保留最后 ${INTEROP_REPLY_MAX_CHARS} 字）\n${text.slice(-INTEROP_REPLY_MAX_CHARS)}`
+      : text;
+  }
+  // 一页放不下时只放完整的记录，其余留给下一页，不漏不重；最新一条单独就超限时只能保留它的结尾
+  let first = rendered.length;
+  let used = 0;
+  while (first > 0 && used + rendered[first - 1]!.length + 2 <= INTEROP_REPLY_MAX_CHARS + 2) {
+    first -= 1;
+    used += rendered[first]!.length + 2;
+  }
+  let body: string;
+  if (first === rendered.length) {
+    first = rendered.length - 1;
+    body = `…（这一条过长，只保留最后 ${INTEROP_REPLY_MAX_CHARS} 字）\n${rendered[first]!.slice(-INTEROP_REPLY_MAX_CHARS)}`;
+  } else {
+    body = rendered.slice(first).join("\n\n");
+  }
+  const remaining = start + first;
+  return remaining > 0
+    ? `${body}\n\n（更早还有 ${remaining} 条记录，传 offset=${visible.length - remaining} 继续读）`
+    : body;
 }
 
 export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -443,7 +511,7 @@ export class McpInteropEndpoint {
 
     register(
       "read_agent",
-      "读取某个会话最近的用户 / 助手消息（工具调用只显示一行摘要）。",
+      "读取某个会话的用户 / 助手消息，用于查看进度或审查派出去的子会话，任何状态都可读。默认只取最近的消息，工具调用只显示一行摘要；offset 向前翻页，includeTools 附工具入参与输出，includeDiff 附相对派单会话的提交、diff 与未跟踪文件。",
       {
         agentId: z.string().min(1),
         lastMessages: z
@@ -453,12 +521,22 @@ export class McpInteropEndpoint {
           .max(INTEROP_READ_MAX_MESSAGES)
           .optional()
           .describe(`默认 ${INTEROP_READ_DEFAULT_MESSAGES}，上限 ${INTEROP_READ_MAX_MESSAGES}`),
+        offset: z.number().int().min(0).optional().describe("跳过最近 N 条记录（消息与工具调用各算一条）向前翻页，按文末提示传"),
+        includeTools: z.boolean().optional().describe("附工具的入参与输出（每个上限 4000 字）"),
+        includeDiff: z.boolean().optional().describe("附代码改动：相对派单会话的提交列表、diff 与未跟踪文件"),
       },
       async (args) => {
         const target = this.requireTarget(args.agentId);
         const { entries } = await this.manager.timeline(target.id);
-        const transcript = buildReadTranscript(entries, args.lastMessages ?? INTEROP_READ_DEFAULT_MESSAGES);
-        return textResult(transcript || "（该会话还没有消息）");
+        const transcript = buildReadTranscript(entries, args.lastMessages ?? INTEROP_READ_DEFAULT_MESSAGES, {
+          ...(args.offset !== undefined ? { offset: args.offset } : {}),
+          ...(args.includeTools ? { tools: true } : {}),
+        });
+        const text = transcript || "（该会话还没有消息）";
+        if (!args.includeDiff) {
+          return textResult(text);
+        }
+        return textResult(`${text}\n\n# 代码改动\n${await this.describeDiff(target, callerId)}`);
       },
     );
 
@@ -483,13 +561,13 @@ export class McpInteropEndpoint {
           .boolean()
           .optional()
           .describe(
-            "为 true 时新开独立会话而不是子会话：在侧边栏作为顶层会话显示。子会话和独立会话自身不能再新开独立会话",
+            "已废弃：所有子会话都只在派单页显示，不再影响归属。仅让 wait 默认为 false",
           ),
         report: z
           .boolean()
           .optional()
           .describe(
-            "任务结束后是否把结果自动发回当前会话，默认 true。为 false 时不回传；若同时 independent=true，当前会话之后也不能 send_to_agent / cancel_agent（除非用户允许）",
+            "任务结束后是否把结果自动发回当前会话，默认 true。为 false 时不回传",
           ),
         wait: z.boolean().optional().describe("是否等待回合结束，默认 true；independent 为 true 时默认 false"),
         timeoutSec: z
@@ -627,28 +705,15 @@ export class McpInteropEndpoint {
     signal: AbortSignal | undefined,
   ): Promise<ToolResult> {
     const caller = this.requireTarget(callerId);
-    const independent = args.independent === true;
-    if (independent) {
-      if (caller.origin === "delegate") {
-        throw new ToolError("子会话和独立会话不能再新开独立会话");
-      }
-      const running = this.manager
-        .listAgents()
-        .filter((agent) => agent.origin === "delegate" && !agent.parentAgentId && isBusy(agent)).length;
-      if (running >= INTEROP_MAX_RUNNING_INDEPENDENT) {
-        throw new ToolError(`同时运行的独立会话已达上限（${INTEROP_MAX_RUNNING_INDEPENDENT} 个），请等待部分完成后再新开`);
-      }
-    } else {
-      const depth = this.ancestorsOf(callerId).length + 1;
-      if (depth > INTEROP_MAX_DEPTH) {
-        throw new ToolError(`委派深度已达上限（${INTEROP_MAX_DEPTH} 层），不能继续向下委派`);
-      }
-      const running = this.manager
-        .listAgents()
-        .filter((agent) => agent.parentAgentId === callerId && isBusy(agent)).length;
-      if (running >= INTEROP_MAX_RUNNING_CHILDREN) {
-        throw new ToolError(`同时运行的子会话已达上限（${INTEROP_MAX_RUNNING_CHILDREN} 个），请等待部分完成后再委派`);
-      }
+    const depth = this.ancestorsOf(callerId).length + 1;
+    if (depth > INTEROP_MAX_DEPTH) {
+      throw new ToolError(`委派深度已达上限（${INTEROP_MAX_DEPTH} 层），不能继续向下委派`);
+    }
+    const running = this.manager
+      .listAgents()
+      .filter((agent) => agent.parentAgentId === callerId && isBusy(agent)).length;
+    if (running >= INTEROP_MAX_RUNNING_CHILDREN) {
+      throw new ToolError(`同时运行的子会话已达上限（${INTEROP_MAX_RUNNING_CHILDREN} 个），请等待部分完成后再委派`);
     }
 
     const cwd = args.cwd ? path.resolve(caller.cwd, args.cwd) : caller.cwd;
@@ -694,7 +759,7 @@ export class McpInteropEndpoint {
         id,
         provider: args.provider,
         cwd: worktree?.path ?? cwd,
-        ...(independent ? {} : { parentAgentId: callerId }),
+        parentAgentId: callerId,
         ...(report ? { reportToAgentId: callerId } : {}),
         origin: "delegate",
         ...(args.model !== undefined ? { model: args.model } : {}),
@@ -720,7 +785,7 @@ export class McpInteropEndpoint {
       await this.manager.sendPrompt(id, args.prompt);
     } catch (error) {
       throw new ToolError(
-        `${independent ? "独立会话" : "子会话"} ${id} 已创建，但发送任务失败：${error instanceof Error ? error.message : String(error)}`,
+        `子会话 ${id} 已创建，但发送任务失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
     if (report) {
@@ -730,7 +795,7 @@ export class McpInteropEndpoint {
     if (firstDispatch) {
       await this.enableKeepAlive(callerId, caller.provider);
     }
-    const wait = args.wait ?? !independent;
+    const wait = args.wait ?? args.independent !== true;
     return this.finish(
       callerId,
       id,
@@ -907,6 +972,35 @@ export class McpInteropEndpoint {
     }
     lines.push(result.reply !== undefined ? `回复：\n${result.reply}` : "（没有回复内容）");
     return lines.join("\n");
+  }
+
+  /** read_agent includeDiff：基线取目标的派单会话，派单会话没有或已删除时取调用方 */
+  private async describeDiff(target: AgentSnapshot, callerId: string): Promise<string> {
+    const dispatcherId = target.parentAgentId ?? target.reportToAgentId;
+    const base =
+      (dispatcherId !== undefined ? this.callerSnapshot(dispatcherId) : undefined) ?? this.callerSnapshot(callerId);
+    const baseCwd = base?.cwd ?? target.cwd;
+    try {
+      const { text, limitation } = await reviewDiff({ cwd: target.cwd, baseCwd });
+      // 比不出提交时不能说成「没有改动」
+      const note =
+        limitation === "same-worktree"
+          ? "（这个会话和基线会话在同一工作区，分不出各自的提交：这里只有未提交的改动，可能包含其他会话的；已提交的改动用 git log 查看）"
+          : limitation === "no-base"
+            ? "（基线会话不在同一个仓库或已不可用，比不出提交：这里只有未提交的改动；已提交的改动用 git log 查看）"
+            : "";
+      if (!text) {
+        return note || "（没有未合并的改动；已合并进基线的提交不列在这里）";
+      }
+      const redacted = redactInteropTokens(text);
+      const body =
+        redacted.length > INTEROP_REPLY_MAX_CHARS
+          ? `${redacted.slice(0, INTEROP_REPLY_MAX_CHARS)}\n…（已截断，超过 ${INTEROP_REPLY_MAX_CHARS} 字，可在 ${target.cwd} 里用 git 查看）`
+          : redacted;
+      return note ? `${note}\n\n${body}` : body;
+    } catch (error) {
+      return `（读取改动失败：${error instanceof Error ? error.message : String(error)}）`;
+    }
   }
 
   private async describeWorkingTree(cwd: string): Promise<string[]> {

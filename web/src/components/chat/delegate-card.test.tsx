@@ -8,7 +8,7 @@ import type { AgentSnapshot } from "@agentdeck/protocol";
 import { replaceAgentSnapshotsAtom } from "@/stores/agents";
 import type { ChatToolItem } from "./chat-types";
 import { DelegatedFromLink } from "./delegated-from";
-import { DelegateCard } from "./delegate-card";
+import { DelegateCard, OpenSessionContext } from "./delegate-card";
 
 vi.mock("@/hooks/use-agent-catalog", () => ({ useAgentProviders: () => ({ data: undefined }) }));
 
@@ -127,5 +127,34 @@ describe("DelegatedFromLink", () => {
 
     renderWith([], <DelegatedFromLink parentAgentId="gone" />);
     expect(screen.getByText("由已删除的会话委派")).toBeTruthy();
+  });
+});
+
+describe("委派卡片：手机端没有 Router", () => {
+  const delegate = { tool: "delegate", agentId: "child", request: "任务" } as ChatToolItem["delegate"];
+
+  function renderCard(open: ((agentId: string) => void) | null) {
+    const store = createStore();
+    store.set(replaceAgentSnapshotsAtom, [agent("child")]);
+    render(
+      <Provider store={store}>
+        <OpenSessionContext.Provider value={open}>
+          <DelegateCard tool={tool(delegate)} />
+        </OpenSessionContext.Provider>
+      </Provider>,
+    );
+  }
+
+  it("页面注入跳转时用注入的，不碰 Router", () => {
+    const open = vi.fn();
+    renderCard(open);
+    fireEvent.click(screen.getByRole("button", { name: "查看会话" }));
+    expect(open).toHaveBeenCalledWith("child");
+  });
+
+  it("既没有 Router 也没有注入：卡片照常显示，只是没有跳转按钮", () => {
+    renderCard(null);
+    expect(screen.getByTestId("delegate-card")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看会话" })).toBeNull();
   });
 });

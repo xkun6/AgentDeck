@@ -77,6 +77,74 @@ export async function currentBranch(options: { cwd: string }): Promise<string | 
   return result.code === 0 && branch ? branch : null;
 }
 
+/** reviewDiff 读取 diff 的上限：调用方还会再按字数截断，这里只防止巨大 diff 全量进内存 */
+const REVIEW_DIFF_MAX_BYTES = 1024 * 1024;
+
+/**
+ * 审查用的改动（design.md 4.26 read_agent）：相对 baseCwd 当前 HEAD 的 merge-base 的提交列表、
+ * diff（含未提交的已跟踪改动）与未跟踪文件清单。不是仓库时抛出。
+ */
+export async function reviewDiff(options: {
+  cwd: string;
+  baseCwd: string;
+}): Promise<{ text: string; limitation: "same-worktree" | "no-base" | null }> {
+  const gitPath = await requireGit();
+  const text = (result: { stdout: Buffer }) => result.stdout.toString("utf8").trimEnd();
+  const topLevel = async (cwd: string) => {
+    const result = await runGit(gitPath, ["rev-parse", "--show-toplevel"], { cwd }).catch(() => null);
+    if (result?.code !== 0) return null;
+    return process.platform === "win32" ? text(result).toLowerCase() : text(result);
+  };
+  const targetTop = await topLevel(options.cwd);
+  if (targetTop === null) {
+    throw new Error("目录不存在或不是 git 仓库");
+  }
+  const baseHead = await runGit(gitPath, ["rev-parse", "HEAD"], { cwd: options.baseCwd }).catch(() => null);
+  const mergeBase =
+    baseHead?.code === 0
+      ? await runGit(gitPath, ["merge-base", "HEAD", text(baseHead)], { cwd: options.cwd }).catch(() => null)
+      : null;
+  const base = mergeBase?.code === 0 ? text(mergeBase) : "HEAD";
+  // 同一工作区（含子目录）HEAD 相同；不同仓库或基线不是仓库时没有 merge-base。两种都比不出提交
+  const limitation =
+    targetTop === (await topLevel(options.baseCwd))
+      ? "same-worktree"
+      : mergeBase?.code === 0
+        ? null
+        : "no-base";
+  // 还没有提交的仓库没有 HEAD 可比，只有未跟踪文件
+  const head = await runGit(gitPath, ["rev-parse", "--verify", "-q", "HEAD"], { cwd: options.cwd });
+  const hasCommits = head.code === 0;
+  // 用户配置不能影响输出；中文文件名不转义。diff 放最后，超限时提交与未跟踪清单不受影响
+  const diff = hasCommits
+    ? await runGit(gitPath, ["-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", base], {
+        cwd: options.cwd,
+        maxBytes: REVIEW_DIFF_MAX_BYTES,
+      })
+    : { code: 0, stdout: Buffer.alloc(0), stderr: "", truncated: false };
+  if (diff.code !== 0 && !diff.truncated) {
+    throw new Error(stderrOf(diff));
+  }
+  const log = await runGit(gitPath, ["log", "--oneline", "--no-color", `${base}..HEAD`], { cwd: options.cwd });
+  // diff 看整个仓库，未跟踪清单也要从根目录列，cwd 是子目录时才不漏
+  const untracked = await runGit(
+    gitPath,
+    ["-c", "core.quotepath=false", "ls-files", "-o", "--exclude-standard", "--", ":/"],
+    { cwd: options.cwd },
+  );
+  const parts: string[] = [];
+  if (log.code === 0 && text(log)) {
+    parts.push(`提交：\n${text(log)}`);
+  }
+  if (untracked.code === 0 && text(untracked)) {
+    parts.push(`未跟踪文件：\n${text(untracked)}`);
+  }
+  if (text(diff)) {
+    parts.push(`diff：\n${text(diff)}`);
+  }
+  return { text: parts.join("\n\n"), limitation };
+}
+
 /**
  * 目录相对 HEAD 的改动摘要：`diff --stat HEAD` 加未跟踪文件清单。
  * 没有改动返回空字符串；不是仓库时抛出。

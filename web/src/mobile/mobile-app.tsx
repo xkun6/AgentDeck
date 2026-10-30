@@ -13,6 +13,10 @@ import { PairScreen } from "./pair-screen";
 import type { PreferencesStore } from "./preferences";
 import { detectDeviceName } from "./platform";
 import { useNotificationClicks } from "./native/use-notification-clicks";
+import { OpenSessionContext } from "@/components/chat/delegate-card";
+import { useDispatchGroups } from "@/hooks/use-dispatch-groups";
+import { dispatchBadgeOf } from "@/lib/dispatch";
+import { DispatchDetail, DispatchOverview } from "./dispatch";
 import { navTabOf, type MobileRoute } from "./route";
 import { SessionDetail } from "./session-detail";
 import { SessionList } from "./session-list";
@@ -30,8 +34,9 @@ export interface MobileAppProps {
   pairOverrides?: PairOverrides;
 }
 
-const NAV_ITEMS: Array<{ tab: "sessions" | "new" | "settings"; label: string }> = [
+const NAV_ITEMS: Array<{ tab: "sessions" | "dispatch" | "new" | "settings"; label: string }> = [
   { tab: "sessions", label: "会话" },
+  { tab: "dispatch", label: "派单" },
   { tab: "new", label: "新建" },
   { tab: "settings", label: "设置" },
 ];
@@ -169,6 +174,7 @@ function ConnectedShell({
   const [notice, dismiss] = useAttentionNotice(connection.client, route, undefined, () => prefs.getState().notifyMode);
   const syncing = useClientSyncing(connection.client);
   const tab = navTabOf(route);
+  const dispatchBadge = dispatchBadgeOf(useDispatchGroups());
 
   // 凭据失效（含被吊销）：旧会话数据已不可信也不能再操作，整页只留说明与重新配对入口
   if (connection.phase === "auth_failed") {
@@ -207,6 +213,15 @@ function ConnectedShell({
               onClick={() => navigate({ name: item.tab })}
             >
               {item.label}
+              {item.tab === "dispatch" && dispatchBadge ? (
+                <span
+                  className={s.navBadge}
+                  data-attention={dispatchBadge.attention > 0 ? "true" : undefined}
+                  title={`${dispatchBadge.working} 工作中，${dispatchBadge.attention} 需要处理`}
+                >
+                  {dispatchBadge.count}
+                </span>
+              ) : null}
             </button>
           ))}
         </nav>
@@ -266,13 +281,33 @@ function ShellContent({
   switch (route.name) {
     case "session":
       return (
-        <SessionDetail
+        <OpenSessionContext.Provider value={(agentId) => navigate({ name: "session", agentId })}>
+          <SessionDetail
+            key={route.agentId}
+            agentId={route.agentId}
+            onBack={() => back({ name: "sessions" })}
+            openSubagentId={route.subagentId ?? null}
+            onOpenSubagent={(id) => navigate({ name: "session", agentId: route.agentId, subagentId: id })}
+            onCloseSubagent={() => back({ name: "session", agentId: route.agentId })}
+            onOpenSession={(agentId) => navigate({ name: "session", agentId })}
+            onOpenDispatch={(masterId) =>
+              navigate(masterId === null ? { name: "dispatch" } : { name: "dispatch", agentId: masterId })
+            }
+          />
+        </OpenSessionContext.Provider>
+      );
+    case "dispatch":
+      return route.agentId === undefined ? (
+        <DispatchOverview
+          onOpenDetail={(agentId) => navigate({ name: "dispatch", agentId })}
+          onOpenSession={(agentId) => navigate({ name: "session", agentId })}
+        />
+      ) : (
+        <DispatchDetail
           key={route.agentId}
           agentId={route.agentId}
-          onBack={() => back({ name: "sessions" })}
-          openSubagentId={route.subagentId ?? null}
-          onOpenSubagent={(id) => navigate({ name: "session", agentId: route.agentId, subagentId: id })}
-          onCloseSubagent={() => back({ name: "session", agentId: route.agentId })}
+          onBack={() => back({ name: "dispatch" })}
+          onOpenSession={(agentId) => navigate({ name: "session", agentId })}
         />
       );
     case "new":
@@ -298,6 +333,11 @@ function ShellContent({
         />
       );
     default:
-      return <SessionList onOpen={(agentId) => navigate({ name: "session", agentId })} />;
+      return (
+        <SessionList
+          onOpen={(agentId) => navigate({ name: "session", agentId })}
+          onOpenDispatch={(agentId) => navigate({ name: "dispatch", agentId })}
+        />
+      );
   }
 }

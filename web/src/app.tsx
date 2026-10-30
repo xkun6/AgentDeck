@@ -27,6 +27,8 @@ const ProjectDetailRoute = lazy(() => import("@/routes/project-detail").then((m)
 const ConsoleRoute = lazy(() => import("@/routes/console").then((m) => ({ default: m.ConsoleRoute })));
 const UsageRoute = lazy(() => import("@/routes/usage").then((m) => ({ default: m.UsageRoute })));
 const GroupViewRoute = lazy(() => import("@/routes/group-view").then((m) => ({ default: m.GroupViewRoute })));
+const DispatchOverviewRoute = lazy(() => import("@/routes/dispatch").then((m) => ({ default: m.DispatchOverviewRoute })));
+const DispatchDetailRoute = lazy(() => import("@/routes/dispatch").then((m) => ({ default: m.DispatchDetailRoute })));
 const AutomationRoute = lazy(() => import("@/routes/automation").then((m) => ({ default: m.AutomationRoute })));
 const ThemeRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.ThemeRoute })));
 const AdvancedRoute = lazy(() => import("@/routes/advanced").then((m) => ({ default: m.AdvancedRoute })));
@@ -64,6 +66,8 @@ function MainApp() {
             <Route path="/new" element={<NewTaskRedirect />} />
             <Route path="/tasks/:taskId" element={withBoundary(<DetailRoute />)} />
             <Route path="/groups/:groupId" element={withBoundary(<GroupViewRoute />)} />
+            <Route path="/dispatch" element={withBoundary(<DispatchOverviewRoute />)} />
+            <Route path="/dispatch/:agentId" element={withBoundary(<DispatchDetailRoute />)} />
             <Route path="/history"element={withBoundary(<HistoryRoute />)} />
             <Route path="/projects" element={withBoundary(<ProjectsRoute />)} />
             <Route path="/projects/:workspacePath" element={withBoundary(<ProjectDetailRoute />)} />

@@ -471,3 +471,35 @@
 .searchInput::placeholder {
   color: var(--h-text-3);
 }
+
+/* 主会话的派单进度（design.md 4.26） */
+.rowDispatch {
+  flex: none;
+  padding: 0 6px;
+  border: none;
+  border-radius: var(--h-radius-sm);
+  background: transparent;
+  color: var(--h-text-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rowDispatch:hover {
+  background: var(--h-bg-hover);
+  color: var(--h-text);
+}
+
+.rowDispatch[data-attention="true"] {
+  color: var(--h-danger);
+}
+
+.itemBadge {
+  flex: none;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.itemBadge[data-attention="true"] {
+  color: var(--h-danger);
+}

@@ -128,7 +128,7 @@ describe("侧栏协作组节点", () => {
     expect(screen.getByText("会话-m1")).toBeTruthy();
   });
 
-  it("组内任一会话在运行时整组排在项目内前面；子会话随其父成员一起进组", () => {
+  it("组内任一会话在运行时整组排在项目内前面；成员派出去的子会话不进组", () => {
     renderSidebar(
       [
         agent("m1", { groupId: "g1", status: "running", updatedAt: 5000 }),
@@ -139,9 +139,8 @@ describe("侧栏协作组节点", () => {
       [group()],
     );
     const labels = screen.getAllByText(/^(会话-|排序对比)/).map((node) => node.textContent);
-    // 运行中的块在前：组节点 + m1 + m2 + sub（sub 在 m2 下，深度 2）；其后 solo
-    expect(labels).toEqual(["排序对比", "会话-m1", "会话-m2", "会话-sub", "会话-solo"]);
-    expect(screen.getByText("会话-sub").closest("[data-depth]")?.getAttribute("data-depth")).toBe("2");
+    // 运行中的块在前：组节点 + m1 + m2；其后 solo。sub 只在派单页（4.26）
+    expect(labels).toEqual(["排序对比", "会话-m1", "会话-m2", "会话-solo"]);
   });
 
   it("协作组已不存在时，会话按普通会话显示", () => {

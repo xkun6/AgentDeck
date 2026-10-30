@@ -922,3 +922,113 @@
   align-items: center;
   padding: 4px 12px;
 }
+
+/* 派单（design.md 4.26） */
+.rowWrap {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.rowWrap > .row {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowDispatch {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--h-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+  border-radius: var(--h-radius-md);
+}
+
+.rowDispatch:active {
+  background: var(--h-bg-hover);
+}
+
+.rowDispatch[data-attention="true"],
+.dispatchSummary[data-attention="true"],
+.dispatchLink[data-attention="true"],
+.navBadge[data-attention="true"] {
+  color: var(--h-err);
+}
+
+.navBadge {
+  margin-left: 4px;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.dispatchStatus[data-status="running"],
+.dispatchStatus[data-status="waiting"] {
+  color: var(--h-accent);
+}
+
+.dispatchStatus[data-status="approval"] {
+  color: var(--h-warn);
+}
+
+.dispatchStatus[data-status="failed"],
+.dispatchStatus[data-status="canceled"] {
+  color: var(--h-err);
+}
+
+/* 汇总可能很长：先省略汇总，时间始终可见 */
+.rowMeta > .dispatchSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dispatchNested {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dispatchSection {
+  padding: 12px 12px 4px;
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
+.dispatchHead {
+  flex-shrink: 0;
+  padding: 8px 20px 0;
+  font-size: 12px;
+  color: var(--h-text-3);
+}
+
+.dispatchBar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  border-bottom: var(--h-hairline) solid var(--h-line-soft);
+  color: var(--h-text-3);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.dispatchLink {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--h-accent);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: var(--h-radius-sm);
+}

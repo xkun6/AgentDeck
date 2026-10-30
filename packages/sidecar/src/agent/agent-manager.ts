@@ -180,6 +180,8 @@ interface ManagedAgent {
   /** agent.send 已受理（含恢复会话）、startTurn 尚未返回 */
   sending: boolean;
   finishedTurnIds: Set<string>;
+  /** 当前缓存保活回合（design.md 4.36）：不计入 lastTurnOutcome */
+  keepAliveTurnId?: string | null;
   /** 当前进行中的 CLI 自发轮次（turn_started.origin 为 background，design.md 4.12）；agent.send 可接管 */
   backgroundTurnId: string | null;
   /** 当前 agent.send 发起的回合（供撤回，design.md 4.16）；回合结束 / 撤回完成后清空 */
@@ -1921,8 +1923,13 @@ export class AgentManager {
         snapshot.activeTurnId = event.turnId;
         snapshot.lastError = null;
         agent.backgroundTurnId = event.origin === "background" ? event.turnId : null;
+        agent.keepAliveTurnId = event.origin === "keepalive" ? event.turnId : null;
+        if (event.origin !== "keepalive") {
+          snapshot.lastTurnOutcome = "running";
+        }
         return true;
       case "turn_completed": {
+        recordTurnOutcome(agent, event.turnId, "completed");
         if (event.usage) {
           snapshot.lastUsage = event.usage;
         }
@@ -1932,10 +1939,12 @@ export class AgentManager {
         return this.finishTurn(agent, event.turnId) || counted;
       }
       case "turn_failed":
+        recordTurnOutcome(agent, event.turnId, "failed");
         snapshot.lastError = event.error;
         this.finishTurn(agent, event.turnId);
         return true;
       case "turn_canceled":
+        recordTurnOutcome(agent, event.turnId, "canceled");
         return this.finishTurn(agent, event.turnId);
       case "user_message_retracted":
         return false;
@@ -2290,6 +2299,12 @@ function newManagedAgent(
 }
 
 /** 自动回收候选（design.md 4.34）：已加载、空闲、无挂起审批与后台活动、可恢复、未置顶 */
+function recordTurnOutcome(agent: ManagedAgent, turnId: string, outcome: "completed" | "failed" | "canceled"): void {
+  if (agent.keepAliveTurnId !== turnId) {
+    agent.snapshot.lastTurnOutcome = outcome;
+  }
+}
+
 function isIdleReclaimable(agent: ManagedAgent): boolean {
   const snapshot = agent.snapshot;
   return (

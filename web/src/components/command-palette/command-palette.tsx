@@ -8,6 +8,7 @@ import {
   BarChart3,
   Bell,
   CalendarClock,
+  Network,
   Bot,
   FileText,
   Folder,
@@ -35,6 +36,7 @@ import {
   type CommandPaletteItem,
   type CommandPaletteSession,
 } from "@/lib/command-palette";
+import { dispatchMasterOf } from "@/lib/dispatch";
 import { isHiddenAgent } from "@/lib/session-list";
 import { isCommandPaletteShortcut } from "@/lib/command-palette-shortcut";
 import {
@@ -52,6 +54,7 @@ const GROUP_ITEM_LIMIT = 8;
 const ICONS: Record<CommandPaletteIconKey, LucideIcon> = {
   agents: Bot,
   automation: CalendarClock,
+  dispatch: Network,
   console: TerminalSquare,
   env: Wrench,
   file: FileText,
@@ -134,13 +137,20 @@ export function CommandPalette() {
   const runtimes = useAtomValue(chatRuntimeBySessionAtom);
   const providersQuery = useAgentProviders();
   const sessions = useMemo<CommandPaletteSession[]>(
-    () => agents.filter((agent) => !isHiddenAgent(agent)).map((agent) => ({
-      id: agent.id,
-      title: agentDisplayTitle(agent, runtimes[agent.id], providersQuery.data),
-      subtitle: [agentProviderLabel(agent.provider, providersQuery.data), agent.cwd].filter(Boolean).join("，"),
-      preview: agent.preview,
-      updatedAt: agent.updatedAt,
-    })),
+    () => {
+      const byId = new Map(agents.map((agent) => [agent.id, agent]));
+      return agents.filter((agent) => !isHiddenAgent(agent)).map((agent) => {
+        const master = dispatchMasterOf(agent, byId);
+        return {
+          id: agent.id,
+          title: agentDisplayTitle(agent, runtimes[agent.id], providersQuery.data),
+          ...(master ? { note: `主会话 ${agentDisplayTitle(master, runtimes[master.id], providersQuery.data)}` } : {}),
+          subtitle: [agentProviderLabel(agent.provider, providersQuery.data), agent.cwd].filter(Boolean).join("，"),
+          preview: agent.preview,
+          updatedAt: agent.updatedAt,
+        };
+      });
+    },
     [agents, providersQuery.data, runtimes],
   );
   const projects = useWorkspaceProjects();
@@ -274,7 +284,9 @@ export function CommandPalette() {
                           </span>
                           <span className={s.itemMain}>
                             <span className={s.itemLabel}>{item.label}</span>
-                            {item.subtitle ? <span className={s.itemSub}>{item.subtitle}</span> : null}
+                            {item.subtitle || item.note ? (
+                              <span className={s.itemSub}>{[item.note, item.subtitle].filter(Boolean).join("，")}</span>
+                            ) : null}
                           </span>
                         </Command.Item>
                       );

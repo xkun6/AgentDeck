@@ -520,6 +520,9 @@ function normalizeMeta(value: unknown, dirName: string): PersistedAgentMeta | nu
   if (typeof value.reportToAgentId !== "string") {
     delete meta.reportToAgentId;
   }
+  if (!["running", "completed", "failed", "canceled"].includes(value.lastTurnOutcome as string)) {
+    delete meta.lastTurnOutcome;
+  }
   if (typeof value.groupId !== "string") {
     delete meta.groupId;
   }

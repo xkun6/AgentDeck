@@ -981,6 +981,25 @@ describe("空闲会话回收（design.md 4.34）", () => {
     expect(await top.manager.reclaimIfIdle(worker.id)).toBe(true);
   });
 
+  test("lastTurnOutcome：记录回合结局并落盘，保活回合不计入（design.md 4.26）", async () => {
+    const { manager, sessions, agentId } = await idleAgent();
+    const first = await manager.sendPrompt(agentId, "go");
+    await vi.waitFor(() => expect(manager.getAgent(agentId).lastTurnOutcome).toBe("running"));
+    sessions.at(-1)!.emit({ type: "turn_completed", turnId: first.turnId });
+    await vi.waitFor(() => expect(manager.getAgent(agentId).lastTurnOutcome).toBe("completed"));
+
+    const keepAlive = await manager.sendPrompt(agentId, "保活", undefined, { internal: true, keepAlive: true });
+    await vi.waitFor(() => expect(manager.getAgent(agentId).status).toBe("running"));
+    expect(manager.getAgent(agentId).lastTurnOutcome).toBe("completed");
+    sessions.at(-1)!.emit({ type: "turn_failed", turnId: keepAlive.turnId, error: "保活失败" });
+    await vi.waitFor(() => expect(manager.getAgent(agentId).status).not.toBe("running"));
+    expect(manager.getAgent(agentId).lastTurnOutcome).toBe("completed");
+
+    const failed = await manager.sendPrompt(agentId, "again");
+    sessions.at(-1)!.emit({ type: "turn_failed", turnId: failed.turnId, error: "炸了" });
+    await vi.waitFor(() => expect(manager.getAgent(agentId).lastTurnOutcome).toBe("failed"));
+  });
+
   test("reclaimIfIdle：不等空闲时长；置顶、运行中、不可恢复、仍有派单任务时不回收（design.md 4.26）", async () => {
     const { manager, sessions, agentId } = await idleAgent();
     expect(await manager.reclaimIfIdle(agentId)).toBe(true);
