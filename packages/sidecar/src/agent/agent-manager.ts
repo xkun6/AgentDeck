@@ -672,6 +672,7 @@ export class AgentManager {
       throw new AgentRpcError("NOT_SUPPORTED", "CLI 自发轮次进行中不支持插话，请直接发送消息");
     }
     this.emitUserAction(agentId, "steer");
+    const imageCount = typeof prompt === "string" ? 0 : prompt.filter((part) => part.type === "image").length;
     let settleUserMessage!: (sent: boolean) => void;
     const userMessageSent = new Promise<boolean>((resolve) => {
       settleUserMessage = resolve;
@@ -684,6 +685,7 @@ export class AgentManager {
         ...userMessageText(prompt, sent),
         ...(clientMessageId !== undefined ? { clientMessageId } : {}),
         steer: true,
+        ...(imageCount > 0 ? { imageCount } : {}),
       },
     };
     this.runInChain(agent, async () => {

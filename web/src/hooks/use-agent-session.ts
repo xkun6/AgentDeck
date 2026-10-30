@@ -67,6 +67,8 @@ import {
   resetAgentRuntimesForEpochAtom,
   settleInactiveAgentRuntimeAtom,
   prependAgentHistoryAtom,
+  forgetSteerImagesAtom,
+  rememberSteerImagesAtom,
   startAgentPromptAtom,
   type ImageEntry,
 } from "@/stores/chat";
@@ -476,13 +478,17 @@ export function createAgentSessionActions(client: SidecarClient, store: JotaiSto
     async steerPrompt(
       agentId: string,
       prompt: AgentPromptInput,
-      options: { clientMessageId?: string } = {},
+      options: { clientMessageId?: string; displayImages?: ImageEntry[] } = {},
     ): Promise<{ clientMessageId: string }> {
       const clientMessageId = options.clientMessageId ?? newClientMessageId();
+      if (options.displayImages?.length) {
+        store.set(rememberSteerImagesAtom, { agentId, clientMessageId, images: options.displayImages });
+      }
       try {
         await client.request("agent.steer", { agentId, prompt, clientMessageId });
       } catch (error) {
         if (await confirmLostSend(client, agentId, clientMessageId, error)) return { clientMessageId };
+        store.set(forgetSteerImagesAtom, { agentId, clientMessageId });
         throw new Error(humanizeSidecarError(error));
       }
       return { clientMessageId };

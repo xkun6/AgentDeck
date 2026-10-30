@@ -68,6 +68,12 @@ export function createFileAttachment(file: File, index: number): ComposerAttachm
   };
 }
 
+/** 把已提交过的附件恢复成可编辑的草稿：提交时 blob 预览已释放，浏览器文件要重新生成。 */
+export function restoreAttachmentDraft(attachment: ComposerAttachment, index: number): ComposerAttachment {
+  if (attachment.file) return createFileAttachment(attachment.file, index);
+  return { ...attachment, status: "ready", error: undefined, progress: undefined };
+}
+
 export function attachmentIdentity(attachment: ComposerAttachment): string {
   if (attachment.path) return `path:${attachment.path}`;
   if (attachment.file) {

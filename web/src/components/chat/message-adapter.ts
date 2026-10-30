@@ -180,11 +180,13 @@ function partsToBlocks(
     }
     if (part.type === "steer") {
       const text = normalizeContent(part.text);
-      if (text) {
+      if (text || part.images?.length || part.imageCount) {
         blocks.push({
           type: "steer",
-          text,
+          text: text ?? "",
           ...(part.translatedText ? { translatedText: part.translatedText } : {}),
+          ...(part.images?.length ? { images: part.images.map(imagePartToEntry) } : {}),
+          ...(part.imageCount ? { imageCount: part.imageCount } : {}),
         });
       }
       continue;

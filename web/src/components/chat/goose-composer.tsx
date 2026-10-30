@@ -42,6 +42,7 @@ import {
   createPathAttachment,
   isAttachmentBusy,
   MAX_ATTACHMENT_BYTES,
+  restoreAttachmentDraft,
   revokeAttachmentPreview,
   uniquePaths,
 } from "./goose-composer-attachments";
@@ -93,6 +94,8 @@ interface GooseComposerProps {
   initialNonce?: number;
   /** 随 initialNonce 变化一并注入的图片 / 文件附件（撤回消息回填，design.md 4.16）。 */
   initialFiles?: File[];
+  /** 随 initialNonce 变化一并注入的已有附件（编辑排队消息回填，design.md 4.22）。 */
+  initialAttachments?: ComposerAttachment[];
   /** 输入框与附件都为空时按 ↑：返回 true 表示宿主已处理（阻止默认行为）。 */
   onEmptyArrowUp?: () => boolean;
   autoFocus?: boolean;
@@ -147,6 +150,7 @@ export function GooseComposer({
   initial = "",
   initialNonce = 0,
   initialFiles,
+  initialAttachments,
   onEmptyArrowUp,
   autoFocus = false,
   disabled = false,
@@ -190,6 +194,8 @@ export function GooseComposer({
   const dragDepthRef = useRef(0);
   const hasProcessingAttachment = attachments.some(isAttachmentBusy);
   const controlsDisabled = disabled || loading;
+  // 运行中可排队 / 插话时，附件和文本一样可以继续添加（design.md 4.22）
+  const attachmentsDisabled = disabled || (loading && !queueWhileLoading);
   const submitText = value.trim();
   // 运行中（loading）也可提交：onSend 排队、onSteer 插话（design.md 4.22）
   const canSend =
@@ -264,6 +270,9 @@ export function GooseComposer({
 
   useEffect(() => {
     if (initialNonce > 0 && initialFiles?.length) addBrowserFiles(initialFiles);
+    if (initialNonce > 0 && initialAttachments?.length) {
+      appendAttachmentDrafts(initialAttachments.map(restoreAttachmentDraft));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialNonce]);
 
@@ -302,11 +311,14 @@ export function GooseComposer({
   }, []);
 
   useEffect(() => {
-    if (!controlsDisabled) return;
-    setWorkspacePickerOpen(false);
+    if (controlsDisabled) setWorkspacePickerOpen(false);
+  }, [controlsDisabled]);
+
+  useEffect(() => {
+    if (!attachmentsDisabled) return;
     setDragActive(false);
     dragDepthRef.current = 0;
-  }, [controlsDisabled]);
+  }, [attachmentsDisabled]);
 
   const appendAttachmentDrafts = useCallback((drafts: ComposerAttachment[]) => {
     if (!drafts.length) return;
@@ -367,7 +379,7 @@ export function GooseComposer({
         return;
       }
 
-      if (controlsDisabled) {
+      if (attachmentsDisabled) {
         dragDepthRef.current = 0;
         setDragActive(false);
         return;
@@ -388,10 +400,10 @@ export function GooseComposer({
         }
       }
     });
-  }, [addPathAttachments, controlsDisabled]);
+  }, [addPathAttachments, attachmentsDisabled]);
 
   const pickFiles = async () => {
-    if (controlsDisabled) return;
+    if (attachmentsDisabled) return;
     setSubmitError("");
     try {
       if (window.agentdeckDesktop?.pickFiles) {
@@ -406,14 +418,14 @@ export function GooseComposer({
   };
 
   const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-    if (!controlsDisabled && event.target.files) {
+    if (!attachmentsDisabled && event.target.files) {
       addBrowserFiles(event.target.files);
     }
     event.target.value = "";
   };
 
   const attachClipboardImage = async () => {
-    if (controlsDisabled) return;
+    if (attachmentsDisabled) return;
     setSubmitError("");
     try {
       const file = await readClipboardImageAsFile();
@@ -517,9 +529,11 @@ export function GooseComposer({
       await handler?.(payload, { updateAttachment });
       onDraftChange?.("");
       setValue("");
+      // 只清除已提交的附件：提交过程中（运行中输入框仍可添加）新加的保留
+      const submittedIds = new Set(payload.attachments.map((item) => item.id));
       setAttachments((current) => {
-        current.forEach(revokeAttachmentPreview);
-        return [];
+        current.filter((item) => submittedIds.has(item.id)).forEach(revokeAttachmentPreview);
+        return current.filter((item) => !submittedIds.has(item.id));
       });
     } catch (error) {
       restoreAttachmentState(error);
@@ -604,7 +618,7 @@ export function GooseComposer({
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (controlsDisabled) return;
+    if (attachmentsDisabled) return;
     const clipboardData = event.clipboardData;
     const text = clipboardData.getData("text/plain");
     const pastedFiles = filesFromClipboardData(clipboardData);
@@ -635,7 +649,7 @@ export function GooseComposer({
   };
 
   const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
-    if (controlsDisabled || !hasDroppableData(event)) return;
+    if (attachmentsDisabled || !hasDroppableData(event)) return;
     event.preventDefault();
     dragDepthRef.current += 1;
     setDragActive(true);
@@ -651,7 +665,7 @@ export function GooseComposer({
   };
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
-    if (controlsDisabled || !hasDroppableData(event)) return;
+    if (attachmentsDisabled || !hasDroppableData(event)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
@@ -660,7 +674,7 @@ export function GooseComposer({
     event.preventDefault();
     dragDepthRef.current = 0;
     setDragActive(false);
-    if (controlsDisabled) return;
+    if (attachmentsDisabled) return;
 
     const paths: string[] = [];
     const text = event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain");
@@ -758,7 +772,7 @@ export function GooseComposer({
               className={s.iconButton}
               type="button"
               onClick={() => void pickFiles()}
-              disabled={controlsDisabled}
+              disabled={attachmentsDisabled}
               title="添加附件"
               aria-label="添加附件"
             >
@@ -768,7 +782,7 @@ export function GooseComposer({
               className={s.iconButton}
               type="button"
               onClick={() => void attachClipboardImage()}
-              disabled={controlsDisabled}
+              disabled={attachmentsDisabled}
               title="添加剪贴板图片"
               aria-label="添加剪贴板图片"
             >

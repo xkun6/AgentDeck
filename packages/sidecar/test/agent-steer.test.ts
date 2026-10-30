@@ -128,6 +128,22 @@ describe("AgentManager 运行中插话（design.md 4.22）", () => {
     expect(manager.getAgent(agent.id).activeTurnId).toBe(turnId);
   });
 
+  test("插话带图片：图片原样给 provider，user_message 只记图片数；无图时省略", async () => {
+    const { manager, agent, session, streams } = await setup();
+    await manager.sendPrompt(agent.id, "先做 A", "cm-1");
+    const prompt = [
+      { type: "text" as const, text: "看这张" },
+      { type: "image" as const, data: "AAAA", mimeType: "image/png" },
+    ];
+    await manager.steer(agent.id, prompt, "cm-2");
+    await manager.steer(agent.id, "再补一句", "cm-3");
+
+    expect(session.steers[0]).toEqual({ prompt, clientMessageId: "cm-2" });
+    const users = userMessages(streams);
+    expect(users[1]!.item).toMatchObject({ text: "看这张", steer: true, imageCount: 1 });
+    expect(users[2]!.item).not.toHaveProperty("imageCount");
+  });
+
   test("没有进行中的回合 → NOT_SUPPORTED（当前没有进行中的回合），且不写 user_message", async () => {
     const { manager, agent, session, streams } = await setup();
     await expect(manager.steer(agent.id, "x", "cm")).rejects.toMatchObject({

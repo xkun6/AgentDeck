@@ -1,9 +1,16 @@
 import { useSyncExternalStore } from "react";
 import type { ComposerAttachment } from "@/components/chat/composer-types";
+import {
+  deleteAttachmentFile,
+  loadAttachmentFile,
+  pruneAttachmentFiles,
+  saveAttachmentFile,
+} from "@/lib/queue-attachment-files";
 
 // Per-session send queue. When the agent is busy, composer submissions are
 // parked here and drained (automatically on turn-settle, or manually) when it
-// frees up. Pure client state, persisted to localStorage; no backend.
+// frees up. Pure client state, persisted to localStorage (pasted files live in
+// IndexedDB, see lib/queue-attachment-files.ts); no backend.
 
 export interface QueuedPromptEntry {
   id: string;
@@ -104,29 +111,37 @@ function isQueuedEntry(value: unknown): value is QueuedPromptEntry {
   );
 }
 
-/** Drop attachments that can't survive a reload (browser File objects lose
- *  their data); path-based and already-uploaded attachments keep working.
+/** Keep attachments that can come back after a reload: path-based and
+ *  already-uploaded ones work as is, browser files get their content back from
+ *  IndexedDB (see applyLoadedFiles).
  *  Tolerates malformed elements (null / non-objects) without throwing. */
 function sanitizeAttachments(attachments: ComposerAttachment[]): ComposerAttachment[] {
   return attachments.filter(
     (a): a is ComposerAttachment =>
       Boolean(a) && typeof a === "object" && (
         (a.source === "path" && Boolean(a.path)) ||
-        (a.source === "uploaded" && Boolean(a.uploadedPath))
+        (a.source === "uploaded" && Boolean(a.uploadedPath)) ||
+        (a.source === "browser" && typeof a.id === "string")
       ),
   );
 }
 
 /**
  * Check whether any queued entry has attachments that cannot survive a page
- * refresh (browser File / blob URLs). Callers can use this to warn the user
- * before unload — see the `beforeunload` listener in this module.
+ * refresh (browser files not yet saved to IndexedDB). Callers can use this to
+ * warn the user before unload — see the `beforeunload` listener in this module.
  */
-export function hasNonSerializableAttachments(state: QueueState): boolean {
+export function hasNonSerializableAttachments(
+  state: QueueState,
+  savedFileIds: ReadonlySet<string> = new Set(),
+): boolean {
   for (const entries of Object.values(state)) {
     for (const entry of entries) {
       for (const att of entry.attachments) {
-        if (att && typeof att === "object" && att.source !== "path" && att.source !== "uploaded") {
+        if (
+          att && typeof att === "object" && att.source !== "path" && att.source !== "uploaded" &&
+          !savedFileIds.has(att.id)
+        ) {
           return true;
         }
       }
@@ -159,6 +174,36 @@ export function deserializeQueue(raw: string | null): QueueState {
   } catch {
     return {};
   }
+}
+
+/** 刚从 localStorage 恢复、内容还没取回的浏览器文件附件 id。 */
+export function fileIdsToLoad(state: QueueState): string[] {
+  return Object.values(state).flatMap((entries) =>
+    entries.flatMap((entry) =>
+      entry.attachments.filter((a) => a.source === "browser" && !a.file).map((a) => a.id),
+    ),
+  );
+}
+
+/**
+ * 并入从 IndexedDB 取回的文件：取到的填回 file，取不到（null）的去掉该附件；
+ * 因此变成空消息的条目一并去掉。loaded 里没有的附件不动。
+ */
+export function applyLoadedFiles(state: QueueState, loaded: ReadonlyMap<string, File | null>): QueueState {
+  const next: QueueState = {};
+  for (const [key, entries] of Object.entries(state)) {
+    const kept = entries.flatMap((entry) => {
+      const attachments = entry.attachments.flatMap((a) => {
+        if (a.source !== "browser" || a.file || !loaded.has(a.id)) return [a];
+        const file = loaded.get(a.id);
+        return file ? [{ ...a, file }] : [];
+      });
+      if (attachments.length === entry.attachments.length) return [{ ...entry, attachments }];
+      return entry.text.trim() || attachments.length > 0 ? [{ ...entry, attachments }] : [];
+    });
+    if (kept.length > 0) next[key] = kept;
+  }
+  return next;
 }
 
 // ---- Live store (useSyncExternalStore) -------------------------------------
@@ -198,12 +243,43 @@ function getSnapshot(): QueueState {
   return liveState;
 }
 
-// Warn before page refresh when queued prompts have non-serializable
-// attachments (browser File objects / blob URLs that would be lost).
+// 已写入 IndexedDB（或启动时从那里恢复）的文件附件 id，刷新不会丢。
+const savedFileIds = new Set<string>(fileIdsToLoad(liveState));
+
+// 启动时取回粘贴文件的内容；发送和编辑要等它完成，否则会丢掉还没取回的附件。
+const hydration: Promise<void> = hydrateAttachmentFiles();
+
+async function hydrateAttachmentFiles(): Promise<void> {
+  const ids = fileIdsToLoad(liveState);
+  if (ids.length > 0) {
+    const loaded = new Map(
+      await Promise.all(ids.map(async (id) => [id, await loadAttachmentFile(id)] as const)),
+    );
+    for (const [id, file] of loaded) {
+      if (!file) savedFileIds.delete(id);
+    }
+    commit(applyLoadedFiles(liveState, loaded));
+  }
+  const referenced = Object.values(liveState).flatMap((entries) =>
+    entries.flatMap((entry) => entry.attachments.map((a) => a.id)),
+  );
+  await pruneAttachmentFiles(new Set(referenced));
+}
+
+function forgetAttachmentFiles(entry: QueuedPromptEntry): void {
+  for (const attachment of entry.attachments) {
+    if (attachment.source !== "browser") continue;
+    savedFileIds.delete(attachment.id);
+    void deleteAttachmentFile(attachment.id);
+  }
+}
+
+// Warn before page refresh when queued prompts have attachments not yet saved
+// (browser File objects / blob URLs that would be lost).
 function installBeforeUnloadWarning() {
   if (typeof window === "undefined") return;
   const handler = (event: BeforeUnloadEvent) => {
-    if (hasNonSerializableAttachments(liveState)) {
+    if (hasNonSerializableAttachments(liveState, savedFileIds)) {
       event.preventDefault();
       event.returnValue = "有暂存的附件可能丢失";
     }
@@ -226,12 +302,29 @@ export function enqueueQueuedPrompt(
     queuedAt: now,
   };
   commit(enqueue(liveState, key, entry));
+  for (const attachment of input.attachments) {
+    if (attachment.source !== "browser" || !attachment.file) continue;
+    void saveAttachmentFile(attachment.id, attachment.file).then((saved) => {
+      if (saved) savedFileIds.add(attachment.id);
+    });
+  }
   return entry;
 }
 
 export function removeQueuedPrompt(key: string | null | undefined, id: string): void {
   if (!key) return;
+  const entry = entriesFor(liveState, key).find((item) => item.id === id);
+  if (entry) forgetAttachmentFiles(entry);
   commit(removeEntry(liveState, key, id));
+}
+
+/** 编辑排队消息：等文件取回后移出队列并返回该条，已不在队列时返回 null。 */
+export async function takeQueuedPrompt(key: string, id: string): Promise<QueuedPromptEntry | null> {
+  await hydration;
+  const entry = entriesFor(liveState, key).find((item) => item.id === id);
+  if (!entry) return null;
+  removeQueuedPrompt(key, id);
+  return entry;
 }
 
 export function updateQueuedPrompt(
@@ -284,8 +377,11 @@ export async function drainQueuedPrompt(
   if (drainingKeys.has(key)) return;
   drainingKeys.add(key);
   try {
-    await send(entry);
-    commit(removeEntry(liveState, key, entry.id));
+    await hydration;
+    const current = entriesFor(liveState, key).find((item) => item.id === entry.id);
+    if (!current) return;
+    await send(current);
+    removeQueuedPrompt(key, current.id);
   } catch (error) {
     console.error("发送排队消息失败：", error);
   } finally {

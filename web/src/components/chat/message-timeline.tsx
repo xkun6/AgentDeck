@@ -626,10 +626,19 @@ function MessageBlocks({ message, streaming, turnStartedAt, sessionUsage, progre
       items.push(
         <div key={`steer-${index}`} className={s.steerBubble} data-testid="steer-bubble">
           <span className={s.steerLabel}>插话</span>
-          <span className={s.steerText}>
+          <div className={s.steerText}>
             {block.text}
             {block.translatedText ? <SentTranslation text={block.translatedText} /> : null}
-          </span>
+            {block.images?.length ? (
+              <div className={s.steerImages}>
+                {block.images.map((image, imageIndex) => (
+                  <MessageImage key={imageIndex} image={image} />
+                ))}
+              </div>
+            ) : block.imageCount ? (
+              <div className={s.steerImageCount}>图片 ×{block.imageCount}</div>
+            ) : null}
+          </div>
         </div>,
       );
       return;

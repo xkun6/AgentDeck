@@ -72,10 +72,11 @@ import {
   enqueueQueuedPrompt,
   markQueueInterrupted,
   removeQueuedPrompt,
+  takeQueuedPrompt,
   useQueuedPrompts,
   type QueuedPromptEntry,
 } from "@/stores/composer-queue";
-import type { ComposerSubmitPayload } from "@/components/chat/composer-types";
+import type { ComposerAttachment, ComposerSubmitPayload } from "@/components/chat/composer-types";
 import { MessageTimeline } from "@/components/chat/message-timeline";
 import { TranslationToggle, useSessionTranslation } from "@/components/chat/translation-toggle";
 import { parseFocusSeq } from "@/components/chat/focus-seq";
@@ -98,6 +99,8 @@ interface ComposerPrefillState {
   sessionId?: string;
   /** 撤回消息回填的图片附件（design.md 4.16） */
   files?: File[];
+  /** 编辑排队消息回填的附件（design.md 4.22） */
+  attachments?: ComposerAttachment[];
 }
 
 function firstUserText(messages: { role: string; parts: { type: string; text?: string }[] }[]): string {
@@ -335,7 +338,7 @@ export function DetailRoute() {
   const onSteer = useCallback(async (payload: ComposerSubmitPayload) => {
     if (!taskId) return;
     const prepared = await prepareAgentPrompt(payload);
-    await actions.steerPrompt(taskId, prepared.prompt);
+    await actions.steerPrompt(taskId, prepared.prompt, { displayImages: prepared.displayImages });
   }, [actions, taskId]);
 
   // ---- 发送队列（立即发送 / 编辑 / 删除；回合结束自动出队见 useQueueAutoDrain） ----
@@ -350,8 +353,16 @@ export function DetailRoute() {
   }, [queuedPrompts, submitPayload, taskId]);
 
   const onQueueEdit = useCallback((entry: QueuedPromptEntry) => {
-    setComposerPrefill((prefill) => ({ text: entry.text, nonce: prefill.nonce + 1, sessionId: taskId }));
-    removeQueuedPrompt(taskId, entry.id);
+    if (!taskId) return;
+    void takeQueuedPrompt(taskId, entry.id).then((taken) => {
+      if (!taken) return;
+      setComposerPrefill((prefill) => ({
+        text: taken.text,
+        attachments: taken.attachments,
+        nonce: prefill.nonce + 1,
+        sessionId: taskId,
+      }));
+    });
   }, [taskId]);
 
   const retractMessageId = retractableUserMessageId(runtime);
@@ -743,6 +754,7 @@ export function DetailRoute() {
               initial={composerInitial}
               initialNonce={composerInitialNonce}
               initialFiles={hasActiveComposerPrefill ? composerPrefill.files : undefined}
+              initialAttachments={hasActiveComposerPrefill ? composerPrefill.attachments : undefined}
               onEmptyArrowUp={onEmptyArrowUp}
               onDraftChange={onComposerDraftChange}
               onSend={onSend}

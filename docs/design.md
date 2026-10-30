@@ -823,7 +823,8 @@ interface UsageSummary {
   - **实测结论（2.1.296，stream-json，两次复测一致）：被吸收，`capabilities.steer = true`。** 第一条 user（uuid U1）让它跑 `ping -n 8 127.0.0.1` 再总结；工具执行期间写入第二条（uuid U2，「另外请在回答最后加一句：插话已收到」）。事件顺序：`command_lifecycle(U1) queued → started` → `init` → `assistant`（thinking / 文字 / PowerShell tool_use）→ 写入 U2 → `command_lifecycle(U2) queued` → 工具结果 `user` → `command_lifecycle(U2) started`（此刻工具刚结束，U2 并入当前回合）→ `assistant`（总结末尾带「插话已收到」）→ `command_lifecycle(U2) completed` → **`result` 只有一条，`user_message_uuid` 为 U1** → `command_lifecycle(U1) completed`。之后 150 秒内没有再出现带 U2 的 `result`，U2 的 `user` 消息也不会回显到 stdout。因此 Claude 的 `steer` 实现 = 向 stdin 再写一条带新 uuid 的 user 消息，回合仍以 U1 的 result 结束；`handleResult` 对 uuid 与当前回合不符的 result 本就忽略，未被吸收的兜底（排到回合之后单独执行）时其 result 不会提前结束新回合。仅用户回合支持；CLI 自发轮次进行中 `agent.steer` 返回 `NOT_SUPPORTED`（「CLI 自发轮次进行中不支持插话，请直接发送消息」）。探针与原始输出摘要见 `tmp/steer-probe.mjs`、`tmp/steer-probe-result.txt`（不入库）。
 - ACP：不支持。
 - 前端：回合运行中，输入框发送区显示「排队」与「插话」按钮；键位：Ctrl+Enter = 插话，Ctrl+Shift+Enter = 排队，用户发送快捷键设为 Enter 时 Enter = 排队，provider 不支持插话时只显示排队。插话的用户消息在当前助手消息流中以内联气泡显示（标注「插话」）。
-- 排队（纯前端，`stores/composer-queue.ts`，按会话存 localStorage）：自动出队由应用根部的 `useQueueAutoDrain` 监视所有会话，任一会话从运行变为空闲时发出其队首一条，不要求详情页正在显示该会话；用户中止 / 撤回的那一轮结束时不出队（下一轮开始即清除该标记）；首次看到就是空闲的会话（如重启后恢复的队列）不自动发出，用队列面板手动发送。「立即发送」与自动出队共用按会话的发送锁。
+- 附件：运行中（`queueWhileLoading` 的输入框）的添加按钮、剪贴板按钮、粘贴与拖放照常可用，排队与插话都可带图片 / 文件；提交只清除已提交的附件，提交过程中新加的保留。插话带图片时，`user_message` 另带 `imageCount`（图片不落盘）；发起插话的前端在请求前按 `clientMessageId` 暂存图片（`runtime.pendingSteerImages`），气泡显示缩略图，其它情况（重连重建、另一台设备）显示「图片 ×N」。
+- 排队（纯前端，`stores/composer-queue.ts`，按会话存 localStorage）：编辑排队消息时文本与附件一并回填输入框；粘贴的文件（浏览器 `File`，没有本机路径）内容存 IndexedDB（`lib/queue-attachment-files.ts`，按附件 id，随排队消息移除而删除，启动时清理无引用的文件），localStorage 只记元信息，启动时取回，发送与编辑都等取回完成；取不回的附件被去掉，还没写入完成就离开页面时有提示；自动出队由应用根部的 `useQueueAutoDrain` 监视所有会话，任一会话从运行变为空闲时发出其队首一条，不要求详情页正在显示该会话；用户中止 / 撤回的那一轮结束时不出队（下一轮开始即清除该标记）；首次看到就是空闲的会话（如重启后恢复的队列）不自动发出，用队列面板手动发送。「立即发送」与自动出队共用按会话的发送锁。
 
 ### 4.23 会话分叉（fork）
 

@@ -342,6 +342,8 @@ export type AgentTimelineItem =
       clientMessageId?: string;
       /** 运行中插话（design.md 4.22）：归属当前回合，不开新回合 */
       steer?: true;
+      /** 插话携带的图片数（design.md 4.22）；图片不落盘，无图时省略 */
+      imageCount?: number;
       /** 会话开启翻译时实际发给 Agent 的文本（design.md 4.35）；与 text 相同时省略 */
       translatedText?: string;
     }

@@ -577,4 +577,20 @@ describe("steerPrompt（design.md 4.22）", () => {
     const actions = createAgentSessionActions(client, createStore());
     await expect(actions.steerPrompt(AGENT, "x")).rejects.toThrow("该 Agent 不支持运行中插话");
   });
+
+  it("带图时请求前暂存图片，失败后丢弃", async () => {
+    const store = createStore();
+    const seen: unknown[] = [];
+    const client = fakeClient(async () => {
+      seen.push(store.get(chatRuntimeBySessionAtom)[AGENT]?.pendingSteerImages?.["cm-1"]);
+      throw rpcError("NOT_SUPPORTED", "该 Agent 不支持运行中插话");
+    });
+    const actions = createAgentSessionActions(client, store);
+    await expect(actions.steerPrompt(AGENT, "x", {
+      clientMessageId: "cm-1",
+      displayImages: [{ url: "data:image/png;base64,AAAA", name: "a.png" }],
+    })).rejects.toThrow();
+    expect(seen[0]).toMatchObject([{ type: "image", name: "a.png" }]);
+    expect(store.get(chatRuntimeBySessionAtom)[AGENT]?.pendingSteerImages?.["cm-1"]).toBeUndefined();
+  });
 });

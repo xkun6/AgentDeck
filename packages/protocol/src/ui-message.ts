@@ -128,6 +128,10 @@ interface AgentSteerMessagePart {
   clientMessageId?: string;
   /** 实际发给 Agent 的译文（design.md 4.35） */
   translatedText?: string;
+  /** 本端发起的插话带的图片（不落盘，design.md 4.22） */
+  images?: AgentImageMessagePart[];
+  /** 插话带的图片数；没有 images 时显示为「图片 ×N」 */
+  imageCount?: number;
 }
 
 /** 多模型参考输出块（历史结构，保留以兼容渲染层的分支）。 */

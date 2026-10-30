@@ -1370,6 +1370,22 @@
   white-space: pre-wrap;
 }
 
+.steerImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.steerImages:first-child {
+  margin-top: 0;
+}
+
+.steerImageCount {
+  color: var(--h-text-3);
+  font-size: 12px;
+}
+
 /* 全文搜索定位到的消息：短暂高亮后淡出（design.md 4.19） */
 .messages > [data-focus="true"] {
   animation: focusFlash 2s ease-out;

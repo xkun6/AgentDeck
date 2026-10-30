@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ComposerAttachment } from "@/components/chat/composer-types";
 import {
+  applyLoadedFiles,
   deserializeQueue,
   enqueue,
   entriesFor,
+  fileIdsToLoad,
   hasNonSerializableAttachments,
   removeEntry,
   serializeQueue,
@@ -54,13 +56,14 @@ describe("shouldAutoDrainOnSettle", () => {
 });
 
 describe("serialization", () => {
-  it("round-trips path attachments and drops transient browser files", () => {
+  it("round-trips attachments without the transient browser file data", () => {
     const pathAttachment = { id: "p", source: "path", path: "/a/b.txt", name: "b.txt", kind: "file", status: "ready" } as ComposerAttachment;
     const browserAttachment = { id: "f", source: "browser", name: "x.png", kind: "image", status: "ready", file: {} as File, previewUrl: "blob:x" } as ComposerAttachment;
     const state = enqueue({}, "s1", entry({ attachments: [pathAttachment, browserAttachment] }));
     const restored = deserializeQueue(serializeQueue(state));
     expect(entriesFor(restored, "s1")[0]!.attachments).toEqual([
       { id: "p", source: "path", path: "/a/b.txt", name: "b.txt", kind: "file", status: "ready" },
+      { id: "f", source: "browser", name: "x.png", kind: "image", status: "ready" },
     ]);
   });
 
@@ -120,15 +123,39 @@ describe("serialization", () => {
     expect(entriesFor(restored, "s1")[0]!.attachments[0]!.uploadedPath).toBe("/tmp/x.pdf");
   });
 
-  it("strips browser attachments without uploadedPath during deserialization", () => {
-    const browserAttachment = { id: "b1", source: "browser", name: "img.png", kind: "image", status: "ready", file: {} as File } as ComposerAttachment;
-    const pathAttachment = { id: "p1", source: "path", path: "/a/b.txt", name: "b.txt", kind: "file", status: "ready" } as ComposerAttachment;
-    const state = enqueue({}, "s1", entry({ attachments: [browserAttachment, pathAttachment] }));
-    const restored = deserializeQueue(serializeQueue(state));
-    // Browser attachments still dropped (no way to recover the File data),
-    // but path attachments survive.
-    expect(entriesFor(restored, "s1")[0]!.attachments).toHaveLength(1);
-    expect(entriesFor(restored, "s1")[0]!.attachments[0]!.source).toBe("path");
+});
+
+describe("粘贴文件的恢复", () => {
+  const browser = (id: string) =>
+    ({ id, source: "browser", name: `${id}.png`, kind: "image", status: "ready" }) as ComposerAttachment;
+
+  it("fileIdsToLoad 只列出还没取回内容的浏览器附件", () => {
+    const state = enqueue({}, "s1", entry({
+      attachments: [
+        browser("b1"),
+        { ...browser("b2"), file: new File(["x"], "b2.png") },
+        { id: "p", source: "path", path: "/a", name: "a", kind: "file", status: "ready" },
+      ],
+    }));
+    expect(fileIdsToLoad(state)).toEqual(["b1"]);
+  });
+
+  it("applyLoadedFiles 填回取到的文件，去掉取不到的附件，保留有文字的条目", () => {
+    const file = new File(["x"], "b1.png");
+    const state = enqueue({}, "s1", entry({ attachments: [browser("b1"), browser("b2")] }));
+    const next = applyLoadedFiles(state, new Map([["b1", file], ["b2", null]]));
+    expect(entriesFor(next, "s1")[0]!.attachments).toEqual([{ ...browser("b1"), file }]);
+  });
+
+  it("applyLoadedFiles 去掉因此变空的条目和会话", () => {
+    const state = enqueue({}, "s1", entry({ text: "  ", attachments: [browser("b1")] }));
+    expect(applyLoadedFiles(state, new Map([["b1", null]]))).toEqual({});
+  });
+
+  it("已保存的文件不再算作会丢失", () => {
+    const state = enqueue({}, "s1", entry({ attachments: [browser("b1")] }));
+    expect(hasNonSerializableAttachments(state)).toBe(true);
+    expect(hasNonSerializableAttachments(state, new Set(["b1"]))).toBe(false);
   });
 });
 

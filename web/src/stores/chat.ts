@@ -44,7 +44,7 @@ export type AssistantTurnBlock =
   | { type: "progress"; text: string }
   | { type: "image"; image: ImageEntry }
   | { type: "tool"; tool: ToolEntry }
-  | { type: "steer"; text: string; translatedText?: string }
+  | { type: "steer"; text: string; translatedText?: string; images?: ImageEntry[]; imageCount?: number }
   | { type: "moa_reference"; label: string; text: string; index?: number; count?: number };
 
 export interface PendingApproval {
@@ -98,11 +98,14 @@ export interface ChatSessionRuntime {
   activeTurnBackground?: boolean;
   /** AgentDeck：进行中的回合是缓存保活（origin keepalive，design.md 4.36），结束时不发桌面通知。 */
   activeTurnKeepAlive?: boolean;
+  /** AgentDeck：本端发起、尚未回到时间线的插话图片，按 clientMessageId 暂存（design.md 4.22）。 */
+  pendingSteerImages?: Record<string, AgentImagePart[]>;
 }
 
 export type ChatRuntimeBySession = Record<string, ChatSessionRuntime>;
 
 type AgentToolPart = Extract<AgentMessagePart, { type: "tool" }>;
+type AgentImagePart = Extract<AgentMessagePart, { type: "image" }>;
 
 export const chatRuntimeBySessionAtom = atom<ChatRuntimeBySession>({});
 
@@ -665,6 +668,12 @@ function findToolOwnerMessageId(runtime: ChatSessionRuntime, callId: string): st
   return undefined;
 }
 
+function withoutPendingSteerImages(runtime: ChatSessionRuntime, clientMessageId: string | undefined): ChatSessionRuntime {
+  if (!clientMessageId || !runtime.pendingSteerImages?.[clientMessageId]) return runtime;
+  const { [clientMessageId]: _drop, ...rest } = runtime.pendingSteerImages;
+  return { ...runtime, pendingSteerImages: rest };
+}
+
 function reduceAgentTimelineItem(
   runtime: ChatSessionRuntime,
   envelope: AgentStreamEnvelope,
@@ -676,7 +685,8 @@ function reduceAgentTimelineItem(
     case "user_message": {
       if (item.steer) {
         // 运行中插话（design.md 4.22）：不开新一轮，作为内联气泡并入当前助手消息流
-        return withActiveAgentAssistant(runtime, envelope, turnId, (message) => ({
+        const steerImages = item.clientMessageId ? runtime.pendingSteerImages?.[item.clientMessageId] : undefined;
+        return withActiveAgentAssistant(withoutPendingSteerImages(runtime, item.clientMessageId), envelope, turnId, (message) => ({
           ...message,
           status: "streaming",
           parts: [
@@ -684,6 +694,8 @@ function reduceAgentTimelineItem(
             {
               type: "steer",
               text: item.text,
+              ...(steerImages?.length ? { images: steerImages } : {}),
+              ...(item.imageCount ? { imageCount: item.imageCount } : {}),
               ...(item.clientMessageId ? { clientMessageId: item.clientMessageId } : {}),
               ...(item.translatedText ? { translatedText: item.translatedText } : {}),
             },
@@ -1175,6 +1187,31 @@ export const startAgentPromptAtom = atom(
 );
 
 /** `agent.send` 失败：撤掉占位助手消息，用户消息保留，追加错误提示。 */
+/** 插话请求发出前暂存图片，sidecar 写回 user_message 时并入气泡（design.md 4.22）。 */
+export const rememberSteerImagesAtom = atom(
+  null,
+  (_get, set, params: { agentId: string; clientMessageId: string; images: ImageEntry[] }) => {
+    const parts = params.images.flatMap((image) => imagePartFromSource(image) ?? []);
+    if (parts.length === 0) return;
+    set(chatRuntimeBySessionAtom, (state) =>
+      updateSessionRuntime(state, params.agentId, (runtime) => ({
+        ...runtime,
+        pendingSteerImages: { ...runtime.pendingSteerImages, [params.clientMessageId]: parts },
+      })),
+    );
+  },
+);
+
+/** 插话失败：丢弃暂存的图片。 */
+export const forgetSteerImagesAtom = atom(
+  null,
+  (_get, set, params: { agentId: string; clientMessageId: string }) => {
+    set(chatRuntimeBySessionAtom, (state) =>
+      updateSessionRuntime(state, params.agentId, (runtime) => withoutPendingSteerImages(runtime, params.clientMessageId)),
+    );
+  },
+);
+
 export const failAgentPromptAtom = atom(
   null,
   (_get, set, params: { agentId: string; clientMessageId: string; message: string; now?: number }) => {
