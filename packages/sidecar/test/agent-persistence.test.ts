@@ -955,6 +955,86 @@ describe("空闲会话回收（design.md 4.34）", () => {
     expect(await busy.manager.reclaimIdleAgents()).toEqual([]);
   });
 
+  test("自动回收：开启保活的派单会话一直不回收（不要求置顶、不要求还有任务）；关掉保活或干活的会话照常回收（design.md 4.26）", async () => {
+    const dispatcher = await idleAgent();
+    await dispatcher.manager.createAgent({ provider: "fake", cwd: "/w", reportToAgentId: dispatcher.agentId });
+    internalAgent(dispatcher.manager, dispatcher.agentId).snapshot.cacheKeepAlive = true;
+    dispatcher.clock.value += 60 * 60_000;
+    expect(await dispatcher.manager.reclaimIdleAgents()).not.toContain(dispatcher.agentId);
+    expect(dispatcher.manager.getAgent(dispatcher.agentId).pinned).toBeUndefined();
+
+    internalAgent(dispatcher.manager, dispatcher.agentId).snapshot.cacheKeepAlive = false;
+    expect(await dispatcher.manager.reclaimIdleAgents()).toContain(dispatcher.agentId);
+
+    const archived = await idleAgent();
+    await archived.manager.createAgent({ provider: "fake", cwd: "/w", reportToAgentId: archived.agentId });
+    internalAgent(archived.manager, archived.agentId).snapshot.cacheKeepAlive = true;
+    internalAgent(archived.manager, archived.agentId).snapshot.archived = true;
+    archived.clock.value += 60 * 60_000;
+    expect(await archived.manager.reclaimIdleAgents()).toContain(archived.agentId);
+
+    const top = await idleAgent();
+    const worker = await top.manager.createAgent({ provider: "fake", cwd: "/w", reportToAgentId: top.agentId });
+    await top.manager.createAgent({ provider: "fake", cwd: "/w", reportToAgentId: worker.id });
+    internalAgent(top.manager, worker.id).snapshot.cacheKeepAlive = true;
+    internalAgent(top.manager, worker.id).snapshot.resumable = true;
+    expect(await top.manager.reclaimIfIdle(worker.id)).toBe(true);
+  });
+
+  test("reclaimIfIdle：不等空闲时长；置顶、运行中、不可恢复、仍有派单任务时不回收（design.md 4.26）", async () => {
+    const { manager, sessions, agentId } = await idleAgent();
+    expect(await manager.reclaimIfIdle(agentId)).toBe(true);
+    expect(manager.getAgent(agentId).status).toBe("dormant");
+    expect(sessions[0]!.closed).toBe(true);
+    expect(await manager.reclaimIfIdle("nope")).toBe(false);
+
+    const disabled = await idleAgent({}, { enabled: false, idleMinutes: 15 });
+    expect(await disabled.manager.reclaimIfIdle(disabled.agentId)).toBe(false);
+
+    const pinned = await idleAgent();
+    await pinned.manager.updateAgent(pinned.agentId, { pinned: true });
+    expect(await pinned.manager.reclaimIfIdle(pinned.agentId)).toBe(false);
+
+    const busy = await idleAgent();
+    await busy.manager.sendPrompt(busy.agentId, "go");
+    expect(await busy.manager.reclaimIfIdle(busy.agentId)).toBe(false);
+
+    const fixed = await idleAgent({ resumable: false });
+    expect(await fixed.manager.reclaimIfIdle(fixed.agentId)).toBe(false);
+
+    const dispatcher = await idleAgent();
+    const task = await dispatcher.manager.createAgent({
+      provider: "fake",
+      cwd: "/w",
+      reportToAgentId: dispatcher.agentId,
+    });
+    await dispatcher.manager.sendPrompt(task.id, "并行开发");
+    expect(await dispatcher.manager.reclaimIfIdle(dispatcher.agentId)).toBe(false);
+  });
+
+  test("自动回收：派单出去的会话仍在工作时跳过，不要求开启保活；子会话不算派单时照常回收（design.md 4.26）", async () => {
+    const dispatcher = await idleAgent();
+    const task = await dispatcher.manager.createAgent({
+      provider: "fake",
+      cwd: "/w",
+      reportToAgentId: dispatcher.agentId,
+    });
+    const { turnId } = await dispatcher.manager.sendPrompt(task.id, "并行开发");
+    dispatcher.clock.value += 60 * 60_000;
+    expect(await dispatcher.manager.reclaimIdleAgents()).toEqual([]);
+
+    dispatcher.sessions.at(-1)!.emit({ type: "turn_completed", turnId });
+    await vi.waitFor(() => expect(dispatcher.manager.getAgent(task.id).status).toBe("idle"));
+    dispatcher.clock.value += 60 * 60_000;
+    expect(await dispatcher.manager.reclaimIdleAgents()).toContain(dispatcher.agentId);
+
+    const parent = await idleAgent();
+    const child = await parent.manager.createAgent({ provider: "fake", cwd: "/w", parentAgentId: parent.agentId });
+    await parent.manager.sendPrompt(child.id, "没有回传的子会话");
+    parent.clock.value += 60 * 60_000;
+    expect(await parent.manager.reclaimIdleAgents()).toEqual([parent.agentId]);
+  });
+
   test("自动回收：开启缓存保活且委派子会话仍在工作时跳过，子会话结束后照常回收（design.md 4.36）", async () => {
     const parent = await idleAgent();
     internalAgent(parent.manager, parent.agentId).snapshot.cacheKeepAlive = true;

@@ -3,6 +3,7 @@ import type {
   AgentPermissionRequest,
   AgentPersistenceHandle,
   AgentPromptInput,
+  AgentSnapshot,
   AgentStreamEnvelope,
 } from "@agentdeck/protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -74,7 +75,7 @@ interface Harness {
   /** 全部 turn_started 事件 */
   started: AgentStreamEnvelope[];
   /** 建会话并记下它的假会话 */
-  create(opts?: { provider?: string; parentAgentId?: string }): Promise<string>;
+  create(opts?: { provider?: string; parentAgentId?: string; reportToAgentId?: string }): Promise<string>;
   /** 建会话并跑完一轮普通回合（让保活看到一次请求） */
   createIdle(opts: { cacheKeepAlive?: boolean; pinned?: boolean }): Promise<string>;
 }
@@ -91,6 +92,12 @@ afterEach(async () => {
   }
   vi.useRealTimers();
 });
+
+/** 把已有会话标成干活的会话（它的 reportToAgentId 只能在创建时给，这里补上以便先跑一轮回合） */
+function internalReportTo(manager: AgentManager, agentId: string, reportTo: string): void {
+  (manager as unknown as { agents: Map<string, { snapshot: AgentSnapshot }> }).agents.get(agentId)!.snapshot.reportToAgentId =
+    reportTo;
+}
 
 const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 const settle = () => vi.advanceTimersByTimeAsync(0);
@@ -138,6 +145,7 @@ function setup(): Harness {
       provider: opts.provider ?? "claude",
       cwd: "/work",
       ...(opts.parentAgentId ? { parentAgentId: opts.parentAgentId, origin: "delegate" as const } : {}),
+      ...(opts.reportToAgentId ? { reportToAgentId: opts.reportToAgentId, origin: "delegate" as const } : {}),
     });
     sessions.set(agent.id, created.at(-1)!);
     return agent.id;
@@ -232,6 +240,46 @@ describe("保活触发", () => {
     await advance(50 * MIN);
     await settle();
     expect(h.sessionOf(pinned).prompts).toHaveLength(3);
+  });
+
+  test("派单会话开着保活就空闲也保活（不要求置顶）；关掉保活后停止；干活的会话再派单不算派单会话", async () => {
+    const h = setup();
+    const dispatcher = await h.createIdle({ cacheKeepAlive: true });
+    const worker = await h.createIdle({ cacheKeepAlive: true });
+    const off = await h.createIdle({});
+    await h.create({ reportToAgentId: dispatcher });
+    await h.create({ reportToAgentId: off });
+    internalReportTo(h.manager, worker, dispatcher);
+    await h.create({ reportToAgentId: worker });
+
+    await advance(50 * MIN);
+    await settle();
+    expect(h.sessionOf(dispatcher).prompts).toEqual(["开始任务", KEEPALIVE_PROMPT]);
+    expect(h.sessionOf(worker).prompts).toEqual(["开始任务"]);
+    expect(h.sessionOf(off).prompts).toEqual(["开始任务"]);
+    expect(h.manager.getAgent(dispatcher).pinned).toBeUndefined();
+
+    h.sessionOf(dispatcher).finish();
+    await settle();
+    await h.manager.updateAgent(dispatcher, { cacheKeepAlive: false });
+    await advance(50 * MIN);
+    await settle();
+    expect(h.sessionOf(dispatcher).prompts).toHaveLength(2);
+  });
+
+  test("已归档的会话不保活，也不会因此被取消归档", async () => {
+    const h = setup();
+    const dispatcher = await h.createIdle({ cacheKeepAlive: true });
+    const pinned = await h.createIdle({ cacheKeepAlive: true, pinned: true });
+    await h.create({ reportToAgentId: dispatcher });
+    await h.manager.updateAgent(dispatcher, { archived: true });
+    await h.manager.updateAgent(pinned, { archived: true });
+
+    await advance(120 * MIN);
+    await settle();
+    expect(h.sessionOf(dispatcher).prompts).toEqual(["开始任务"]);
+    expect(h.sessionOf(pinned).prompts).toEqual(["开始任务"]);
+    expect(h.manager.getAgent(dispatcher).archived).toBe(true);
   });
 
   test("委派的子会话仍在运行时父会话保活，子会话本身不被打扰", async () => {

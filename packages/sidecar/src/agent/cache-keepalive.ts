@@ -1,5 +1,5 @@
 // 缓存保活（design.md 4.36）：开启了 cacheKeepAlive 的 Claude 会话在等待子代理 / 后台任务 / 委派子会话时
-// （置顶会话不要求在等待），距最近一次主线程请求满 50 分钟就在当前会话里发一条内部消息，刷新提示缓存的 TTL。
+// （置顶会话与派单会话不要求在等待），距最近一次主线程请求满 50 分钟就在当前会话里发一条内部消息，刷新提示缓存的 TTL。
 import type { AgentProviderId, AgentSnapshot, AgentStreamEnvelope } from "@agentdeck/protocol";
 
 import { createSilentLogger, type Logger } from "../logger.js";
@@ -86,14 +86,15 @@ export class CacheKeepAlive {
   }
 
   private eligible(agent: AgentSnapshot, all: AgentSnapshot[]): boolean {
-    if (agent.cacheKeepAlive !== true || !this.isClaude(agent.provider)) {
+    // 已归档的不发：向已归档会话发消息会自动取消归档（design.md 4.17）
+    if (agent.cacheKeepAlive !== true || agent.archived || !this.isClaude(agent.provider)) {
       return false;
     }
     if (agent.status !== "idle" || agent.activeTurnId || agent.pendingPermissions.length > 0) {
       return false;
     }
-    // 置顶会话进程未被回收期间一直保活；其余只在等待子代理 / 后台任务 / 委派子会话时保活
-    return agent.pinned === true || isWaiting(agent, all);
+    // 置顶会话与派单会话进程未被回收期间一直保活；其余只在等待子代理 / 后台任务 / 委派子会话时保活
+    return agent.pinned === true || isDispatcher(agent, all) || isWaiting(agent, all);
   }
 
   private send(agentId: string, now: number): void {
@@ -110,6 +111,19 @@ export class CacheKeepAlive {
         );
       });
   }
+}
+
+/** 派单会话（design.md 4.26）：有会话向它回传，且它自己不是被派单的（干活的会话再派单不算，空闲时不保活） */
+export function isDispatcher(agent: AgentSnapshot, all: Iterable<AgentSnapshot>): boolean {
+  if (agent.reportToAgentId || agent.parentAgentId) {
+    return false;
+  }
+  for (const other of all) {
+    if (other.reportToAgentId === agent.id) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isBusy(snapshot: AgentSnapshot): boolean {

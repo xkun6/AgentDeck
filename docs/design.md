@@ -974,12 +974,16 @@ interface ScheduleRun { scheduleId: string; ts: number; agentId?: string; turnId
 
 **派单回传**（`server/interop-reports.ts`）：让派单会话不必阻塞等待，并行派出多个任务后结束回合即可，子任务完成时由 sidecar 把它唤醒。
 - 快照字段 `reportToAgentId?: string`（持久化）：派单时写入，指向接收回传的会话，与决定侧边栏层级的 `parentAgentId` 相互独立。
-- 回传时机：只有派单方经 `delegate` / `send_to_agent` 发出的回合才回传；用户在该会话里手动发的回合、保活回合不回传。回合结束后要求状态为 `idle` / `error` 且 `backgroundActive` 为 false，并稳定 1.5 秒（防止把后台子代理完成后 CLI 自发的下一轮截断）；状态变为 `closed` / `dormant` 或会话被删除时放弃。
+- 回传时机：只有派单方经 `delegate` / `send_to_agent` 发出的回合才回传；用户在该会话里手动发的回合、保活回合不回传。回合结束后要求状态为 `idle` / `error`、`backgroundActive` 为 false、它自己派出的任务都已回传并处理完（没有待回传、待投递的记录），并稳定 1.5 秒（防止把后台子代理完成后 CLI 自发的下一轮截断）；会话被关闭、休眠且没有这类未完成任务，或被删除时放弃。因此干活的会话再派单并结束回合时不算完成，等子任务回传、它处理完后才向上回传最终结果。
+- 不启用回传的调用方：`origin` 为 `schedule` / `kanban` / `group` / `judge` 的会话，回合结束对它们有业务含义（目标循环、任务状态、触发汇总），由回传唤醒的回合会打乱判断，因此 `delegate` 一律按 `report: false` 处理，也不开启保活。用户自己的会话上配置的目标循环（4.25）不受此限，每条回传会多跑一轮。
+- 回传与 `wait` 的正文不取缓存保活回合（4.36）的内容。
 - 不重复：派单方正在 `wait` / `wait_agent` 并拿到了结果，或自己 `cancel_agent` 了该回合时，不再回传（已入队未送达的也撤回）；`wait` 超时或被中断则照常回传。
-- 投递：回传内容为状态、错误、最后一条助手消息（上限 40k 字），`cwd` 与派单会话不同时另附分支名与未提交改动统计。按接收方排队，接收方空闲并稳定 1.5 秒后合并成一条 `sendPrompt(internal)` 发出（休眠的会话会被恢复，已归档或已删除的放弃并记日志）；接收方忙时等它本回合结束，遇到 `TURN_IN_PROGRESS` 则放回队列等下一次空闲。稳定时间也让前端排队消息优先发出。
+- 投递：回传内容为状态、错误、最后一条助手消息（上限 40k 字），`cwd` 与派单会话不同时另附分支名与未提交改动统计。按接收方排队，接收方空闲并稳定 1.5 秒后合并成一条 `sendPrompt(internal)` 发出（休眠的会话会被恢复，已归档或已删除的放弃并记日志）；接收方忙时等它本回合结束，遇到 `TURN_IN_PROGRESS` 则放回队列等下一次空闲；其它发送失败（如恢复失败）每 60 秒重试，最多 5 次，仍失败才放弃并记日志。稳定时间也让前端排队消息优先发出。
 - worktree 的合并与清理由派单会话用 git 完成，sidecar 不代做；`delegate` 工具说明要求在任务里交代子会话提交改动。
 - 局限：待回传记录只在内存，sidecar 重启后丢失（运行中的回合本来也会中断），派单会话可用 `list_agents` / `read_agent` 查看。
-- 侧栏归属：会话 cwd 不属于已记住的项目时，先按 git worktree 归回所属项目（4.17），查不到（如 worktree 已清理）且有 `reportToAgentId` 时归入派单会话的项目。AgentDeck 自建的 worktree 目录（`<dataDir>/worktrees/` 下的 `delegate-<8 位>`、`task-<id>`、`<组 id>/<n>`）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。
+- 侧栏归属：会话 cwd 不属于已记住的项目时，先按 git worktree 归回所属项目（4.17），查不到（如 worktree 已清理）且有 `reportToAgentId` 时归入派单会话的项目。AgentDeck 自建的 worktree 目录（`<dataDir>/worktrees/` 下的 `delegate-<8 位>`、`task-<UUID>`、`<8 位组 id>/<n>`）不是项目：打开这类会话时不登记为项目、也不写入当前工作区；已误登记的读取时过滤。
+- 干活的会话（`delegate` 带回传新建的会话）：Claude 类建好即开启缓存保活、不置顶，因此只在等待子代理 / 后台任务 / 子任务时保活，空闲时不保活（4.36）。派单任务完成（回传已入队，或派单方经 `wait` 拿到结果）后，按 4.34 自动回收的同一套条件立刻回收进程（关闭了「空闲自动回收」设置时不回收；置顶、后台活动、待审批、不可恢复、仍有子任务在工作的都跳过），不等空闲时长；派单方再 `send_to_agent` 时自动恢复。派单方 `cancel_agent` 的回合不触发，由空闲回收兜底。
+- 派单会话（有 `reportToAgentId` 指向它，且自身没有 `reportToAgentId` / `parentAgentId`）：首次发出带回传的 `delegate` 时自动开启缓存保活（仅 Claude 类），不改置顶，置顶由用户自己决定。开着保活时等同置顶的效果：空闲也保活、不被自动回收（4.36、4.34）；只在首次开启（已有会话指向它时不再设置），用户关掉后不会被重新打开；设置失败只记日志，不影响派单。
 - 只有 Agent 发起的会话有此字段；前端详情页「由 <父会话> 委派」链接取 `parentAgentId ?? reportToAgentId`；缓存保活（4.36）把 `reportToAgentId` 相同的运行中会话也算作等待中的子会话。
 
 **服务说明（instructions）**：initialize 应答带 `instructions`（`INTEROP_INSTRUCTIONS`）：用户提到的会话 ID、或要求联系 / 询问 / 发消息给另一个会话时，指的是 AgentDeck 会话，用本服务的工具处理，不要把会话 ID 当作 Claude / Codex 的本地会话记录去搜索或读取 jsonl 等文件。Claude Code 把 MCP 工具延迟加载（只列名字），但会把服务说明放进系统提示词，因此用户只说「把 X 发给会话 <ID>」时，Agent 也会经 ToolSearch 取用 `send_to_agent` / `read_agent`，不用在提示词里写工具名（claude 2.1.x 实测）。
@@ -1300,7 +1304,7 @@ Codex 的 `request_user_input` 工具向用户提问时，app-server 发 server�
 - 已加载：`session !== null`，且不在关闭 / 恢复 / 发送中，未被删除；
 - `status` 为 `idle` 或 `error`，`activeTurnId` 为空，`pendingPermissions` 为空，`backgroundActive` 不为 true；
 - `resumable === true`；未置顶（`pinned !== true`，置顶会话只能手动回收）；
-- 不是「开启缓存保活且有直接子会话仍在工作」（4.36）；
+- 不是「开启缓存保活且有直接子会话仍在工作」（4.36）；没有派单出去、仍在工作的会话（`reportToAgentId` 指向它，4.26，不要求开启保活）；不是开启缓存保活且未归档的派单会话（4.26，不要求还有任务在工作）；
 - 距最近一次活动 ≥ `idleMinutes`。「活动」= 会话创建 / 恢复完成、`agent.send` 受理、任一 `agent.stream` 事件发出（只在内存记录，不持久化；sidecar 重启后会话本就是 dormant）。
 
 **并发**：关闭进行中再 `agent.send`，先等关闭完成再按 dormant 恢复（`ensureSession` 等待 `agent.closing`），不返回 `AGENT_CLOSED`。回收写日志「回收空闲 agent <id>（手动 / 空闲 N 分钟）」。
@@ -1380,9 +1384,9 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 **开关**：`AgentSnapshot.cacheKeepAlive?: boolean`（缺省 false，随 meta 持久化，加载时校验类型），经 `agent.update { agentId, cacheKeepAlive }` 设置（同 4.17 只改元数据）。只对 Claude 类 provider（`AgentClient.kind === "claude"`，含 extends claude 的自定义中转）可开：其它 provider 或 provider 已不存在时设为 true → `NOT_SUPPORTED`（「该 Agent 不支持缓存保活」）；设为 false 总是允许。不注入 TTL 相关环境变量，依赖订阅套餐内主会话默认的 1 小时 TTL（5 分钟 TTL 下 50 分钟一次的保活不起作用）。
 
 **触发**：`CacheKeepAlive`（`agent/cache-keepalive.ts`，订阅 AgentManager）每 60 秒扫一次（定时器 `unref`，`stop` 时清除），对满足以下**全部**条件的会话发一次保活：
-- `cacheKeepAlive === true`，且 provider 为 Claude 类；
+- `cacheKeepAlive === true`，未归档（向已归档会话发消息会自动取消归档，4.17），且 provider 为 Claude 类；
 - 已加载且空闲：`status === "idle"`，`activeTurnId` 为空，`pendingPermissions` 为空（dormant / closed / error 不发；发送中由 `TURN_IN_PROGRESS` 挡掉）；
-- 在等待：`backgroundActive === true`（4.11 / 4.15），或有直接子会话（`parentAgentId` 为它，4.26）处于 `running` / `starting`、`activeTurnId` 非空或 `backgroundActive`。**置顶**（`pinned === true`）的会话不要求在等待：进程未被回收期间一直保活，长任务全部结束后用户回来时缓存仍在。有后台活动的会话本就不会被自动回收（4.34）；开启保活且在等子会话的会话同样不自动回收；
+- 在等待：`backgroundActive === true`（4.11 / 4.15），或有直接子会话（`parentAgentId` 为它，4.26）处于 `running` / `starting`、`activeTurnId` 非空或 `backgroundActive`。**置顶**（`pinned === true`）的会话和**派单会话**（4.26）不要求在等待：进程未被回收期间一直保活，长任务全部结束后用户回来时缓存仍在。有后台活动的会话本就不会被自动回收（4.34）；开启保活且在等子会话的会话、开启保活的派单会话同样不自动回收；派单会话首次派单时自动开启本开关（4.26）；
 - 距该会话最近一次主线程请求 ≥ 50 分钟。「请求」取 sidecar 收到该会话 `turn_started` / `usage_updated`（主线程每个 `message_start` 一次，4.3）的时间，只在内存记录；sidecar 启动后该会话还没有过请求则不保活（不知道缓存是否还在）；
 - 上一次保活发送失败（`sendPrompt` 抛错）后同样等满 50 分钟再试；同一会话同时只有一次发送在进行。
 

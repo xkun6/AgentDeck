@@ -33,11 +33,11 @@ describe("workspace persistence helpers", () => {
   it("AgentDeck 自建的 worktree 不算项目：不登记、不写当前工作区，已误登记的读取时过滤", () => {
     const managed = [
       "C:\\Users\\x\\AppData\\Roaming\\local.agentdeck.desktop\\worktrees\\delegate-906423a5",
-      "/data/worktrees/task-3f2a",
+      "/data/worktrees/task-3f2a9c1e-5b7d-4a21-9e0f-1c2d3e4f5a6b",
       "/data/worktrees/ab12cd34/2",
     ];
     for (const path of managed) expect(isManagedWorktreePath(path)).toBe(true);
-    for (const path of ["/work/worktrees", "/work/worktrees/feature-x", "/work/delegate-906423a5"]) {
+    for (const path of ["/work/worktrees", "/work/worktrees/task-foo", "/work/delegate-906423a5"]) {
       expect(isManagedWorktreePath(path)).toBe(false);
     }
 

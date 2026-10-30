@@ -48,6 +48,8 @@ export const INTEROP_INSTRUCTIONS =
 const REQUEST_BODY_MAX_BYTES = 1024 * 1024;
 /** 即使目录里查不到，这些 modeId 也一律视为危险（跳过权限确认类） */
 const DANGEROUS_MODE_PATTERN = /bypass|full-access|dangerous|yolo/i;
+/** 回合结束对这些会话有业务含义（目标循环、任务状态、触发汇总），回传唤醒的回合会打乱判断，不启用回传（design.md 4.26） */
+const NO_REPORT_ORIGINS: ReadonlySet<string> = new Set(["schedule", "kanban", "group", "judge"]);
 /** plan 模式不能动手开发，子会话不继承 */
 const PLAN_MODE_PATTERN = /plan/i;
 
@@ -130,6 +132,21 @@ export function lastAssistantText(entries: AgentStreamEnvelope[]): string | unde
   }
   const text = chunks.join("");
   return text.trim() ? text : undefined;
+}
+
+/** 去掉缓存保活回合（design.md 4.36）：它的「ok」不是任务结果 */
+function withoutKeepAliveTurns(entries: AgentStreamEnvelope[]): AgentStreamEnvelope[] {
+  let keepAlive = false;
+  return entries.filter(({ event }) => {
+    if (event.type === "turn_started") {
+      keepAlive = event.origin === "keepalive";
+    }
+    const drop = keepAlive;
+    if (event.type === "turn_completed" || event.type === "turn_failed" || event.type === "turn_canceled") {
+      keepAlive = false;
+    }
+    return !drop;
+  });
 }
 
 /** 最近一个回合的结局（取 entries 中最后一个回合结束事件） */
@@ -451,7 +468,8 @@ export class McpInteropEndpoint {
         " 并行派单时用 wait=false 并结束当前回合：任务结束后结果会作为一条消息自动发回本会话。" +
         " worktree=true 时任务要交代对方提交改动；合并到主线和清理（git merge、git worktree remove、git branch -d）由当前会话用 git 完成。" +
         " 不传 modeId 且 provider 相同时继承当前会话的权限模式；只有当前会话本身在危险模式时才能指定危险模式。子会话的权限请求由用户在 AgentDeck 界面审批。" +
-        " 可选的模型、思考强度与模式见 list_providers 的 provider 参数。",
+        " 可选的模型、思考强度与模式见 list_providers 的 provider 参数。" +
+        " 首次带回传派单时，当前会话会自动开启缓存保活（仅 Claude 类）。",
       {
         provider: z.string().min(1).describe("provider id，见 list_providers，如 claude / codex"),
         prompt: z.string().min(1).describe("交给子会话的任务描述"),
@@ -650,6 +668,9 @@ export class McpInteropEndpoint {
       throw new ToolError(`工作目录不存在：${cwd}`);
     }
 
+    const report = args.report !== false && !NO_REPORT_ORIGINS.has(caller.origin ?? "user");
+    const firstDispatch =
+      report && !this.manager.listAgents().some((agent) => agent.reportToAgentId === callerId);
     const id = randomUUID();
     let worktree: { path: string; branch: string } | undefined;
     if (args.worktree === true) {
@@ -674,7 +695,7 @@ export class McpInteropEndpoint {
         provider: args.provider,
         cwd: worktree?.path ?? cwd,
         ...(independent ? {} : { parentAgentId: callerId }),
-        ...(args.report !== false ? { reportToAgentId: callerId } : {}),
+        ...(report ? { reportToAgentId: callerId } : {}),
         origin: "delegate",
         ...(args.model !== undefined ? { model: args.model } : {}),
         ...(modeId !== undefined ? { modeId } : {}),
@@ -702,11 +723,38 @@ export class McpInteropEndpoint {
         `${independent ? "独立会话" : "子会话"} ${id} 已创建，但发送任务失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    if (args.report !== false) {
+    if (report) {
       this.reports.expect(id, callerId, 0);
+      await this.enableKeepAlive(id, args.provider);
+    }
+    if (firstDispatch) {
+      await this.enableKeepAlive(callerId, caller.provider);
     }
     const wait = args.wait ?? !independent;
-    return this.finish(callerId, id, 0, wait, clampTimeoutSec(args.timeoutSec, caller), signal, worktree);
+    return this.finish(
+      callerId,
+      id,
+      0,
+      wait,
+      clampTimeoutSec(args.timeoutSec, this.callerSnapshot(callerId)),
+      signal,
+      worktree,
+    );
+  }
+
+  /**
+   * 派单时开启缓存保活（仅 Claude 类，design.md 4.26）：派单会话开着保活就空闲也保活、不被自动回收；
+   * 干活的会话只在等子代理 / 后台任务 / 子任务时保活。都不改置顶
+   */
+  private async enableKeepAlive(agentId: string, provider: string): Promise<void> {
+    if (this.registry.get(provider)?.kind !== "claude") {
+      return;
+    }
+    await this.manager
+      .updateAgent(agentId, { cacheKeepAlive: true })
+      .catch((error: unknown) =>
+        this.logger.warn("开启会话 %s 的缓存保活失败：%s", agentId, error instanceof Error ? error.message : String(error)),
+      );
   }
 
   private async sendToAgent(
@@ -815,9 +863,14 @@ export class McpInteropEndpoint {
       }
       return textResult(result);
     }
-    // 派单方已拿到结果，不再回传；后台任务未结束时保留，之后的结果仍要发回
-    if (wait && snapshot.reportToAgentId === callerId && snapshot.backgroundActive !== true) {
-      this.reports.settle(agentId, callerId);
+    // 派单方已拿到结果，不再回传；后台任务或它派出的任务未结束时保留，之后的结果仍要发回
+    if (
+      wait &&
+      snapshot.reportToAgentId === callerId &&
+      snapshot.backgroundActive !== true &&
+      !this.reports.hasOutstanding(agentId)
+    ) {
+      this.reports.settleWaited(agentId, callerId);
     }
     return textResult({ ...result, ...(await this.turnResult(agentId, sinceSeq)) });
   }
@@ -827,8 +880,9 @@ export class McpInteropEndpoint {
     sinceSeq: number,
   ): Promise<{ status: string; error?: string; reply?: string }> {
     const { entries } = await this.manager.timeline(agentId, sinceSeq);
-    const outcome = lastOutcome(entries);
-    const reply = lastAssistantText(entries);
+    const real = withoutKeepAliveTurns(entries);
+    const outcome = lastOutcome(real);
+    const reply = lastAssistantText(real);
     return {
       status: outcome?.status ?? "completed",
       ...(outcome?.error ? { error: outcome.error } : {}),

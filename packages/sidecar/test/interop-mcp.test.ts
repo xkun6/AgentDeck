@@ -127,7 +127,12 @@ interface Harness {
   port: number;
   url: string;
   /** 以用户身份建会话（origin 缺省），返回 agentId 与它的互通 token */
-  createCaller(opts?: { cwd?: string; parentAgentId?: string; modeId?: string }): Promise<{ id: string; token: string }>;
+  createCaller(opts?: {
+    cwd?: string;
+    parentAgentId?: string;
+    modeId?: string;
+    origin?: "schedule" | "kanban" | "group";
+  }): Promise<{ id: string; token: string }>;
   /** 用某会话的 token 连上 MCP 端点 */
   connect(token: string): Promise<Client>;
   /** 按 agentId 取它的脚本化会话（用互通 token 对应） */
@@ -142,11 +147,11 @@ afterEach(async () => {
   }
 });
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(opts: { kind?: AgentClient["kind"] } = {}): Promise<Harness> {
   const sessions: ScriptedSession[] = [];
   const fakeClient: AgentClient = {
     provider: "fake",
-    kind: "mock",
+    kind: opts.kind ?? "mock",
     label: "Fake",
     isAvailable: async () => ({ available: true }),
     fetchCatalog: async () => ({
@@ -214,6 +219,7 @@ async function createHarness(): Promise<Harness> {
         cwd: opts.cwd ?? dataDir,
         ...(opts.parentAgentId ? { parentAgentId: opts.parentAgentId } : {}),
         ...(opts.modeId ? { modeId: opts.modeId } : {}),
+        ...(opts.origin ? { origin: opts.origin } : {}),
       });
       const endpoint = interop.endpointFor(agent.id);
       return { id: agent.id, token: endpoint!.token };
@@ -764,6 +770,123 @@ describe("派单回传", () => {
     expect(report).toContain(`分支：${json.worktree.branch}`);
     expect(report).toContain("未提交改动");
     expect(report).toContain("new.txt");
+  });
+});
+
+describe("派单时自动开启保活", () => {
+  test("Claude 类：首次派单开启保活、不改置顶；用户关掉后再派单不会重新打开", async () => {
+    const h = await createHarness({ kind: "claude" });
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    await callTool(client, "delegate", { provider: "fake", prompt: "hold:一", wait: false });
+    expect(h.manager.getAgent(caller.id).cacheKeepAlive).toBe(true);
+    expect(h.manager.getAgent(caller.id).pinned).toBeUndefined();
+
+    await h.manager.updateAgent(caller.id, { cacheKeepAlive: false });
+    await callTool(client, "delegate", { provider: "fake", prompt: "hold:二", wait: false });
+    expect(h.manager.getAgent(caller.id).cacheKeepAlive).toBe(false);
+  });
+
+  test("非 Claude 类不开保活；report=false 不算派单", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    await callTool(await h.connect(caller.token), "delegate", { provider: "fake", prompt: "x" });
+    expect(h.manager.getAgent(caller.id).cacheKeepAlive).toBeUndefined();
+    expect(h.manager.getAgent(caller.id).pinned).toBeUndefined();
+
+    const claude = await createHarness({ kind: "claude" });
+    const silent = await claude.createCaller();
+    await callTool(await claude.connect(silent.token), "delegate", { provider: "fake", prompt: "x", report: false });
+    expect(claude.manager.getAgent(silent.id).cacheKeepAlive).toBeUndefined();
+  });
+
+  test("干活的会话：Claude 类建好即开保活、不置顶；非 Claude 类和 report=false 都不开", async () => {
+    const h = await createHarness({ kind: "claude" });
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const worker = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:干活", wait: false })).json as {
+      agentId: string;
+    };
+    expect(h.manager.getAgent(worker.agentId).cacheKeepAlive).toBe(true);
+    expect(h.manager.getAgent(worker.agentId).pinned).toBeUndefined();
+    const silent = (await callTool(client, "delegate", { provider: "fake", prompt: "x", report: false })).json as {
+      agentId: string;
+    };
+    expect(h.manager.getAgent(silent.agentId).cacheKeepAlive).toBeUndefined();
+
+    const other = await createHarness();
+    const otherCaller = await other.createCaller();
+    const otherWorker = (
+      await callTool(await other.connect(otherCaller.token), "delegate", { provider: "fake", prompt: "x" })
+    ).json as { agentId: string };
+    expect(other.manager.getAgent(otherWorker.agentId).cacheKeepAlive).toBeUndefined();
+  });
+
+  test("定时、看板、协作组的会话派单：不写回传关系、不唤醒、不开保活", async () => {
+    const h = await createHarness({ kind: "claude" });
+    for (const origin of ["schedule", "kanban", "group"] as const) {
+      const caller = await h.createCaller({ origin });
+      const { agentId } = (
+        await callTool(await h.connect(caller.token), "delegate", { provider: "fake", prompt: "hold:任务", wait: false })
+      ).json as { agentId: string };
+      expect(h.manager.getAgent(agentId).reportToAgentId).toBeUndefined();
+      expect(h.manager.getAgent(agentId).cacheKeepAlive).toBeUndefined();
+      expect(h.manager.getAgent(caller.id).cacheKeepAlive).toBeUndefined();
+      h.sessionOf(agentId)!.finish("完成");
+      await sleep(60);
+      expect(h.sessionOf(caller.id)!.prompts).toEqual([]);
+    }
+  });
+
+  test("结果不取缓存保活回合的内容", async () => {
+    const h = await createHarness();
+    const caller = await h.createCaller();
+    const client = await h.connect(caller.token);
+    const { agentId } = (await callTool(client, "delegate", { provider: "fake", prompt: "hold:任务", wait: false })).json as {
+      agentId: string;
+    };
+    h.sessionOf(agentId)!.finish("真实结果");
+    await vi.waitUntil(() => h.manager.getAgent(agentId).status === "idle");
+    await h.manager.sendPrompt(agentId, "保活", undefined, { internal: true, keepAlive: true });
+    const waited = (await callTool(client, "wait_agent", { agentId })).json as { reply: string };
+    expect(waited.reply).toBe("真实结果");
+  });
+
+  test("干活的会话再派单并结束回合：子任务回传、它处理完后才向上回传最终结果", async () => {
+    const h = await createHarness();
+    const top = await h.createCaller();
+    const topClient = await h.connect(top.token);
+    const worker = (await callTool(topClient, "delegate", { provider: "fake", prompt: "hold:总任务", wait: false })).json as {
+      agentId: string;
+    };
+    const workerClient = await h.connect(h.interop.endpointFor(worker.agentId)!.token);
+    const sub = (await callTool(workerClient, "delegate", { provider: "fake", prompt: "hold:子任务", wait: false })).json as {
+      agentId: string;
+    };
+    const topReports = () => h.sessionOf(top.id)!.prompts.filter((prompt) => prompt.includes("派单回传"));
+
+    h.sessionOf(worker.agentId)!.finish("先派出去了");
+    await sleep(80);
+    expect(topReports()).toEqual([]);
+
+    h.sessionOf(sub.agentId)!.finish("子任务结果");
+    await vi.waitUntil(() => topReports().length === 1, { timeout: 3000 });
+    expect(h.sessionOf(worker.agentId)!.prompts.at(-1)).toContain("子任务结果");
+    expect(topReports()[0]).toContain("回答:");
+    expect(topReports()[0]).not.toContain("先派出去了");
+  });
+
+  test("被派单的会话再派单：只开保活，不置顶", async () => {
+    const h = await createHarness({ kind: "claude" });
+    const root = await h.createCaller();
+    const rootClient = await h.connect(root.token);
+    const { agentId } = (await callTool(rootClient, "delegate", { provider: "fake", prompt: "x" })).json as {
+      agentId: string;
+    };
+    await callTool(await h.connect(h.interop.endpointFor(agentId)!.token), "delegate", { provider: "fake", prompt: "y" });
+    const child = h.manager.getAgent(agentId);
+    expect(child.cacheKeepAlive).toBe(true);
+    expect(child.pinned).toBeUndefined();
   });
 });
 

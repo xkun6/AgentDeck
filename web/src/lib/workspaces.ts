@@ -62,7 +62,7 @@ function normalizeWorkspacePathList(value: unknown): string[] {
 }
 
 /** AgentDeck 自建的 worktree 目录（委派、看板任务、协作组成员，design.md 4.26）：属于所在仓库的项目，自身不是项目 */
-const MANAGED_WORKTREE_PATTERN = /[\\/]worktrees[\\/](?:delegate-[0-9a-f]{8}|task-[^\\/]+|[0-9a-f]{8}[\\/]\d+)$/i;
+const MANAGED_WORKTREE_PATTERN = /[\\/]worktrees[\\/](?:delegate-[0-9a-f]{8}|task-[0-9a-f]{8}-[0-9a-f-]{27}|[0-9a-f]{8}[\\/]\d+)$/i;
 
 export function isManagedWorktreePath(path: string): boolean {
   return MANAGED_WORKTREE_PATTERN.test(path);

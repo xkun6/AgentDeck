@@ -30,6 +30,7 @@ import { normalizeCwd, type SnapshotService } from "../snapshots/snapshot-servic
 import type { UsageLedger } from "../usage/ledger.js";
 import { UsageTurnTracker } from "../usage/turn-tracker.js";
 import type { AgentStore, PendingNativeFork, PersistedAgentMeta } from "./agent-store.js";
+import { isDispatcher } from "./cache-keepalive.js";
 import { AGENT_STREAM_COALESCE_DEFAULT_WINDOW_MS, AgentStreamCoalescer } from "./coalescer.js";
 import { AgentInvalidParamsError, AgentRpcError } from "./errors.js";
 import {
@@ -1146,7 +1147,7 @@ export class AgentManager {
     const thresholdMs = settings.idleMinutes * 60_000;
     const targets = Array.from(this.agents.values()).filter(
       (agent) =>
-        isIdleReclaimable(agent) && !this.keepAliveWaitingOnChild(agent) && now - agent.lastActivityAt >= thresholdMs,
+        isIdleReclaimable(agent) && !this.waitingOnChild(agent) && now - agent.lastActivityAt >= thresholdMs,
     );
     await Promise.allSettled(
       targets.map((agent) => {
@@ -1161,15 +1162,30 @@ export class AgentManager {
     return targets.map((agent) => agent.id);
   }
 
-  /** 开启缓存保活且仍有委派子会话在工作（design.md 4.36）：不自动回收，否则保活无从发出 */
-  private keepAliveWaitingOnChild(agent: ManagedAgent): boolean {
-    if (agent.snapshot.cacheKeepAlive !== true) {
+  /** design.md 4.26：派单任务完成后回收干活的会话，条件同自动回收，只是不等空闲时长；未回收返回 false */
+  async reclaimIfIdle(agentId: string): Promise<boolean> {
+    const agent = this.agents.get(agentId);
+    if (this.idleReclaim?.().enabled === false || !agent || !isIdleReclaimable(agent) || this.waitingOnChild(agent)) {
       return false;
+    }
+    this.logger.info("回收空闲 agent %s（派单任务已完成）", agent.id);
+    await this.closeAgent(agent, "dormant");
+    return true;
+  }
+
+  /**
+   * 不自动回收：有派单出去的会话仍在工作（design.md 4.26）；或开启缓存保活，且是派单会话或有子会话仍在工作（4.36，否则保活无从发出）
+   */
+  private waitingOnChild(agent: ManagedAgent): boolean {
+    // 已归档的不保活（cache-keepalive.ts），不必为它留着进程
+    const keepAlive = agent.snapshot.cacheKeepAlive === true && agent.snapshot.archived !== true;
+    if (keepAlive && isDispatcher(agent.snapshot, Array.from(this.agents.values(), (other) => other.snapshot))) {
+      return true;
     }
     for (const other of this.agents.values()) {
       const child = other.snapshot;
       if (
-        (child.parentAgentId === agent.id || child.reportToAgentId === agent.id) &&
+        (child.reportToAgentId === agent.id || (keepAlive && child.parentAgentId === agent.id)) &&
         (child.status === "running" ||
           child.status === "starting" ||
           Boolean(child.activeTurnId) ||
