@@ -1,6 +1,7 @@
-// 后台运行：设置页小节（保持连接开关 / 通知与电池优化状态 / 厂商指引）与首次开启「后台保持连接」时的一次性引导。
+// 后台运行：设置页的保持连接开关、子页（通知与电池优化状态 / 厂商指引）与首次开启「后台保持连接」时的一次性引导。
 // 国产 ROM 会冻结后台进程，前台服务也未必挡得住：这里能做的是引导用户放行，并说明被冻结后的兜底（回到 App 自动补齐）。
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { BatteryCharging, Bell, ChevronRight, ExternalLink, Radio } from "lucide-react";
 import {
   getBatteryOptimization,
   getNotificationsEnabled,
@@ -12,6 +13,8 @@ import {
   type BatteryOptimizationStatus,
 } from "./native/native-plugin";
 import { subscribeAppForeground } from "./native/app-state";
+import { ListRow, ListSection, SwitchRow } from "./list-row";
+import { Modal } from "./modal";
 import type { NotifyMode, PreferencesStore } from "./preferences";
 import s from "./mobile.module.css";
 
@@ -81,7 +84,10 @@ export function VendorTips() {
     <div className={s.vendorTips}>
       {VENDOR_TIPS.map((tip) => (
         <details key={tip.vendor} className={s.vendorTip}>
-          <summary>{tip.vendor}</summary>
+          <summary>
+            {tip.vendor}
+            <ChevronRight className={s.vendorChevron} aria-hidden="true" />
+          </summary>
           <ul>
             {tip.steps.map((step) => (
               <li key={step}>{step}</li>
@@ -93,39 +99,57 @@ export function VendorTips() {
   );
 }
 
-const NOTIFY_MODE_OPTIONS: Array<{ mode: NotifyMode; label: string; hint: string }> = [
+export const NOTIFY_MODE_OPTIONS: Array<{ mode: NotifyMode; label: string; hint: string }> = [
   { mode: "always", label: "总是通知", hint: "切到后台或锁屏时弹本地通知；在前台时，不在该会话页会弹提示条。" },
   { mode: "foreground", label: "仅在前台时", hint: "只在 App 打开时提示，后台不通知。" },
   { mode: "never", label: "从不通知", hint: "任务完成、待审批都不提醒。" },
 ];
 
 /** 通知提醒档位（design.md 4.31）：存手机本地，默认总是通知 */
-export function NotifyModeSection({ prefs }: { prefs: PreferencesStore }) {
+export function NotifyModeSection({ prefs, onPicked }: { prefs: PreferencesStore; onPicked?: () => void }) {
   const { notifyMode } = useSyncExternalStore(prefs.subscribe, prefs.getState);
   return (
-    <section className={s.section} aria-label="通知">
-      <h2 className={s.sectionTitle}>通知</h2>
-      <div role="radiogroup" aria-label="通知提醒" className={s.radioGroup}>
-        {NOTIFY_MODE_OPTIONS.map((option) => (
-          <label key={option.mode} className={s.switchRow}>
-            <input
-              type="radio"
-              name="notify-mode"
-              value={option.mode}
-              checked={notifyMode === option.mode}
-              onChange={() => prefs.setNotifyMode(option.mode)}
-            />
-            <span>{option.label}</span>
-          </label>
-        ))}
-      </div>
-      <div className={s.hint}>{NOTIFY_MODE_OPTIONS.find((option) => option.mode === notifyMode)?.hint}</div>
-    </section>
+    <div role="radiogroup" aria-label="通知提醒">
+      {NOTIFY_MODE_OPTIONS.map((option) => (
+        <label key={option.mode} className={s.listRow}>
+          <input
+            type="radio"
+            className={s.radio}
+            name="notify-mode"
+            value={option.mode}
+            aria-label={option.label}
+            checked={notifyMode === option.mode}
+            onChange={() => {
+              prefs.setNotifyMode(option.mode);
+              onPicked?.();
+            }}
+          />
+          <span className={s.listText}>
+            <span className={s.listTitle}>{option.label}</span>
+            <span className={s.listSupporting}>{option.hint}</span>
+          </span>
+        </label>
+      ))}
+    </div>
   );
 }
 
-export function BackgroundSection({ prefs }: { prefs: PreferencesStore }) {
+/** 后台保持连接开关（设置一级页） */
+export function KeepAliveRow({ prefs }: { prefs: PreferencesStore }) {
   const { keepAlive } = useSyncExternalStore(prefs.subscribe, prefs.getState);
+  return (
+    <SwitchRow
+      icon={<Radio aria-hidden="true" />}
+      title="后台保持连接"
+      supporting="常驻一条通知，切到后台或锁屏时仍能收到任务完成 / 待审批提醒"
+      checked={keepAlive}
+      onChange={(checked) => prefs.setKeepAlive(checked)}
+    />
+  );
+}
+
+/** 后台运行设置子页：权限状态与各品牌手机的放行方法 */
+export function BackgroundSection() {
   const status = useBackgroundStatus();
   const native = nativeAvailable();
 
@@ -138,93 +162,97 @@ export function BackgroundSection({ prefs }: { prefs: PreferencesStore }) {
   };
 
   return (
-    <section className={s.section} aria-label="后台运行">
-      <h2 className={s.sectionTitle}>后台运行</h2>
-      <label className={s.switchRow}>
-        <input
-          type="checkbox"
-          role="switch"
-          aria-label="后台保持连接"
-          checked={keepAlive}
-          onChange={(event) => prefs.setKeepAlive(event.target.checked)}
-        />
-        <span>后台保持连接</span>
-      </label>
-      <div className={s.hint}>连上电脑后保持一条常驻通知，让 App 切到后台或锁屏时仍能收到任务完成 / 待审批提醒。</div>
-
+    <>
       {native ? (
-        <>
-          <div className={s.card}>
-            <div className={s.rowTitle}>通知</div>
-            <div className={s.hostStatus} data-state={status.notifications ? "open" : "error"}>
-              {status.notifications === null ? "检测中…" : status.notifications ? "已开启" : "未开启：后台收不到提醒"}
-            </div>
-            {status.notifications === false ? (
-              <button type="button" className={s.secondaryButton} onClick={() => void enableNotifications()}>
-                开启通知
-              </button>
-            ) : null}
-          </div>
-
-          <div className={s.card}>
-            <div className={s.rowTitle}>电池优化</div>
-            <div className={s.hostStatus} data-state={status.battery.ignoring ? "open" : undefined}>
-              {!status.battery.supported ? "检测中…" : status.battery.ignoring ? "已忽略（不受电池优化限制）" : BATTERY_NOT_WHITELISTED}
-            </div>
-            {status.battery.supported && !status.battery.ignoring ? (
-              <button type="button" className={s.secondaryButton} onClick={() => void requestIgnoreBatteryOptimization()}>
+        <ListSection title="权限状态">
+          <ListRow
+            icon={<Bell aria-hidden="true" />}
+            title="通知"
+            supporting={
+              <span className={s.hostStatus} data-state={status.notifications ? "open" : "error"}>
+                {status.notifications === null ? "检测中…" : status.notifications ? "已开启" : "未开启：后台收不到提醒"}
+              </span>
+            }
+            trailing={
+              status.notifications === false ? (
+                <button type="button" className={s.tonalButton} onClick={() => void enableNotifications()}>
+                  开启通知
+                </button>
+              ) : undefined
+            }
+          />
+          <ListRow
+            icon={<BatteryCharging aria-hidden="true" />}
+            title="电池优化"
+            supporting={
+              <span className={s.hostStatus} data-state={status.battery.ignoring ? "open" : undefined}>
+                {!status.battery.supported ? "检测中…" : status.battery.ignoring ? "已忽略（不受电池优化限制）" : BATTERY_NOT_WHITELISTED}
+              </span>
+            }
+          />
+          {status.battery.supported && !status.battery.ignoring ? (
+            <div className={s.rowAction}>
+              <button type="button" className={s.tonalButton} onClick={() => void requestIgnoreBatteryOptimization()}>
                 请求忽略电池优化
               </button>
-            ) : null}
-          </div>
-
-          <button type="button" className={s.secondaryButton} onClick={() => void openAppSettings()}>
-            打开应用设置
-          </button>
+            </div>
+          ) : null}
+          <ListRow
+            title="打开应用设置"
+            trailing={<ExternalLink className={s.listChevron} aria-hidden="true" />}
+            onClick={() => void openAppSettings()}
+          />
+          <ListRow
+            title="打开通知设置"
+            trailing={<ExternalLink className={s.listChevron} aria-hidden="true" />}
+            onClick={() => void openAppNotificationSettings()}
+          />
           <div className={s.hint}>{BANNER_HINT}</div>
-          <button type="button" className={s.secondaryButton} onClick={() => void openAppNotificationSettings()}>
-            打开通知设置
-          </button>
-        </>
+        </ListSection>
       ) : null}
 
-      <div className={s.hint}>
-        国产手机系统会限制后台应用。请在系统里为 AgentDeck 放行自启动、后台活动，并在最近任务里锁定：
-      </div>
-      <VendorTips />
-      <div className={s.hint}>{FROZEN_NOTE}</div>
-    </section>
+      <ListSection title="各品牌手机的放行方法">
+        <div className={s.hint}>国产手机系统会限制后台应用。请在系统里为 AgentDeck 放行自启动、后台活动，并在最近任务里锁定：</div>
+        <VendorTips />
+        <div className={s.hint}>{FROZEN_NOTE}</div>
+      </ListSection>
+    </>
   );
 }
 
-/** 首次开启「后台保持连接」后弹一次：说明用途、给出放行入口；点「知道了」后不再弹 */
-export function BackgroundGuideDialog({ prefs }: { prefs: PreferencesStore }) {
+/**
+ * 首次开启「后台保持连接」后弹一次：说明用途、给出放行入口；点「知道了」后不再弹。
+ * 点遮罩 / 返回键可能是误触，只关这一次，下次进入再弹。断线重连时组件不卸载，不会因此重新弹出。
+ */
+export function BackgroundGuideDialog({ prefs, connected = true }: { prefs: PreferencesStore; connected?: boolean }) {
   const { keepAlive, keepAliveGuided } = useSyncExternalStore(prefs.subscribe, prefs.getState);
   const status = useBackgroundStatus();
+  const [dismissed, setDismissed] = useState(false);
   // 引导内容针对 Android 原生壳；浏览器 / 桌面 dev 里不弹
-  if (!keepAlive || keepAliveGuided || !nativeAvailable()) return null;
+  const open = connected && keepAlive && !keepAliveGuided && !dismissed && nativeAvailable();
 
   return (
-    <div className={s.guideOverlay} role="dialog" aria-modal="true" aria-label="后台保持连接引导">
-      <div className={s.guideBox}>
-        <h2 className={s.guideTitle}>让 AgentDeck 在后台保持连接</h2>
+    <Modal open={open} onClose={() => setDismissed(true)} label="后台保持连接引导" title="让 AgentDeck 在后台保持连接">
+      <div className={s.guideBody}>
         <div className={s.hint}>
           已开启「后台保持连接」：切到后台或锁屏后，仍会通知你任务完成和待审批。要让它稳定生效，请放行下面的限制。
         </div>
         {status.battery.supported && !status.battery.ignoring ? (
-          <button type="button" className={s.primaryButton} onClick={() => void requestIgnoreBatteryOptimization()}>
+          <button type="button" className={s.tonalButton} onClick={() => void requestIgnoreBatteryOptimization()}>
             请求忽略电池优化
           </button>
         ) : null}
-        <button type="button" className={s.secondaryButton} onClick={() => void openAppSettings()}>
+        <button type="button" className={s.tonalButton} onClick={() => void openAppSettings()}>
           打开应用设置（自启动 / 后台活动）
         </button>
-        <VendorTips />
+      </div>
+      <VendorTips />
+      <div className={s.guideBody}>
         <div className={s.hint}>{FROZEN_NOTE}</div>
         <button type="button" className={s.primaryButton} onClick={() => prefs.markKeepAliveGuided()}>
           知道了
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

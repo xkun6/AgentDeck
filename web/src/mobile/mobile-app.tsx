@@ -1,7 +1,7 @@
 // 手机端应用壳：电脑列表 / 配对（无需连接）→ 会话列表 / 会话详情 / 新建 / 设置（需要已连接的电脑，带底部导航）。
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { Provider as JotaiProvider } from "jotai";
-import { MessageSquare, Network, Plus, Settings as SettingsIcon, type LucideIcon } from "lucide-react";
+import { MessageSquare, Network, Plus, Settings as SettingsIcon, ShieldAlert, type LucideIcon } from "lucide-react";
 import type { HostStore, PairedHost } from "@/lib/remote/hosts";
 import type { PairOverrides } from "@/lib/remote/pairing";
 import { useSidecarBridge } from "@/hooks/use-agent-session";
@@ -21,9 +21,10 @@ import { DispatchDetail, DispatchOverview } from "./dispatch";
 import { navTabOf, type MobileRoute } from "./route";
 import { SessionDetail } from "./session-detail";
 import { SessionList } from "./session-list";
-import { Settings } from "./settings";
+import { Settings, SettingsSubpage } from "./settings";
 import { SyncBanner, useClientSyncing } from "./sync-indicator";
 import { useHashRoute } from "./use-route";
+import { EmptyState } from "./visual";
 import { DEFAULT_DEVICE_NAME } from "@/lib/remote/hosts";
 import s from "./mobile.module.css";
 
@@ -187,7 +188,7 @@ function ConnectedShell({
 
   return (
     <div className={s.app}>
-      {connection.phase === "open" ? <BackgroundGuideDialog prefs={prefs} /> : null}
+      <BackgroundGuideDialog prefs={prefs} connected={connection.phase === "open"} />
       {notice ? <AttentionBanner notice={notice} onOpen={(target) => navigate(target)} onDismiss={dismiss} /> : null}
       {connection.phase !== "open" ? (
         <div className={s.connBanner} data-state={connection.phase} role="status">
@@ -201,9 +202,14 @@ function ConnectedShell({
         <SyncBanner />
       ) : null}
       {content}
+      {tab === "sessions" ? (
+        <button type="button" className={s.fab} onClick={() => navigate({ name: "new" })}>
+          <Plus aria-hidden="true" />
+          新建会话
+        </button>
+      ) : null}
       {tab && tab !== "new" ? (
         <nav className={s.nav} aria-label="主导航">
-          <div className={s.navTabs}>
           {NAV_ITEMS.map((item) => (
             <button
               key={item.tab}
@@ -228,10 +234,6 @@ function ConnectedShell({
               <span className={s.navLabel}>{item.label}</span>
             </button>
           ))}
-          </div>
-          <button type="button" className={s.navFab} aria-label="新建" onClick={() => navigate({ name: "new" })}>
-            <Plus aria-hidden="true" />
-          </button>
         </nav>
       ) : null}
     </div>
@@ -251,13 +253,17 @@ export function AuthFailedPanel({
         <h1 className={s.title}>需要重新配对</h1>
       </header>
       <div className={s.body}>
-        <div className={s.error} role="alert">
-          {reason === "revoked" ? "此设备已被吊销，请重新配对" : reason ? AUTH_REASON_TEXT[reason] : AUTH_REASON_TEXT.invalid}
-        </div>
-        <div className={s.hint}>电脑上的会话不会显示在这里，重新扫码配对后即可继续使用。</div>
-        <button type="button" className={s.primaryButton} onClick={onRepair}>
-          重新配对
-        </button>
+        <EmptyState
+          icon={ShieldAlert}
+          title={reason === "revoked" ? "此设备已被吊销，请重新配对" : reason ? AUTH_REASON_TEXT[reason] : AUTH_REASON_TEXT.invalid}
+          actions={
+            <button type="button" className={s.primaryButton} onClick={onRepair}>
+              重新配对
+            </button>
+          }
+        >
+          电脑上的会话不会显示在这里，重新扫码配对后即可继续使用。
+        </EmptyState>
       </div>
     </div>
   );
@@ -326,12 +332,16 @@ function ShellContent({
         />
       );
     case "settings":
+      if (route.page) {
+        return <SettingsSubpage page={route.page} onBack={() => back({ name: "settings" })} />;
+      }
       return (
         <Settings
           host={host}
           connection={connection}
           deviceName={deviceName}
           prefs={prefs}
+          onOpenPage={(page) => navigate({ name: "settings", page })}
           onRenameDevice={(name) => void hosts.setDeviceName(name)}
           onSwitchHost={() => navigate({ name: "hosts" })}
           onDisconnect={() => {

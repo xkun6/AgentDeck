@@ -48,7 +48,7 @@ const flush = () => act(async () => {
 describe("设置页「后台运行」小节", () => {
   it("显示通知与电池优化状态；未放行时给出按钮，点击调用对应原生命令", async () => {
     const { calls } = fakeBackend({ ignoring: false, notifications: false });
-    render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
+    render(<BackgroundSection />);
     await flush();
     expect(screen.getByText("未开启：后台收不到提醒")).toBeTruthy();
     expect(screen.getByText(BATTERY_NOT_WHITELISTED)).toBeTruthy();
@@ -71,7 +71,7 @@ describe("设置页「后台运行」小节", () => {
 
   it("已放行：显示已忽略 / 已开启，不再给请求按钮", async () => {
     fakeBackend({ ignoring: true, notifications: true });
-    render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
+    render(<BackgroundSection />);
     await flush();
     expect(screen.getByText("已忽略（不受电池优化限制）")).toBeTruthy();
     expect(screen.getByText("已开启")).toBeTruthy();
@@ -81,7 +81,7 @@ describe("设置页「后台运行」小节", () => {
 
   it("开启通知：系统框允许后刷新为已开启；被拒（系统不再弹框）时引导去应用设置", async () => {
     const granted = fakeBackend({ ignoring: true, notifications: false });
-    const { unmount } = render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
+    const { unmount } = render(<BackgroundSection />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "开启通知" }));
     await flush();
@@ -91,7 +91,7 @@ describe("设置页「后台运行」小节", () => {
     unmount();
 
     const denied = fakeBackend({ ignoring: true, notifications: false }, "denied");
-    render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
+    render(<BackgroundSection />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "开启通知" }));
     await flush();
@@ -100,7 +100,7 @@ describe("设置页「后台运行」小节", () => {
 
   it("从系统设置页回到前台（visibilitychange）时重新查询状态", async () => {
     const { state } = fakeBackend({ ignoring: false, notifications: true });
-    render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
+    render(<BackgroundSection />);
     await flush();
     expect(screen.getByText(BATTERY_NOT_WHITELISTED)).toBeTruthy();
     state.ignoring = true;
@@ -111,7 +111,7 @@ describe("设置页「后台运行」小节", () => {
   });
 
   it("厂商指引（华为 / 荣耀、小米、OPPO / vivo）与被冻结后自动补齐的说明始终显示；非 Tauri 环境不显示原生状态", () => {
-    render(<BackgroundSection prefs={new PreferencesStore(new MemoryStorage())} />);
+    render(<BackgroundSection />);
     expect(screen.getByText("华为 / 荣耀")).toBeTruthy();
     expect(screen.getByText("小米 / Redmi")).toBeTruthy();
     expect(screen.getByText("OPPO / vivo / 一加")).toBeTruthy();
@@ -139,6 +139,37 @@ describe("首次开启「后台保持连接」引导", () => {
     render(<BackgroundGuideDialog prefs={new PreferencesStore(storage)} />);
     await flush();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("点遮罩只关这一次：不写入偏好，断线重连不重弹，下次进入再弹", async () => {
+    fakeBackend({ ignoring: false, notifications: true });
+    const storage = new MemoryStorage();
+    const prefs = new PreferencesStore(storage);
+    const { rerender, unmount, baseElement } = render(<BackgroundGuideDialog prefs={prefs} connected />);
+    await flush();
+    fireEvent.click(baseElement.querySelector("[aria-hidden='true'][class*='scrim']")!);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(prefs.getState().keepAliveGuided).toBe(false);
+
+    rerender(<BackgroundGuideDialog prefs={prefs} connected={false} />);
+    rerender(<BackgroundGuideDialog prefs={prefs} connected />);
+    await flush();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    unmount();
+
+    render(<BackgroundGuideDialog prefs={new PreferencesStore(storage)} />);
+    await flush();
+    expect(screen.getByRole("dialog", { name: "后台保持连接引导" })).toBeTruthy();
+  });
+
+  it("没连上电脑时不弹，连上才弹", async () => {
+    fakeBackend({ ignoring: false, notifications: true });
+    const prefs = new PreferencesStore(new MemoryStorage());
+    const { rerender } = render(<BackgroundGuideDialog prefs={prefs} connected={false} />);
+    await flush();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    rerender(<BackgroundGuideDialog prefs={prefs} connected />);
+    expect(screen.getByRole("dialog", { name: "后台保持连接引导" })).toBeTruthy();
   });
 
   it("开关关闭或非 Tauri 环境不弹", async () => {

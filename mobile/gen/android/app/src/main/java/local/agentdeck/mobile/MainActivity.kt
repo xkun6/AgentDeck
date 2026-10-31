@@ -1,5 +1,6 @@
 package local.agentdeck.mobile
 
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -39,6 +40,12 @@ class MainActivity : TauriActivity() {
       view.setPadding(0, 0, 0, ime.bottom)
       insets
     }
+  }
+
+  // 清单声明了 configChanges=uiMode，切换系统深浅色时 Activity 不重建；不重新应用的话状态栏图标会停留在旧颜色，深色下看不见
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    enableEdgeToEdge()
   }
 
   override fun onWebViewCreate(webView: WebView) {

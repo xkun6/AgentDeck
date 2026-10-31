@@ -1,8 +1,10 @@
 // 手机端输入区：发送 / 运行中插话（provider 支持 steer）/ 取消，以及图片附件（拍照 / 相册，最多 4 张，可预览可删除）。
 // 撤回按钮在消息气泡上（MessageTimeline 的 retract 操作）。
 import { useRef, useState } from "react";
-import { ArrowUp, Plus, Square } from "lucide-react";
+import { ArrowUp, Camera, Image as ImageIcon, Plus, Square, X } from "lucide-react";
 import { IMAGE_LIMITS, type DraftImage } from "./image-attachments";
+import { ListRow } from "./list-row";
+import { Modal } from "./modal";
 import s from "./mobile.module.css";
 
 export interface MobileComposerProps {
@@ -87,7 +89,7 @@ export function MobileComposer({
                 aria-label={`移除图片 ${image.name}`}
                 onClick={() => onRemoveImage?.(image.id)}
               >
-                ×
+                <X aria-hidden="true" />
               </button>
             </li>
           ))}
@@ -104,22 +106,18 @@ export function MobileComposer({
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             title={imagesFull ? `最多 ${IMAGE_LIMITS.maxCount} 张` : undefined}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => setMenuOpen(true)}
           >
             <Plus aria-hidden="true" />
           </button>
-          {menuOpen ? (
-            <div className={s.imageMenu} role="menu">
-              <button type="button" role="menuitem" className={s.secondaryButton} onClick={() => pick(cameraInput.current)}>
-                拍照
-              </button>
-              <button type="button" role="menuitem" className={s.secondaryButton} onClick={() => pick(galleryInput.current)}>
-                相册
-              </button>
-            </div>
-          ) : null}
           <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-label="拍照" onChange={onFiles} />
           <input ref={galleryInput} type="file" accept="image/*" multiple hidden aria-label="从相册选择" onChange={onFiles} />
+          <Modal open={menuOpen} onClose={() => setMenuOpen(false)} label="添加图片" title="添加图片">
+            <div role="menu" aria-label="添加图片">
+              <ListRow role="menuitem" icon={<Camera aria-hidden="true" />} title="拍照" onClick={() => pick(cameraInput.current)} />
+              <ListRow role="menuitem" icon={<ImageIcon aria-hidden="true" />} title="相册" onClick={() => pick(galleryInput.current)} />
+            </div>
+          </Modal>
         </div>
       ) : null}
       <textarea

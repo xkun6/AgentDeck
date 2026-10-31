@@ -1,83 +1,96 @@
 /* 手机端设计语言：只在 <html data-surface="mobile"> 下生效，桌面不受影响（design.md 4.38）。
-   直接覆盖 --h-*，手机与桌面共用的组件（时间线、审批卡片、状态行）随之换肤。 */
+   直接覆盖 --h-*，手机与桌面共用的组件（时间线、审批卡片、状态行）随之换肤。
+   规则：强调色只有品牌橙；灰色只有一个暖灰色系；层级靠明暗差与细线，不靠阴影。
+   形状：操作是胶囊，FAB 16，卡片 / 输入框 12，筛选标签 8，底部面板与对话框 28；
+   消息气泡 18（靠发送方一角 4）、可长高的输入框 22 是聊天专用形状。 */
 :root[data-surface="mobile"] {
   --h-font-ui: system-ui, -apple-system, "HarmonyOS Sans SC", "MiSans", "PingFang SC", "Noto Sans CJK SC", sans-serif;
   --h-font-cn: var(--h-font-ui);
-  --h-radius-lg: 14px;
-  --h-radius-xl: 20px;
-  --m-radius-card: 20px;
-  --m-radius-control: 14px;
-  --m-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --h-radius-lg: 12px;
+  --h-radius-xl: 12px;
+  --m-radius-card: 12px;
+  --m-radius-control: 12px;
+  --m-radius-chip: 8px;
+  --m-radius-fab: 16px;
+  --m-radius-sheet: 28px;
+  --m-ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --m-bar-height: 64px;
+  /* 按压反馈由各控件的 :active 负责，去掉 WebView 默认的蓝色点击高亮 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 手机上滚动条不占位，也不常驻（桌面的滚动条样式来自 global.css） */
+:root[data-surface="mobile"] ::-webkit-scrollbar {
+  display: none;
+}
+
+/* 软键盘弹起时手势条被盖住，不再为它留白（--ad-safe-bottom 由 safe-area.ts 写在行内样式上，所以要 !important） */
+:root[data-surface="mobile"][data-keyboard="open"] {
+  --ad-safe-bottom: 0px !important;
 }
 
 :root[data-surface="mobile"][data-theme="light-modern"] {
   color-scheme: light;
-  --h-bg-app: #f3f3f7;
-  --h-bg-pane: #ffffff;
+  --h-bg-app: #fdfcfa;
+  --h-bg-pane: #fdfcfa;
   --h-bg-elevated: #ffffff;
-  --h-bg-soft: #ffffff;
+  --h-bg-soft: #f6f4f1;
   --h-bg-input: #ffffff;
-  --h-bg-chip: #e9e9f0;
-  --h-bg-code: #f1f1f6;
-  --h-bg-hover: rgb(24 24 48 / 5%);
-  --h-bg-selected: rgb(91 79 233 / 10%);
-  --h-line: rgb(24 24 48 / 12%);
-  --h-line-soft: rgb(24 24 48 / 7%);
-  --h-text: #15161c;
-  --h-text-2: #4c4e5c;
-  --h-text-3: #7d7f8d;
-  --h-text-4: #b4b6c2;
-  --h-accent: #5b4fe9;
+  --h-bg-chip: #efede9;
+  --h-bg-code: #f4f2ee;
+  --h-bg-hover: rgb(44 38 30 / 7%);
+  --h-bg-selected: rgb(194 84 10 / 11%);
+  --h-line: rgb(44 38 30 / 22%);
+  --h-line-soft: rgb(44 38 30 / 10%);
+  --h-text: #1d1b18;
+  --h-text-2: #514d46;
+  --h-text-3: #6f6a61;
+  --h-text-4: #918c80;
+  --h-accent: #bd5209;
   --h-accent-contrast: #ffffff;
-  --h-accent-soft: rgb(91 79 233 / 10%);
-  --h-accent-border: rgb(91 79 233 / 40%);
-  --h-ok: #0e9f5b;
-  --h-ok-soft: rgb(14 159 91 / 12%);
-  --h-ok-border: rgb(14 159 91 / 30%);
-  --h-warn: #c76a00;
-  --h-warn-soft: rgb(217 119 6 / 13%);
-  --h-warn-border: rgb(217 119 6 / 32%);
-  --h-err: #dc3a40;
-  --h-err-soft: rgb(220 58 64 / 11%);
-  --h-err-border: rgb(220 58 64 / 30%);
-  --m-glass: rgb(255 255 255 / 78%);
-  --m-shadow-rest: 0 1px 2px rgb(24 24 48 / 4%), 0 4px 16px rgb(24 24 48 / 4%);
-  --m-shadow-float: 0 2px 6px rgb(24 24 48 / 6%), 0 12px 32px rgb(24 24 48 / 12%);
-  --m-shadow-accent: 0 8px 20px rgb(91 79 233 / 32%);
+  --h-accent-soft: rgb(194 84 10 / 12%);
+  --h-accent-border: rgb(194 84 10 / 45%);
+  --h-ok: #18794e;
+  --h-ok-soft: rgb(24 121 78 / 12%);
+  --h-ok-border: rgb(24 121 78 / 30%);
+  --h-warn: #8f6500;
+  --h-warn-soft: rgb(171 123 0 / 15%);
+  --h-warn-border: rgb(171 123 0 / 35%);
+  --h-err: #c4203b;
+  --h-err-soft: rgb(196 32 59 / 10%);
+  --h-err-border: rgb(196 32 59 / 30%);
+  --m-shadow-float: 0 1px 3px rgb(44 38 30 / 12%), 0 6px 16px rgb(44 38 30 / 14%);
 }
 
 :root[data-surface="mobile"][data-theme="dark-modern"] {
   color-scheme: dark;
-  --h-bg-app: #0b0c10;
-  --h-bg-pane: #16171d;
-  --h-bg-elevated: #1c1d25;
-  --h-bg-soft: #16171d;
-  --h-bg-input: #16171d;
-  --h-bg-chip: #262730;
-  --h-bg-code: #101116;
-  --h-bg-hover: rgb(255 255 255 / 6%);
-  --h-bg-selected: rgb(143 133 255 / 16%);
-  --h-line: rgb(255 255 255 / 12%);
-  --h-line-soft: rgb(255 255 255 / 7%);
-  --h-text: #f3f3f7;
-  --h-text-2: #b9bac6;
-  --h-text-3: #83858f;
-  --h-text-4: #55575f;
-  --h-accent: #8f85ff;
-  --h-accent-contrast: #0b0c10;
-  --h-accent-soft: rgb(143 133 255 / 16%);
-  --h-accent-border: rgb(143 133 255 / 45%);
-  --h-ok: #3dd68c;
-  --h-ok-soft: rgb(61 214 140 / 14%);
-  --h-ok-border: rgb(61 214 140 / 30%);
-  --h-warn: #f5b544;
-  --h-warn-soft: rgb(245 181 68 / 14%);
-  --h-warn-border: rgb(245 181 68 / 30%);
-  --h-err: #ff6b70;
-  --h-err-soft: rgb(255 107 112 / 14%);
-  --h-err-border: rgb(255 107 112 / 30%);
-  --m-glass: rgb(28 29 37 / 76%);
-  --m-shadow-rest: 0 0 0 0.5px rgb(255 255 255 / 6%);
-  --m-shadow-float: 0 0 0 0.5px rgb(255 255 255 / 10%), 0 12px 32px rgb(0 0 0 / 50%);
-  --m-shadow-accent: 0 8px 20px rgb(143 133 255 / 26%);
+  --h-bg-app: #141311;
+  --h-bg-pane: #141311;
+  --h-bg-elevated: #24221f;
+  --h-bg-soft: #1d1c19;
+  --h-bg-input: #1d1c19;
+  --h-bg-chip: #2c2a26;
+  --h-bg-code: #1d1c19;
+  --h-bg-hover: rgb(255 250 240 / 9%);
+  --h-bg-selected: rgb(255 158 102 / 16%);
+  --h-line: rgb(255 250 240 / 24%);
+  --h-line-soft: rgb(255 250 240 / 11%);
+  --h-text: #efece6;
+  --h-text-2: #c4bfb5;
+  --h-text-3: #9c978d;
+  --h-text-4: #6a665e;
+  --h-accent: #ff9e66;
+  --h-accent-contrast: #2b1404;
+  --h-accent-soft: rgb(255 158 102 / 16%);
+  --h-accent-border: rgb(255 158 102 / 45%);
+  --h-ok: #4cc38a;
+  --h-ok-soft: rgb(76 195 138 / 14%);
+  --h-ok-border: rgb(76 195 138 / 30%);
+  --h-warn: #e6b84a;
+  --h-warn-soft: rgb(230 184 74 / 14%);
+  --h-warn-border: rgb(230 184 74 / 30%);
+  --h-err: #ff7f8e;
+  --h-err-soft: rgb(255 127 142 / 14%);
+  --h-err-border: rgb(255 127 142 / 30%);
+  --m-shadow-float: 0 1px 3px rgb(0 0 0 / 40%), 0 6px 16px rgb(0 0 0 / 40%);
 }

@@ -12,6 +12,14 @@ describe("route", () => {
   it("hash 与路由互相转换，未知 hash 回落到会话列表", () => {
     expect(parseRoute("")).toEqual({ name: "sessions" });
     expect(parseRoute("#/nope")).toEqual({ name: "sessions" });
+    expect(parseRoute("#/settings/nope")).toEqual({ name: "sessions" });
+    for (const page of ["background", "diagnostics"] as const) {
+      const route: MobileRoute = { name: "settings", page };
+      expect(parseRoute(routeHash(route))).toEqual(route);
+      // 设置子页不显示底部导航
+      expect(navTabOf(route)).toBeNull();
+    }
+    expect(navTabOf({ name: "settings" })).toBe("settings");
     for (const name of ["hosts", "pair", "new", "settings"] as const) {
       expect(parseRoute(routeHash({ name }))).toEqual({ name });
     }

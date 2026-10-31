@@ -1,7 +1,7 @@
 // 手机端派单页（design.md 4.26）：总览列出主会话，详情列出主会话与它派发的子会话，点行进入普通会话页。
 import { useCallback, useEffect, useState } from "react";
 import { useAtomValue } from "jotai";
-import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronLeft, Network } from "lucide-react";
 import type { AgentSnapshot } from "@agentdeck/protocol";
 import { humanizeSidecarError, useAgentSession } from "@/hooks/use-agent-session";
 import { useAgentProviders } from "@/hooks/use-agent-catalog";
@@ -18,7 +18,7 @@ import { dispatcherIdOf, isDispatchedAgent } from "@/lib/session-list";
 import { workspaceNameFromPath } from "@/lib/workspaces";
 import { agentListLoadedAtom, agentSnapshotsAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { chatRuntimeBySessionAtom } from "@/stores/chat";
-import { ProgressRing, StatusTile } from "./visual";
+import { EmptyState, ListSkeleton, ProgressRing, StatusTile, usePullToRefresh } from "./visual";
 import s from "./mobile.module.css";
 
 function useTitleOf(): (agent: AgentSnapshot) => string {
@@ -77,7 +77,7 @@ function NodeRows({
           <button
             type="button"
             className={s.row}
-            style={depth > 0 ? { paddingLeft: 12 + depth * 16 } : undefined}
+            style={depth > 0 ? { paddingLeft: 16 + depth * 20 } : undefined}
             onClick={() => onOpen(node.agent.id)}
           >
             <StatusTile kind={node.status} />
@@ -115,6 +115,7 @@ export function DispatchOverview({
   const loaded = useAtomValue(agentListLoadedAtom);
   const titleOf = useTitleOf();
   const { refresh, refreshing, error, connection } = useRefreshList();
+  const { handlers: pullHandlers, indicator: pullIndicator } = usePullToRefresh(() => void refresh(), refreshing);
   const orphans = groups.find((group) => !group.master);
   // 有工作中或需要处理的排在前面，其余保持最近更新的顺序
   const masters = groups
@@ -128,27 +129,18 @@ export function DispatchOverview({
     <div className={s.page}>
       <header className={s.header}>
         <h1 className={s.title}>派单</h1>
-        <button
-          type="button"
-          className={s.iconButton}
-          aria-label={refreshing ? "刷新中…" : "刷新"}
-          data-spinning={refreshing ? "true" : undefined}
-          onClick={() => void refresh()}
-          disabled={refreshing}
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
       </header>
       {error ? (
         <div className={s.error} role="alert">
           {error}
         </div>
       ) : null}
-      <ul className={s.list} aria-label="主会话列表">
+      {pullIndicator}
+      <ul className={s.list} aria-label="主会话列表" {...pullHandlers}>
         {masters.map(({ master, summary }) => (
           <li key={master!.agent.id} className={s.dispatchCardWrap}>
             <button type="button" className={s.dispatchCard} onClick={() => onOpenDetail(master!.agent.id)}>
-              <ProgressRing summary={summary} size={48} label />
+              <ProgressRing summary={summary} size={40} label />
               <span className={s.rowBody}>
                 <span className={s.rowTitleLine}>
                   <span className={s.rowTitle}>{titleOf(master!.agent)}</span>
@@ -161,7 +153,6 @@ export function DispatchOverview({
                   <span>{formatAgentTime(master!.agent.updatedAt, now)}</span>
                 </span>
               </span>
-              <ChevronRight className={s.rowChevron} aria-hidden="true" />
             </button>
           </li>
         ))}
@@ -176,9 +167,13 @@ export function DispatchOverview({
           </li>
         ) : null}
         {loaded && groups.length === 0 ? (
-          <li className={s.empty}>还没有派单。会话用 delegate 派发任务后，会在这里显示主会话和子会话</li>
+          <li>
+            <EmptyState icon={Network} title="还没有派单">
+              会话用 delegate 派发任务后，会在这里显示主会话和子会话。
+            </EmptyState>
+          </li>
         ) : null}
-        {!loaded ? <li className={s.empty}>{connection === "open" ? "加载中…" : "等待连接电脑…"}</li> : null}
+        {!loaded ? connection === "open" ? <ListSkeleton /> : <li className={s.empty}>等待连接电脑…</li> : null}
       </ul>
     </div>
   );
@@ -200,7 +195,7 @@ export function DispatchDetail({
   const group = groups.find((entry) => entry.master?.agent.id === agentId);
   const master = group?.master;
   return (
-    <div className={s.page}>
+    <div className={s.page} data-motion="push">
       <header className={s.header}>
         <button type="button" className={s.iconButton} onClick={onBack} aria-label="返回">
           <ChevronLeft aria-hidden="true" />
@@ -215,7 +210,7 @@ export function DispatchDetail({
       {master && group ? (
         <>
           <div className={s.dispatchHero}>
-            <ProgressRing summary={group.summary} size={56} label />
+            <ProgressRing summary={group.summary} size={48} label />
             <span className={s.dispatchSummary} data-attention={group.summary.attention > 0 ? "true" : undefined}>
               {dispatchSummaryText(group.summary)}
             </span>

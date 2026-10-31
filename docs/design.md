@@ -1218,7 +1218,7 @@ interface RemoteStatus {
   `by=local` 表示本端先关闭 / 终止，`path` 说明走的哪条路径：`auth-timeout`（10 秒未认证）、`auth-failed`、`bad-hello`（握手格式 / 公钥非法）、`binary-in-hello`（首帧是二进制）、`bad-frame`（握手后的文本帧、解密失败、计数回退、认证期间多余帧）、`internal-error`、`pong-timeout`（连续 2 次 ping 无 pong）、`buffer-overflow`（发送缓冲超 64 MiB）、`revoked`（吊销设备）、`gateway-stop`（网关停止 / 端口变更）、`shutdown`（RpcServer 关闭）；`by=peer` 时 `path=peer-close`（对端先关闭或网络层断开）。`距上次pong` 以连接建立时刻为起点。`rpc-server` 的「远程客户端已连接 / 已断开」日志同样带 `device=<前 8 位>`。
 - **sidecar 运行标记** `<AGENTDECK_LOG_DIR>/sidecar.running`（未配置日志目录时不写）：启动时写入 `{ pid, startedAt }`；进程自己退出（含 fatal 与 `process.exit`，即触发 `exit` 事件的所有退出，见 4.18）时同步删除。启动时若发现残留，`warn`「上次 sidecar（pid=…，启动于 …）未正常退出（被外部结束或进程级崩溃）」后覆盖。退出码本身由 4.18 的「进程退出事件」日志与 Rust 的 `desktop.log`（3.6）记录，不重复。
 - **手机连接事件缓冲**（`web/src/lib/connection-log.ts`，只在手机入口注入，桌面不写）：环形缓冲最多 100 条，持久化到 `localStorage`（键 `agentdeck.mobile.connection-log`，事件后 1 秒合并写一次，页面隐藏时立即写）。每条记录：ISO 时间 `at`、`event`、触发路径 `trigger`、`gapMs`、关闭的 `code` / `reason` / `wasClean`、`aliveMs`（本连接存活）、`idleMs`（距最后入站帧）、`online` / `netType` / `effectiveType`（`navigator.onLine` 与 Network Information，有则记）、`foreground`（`isBackground` 回调）。`event` 取值：`open`、`close`、`error`、`force-reconnect`、`probe-start`、`probe-ok`、`probe-timeout`、`schedule-reconnect`、`connect-timeout`、`manual-close`、`wake-ignored`（CONNECTING 时忽略非强制唤醒）、`sync-fail`（重连后某个会话按 `sinceSeq` 补齐失败，只记录并继续其它会话，随后照常刷新 `agent.list`），以及 E2eeSocket 的 `attempt-ok` / `attempt-fail`（每个地址的结果与耗时）、`protocol-error`（赢家连接的协议错误）。`trigger` 取值：`gap-watchdog`（附 `gapMs`）、`hint`、`online`、`visibility`、`network-change`、`system-resume`、`probe`、`manual` 等。
-- **设置页「连接诊断」**（手机端设置页，通知 / 后台运行小节之后）：显示最近 20 条（时间 + 事件 + 触发路径 + code，最新在上），「复制全部」把缓冲区全部条目的 JSON 写入剪贴板（`navigator.clipboard` 失败则展示可全选的文本框兜底），「清空」同时清掉持久化。
+- **设置页「连接诊断」**（手机端设置的子页 `#/settings/diagnostics`，一级页的入口显示记录条数）：显示最近 20 条（时间 + 事件 + 触发路径 + code，最新在上），「复制全部」把缓冲区全部条目的 JSON 写入剪贴板（`navigator.clipboard` 失败则展示可全选的文本框兜底），「清空」同时清掉持久化。
 
 **通知（attention）**：
 - sidecar 在以下事件发生时向**所有已认证的远程连接**发 `client.attention`，不做任何「用户是否在电脑前」的判断：主时间线 `turn_completed` / `turn_failed`（CLI 自发轮次 = `turn_started.origin` 为 `background` 的回合，与 `origin` 为 `judge` 的会话除外）、`permission_requested`、`schedule.notice`。另外在 `permission_resolved`（审批在桌面 / 另一台手机处理、被取消或超时）时发一条 `kind: "resolved"` 的**撤回信号**（同样不发 judge 会话与已删除会话），不弹通知，只用来取消手机上对应的系统通知与应用内提示条。
@@ -1239,7 +1239,7 @@ interface AttentionNotice {
 ```
 - **撤回（resolved）**：沿用同一个通知方法 `client.attention`，`kind: "resolved"` 带 `agentId` + `requestId`。手机收到后：（1）调用原生 `cancel_attention` 取消系统通知——系统通知 id 对审批类按 `agentId:requestId` 计算（`notificationIdFor`），permission 通知与撤回信号（各有自己的 `AttentionNotice.id`）因此指向同一条；完成 / 失败 / 调度仍按 `AttentionNotice.id`；（2）若应用内提示条正显示同一条审批（`kind: "permission"` 且 agentId / requestId 相同）则关掉。撤回不受「通知」档位与前后台影响；撤回先于异步发出的通知到达时，该通知不再发出。
 - **提示文案按 `permissionKind`**：提示条与会话列表角标——`question` 显示「待回答」，`plan` 显示「待确认计划」，`elicitation` 显示「待填写」，其余（`tool` / `mode` / `other` 或缺省）显示「待审批」。会话列表读快照 `pendingPermissions[0].kind`。
-- 手机收到后按手机端设置「通知」（存手机本地，默认「总是通知」）处理：
+- 手机收到后按手机端设置「通知提醒」（存手机本地，默认「总是通知」）处理：
   | 设置 | App 在后台 | App 在前台 |
   |---|---|---|
   | 总是通知（`always`，默认） | Android 本地通知，点击跳转到对应会话 | 停在该会话 → 忽略；其它页面 → 应用内提示条 |
@@ -1386,7 +1386,7 @@ translation: {
 
 **前端**：
 - 设置页「翻译」（路径 `/translation`）：endpoint 各字段（apiKey 用密码框）、「测试」按钮（用 `translation.translate` 翻译一句示例文本并显示结果或错误）、用户语言 / Agent 语言、翻译我的输入、翻译思考、新会话默认开启。
-- 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。新任务输入框同样有该开关：初始状态跟随「新会话默认开启」，用户点过后创建会话时以 `agent.create { translation }` 显式传入，未点过则省略、由 sidecar 取默认值。手机端：新建会话页有「翻译」开 / 关选项（规则同新任务输入框）、会话详情顶栏有「翻译」开关（`agent.update`，失败在页面错误条显示）；endpoint 与语言设置只在电脑端（`settings.set`、`translation.endpoint.*` 对远程禁止）。
+- 会话详情输入框工具栏加「翻译」图标开关（`agent.update`），开启时高亮。新任务输入框同样有该开关：初始状态跟随「新会话默认开启」，用户点过后创建会话时以 `agent.create { translation }` 显式传入，未点过则省略、由 sidecar 取默认值。手机端：新建会话页有「翻译」开关（规则同新任务输入框）、会话详情顶栏有「翻译」开关（`agent.update`，失败在页面错误条显示）；endpoint 与语言设置只在电脑端（`settings.set`、`translation.endpoint.*` 对远程禁止）。
 - 全文搜索（4.19）检索的是时间线原文：用户消息为用户语言，助手消息为 Agent 语言。
 
 ### 4.36 缓存保活（仅 Claude）
@@ -1465,12 +1465,18 @@ Claude Code 的提示缓存从最后一次请求**开始**计时，TTL 内没有
 
 - **主题**：`web/src/mobile/theme.ts` 给 `<html>` 打 `data-surface="mobile"`，明暗跟随系统（`prefers-color-scheme`），手机端不提供主题设置。
 - **token**：`packages/shared-ui/src/tokens/mobile.css` 在 `:root[data-surface="mobile"]` 下覆盖 `--h-*`，共用的时间线、审批卡片随之换肤；手机专属的卡片圆角、阴影、毛玻璃用 `--m-*`。
-- **结构**：浅灰（暗色近黑）底上放无边框的白色分层卡片。一级页是大标题，子页是带返回的紧凑顶栏。
-- **底栏**：悬浮的毛玻璃胶囊（会话 / 派单 / 设置）加独立的圆形「新建」按钮；新建会话是全屏流程，不显示底栏，操作固定在页面底部。
-- **会话列表**：顶部筛选（全部 / 进行中 / 待处理，只有 2 项以上才显示；选中项没有会话时回到全部）；项目名在卡片外，会话行在卡片内；行首状态块用颜色和图标区分运行中、等待子任务、待审批、失败、空闲、休眠。筛选时不限制每组行数。
-- **派单**：环形进度代替进度条，总览每个主会话一张卡片，详情顶部是进度卡片。
-- **会话页**：输入框是悬浮胶囊，用户消息用强调色气泡。
-- **动效**：页面淡入、按压缩放，`prefers-reduced-motion` 时关闭页面淡入和转圈动画。
+- **结构**：Material 3 的页面结构，内容直接铺在底色上，行贴边，靠细线和明暗差分层，不用卡片阴影。一级页是 64px 顶栏，子页是带返回的 56px 顶栏。技术栈不变（Tauri WebView，见 `docs/mobile.md` 第 2 节）。
+- **色彩**：强调色只有一个，取自应用图标的品牌橙，只用于主操作、选中态和进度；待审批是琥珀色、错误是冷红色，与橙色区分开。灰色只用一个暖灰色系。正文与强调色对比度不低于 4.5:1，状态图标不低于 3:1（明暗两套）。
+- **形状**：操作是胶囊，FAB 16，卡片 / 输入框 12，筛选标签 8，底部面板与对话框 28；消息气泡 18（靠发送方一角 4）、可长高的输入框 22 是聊天专用形状。
+- **底栏**：标准底部导航栏（会话 / 派单 / 设置），贴底并占位，内容不会被盖住；选中项图标带胶囊指示器。主操作「新建会话」是只出现在会话列表的扩展 FAB。
+- **覆盖层**（`mobile/modal.tsx`）：选择器和动作用底部面板（可从把手下拉关闭），破坏性操作用居中对话框二次确认。打开时压一条同地址的 history：Android 返回键先关覆盖层，页面不动；代码关闭时退掉这条记录，不多占一次返回。
+- **新建会话**：全屏流程，不显示底栏。Agent / 模型 / 模式 / 工作目录各占一行显示当前取值，点开底部面板选择，选完自动关闭；翻译是开关；「创建」在顶栏右侧。选了危险模式时，表单行标红并注明跳过权限确认。
+- **设置**：一级页只放当前取值和入口。通知提醒用底部面板，本机名称用对话框，后台运行设置（`#/settings/background`）和连接诊断（`#/settings/diagnostics`）是子页；后台保持连接的开关留在一级页。
+- **会话列表**：顶部筛选（全部 / 进行中 / 待处理，只有 2 项以上才显示；选中项没有会话时回到全部）；项目名是吸顶小标题，会话行贴边；行首 24px 状态图标区分运行中、等待子任务、待审批、失败、休眠，空闲是小圆点（空心圆会被看成单选框）；待审批文字替换第二行的状态文字。筛选时不限制每组行数。刷新靠进入页面和下拉（圆形指示器跟随手指），不放刷新按钮。加载中显示与行同形的骨架屏。
+- **派单**：环形进度代替进度条，总览每个主会话一行，详情顶部是进度摘要。下拉刷新同会话列表。
+- **会话页**：输入栏贴底，左附件、中间圆角输入框、右发送；停止是中性深色，不用红。用户消息是中性色气泡，助手正文不加底，强调色留给操作。
+- **提示**：连接状态是贴边横条；同步中是屏幕顶部 2px 进度条；attention 提示条浮在内容之上，不把正在看的内容顶下去。
+- **动效**：页签之间没有动效；进入下一层是 200ms 的位移淡入，全屏流程从下方进入，底部面板 280ms 滑入、160ms 滑出；按压反馈是按钮缩放 0.97、列表行背景高亮。`prefers-reduced-motion` 时关闭这些动效和转圈动画。
 
 ## 5. sidecar 内部结构（packages/sidecar）
 

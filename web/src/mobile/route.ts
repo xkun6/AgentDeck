@@ -1,4 +1,6 @@
-// 手机端的 hash 路由（Android 返回键走 history）：#/sessions  #/dispatch  #/dispatch/<主会话 id>  #/s/<agentId>  #/s/<agentId>/sub/<subagentId>  #/new  #/settings  #/hosts  #/pair
+// 手机端的 hash 路由（Android 返回键走 history）：#/sessions  #/dispatch  #/dispatch/<主会话 id>  #/s/<agentId>  #/s/<agentId>/sub/<subagentId>  #/new  #/settings  #/settings/<子页>  #/hosts  #/pair
+export type SettingsPage = "background" | "diagnostics";
+
 export type MobileRoute =
   | { name: "hosts" }
   | { name: "pair" }
@@ -6,7 +8,7 @@ export type MobileRoute =
   | { name: "dispatch"; agentId?: string }
   | { name: "session"; agentId: string; subagentId?: string }
   | { name: "new" }
-  | { name: "settings" };
+  | { name: "settings"; page?: SettingsPage };
 
 export function parseRoute(hash: string): MobileRoute {
   // 子代理页是会话页上的一层 history：返回键逐级回退（孙代理继续 push）
@@ -45,6 +47,10 @@ export function parseRoute(hash: string): MobileRoute {
       return { name: "new" };
     case "#/settings":
       return { name: "settings" };
+    case "#/settings/background":
+      return { name: "settings", page: "background" };
+    case "#/settings/diagnostics":
+      return { name: "settings", page: "diagnostics" };
     default:
       return { name: "sessions" };
   }
@@ -60,6 +66,8 @@ export function routeHash(route: MobileRoute): string {
       return route.agentId === undefined ? "#/dispatch" : `#/dispatch/${encodeURIComponent(route.agentId)}`;
     case "sessions":
       return "#/sessions";
+    case "settings":
+      return route.page === undefined ? "#/settings" : `#/settings/${route.page}`;
     default:
       return `#/${route.name}`;
   }
@@ -68,5 +76,6 @@ export function routeHash(route: MobileRoute): string {
 /** 底部导航高亮哪一项（详情页 / 电脑列表 / 配对页不显示导航） */
 export function navTabOf(route: MobileRoute): "sessions" | "dispatch" | "new" | "settings" | null {
   if (route.name === "dispatch") return route.agentId === undefined ? "dispatch" : null;
-  return route.name === "sessions" || route.name === "new" || route.name === "settings" ? route.name : null;
+  if (route.name === "settings") return route.page === undefined ? "settings" : null;
+  return route.name === "sessions" || route.name === "new" ? route.name : null;
 }

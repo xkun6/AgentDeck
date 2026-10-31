@@ -4,6 +4,8 @@
 import { getSafeAreaInsets } from "./native/native-plugin";
 
 const RETRY_DELAYS_MS = [300, 1_000, 3_000];
+/** 窗口变矮超过这么多才算软键盘弹起，避开系统栏显隐造成的小幅变化 */
+const KEYBOARD_MIN_PX = 120;
 
 export async function applySafeArea(root: HTMLElement = document.documentElement): Promise<boolean> {
   const insets = await getSafeAreaInsets();
@@ -23,13 +25,27 @@ export async function applySafeArea(root: HTMLElement = document.documentElement
 /** 启动时取一次（窗口未就绪则延迟重试几次），之后旋转 / 回前台时刷新；返回卸载函数 */
 export function installSafeArea(): () => void {
   let disposed = false;
+  let fullHeight = window.innerHeight;
+  let lastWidth = window.innerWidth;
   const refresh = () => void applySafeArea();
+  // 软键盘弹起时 WebView 变矮（MainActivity 把输入法高度设为内边距）；宽度变了是旋转，重新取基准
+  const onResize = () => {
+    if (window.innerWidth !== lastWidth) {
+      lastWidth = window.innerWidth;
+      fullHeight = window.innerHeight;
+    } else {
+      fullHeight = Math.max(fullHeight, window.innerHeight);
+    }
+    if (fullHeight - window.innerHeight > KEYBOARD_MIN_PX) document.documentElement.setAttribute("data-keyboard", "open");
+    else document.documentElement.removeAttribute("data-keyboard");
+    refresh();
+  };
   const timers = RETRY_DELAYS_MS.map((delay) => setTimeout(() => !disposed && refresh(), delay));
   refresh();
-  window.addEventListener("resize", refresh);
+  window.addEventListener("resize", onResize);
   return () => {
     disposed = true;
     timers.forEach(clearTimeout);
-    window.removeEventListener("resize", refresh);
+    window.removeEventListener("resize", onResize);
   };
 }

@@ -241,10 +241,10 @@ describe("SessionList 会话列表", () => {
     const rows = within(screen.getByRole("list", { name: "会话列表" })).getAllByRole("listitem");
     expect(rows[0]!.textContent).toContain("置顶会话");
     expect(rows[0]!.textContent).toContain("置顶");
-    expect(rows.map((r) => r.textContent).join("|")).toContain("等审批待审批");
+    expect(rows.map((r) => r.textContent).join("|")).toContain("等审批");
     // 提问 / 计划按快照 pendingPermissions[0].kind 区分
-    expect(rows.map((r) => r.textContent).join("|")).toContain("等回答待回答");
-    expect(rows.map((r) => r.textContent).join("|")).toContain("等计划待确认计划");
+    expect(rows.map((r) => r.textContent).join("|")).toContain("待回答");
+    expect(rows.map((r) => r.textContent).join("|")).toContain("待确认计划");
 
     // 进入页面会刷新一次 agent.list
     expect(client.refreshAgents).toHaveBeenCalled();
@@ -301,36 +301,45 @@ describe("NewSession 新建会话", () => {
 
   const createCalls = (client: FakeClient) => client.request.mock.calls.filter((c) => c[0] === "agent.create");
 
+  const openPicker = (name: RegExp) => fireEvent.click(screen.getByRole("button", { name }));
+  const closePicker = () => fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  const createButton = () => screen.getByRole("button", { name: "创建" }) as HTMLButtonElement;
+  const create = () =>
+    act(async () => {
+      fireEvent.click(createButton());
+    });
+
   it("危险模式标红且不会默认选中：直接创建不带 modeId", async () => {
     const { client, onCreated } = setup();
+    openPicker(/^模式/);
     const dangerous = await screen.findByRole("radio", { name: /完全放行/ });
     expect(dangerous.getAttribute("data-danger")).toBe("true");
     expect(dangerous.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByRole("radio", { name: "默认模式" }).getAttribute("aria-checked")).toBe("true");
     expect(dangerous.textContent).toContain("跳过权限确认");
+    closePicker();
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    await create();
     const [, params] = createCalls(client)[0]!;
     expect(params).toMatchObject({ provider: "claude", cwd: "J:/Program/B" });
     expect(params).not.toHaveProperty("modeId");
     expect(onCreated).toHaveBeenCalledWith("new-1");
   });
 
-  it("用户明确点选危险模式后才带 modeId；切回默认模式即去掉", async () => {
+  it("用户明确点选危险模式后才带 modeId，表单上标红提示；切回默认模式即去掉", async () => {
     const { client } = setup();
+    openPicker(/^模式/);
     fireEvent.click(await screen.findByRole("radio", { name: /完全放行/ }));
-    expect(screen.getByRole("radio", { name: /完全放行/ }).getAttribute("aria-checked")).toBe("true");
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    // 选完面板自动关闭，表单显示当前取值
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: /^模式/ }).textContent).toContain("跳过权限确认");
+    await create();
     expect(createCalls(client)[0]![1]).toMatchObject({ modeId: "bypassPermissions" });
 
+    openPicker(/^模式/);
+    expect(screen.getByRole("radio", { name: /完全放行/ }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "默认模式" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    await create();
     expect(createCalls(client)[1]![1]).not.toHaveProperty("modeId");
   });
 
@@ -340,66 +349,61 @@ describe("NewSession 新建会话", () => {
       agent("a2", { cwd: "j:\\program\\a", updatedAt: 6 }),
       agent("b", { cwd: "J:/Program/B", updatedAt: 9 }),
     ]);
-    await screen.findByRole("radio", { name: /完全放行/ });
+    openPicker(/^Agent/);
+    expect(((await screen.findByRole("radio", { name: /Codex/ })) as HTMLButtonElement).disabled).toBe(true);
+    closePicker();
+
+    openPicker(/^工作目录/);
     const dirs = within(screen.getByRole("radiogroup", { name: "工作目录" })).getAllByRole("radio");
     expect(dirs).toHaveLength(3); // 两个目录 + 「手动输入路径」
     expect(dirs[2]!.textContent).toContain("手动输入路径");
     expect(dirs[0]!.textContent).toContain("J:/Program/B");
     expect(dirs[0]!.getAttribute("aria-checked")).toBe("true");
-    expect((screen.getByRole("radio", { name: /Codex/ }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(dirs[1]!);
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    await create();
     expect(createCalls(client)[0]![1]).toMatchObject({ cwd: "j:\\program\\a" });
   });
 
   it("已有会话时也始终提供「手动输入路径」：选中后出现输入框，创建用输入的目录；改选回已有目录即恢复", async () => {
     const { client } = setup();
-    await screen.findByRole("radio", { name: /完全放行/ });
     expect(screen.queryByPlaceholderText(/J:\/Program\/MyProject/)).toBeNull();
+    await vi.waitFor(() => expect(createButton().disabled).toBe(false));
 
+    openPicker(/^工作目录/);
     fireEvent.click(screen.getByRole("radio", { name: /手动输入路径/ }));
     const input = screen.getByPlaceholderText(/J:\/Program\/MyProject/);
     // 选中手动但还没填：不能创建
-    expect((screen.getByRole("button", { name: "创建会话" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(createButton().disabled).toBe(true);
     fireEvent.change(input, { target: { value: " D:/other/proj " } });
-    expect((screen.getByRole("radio", { name: /手动输入路径/ })).getAttribute("aria-checked")).toBe("true");
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    await create();
     expect(createCalls(client)[0]![1]).toMatchObject({ cwd: "D:/other/proj" });
 
+    openPicker(/^工作目录/);
+    expect(screen.getByRole("radio", { name: /手动输入路径/ }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: /Program\/A/ }));
     expect(screen.queryByPlaceholderText(/J:\/Program\/MyProject/)).toBeNull();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    await create();
     expect(createCalls(client)[1]![1]).toMatchObject({ cwd: "J:/Program/A" });
   });
 
   it("没有任何会话时允许手动输入目录，未填写前不能创建", async () => {
     setup([]);
-    await screen.findByRole("radio", { name: /完全放行/ }).catch(() => undefined);
-    expect((screen.getByRole("button", { name: "创建会话" }) as HTMLButtonElement).disabled).toBe(true);
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /^Agent/ }).textContent).toContain("Claude"));
+    expect(createButton().disabled).toBe(true);
     fireEvent.change(screen.getByPlaceholderText(/J:\/Program\/MyProject/), { target: { value: "J:/x" } });
-    expect((screen.getByRole("button", { name: "创建会话" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(createButton().disabled).toBe(false);
   });
 
-  it("翻译选项跟随「新会话默认开启」，未改动时不传 translation；改选后显式传入（design.md 4.35）", async () => {
+  it("翻译开关跟随「新会话默认开启」，未改动时不传 translation；改选后显式传入（design.md 4.35）", async () => {
     const { client } = setup(undefined, true);
-    const group = () => within(screen.getByRole("radiogroup", { name: "翻译" }));
-    await vi.waitFor(() => expect(group().getByRole("radio", { name: /开启/ }).getAttribute("aria-checked")).toBe("true"));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    const toggle = () => screen.getByRole("switch", { name: "翻译" }) as HTMLInputElement;
+    await vi.waitFor(() => expect(toggle().checked).toBe(true));
+    await create();
     expect(createCalls(client)[0]![1]).not.toHaveProperty("translation");
 
-    fireEvent.click(group().getByRole("radio", { name: "关闭" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "创建会话" }));
-    });
+    fireEvent.click(toggle());
+    await create();
     expect(createCalls(client)[1]![1]).toMatchObject({ translation: false });
   });
 });
@@ -562,8 +566,9 @@ describe("SessionDetail 时间线向前分页", () => {
     const { client } = setup();
     expect(await screen.findByText("问题2")).toBeTruthy();
     expect(screen.queryByText("问题1")).toBeNull();
+    const loadEarlier = await screen.findByRole("button", { name: "加载更早的消息" });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "加载更早的消息" }));
+      fireEvent.click(loadEarlier);
     });
     expect(client.fetchOlder).toHaveBeenCalledWith("a1", 300);
     const positions = order();
@@ -575,6 +580,8 @@ describe("SessionDetail 时间线向前分页", () => {
   it("滚动到顶部也会触发加载，且加载中不会重复请求", async () => {
     const { client } = setup();
     await screen.findByText("问题2");
+    // hasOlder 在 loadTimeline 的 Promise 结束后才设置，消息可能先渲染：等入口出现再滚动
+    await screen.findByRole("button", { name: "加载更早的消息" });
     const log = screen.getByRole("log");
     await act(async () => {
       fireEvent.scroll(log);

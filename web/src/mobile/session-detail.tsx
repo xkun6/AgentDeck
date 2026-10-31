@@ -240,7 +240,7 @@ export function SessionDetail({
   const outputSpeed = runtime.agentUsage?.outputTokensPerSecond ?? snapshot?.lastUsage?.outputTokensPerSecond;
 
   return (
-    <div className={s.page}>
+    <div className={s.page} data-motion="push">
       <header className={s.header}>
         <button type="button" className={s.iconButton} onClick={onBack} aria-label="返回">
           <ChevronLeft aria-hidden="true" />

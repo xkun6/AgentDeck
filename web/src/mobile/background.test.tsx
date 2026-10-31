@@ -241,6 +241,7 @@ describe("设置页：后台保持连接开关", () => {
         connection={snapshot("idle")}
         deviceName="Pixel"
         prefs={prefs}
+        onOpenPage={() => {}}
         onRenameDevice={() => {}}
         onSwitchHost={() => {}}
         onDisconnect={() => {}}
@@ -252,5 +253,46 @@ describe("设置页：后台保持连接开关", () => {
     fireEvent.click(toggle);
     expect(prefs.getState().keepAlive).toBe(false);
     expect(toggle.checked).toBe(false);
+  });
+});
+
+describe("设置页：本机名称", () => {
+  function renderSettings(onRenameDevice: (name: string) => void) {
+    render(
+      <Settings
+        host={undefined}
+        connection={snapshot("idle")}
+        deviceName="Pixel"
+        prefs={new PreferencesStore(new MemoryStorage())}
+        onOpenPage={() => {}}
+        onRenameDevice={onRenameDevice}
+        onSwitchHost={() => {}}
+        onDisconnect={() => {}}
+        onDeleteHost={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /本机名称/ }));
+    return screen.getByRole("textbox", { name: "本机名称" }) as HTMLInputElement;
+  }
+
+  it("Esc 关闭不保存：设置行仍显示已保存的名字，再打开草稿已丢弃", () => {
+    const onRename = vi.fn();
+    const input = renderSettings(onRename);
+    fireEvent.change(input, { target: { value: "新名字" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.queryByText("新名字")).toBeNull();
+    expect(screen.getByText("Pixel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /本机名称/ }));
+    expect((screen.getByRole("textbox", { name: "本机名称" }) as HTMLInputElement).value).toBe("Pixel");
+  });
+
+  it("点保存才上报新名字", () => {
+    const onRename = vi.fn();
+    const input = renderSettings(onRename);
+    fireEvent.change(input, { target: { value: "新名字" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(onRename).toHaveBeenCalledWith("新名字");
   });
 });

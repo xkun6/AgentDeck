@@ -64,7 +64,7 @@ export function PairScreen({ deviceName, onPaired, onBack, autoScan = false, pai
   }, [autoScan]);
 
   return (
-    <div className={s.page}>
+    <div className={s.page} data-motion="push">
       <header className={s.header}>
         <button type="button" className={s.iconButton} onClick={onBack} aria-label="返回">
           <ChevronLeft aria-hidden="true" />
@@ -84,6 +84,9 @@ export function PairScreen({ deviceName, onPaired, onBack, autoScan = false, pai
               value={text}
               rows={4}
               placeholder="粘贴 agentdeck://pair#… 链接（整段文字也可以）"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               onChange={(e) => setText(e.target.value)}
               disabled={pairing}
               aria-label="配对链接"
@@ -103,7 +106,7 @@ export function PairScreen({ deviceName, onPaired, onBack, autoScan = false, pai
             {pairing ? "正在配对…" : "配对"}
           </button>
           {isTauriShell() ? (
-            <button type="button" className={s.secondaryButton} disabled={pairing} onClick={() => void scan()}>
+            <button type="button" className={s.tonalButton} disabled={pairing} onClick={() => void scan()}>
               扫码配对
             </button>
           ) : null}

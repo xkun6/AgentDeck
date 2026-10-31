@@ -1,8 +1,8 @@
 // 会话列表：agent.list（进入时刷新 + 下拉刷新），顶部按状态筛选，按项目（工作目录）分组成卡片、可折叠，置顶单列最前，默认隐藏归档与评判会话。
 // 每组默认只显示最近几个，进行中与待处理的不受限制。子会话只在派单页（design.md 4.26），主会话行带派单进度入口。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "jotai";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, MessagesSquare } from "lucide-react";
 import type { AgentSnapshot, ProviderInfo } from "@agentdeck/protocol";
 import { agentListAtom, agentListLoadedAtom, sidecarConnectionAtom } from "@/stores/agents";
 import { chatRuntimeBySessionAtom, type ChatSessionRuntime } from "@/stores/chat";
@@ -21,11 +21,10 @@ import {
 } from "@/lib/agent-session-display";
 import { archivedCount, visibleSessions } from "./session-filter";
 import { groupSessionsByProject, limitProjectRows } from "./session-groups";
-import { ProgressRing, StatusTile, type StatusKind } from "./visual";
+import { SwitchRow } from "./list-row";
+import { EmptyState, ListSkeleton, ProgressRing, StatusTile, usePullToRefresh, type StatusKind } from "./visual";
 import s from "./mobile.module.css";
 
-const PULL_TRIGGER_PX = 72;
-const PULL_MAX_PX = 96;
 const COLLAPSED_STORAGE_KEY = "agentdeck.mobile.collapsedProjects";
 
 type SessionFilter = "all" | "active" | "attention";
@@ -105,11 +104,14 @@ function SessionRow({
         <span className={s.rowBody}>
           <span className={s.rowTitleLine}>
             <span className={s.rowTitle}>{title}</span>
-            {state.needsApproval ? <span className={s.badgeWarn}>{pendingPermissionLabel(state.approvalKind)}</span> : null}
             <span className={s.rowTime}>{formatAgentTime(agent.updatedAt, now)}</span>
           </span>
           <span className={s.rowMeta}>
-            <span data-running={state.active ? "true" : undefined}>{state.statusLabel}</span>
+            {state.needsApproval ? (
+              <span data-attention="true">{pendingPermissionLabel(state.approvalKind)}</span>
+            ) : (
+              <span data-running={state.active ? "true" : undefined}>{state.statusLabel}</span>
+            )}
             <span>{agentProviderLabel(agent.provider, providers)}</span>
             {agent.archived ? <span>已归档</span> : null}
             {masterTitle ? <span>主会话 {masterTitle}</span> : null}
@@ -151,12 +153,9 @@ export function SessionList({
   const [showArchived, setShowArchived] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pull, setPull] = useState(0);
   const [pickedFilter, setPickedFilter] = useState<SessionFilter>("all");
   const [collapsed, setCollapsed] = useState(readCollapsedProjects);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const touchStartY = useRef<number | null>(null);
-  const listRef = useRef<HTMLUListElement>(null);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -169,6 +168,8 @@ export function SessionList({
       setRefreshing(false);
     }
   }, [actions]);
+
+  const { handlers: pullHandlers, indicator: pullIndicator } = usePullToRefresh(() => void refresh(), refreshing);
 
   // 进入页面（已连接时）刷新一次
   useEffect(() => {
@@ -239,16 +240,6 @@ export function SessionList({
     <div className={s.page}>
       <header className={s.header}>
         <h1 className={s.title}>会话</h1>
-        <button
-          type="button"
-          className={s.iconButton}
-          aria-label={refreshing ? "刷新中…" : "刷新"}
-          data-spinning={refreshing ? "true" : undefined}
-          onClick={() => void refresh()}
-          disabled={refreshing}
-        >
-          <RefreshCw aria-hidden="true" />
-        </button>
       </header>
       {filters.length > 1 ? (
         <div className={s.filterBar} role="group" aria-label="按状态筛选">
@@ -273,27 +264,8 @@ export function SessionList({
           {error}
         </div>
       ) : null}
-      {pull > 0 ? (
-        <div className={s.pullHint}>{pull >= PULL_TRIGGER_PX ? "松开刷新" : "下拉刷新"}</div>
-      ) : null}
-      <ul
-        ref={listRef}
-        className={s.list}
-        aria-label="会话列表"
-        onTouchStart={(e) => {
-          touchStartY.current = listRef.current && listRef.current.scrollTop <= 0 ? e.touches[0]!.clientY : null;
-        }}
-        onTouchMove={(e) => {
-          if (touchStartY.current === null) return;
-          const dy = e.touches[0]!.clientY - touchStartY.current;
-          setPull(dy > 0 ? Math.min(dy, PULL_MAX_PX) : 0);
-        }}
-        onTouchEnd={() => {
-          if (pull >= PULL_TRIGGER_PX) void refresh();
-          touchStartY.current = null;
-          setPull(0);
-        }}
-      >
+      {pullIndicator}
+      <ul className={s.list} aria-label="会话列表" {...pullHandlers}>
         {pinned.length > 0 ? (
           <li className={s.project}>
             <div className={s.projectHead} data-static="true">
@@ -354,14 +326,17 @@ export function SessionList({
             </li>
           );
         })}
-        {loaded && visible.length === 0 ? <li className={s.empty}>还没有会话，点右下角的 + 开始一个</li> : null}
-        {!loaded ? <li className={s.empty}>{connection === "open" ? "加载中…" : "等待连接电脑…"}</li> : null}
+        {loaded && visible.length === 0 ? (
+          <li>
+            <EmptyState icon={MessagesSquare} title="还没有会话">
+              点右下角的「新建会话」，选好 Agent 和工作目录就能开始。
+            </EmptyState>
+          </li>
+        ) : null}
+        {!loaded ? connection === "open" ? <ListSkeleton /> : <li className={s.empty}>等待连接电脑…</li> : null}
         {archived > 0 ? (
           <li>
-            <label className={s.toggleRow}>
-              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-              <span>显示已归档（{archived}）</span>
-            </label>
+            <SwitchRow title={`显示已归档（${archived}）`} checked={showArchived} onChange={setShowArchived} />
           </li>
         ) : null}
       </ul>

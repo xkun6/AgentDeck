@@ -32,8 +32,7 @@ export function ConnectionDiagnosticsSection({ log = getMobileConnectionLog() }:
   };
 
   return (
-    <section className={s.section} aria-label="连接诊断">
-      <h2 className={s.sectionTitle}>连接诊断</h2>
+    <section className={s.listSection} aria-label="连接诊断">
       <div className={s.hint}>
         记录最近的连接、断线、探活与重连事件（共 {entries.length} 条，仅显示最近 {DIAGNOSTICS_VISIBLE} 条）。遇到「总在重连」时，复制全部发给开发者。
       </div>
@@ -49,12 +48,12 @@ export function ConnectionDiagnosticsSection({ log = getMobileConnectionLog() }:
         <div className={s.hint}>暂无记录</div>
       )}
       <div className={s.diagActions}>
-        <button type="button" className={s.secondaryButton} disabled={entries.length === 0} onClick={() => void copyAll()}>
+        <button type="button" className={s.tonalButton} disabled={entries.length === 0} onClick={() => void copyAll()}>
           {copied ? "已复制" : "复制全部"}
         </button>
         <button
           type="button"
-          className={s.secondaryButton}
+          className={s.tonalButton}
           disabled={entries.length === 0}
           onClick={() => {
             log.clear();

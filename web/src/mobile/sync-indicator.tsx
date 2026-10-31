@@ -1,4 +1,4 @@
-// 「正在同步…」提示：断线重连后按 sinceSeq 补齐各会话期间显示，补齐结束自动消失（界面照常可用，不阻塞）。
+// 「正在同步…」提示：断线重连后按 sinceSeq 补齐各会话期间，屏幕顶部显示一条细进度条，补齐结束自动消失（界面照常可用，不阻塞）。
 import { useSyncExternalStore } from "react";
 import type { SidecarClient } from "@/lib/sidecar-client";
 import s from "./mobile.module.css";
@@ -14,7 +14,7 @@ export function useClientSyncing(client: Pick<SidecarClient, "onSyncing" | "sync
 export function SyncBanner() {
   return (
     <div className={s.syncBanner} role="status">
-      正在同步…
+      <span className={s.visuallyHidden}>正在同步…</span>
     </div>
   );
 }
