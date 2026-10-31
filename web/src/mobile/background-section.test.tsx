@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 后台运行小节：电池优化 / 通知状态与按钮、厂商指引、被冻结的说明，以及首次开启「后台保持连接」的一次性引导。
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { BATTERY_NOT_WHITELISTED, BackgroundGuideDialog, BackgroundSection, BANNER_HINT, FROZEN_NOTE, NotifyModeSection } from "./background-section";
 import { setNativeBackend, type NativeBackend } from "./native/native-plugin";
@@ -211,5 +211,17 @@ describe("设置页「通知」单选", () => {
     expect((screen.getByRole("radio", { name: "仅在前台时" }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole("radio", { name: "从不通知" }));
     expect(new PreferencesStore(storage).getState().notifyMode).toBe("never");
+  });
+
+  it("点已选中的项也算选完，面板能关闭", () => {
+    const prefs = new PreferencesStore(new MemoryStorage());
+    const onPicked = vi.fn();
+    render(<NotifyModeSection prefs={prefs} onPicked={onPicked} />);
+    fireEvent.click(screen.getByRole("radio", { name: "总是通知" }));
+    expect(onPicked).toHaveBeenCalledTimes(1);
+    expect(prefs.getState().notifyMode).toBe("always");
+    fireEvent.click(screen.getByRole("radio", { name: "从不通知" }));
+    expect(onPicked).toHaveBeenCalledTimes(2);
+    expect(prefs.getState().notifyMode).toBe("never");
   });
 });

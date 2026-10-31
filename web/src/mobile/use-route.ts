@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { replaceOverlayEntry } from "./overlay-history";
 import { parseRoute, routeHash, type MobileRoute } from "./route";
 
 /** hash 路由：返回当前路由与 navigate（push）/ back（Android 返回键同款 history.back） */
@@ -15,6 +16,8 @@ export function useHashRoute() {
     const hash = routeHash(next);
     if (options.replace) {
       window.history.replaceState(null, "", hash);
+      setRoute(next);
+    } else if (replaceOverlayEntry(hash)) {
       setRoute(next);
     } else {
       window.location.hash = hash;

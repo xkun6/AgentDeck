@@ -9,6 +9,7 @@ afterEach(() => {
   setNativeBackend(null);
   document.documentElement.style.removeProperty("--ad-safe-top");
   document.documentElement.style.removeProperty("--ad-safe-bottom");
+  document.documentElement.removeAttribute("data-keyboard");
 });
 
 describe("安全区", () => {
@@ -19,25 +20,35 @@ describe("安全区", () => {
     expect(document.documentElement.style.getPropertyValue("--ad-safe-bottom")).toBe("16px");
   });
 
-  it("窗口明显变矮标记软键盘弹起，恢复后取消；旋转不算键盘", () => {
-    const resize = (width: number, height: number) => {
-      Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
-      Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
-      window.dispatchEvent(new Event("resize"));
-    };
-    const keyboard = () => document.documentElement.getAttribute("data-keyboard");
-    resize(412, 915);
+  it("软键盘状态以原生为准：窗口变化时重新读取，取不到时保持原状", async () => {
+    let keyboardOpen = false;
+    setNativeBackend({ invoke: async () => ({ top: 30, bottom: 16, keyboard: keyboardOpen }) });
+    const flush = () => new Promise<void>((done) => setTimeout(done, 0));
+    const attr = () => document.documentElement.getAttribute("data-keyboard");
     const dispose = installSafeArea();
-    resize(412, 571);
-    expect(keyboard()).toBe("open");
-    resize(412, 915);
-    expect(keyboard()).toBeNull();
-    // 系统栏显隐的小幅变化
-    resize(412, 880);
-    expect(keyboard()).toBeNull();
-    // 旋转：高度大幅变小但宽度也变了
-    resize(915, 412);
-    expect(keyboard()).toBeNull();
+    await flush();
+    expect(attr()).toBeNull();
+
+    keyboardOpen = true;
+    window.dispatchEvent(new Event("resize"));
+    await flush();
+    expect(attr()).toBe("open");
+
+    // 原生暂时取不到（窗口未就绪）：不能当成键盘收起
+    setNativeBackend({
+      invoke: async () => {
+        throw new Error("窗口尚未就绪");
+      },
+    });
+    window.dispatchEvent(new Event("resize"));
+    await flush();
+    expect(attr()).toBe("open");
+
+    // 分屏让窗口变矮，但原生说没有键盘
+    setNativeBackend({ invoke: async () => ({ top: 30, bottom: 16, keyboard: false }) });
+    window.dispatchEvent(new Event("resize"));
+    await flush();
+    expect(attr()).toBeNull();
     dispose();
   });
 

@@ -1,63 +1,22 @@
 // 手机端覆盖层：底部面板（选择器、动作）与居中对话框（二次确认）。
-// Android 返回键先关覆盖层再离开页面：打开时压一条同地址的 history，关闭时退掉它。
+// Android 返回键先关覆盖层再离开页面（见 overlay-history.ts）。
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { openOverlay } from "./overlay-history";
 import s from "./mobile.module.css";
 
 const DRAG_DISMISS_PX = 96;
 const DRAG_DISMISS_VELOCITY = 0.6;
+/** 最后一次移动距松手超过这么久，说明手指已经停住，不算快速下滑 */
+const DRAG_FLICK_WINDOW_MS = 100;
 const EXIT_MS = 160;
-
-// 关闭后推迟一拍再退 history：下一个覆盖层紧接着打开时（含 StrictMode 的重复 effect）直接复用这条记录，
-// 否则异步的 back 会落在新记录之后，把刚打开的覆盖层当成被返回键关掉
-let pendingBack: ReturnType<typeof setTimeout> | null = null;
-// 自己发起、还没落地的 back：它们的 popstate 不是用户按了返回键，不能关掉此时打开的覆盖层
-let ownBacks = 0;
-let ownBackInFlight = false;
-let trackingOwnBacks = false;
-
-function trackOwnBacks() {
-  if (trackingOwnBacks) return;
-  trackingOwnBacks = true;
-  // 先于各覆盖层的监听注册，所以先执行
-  window.addEventListener("popstate", () => {
-    ownBackInFlight = ownBacks > 0;
-    if (ownBackInFlight) ownBacks -= 1;
-  });
-}
 
 function useBackDismiss(open: boolean, onDismiss: () => void) {
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
   useEffect(() => {
     if (!open) return;
-    trackOwnBacks();
-    if (pendingBack !== null) {
-      clearTimeout(pendingBack);
-      pendingBack = null;
-    } else {
-      window.history.pushState(window.history.state, "", window.location.href);
-    }
-    const hash = window.location.hash;
-    let popped = false;
-    const onPop = () => {
-      if (ownBackInFlight) return;
-      popped = true;
-      dismissRef.current();
-    };
-    window.addEventListener("popstate", onPop);
-    return () => {
-      window.removeEventListener("popstate", onPop);
-      if (popped) return;
-      pendingBack = setTimeout(() => {
-        pendingBack = null;
-        // 关闭的同时已经导航走了：退 history 会撤销那次导航
-        if (window.location.hash === hash) {
-          ownBacks += 1;
-          window.history.back();
-        }
-      }, 0);
-    };
+    return openOverlay(() => dismissRef.current());
   }, [open]);
 }
 
@@ -80,10 +39,15 @@ export function Modal({ open, onClose, label, title, variant = "sheet", children
   const panelRef = useRef<HTMLDivElement>(null);
   const scrimRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startY: number; lastY: number; lastAt: number; velocity: number } | null>(null);
+  // 退场动画期间内容保持关闭前的样子：调用方关闭时往往同时清掉了内容依赖的数据
+  const shownChildren = useRef(children);
+  if (open) shownChildren.current = children;
   useBackDismiss(open, onClose);
 
   useLayoutEffect(() => {
     if (open) {
+      // 拖动关闭留下的位移，退场中被重新打开时要清掉
+      panelRef.current?.style.removeProperty("transform");
       setMounted(true);
       return;
     }
@@ -102,9 +66,12 @@ export function Modal({ open, onClose, label, title, variant = "sheet", children
       ],
       { duration: EXIT_MS, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" },
     );
-    scrimRef.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: EXIT_MS, fill: "forwards" });
+    const fade = scrimRef.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: EXIT_MS, fill: "forwards" });
     exit.onfinish = () => setMounted(false);
-    return () => exit.cancel();
+    return () => {
+      exit.cancel();
+      fade?.cancel();
+    };
   }, [open, mounted, variant]);
 
   useEffect(() => {
@@ -166,19 +133,26 @@ export function Modal({ open, onClose, label, title, variant = "sheet", children
               state.lastAt = event.timeStamp;
               panel.style.transform = `translateY(${Math.max(0, y - state.startY)}px)`;
             }}
-            onTouchEnd={() => {
+            onTouchEnd={(event) => {
               const state = drag.current;
               drag.current = null;
-              if (state) {
-                settle(state.lastY - state.startY > DRAG_DISMISS_PX || state.velocity > DRAG_DISMISS_VELOCITY);
-              }
+              if (!state) return;
+              const moved = state.lastY - state.startY;
+              // 快速下滑要求面板确实往下走过，且松手时手指还在动
+              const flicked =
+                moved > 0 && event.timeStamp - state.lastAt < DRAG_FLICK_WINDOW_MS && state.velocity > DRAG_DISMISS_VELOCITY;
+              settle(moved > DRAG_DISMISS_PX || flicked);
+            }}
+            onTouchCancel={() => {
+              drag.current = null;
+              settle(false);
             }}
           >
             <span />
           </div>
         ) : null}
         {title ? <h2 className={s.modalTitle}>{title}</h2> : null}
-        <div className={s.modalBody}>{children}</div>
+        <div className={s.modalBody}>{shownChildren.current}</div>
       </div>
     </div>,
     document.body,

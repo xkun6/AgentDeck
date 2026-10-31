@@ -274,9 +274,11 @@ describe("NewSession 新建会话", () => {
   function setup(
     agents = [agent("a", { cwd: "J:/Program/A", updatedAt: 5 }), agent("b", { cwd: "J:/Program/B", updatedAt: 9 })],
     translationDefault = false,
+    intercept?: (method: string) => void,
   ) {
     const created = agent("new-1");
     const client = makeClient((method) => {
+      intercept?.(method);
       if (method === "provider.list") return PROVIDERS;
       if (method === "settings.get") return { translation: { enabledByDefault: translationDefault } };
       if (method === "provider.listModels") return CATALOG;
@@ -308,6 +310,23 @@ describe("NewSession 新建会话", () => {
     act(async () => {
       fireEvent.click(createButton());
     });
+
+  // 查询自带 retry: 1，失败要等重试完才显示
+  it("模型读取失败时面板里显示原因，不只剩「默认」一项", async () => {
+    setup(undefined, false, (method) => {
+      if (method === "provider.listModels") throw new Error("目录不存在");
+    });
+    openPicker(/^模型/);
+    expect(await within(screen.getByRole("dialog")).findByText(/目录不存在/, undefined, { timeout: 4000 })).toBeTruthy();
+  });
+
+  it("Agent 列表读取失败时面板里显示原因", async () => {
+    setup(undefined, false, (method) => {
+      if (method === "provider.list") throw new Error("连不上");
+    });
+    openPicker(/^Agent/);
+    expect(await within(screen.getByRole("dialog")).findByText(/连不上/, undefined, { timeout: 4000 })).toBeTruthy();
+  });
 
   it("危险模式标红且不会默认选中：直接创建不带 modeId", async () => {
     const { client, onCreated } = setup();

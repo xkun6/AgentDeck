@@ -139,11 +139,11 @@ describe("openUrl / getSafeAreaInsets", () => {
   it("getSafeAreaInsets 读 safe_area_insets 的 top / bottom；旧原生没有 bottom、非数字时该项为 null，调用失败返回 null", async () => {
     let reply: unknown = { top: 28.5, bottom: 16 };
     setNativeBackend({ invoke: async () => reply });
-    expect(await getSafeAreaInsets()).toEqual({ top: 28.5, bottom: 16 });
+    expect(await getSafeAreaInsets()).toEqual({ top: 28.5, bottom: 16, keyboard: false });
     reply = { top: 28.5 };
-    expect(await getSafeAreaInsets()).toEqual({ top: 28.5, bottom: null });
+    expect(await getSafeAreaInsets()).toEqual({ top: 28.5, bottom: null, keyboard: false });
     reply = { top: "x", bottom: 16 };
-    expect(await getSafeAreaInsets()).toEqual({ top: null, bottom: 16 });
+    expect(await getSafeAreaInsets()).toEqual({ top: null, bottom: 16, keyboard: false });
     setNativeBackend({
       invoke: async () => {
         throw new Error("窗口尚未就绪");

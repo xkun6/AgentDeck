@@ -1,4 +1,4 @@
-// 会话列表：agent.list（进入时刷新 + 下拉刷新），顶部按状态筛选，按项目（工作目录）分组成卡片、可折叠，置顶单列最前，默认隐藏归档与评判会话。
+// 会话列表：agent.list（进入时刷新 + 下拉刷新），顶部按状态筛选，按项目（工作目录）分组、可折叠，置顶单列最前，默认隐藏归档与评判会话。
 // 每组默认只显示最近几个，进行中与待处理的不受限制。子会话只在派单页（design.md 4.26），主会话行带派单进度入口。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue } from "jotai";

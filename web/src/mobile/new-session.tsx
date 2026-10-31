@@ -96,7 +96,16 @@ export function NewSession({ onCreated, onClose }: { onCreated: (agentId: string
   const modelLabel = models.find((item) => item.id === model)?.label ?? "默认模型";
   const modeInfo = modes.find((item) => item.id === mode);
   const closePicker = () => setPicker(null);
-  const catalogStatus = catalogQuery.isLoading ? <div className={s.hint}>正在读取…</div> : null;
+  const providerStatus = providersQuery.isLoading ? (
+    <div className={s.hint}>正在读取 Agent 列表…</div>
+  ) : providersQuery.error ? (
+    <div className={s.error}>{humanizeSidecarError(providersQuery.error)}</div>
+  ) : null;
+  const catalogStatus = catalogQuery.isLoading ? (
+    <div className={s.hint}>正在读取…</div>
+  ) : catalogQuery.error ? (
+    <div className={s.error}>{humanizeSidecarError(catalogQuery.error)}</div>
+  ) : null;
 
   const create = async () => {
     if (!provider || !cwd) return;
@@ -209,6 +218,7 @@ export function NewSession({ onCreated, onClose }: { onCreated: (agentId: string
         open={picker === "provider"}
         label="Agent"
         onClose={closePicker}
+        status={providerStatus}
         options={(providers ?? []).map((item) => ({
           key: item.id,
           title: item.label,

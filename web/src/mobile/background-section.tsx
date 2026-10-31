@@ -119,10 +119,9 @@ export function NotifyModeSection({ prefs, onPicked }: { prefs: PreferencesStore
             value={option.mode}
             aria-label={option.label}
             checked={notifyMode === option.mode}
-            onChange={() => {
-              prefs.setNotifyMode(option.mode);
-              onPicked?.();
-            }}
+            onChange={() => prefs.setNotifyMode(option.mode)}
+            // 放在 onClick：点已选中的项不触发 onChange，也要关闭面板
+            onClick={() => onPicked?.()}
           />
           <span className={s.listText}>
             <span className={s.listTitle}>{option.label}</span>

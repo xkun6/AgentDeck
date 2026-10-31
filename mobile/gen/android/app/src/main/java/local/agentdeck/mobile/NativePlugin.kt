@@ -304,6 +304,7 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
   /**
    * 顶部系统栏（状态栏 / 刘海）高度，单位 CSS px（dp）。Android WebView 的 env(safe-area-inset-top) 在 edge-to-edge 下不一定包含状态栏，
    * 前端据此设置 CSS 变量 --ad-safe-top（见 web/src/mobile/safe-area.ts）；窗口还没拿到 insets 时 reject，前端稍后重试。
+   * keyboard 表示软键盘是否弹起：前端只看窗口高度分不清软键盘和分屏。
    */
   @Command
   fun safeAreaInsets(invoke: Invoke) {
@@ -317,6 +318,7 @@ class NativePlugin(private val activity: Activity) : Plugin(activity) {
     val result = JSObject()
     result.put("top", (insets.top / density).toDouble())
     result.put("bottom", (insets.bottom / density).toDouble())
+    result.put("keyboard", root.isVisible(WindowInsetsCompat.Type.ime()))
     invoke.resolve(result)
   }
 

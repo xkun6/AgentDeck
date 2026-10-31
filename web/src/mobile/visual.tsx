@@ -134,7 +134,11 @@ export function usePullToRefresh(onRefresh: () => void, refreshing: boolean) {
       setPull(dy > 0 ? Math.min(dy * 0.6, PULL_MAX_PX) : 0);
     },
     onTouchEnd: () => {
-      if (pull >= PULL_TRIGGER_PX) onRefresh();
+      if (pull >= PULL_TRIGGER_PX && !refreshing) onRefresh();
+      startY.current = null;
+      setPull(0);
+    },
+    onTouchCancel: () => {
       startY.current = null;
       setPull(0);
     },
@@ -143,7 +147,6 @@ export function usePullToRefresh(onRefresh: () => void, refreshing: boolean) {
   const indicator = visible ? (
     <div
       className={s.pullIndicator}
-      data-settling={pull === 0 ? "true" : undefined}
       style={pull > 0 ? { transform: `translate(-50%, ${pull - 44}px)`, opacity: Math.min(pull / PULL_TRIGGER_PX, 1) } : undefined}
       role={refreshing ? "status" : undefined}
       aria-label={refreshing ? "刷新中…" : undefined}

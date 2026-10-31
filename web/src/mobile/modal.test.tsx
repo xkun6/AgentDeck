@@ -4,6 +4,8 @@ import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { ConfirmDialog, Modal } from "./modal";
+import { replaceOverlayEntry } from "./overlay-history";
+import { useHashRoute } from "./use-route";
 
 function Harness({ initialOpen = false }: { initialOpen?: boolean }) {
   const [open, setOpen] = useState(initialOpen);
@@ -145,6 +147,187 @@ describe("Modal", () => {
     } finally {
       delete proto.animate;
     }
+  });
+
+  it("同时开着两个：一次返回只关最上面一个，再按一次关下面的，历史不留多余记录", async () => {
+    function Two() {
+      const [a, setA] = useState(true);
+      const [b, setB] = useState(true);
+      return (
+        <>
+          <Modal open={a} onClose={() => setA(false)} label="下面">
+            内容
+          </Modal>
+          <Modal open={b} onClose={() => setB(false)} label="上面">
+            内容
+          </Modal>
+        </>
+      );
+    }
+    const before = window.history.length;
+    render(<Two />);
+    expect(window.history.length).toBe(before + 1);
+
+    popstate();
+    expect(screen.queryByRole("dialog", { name: "上面" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "下面" })).toBeTruthy();
+    popstate();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await flushTimers();
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it("关闭其中一个时不退 history，全部关闭才退", async () => {
+    function Two() {
+      const [a, setA] = useState(true);
+      const [b, setB] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setA(false)}>
+            关A
+          </button>
+          <button type="button" onClick={() => setB(false)}>
+            关B
+          </button>
+          <Modal open={a} onClose={() => setA(false)} label="A">
+            内容
+          </Modal>
+          <Modal open={b} onClose={() => setB(false)} label="B">
+            内容
+          </Modal>
+        </>
+      );
+    }
+    render(<Two />);
+    fireEvent.click(screen.getByRole("button", { name: "关A", hidden: true }));
+    await flushTimers();
+    expect(back).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "关B", hidden: true }));
+    await flushTimers();
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it("覆盖层开着时跳转：新页面顶替那条记录并关掉覆盖层，历史不留重复项", async () => {
+    function Page() {
+      const { route, navigate } = useHashRoute();
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <span>当前：{route.name}</span>
+          <Modal open={open} onClose={() => setOpen(false)} label="确认">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                navigate({ name: "hosts" });
+              }}
+            >
+              确认
+            </button>
+          </Modal>
+        </>
+      );
+    }
+    const before = window.history.length;
+    render(<Page />);
+    expect(window.history.length).toBe(before + 1);
+    fireEvent.click(screen.getByRole("button", { name: "确认" }));
+    expect(window.location.hash).toBe("#/hosts");
+    expect(screen.getByText("当前：hosts")).toBeTruthy();
+    // 没有再压一条，也没有退：[…, #/new, #/hosts]
+    expect(window.history.length).toBe(before + 1);
+    await flushTimers();
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it("没有覆盖层时跳转照常走 hash，新增一条历史", () => {
+    expect(replaceOverlayEntry("#/hosts")).toBe(false);
+    expect(window.location.hash).toBe("#/new");
+  });
+
+  it("退场中被重新打开：取消遮罩动画，清掉拖动留下的位移", () => {
+    const cancel = vi.fn();
+    const proto = HTMLElement.prototype as unknown as { animate?: () => unknown };
+    proto.animate = () => ({ cancel, onfinish: null });
+    try {
+      render(<Harness initialOpen />);
+      const panel = screen.getByRole("dialog");
+      panel.style.transform = "translateY(200px)";
+      fireEvent.keyDown(panel, { key: "Escape" });
+      expect(cancel).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "打开", hidden: true }));
+      // 面板和遮罩的退场动画都取消了
+      expect(cancel).toHaveBeenCalledTimes(2);
+      expect(panel.style.transform).toBe("");
+    } finally {
+      delete proto.animate;
+    }
+  });
+
+  it("退场动画期间内容保持关闭前的样子", () => {
+    const proto = HTMLElement.prototype as unknown as { animate?: () => unknown };
+    proto.animate = () => ({ cancel: () => {}, onfinish: null });
+    try {
+      const { rerender } = render(
+        <ConfirmDialog open title="删除？" body="将删除与「书房电脑」的配对" confirmLabel="确认" onConfirm={() => {}} onClose={() => {}} />,
+      );
+      rerender(<ConfirmDialog open={false} title="删除？" body="将删除与「」的配对" confirmLabel="确认" onConfirm={() => {}} onClose={() => {}} />);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.getByText("将删除与「书房电脑」的配对")).toBeTruthy();
+    } finally {
+      delete proto.animate;
+    }
+  });
+
+  it("手势被系统取消：面板复位，不关闭", () => {
+    render(<Harness initialOpen />);
+    const panel = screen.getByRole("dialog");
+    const handle = panel.firstElementChild!;
+    fireEvent.touchStart(handle, { touches: [{ clientY: 0 }] });
+    fireEvent.touchMove(handle, { touches: [{ clientY: 200 }] });
+    expect(panel.style.transform).toBe("translateY(200px)");
+    fireEvent.touchCancel(handle);
+    expect(panel.style.transform).toBe("");
+    expect(panel.style.transition).toBe("");
+    fireEvent.touchEnd(handle);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  describe("快速下滑", () => {
+    let t = 0;
+    let now: MockInstance;
+    beforeEach(() => {
+      t = 0;
+      now = vi.spyOn(Event.prototype, "timeStamp", "get").mockImplementation(() => t);
+    });
+    afterEach(() => now.mockRestore());
+
+    const gesture = (startY: number, moves: Array<[at: number, y: number]>, endAt: number) => {
+      render(<Harness initialOpen />);
+      const handle = screen.getByRole("dialog").firstElementChild!;
+      fireEvent.touchStart(handle, { touches: [{ clientY: startY }] });
+      for (const [at, y] of moves) {
+        t = at;
+        fireEvent.touchMove(handle, { touches: [{ clientY: y }] });
+      }
+      t = endAt;
+      fireEvent.touchEnd(handle);
+    };
+
+    it("手指还在动就松手：距离不够也关闭", () => {
+      gesture(0, [[10, 40]], 20);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("快划后停住再松手：不关闭", () => {
+      gesture(0, [[10, 40]], 500);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+
+    it("先上移到起点上方再快速下划，面板没被拖动过：不关闭", () => {
+      gesture(100, [[10, 0], [20, 50]], 25);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
   });
 
   it("Esc 能关", () => {
